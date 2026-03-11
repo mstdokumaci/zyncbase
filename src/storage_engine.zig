@@ -12,6 +12,7 @@ pub const StorageEngine = struct {
     shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
     transaction_active: std.atomic.Value(bool),
+    pending_writes_count: std.atomic.Value(usize),
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
@@ -76,6 +77,7 @@ pub const StorageEngine = struct {
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
+            .pending_writes_count = std.atomic.Value(usize).init(0),
         };
 
         // Start write thread
@@ -127,7 +129,11 @@ pub const StorageEngine = struct {
             .value = try self.allocator.dupe(u8, value),
         };
 
-        try self.write_queue.push(op);
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        self.write_queue.push(op) catch |err| {
+            _ = self.pending_writes_count.fetchSub(1, .release);
+            return err;
+        };
     }
 
     pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
@@ -163,7 +169,11 @@ pub const StorageEngine = struct {
             .value = null,
         };
 
-        try self.write_queue.push(op);
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        self.write_queue.push(op) catch |err| {
+            _ = self.pending_writes_count.fetchSub(1, .release);
+            return err;
+        };
     }
 
     pub fn query(
@@ -244,9 +254,9 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        // Wait for write queue to drain
-        while (self.write_queue.len() > 0) {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+        // Wait for write queue and currently processing batch to drain
+        while (self.pending_writes_count.load(.acquire) > 0) {
+            std.Thread.sleep(1 * std.time.ns_per_ms);
         }
     }
 
@@ -278,6 +288,7 @@ pub const StorageEngine = struct {
                     batch.append(self.allocator, op) catch |err| {
                         std.log.err("Failed to append to batch: {}", .{err});
                         op.deinit(self.allocator);
+                        _ = self.pending_writes_count.fetchSub(1, .release);
                         continue;
                     };
                 } else {
@@ -293,6 +304,7 @@ pub const StorageEngine = struct {
                 (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
 
             if (should_flush) {
+                const batch_len = batch.items.len;
                 self.executeBatch(batch.items) catch |err| {
                     std.log.err("Failed to execute batch, transaction rolled back: {}", .{err});
                     // Transaction is automatically rolled back by errdefer in executeBatch
@@ -301,6 +313,7 @@ pub const StorageEngine = struct {
                     op.deinit(self.allocator);
                 }
                 batch.clearRetainingCapacity();
+                _ = self.pending_writes_count.fetchSub(batch_len, .release);
                 last_batch_time = now;
             } else {
                 // Sleep briefly to avoid busy-waiting
@@ -310,10 +323,12 @@ pub const StorageEngine = struct {
 
         // Flush remaining operations on shutdown
         if (batch.items.len > 0) {
+            const batch_len = batch.items.len;
             self.executeBatch(batch.items) catch |err| {
                 std.log.err("Failed to execute final batch on shutdown, transaction rolled back: {}", .{err});
                 // Transaction is automatically rolled back by errdefer in executeBatch
             };
+            _ = self.pending_writes_count.fetchSub(batch_len, .release);
         }
     }
 
