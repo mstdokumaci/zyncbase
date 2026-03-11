@@ -527,46 +527,33 @@ server {
 
 ## Hook Server Security
 
-### TLS Configuration
+### Hook Server Security
 
-**Enabling TLS for Hook Server Communication:**
+**Note**: The Hook Server is automatically managed by the ZyncBase CLI. Communication between the Zig core and Hook Server happens over internal IPC/WebSocket using MessagePack.
 
-```yaml
-# config.yaml
-hook_server:
-  url: "wss://localhost:3001/hooks"  # Use wss:// for TLS
-  tls:
-    enabled: true
-    cert_file: "/etc/zyncbase/hook-server.crt"
-    key_file: "/etc/zyncbase/hook-server.key"
-    ca_file: "/etc/zyncbase/ca.crt"
-    verify_certificate: true
-```
+**What's handled automatically:**
+- TLS/encryption for internal communication
+- Circuit breaker protection against failures
+- Timeout management
+- Connection lifecycle
 
-**Certificate Validation:**
+**What you control:**
+- Authorization logic in `zyncbase.auth.ts`
+- Hook function implementations
+- Database queries and external API calls within hooks
 
-ZyncBase validates Hook Server certificates to prevent MitM attacks:
+**Security best practices for hook functions:**
+- Validate all inputs in your hook functions
+- Use parameterized queries to prevent SQL injection
+- Implement rate limiting for expensive operations
+- Cache authorization results when appropriate
+- Log authorization decisions for audit trails
 
-- Verifies certificate chain to trusted CA
-- Checks certificate expiration
-- Validates hostname matches certificate
-- Rejects self-signed certificates (unless explicitly configured)
-
-**Self-Signed Certificates (Development Only):**
-
-```bash
-# Generate self-signed certificate for development
-openssl req -x509 -newkey rsa:4096 -keyout hook-server.key \
-  -out hook-server.crt -days 365 -nodes \
-  -subj "/CN=localhost"
-```
-
-
-**⚠️ Warning**: Never use self-signed certificates in production!
+See [AUTH_SPEC.md](./AUTH_SPEC.md) for details on writing secure Hook Server functions.
 
 ### Circuit Breaker Protection
 
-The circuit breaker prevents cascading failures when Hook Server is unavailable:
+The circuit breaker prevents cascading failures when Hook Server is unavailable. This is automatically managed by ZyncBase.
 
 **Circuit Breaker States:**
 
@@ -580,16 +567,6 @@ The circuit breaker prevents cascading failures when Hook Server is unavailable:
      │                              ┌──────────┐
      └──────────────────────────────│Half-Open │
           Success                   └──────────┘
-```
-
-**Configuration:**
-
-```yaml
-hook_server:
-  circuit_breaker:
-    failure_threshold: 5           # Open after 5 failures
-    timeout_seconds: 60            # Try again after 60 seconds
-    half_open_max_requests: 1      # Test with 1 request
 ```
 
 **Behavior:**
@@ -610,21 +587,6 @@ zyncbase_circuit_breaker_failures{service="hook_server"} 2
 # State transitions
 zyncbase_circuit_breaker_transitions_total{service="hook_server",from="closed",to="open"} 3
 ```
-
-### Timeout Configuration
-
-**Authorization Timeout:**
-
-```yaml
-hook_server:
-  timeout_ms: 5000  # 5 second timeout
-```
-
-**Best Practices:**
-- Set timeout based on p99 latency + buffer (e.g., 2x p99)
-- Monitor timeout rate to detect Hook Server issues
-- Implement retry with exponential backoff for transient failures
-- Log timeouts for debugging
 
 ### Fallback Behavior
 

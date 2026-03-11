@@ -250,7 +250,7 @@ Users configure ZyncBase with three JSON files:
 ### Optional Extensibility
 
 For advanced use cases, users can:
-- Write custom auth webhooks (any language)
+- Write custom auth logic in TypeScript via the Hook Server
 - Use HTTP API for custom logic
 - Extend via external services
 
@@ -322,7 +322,7 @@ Every architectural decision involves trade-offs. Here are ZyncBase's conscious 
 - **Decision**: JSON config, not code
 - **Trade-off**: Less flexible than code-based config
 - **Rationale**: Simpler for 95% of use cases
-- **Mitigation**: Webhooks for custom logic
+- **Mitigation**: Hook Server for complex logic (TypeScript functions in zyncbase.auth.ts)
 
 ### 5. No Built-in Horizontal Scaling
 - **Decision**: No clustering in v1.0

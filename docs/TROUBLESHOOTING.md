@@ -806,20 +806,23 @@ systemctl start zyncbase-hooks
 docker-compose up -d hook-server
 ```
 
-2. **Fix Hook Server configuration**:
+2. **Verify Hook Server is running**:
 ```bash
-# Check Hook Server URL
-echo $HOOK_SERVER_URL
-docker exec zyncbase env | grep HOOK_SERVER_URL
+# The Hook Server is automatically managed by ZyncBase CLI
+# Check if it's running by looking at the health endpoint
+curl http://localhost:3000/health | jq '.hook_server'
 
-# Verify URL is correct
-export HOOK_SERVER_URL=ws://localhost:3001/hooks
+# Check ZyncBase logs for Hook Server connection status
+journalctl -u zyncbase | grep "hook.*server"
+docker logs zyncbase | grep "hook.*server"
 ```
 
-3. **Increase timeout**:
+3. **Restart ZyncBase** (which will restart the Hook Server):
 ```bash
-# Allow more time for Hook Server
-export HOOK_SERVER_TIMEOUT_MS=10000  # 10 seconds
+# The Hook Server is bundled with ZyncBase
+systemctl restart zyncbase
+# or
+docker-compose restart zyncbase
 ```
 
 4. **Reset circuit breaker**:
@@ -880,10 +883,11 @@ export async function authorize(req: AuthRequest) {
 }
 ```
 
-2. **Increase timeout**:
-```bash
-# Allow more time
-export HOOK_SERVER_TIMEOUT_MS=15000  # 15 seconds
+2. **Optimize database queries in hooks**:
+```typescript
+// Use indexes, avoid N+1 queries, batch operations
+// The Hook Server has access to the same ZyncBase client as your frontend
+// but with admin privileges - use it efficiently
 ```
 
 3. **Enable authorization caching**:
@@ -934,23 +938,7 @@ curl http://localhost:3001/health
 watch -n 5 'curl -s http://localhost:3000/metrics | grep circuit_breaker_state'
 ```
 
-2. **Increase failure threshold**:
-```bash
-# Allow more failures before opening
-export HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=10
-
-# Restart to apply
-systemctl restart zyncbase
-```
-
-3. **Reduce circuit breaker timeout**:
-```bash
-# Recover faster
-export HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=30
-
-# Restart to apply
-systemctl restart zyncbase
-```
+2. **Circuit breaker settings are managed internally**: The Hook Server circuit breaker is automatically configured by ZyncBase. If you're experiencing frequent circuit breaker openings, focus on fixing the underlying Hook Server issues (slow queries, errors in hook code, etc.).
 
 4. **Fix underlying Hook Server issues**:
 ```bash
@@ -1920,11 +1908,12 @@ Use this checklist when troubleshooting issues:
 - [ ] No long-running transactions
 
 ### Hook Server Issues
-- [ ] Hook Server running
-- [ ] Hook Server URL correct
+- [ ] Hook Server running (check health endpoint)
+- [ ] Hook Server connected (check health endpoint)
 - [ ] Circuit breaker closed
 - [ ] Authorization latency < 5ms
 - [ ] No timeout errors
+- [ ] Hook functions have no errors
 
 ### Next Steps
 - [ ] Reviewed relevant documentation

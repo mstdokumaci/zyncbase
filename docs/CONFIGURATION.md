@@ -75,13 +75,6 @@ Main server configuration file.
       "algorithm": "HS256",
       "issuer": "your-app",
       "audience": "zyncbase-server"
-    },
-    "webhook": {
-      "url": "http://localhost:4000/auth",
-      "timeout": 1000,
-      "headers": {
-        "Authorization": "Bearer ${WEBHOOK_SECRET}"
-      }
     }
   },
   
@@ -205,18 +198,13 @@ Authentication and authorization configuration.
       "secret": "${JWT_SECRET}",     // JWT signing secret
       "algorithm": "HS256",           // Algorithm (HS256, RS256, etc.)
       "issuer": "your-app",           // Expected issuer
-      "audience": "zyncbase-server"        // Expected audience
-    },
-    "webhook": {
-      "url": "http://localhost:4000/auth",  // Custom auth webhook
-      "timeout": 1000,                       // Timeout in ms
-      "headers": {
-        "Authorization": "Bearer ${WEBHOOK_SECRET}"
-      }
+      "audience": "zyncbase-server"   // Expected audience
     }
   }
 }
 ```
+
+**Note on Hook Server**: Complex authorization logic (requiring database lookups) is handled by the Bun Hook Server, which is automatically managed by the ZyncBase CLI/deployment. You don't configure the Hook Server in `zyncbase-config.json` - instead, you write TypeScript functions in `zyncbase.auth.ts` and the CLI handles the rest. See [AUTH_SPEC.md](./AUTH_SPEC.md) for details.
 
 #### `dataDir`
 
@@ -1009,26 +997,62 @@ Define authorization rules using a simple expression language.
 }
 ```
 
-### Custom Functions
+### Hook Server Functions
 
-Define reusable functions that execute SQL queries:
+Complex authorization logic is handled by TypeScript functions in `zyncbase.auth.ts`, not in the config file. The Hook Server is automatically managed by the ZyncBase CLI.
 
-```json
-{
-  "functions": {
-    "isRoomMember": {
-      "type": "sql",
-      "query": "SELECT 1 FROM room_members WHERE user_id = $1 AND room_id = $2",
-      "params": ["userId", "roomId"]
-    },
-    "hasPermission": {
-      "type": "sql",
-      "query": "SELECT 1 FROM permissions WHERE user_id = $1 AND permission = $2",
-      "params": ["userId", "permission"]
+**zyncbase.auth.ts:**
+```typescript
+import { createAdminClient } from '@zyncbase/server';
+
+// Automatically configured to talk to the local Zig core
+const client = createAdminClient();
+
+// Function names match the "hook" rules in auth.json
+export async function isRoomMember({ session, namespace, path, value }) {
+  const roomId = namespace.split(':')[1];
+  
+  // Use the same Query API as your frontend
+  const memberships = await client.store.query('room_members', {
+    where: { 
+      userId: { eq: session.sub },
+      roomId: { eq: roomId }
     }
-  }
+  });
+
+  return memberships.length > 0;
+}
+
+export async function hasPermission({ session, namespace, path, value }) {
+  const permissions = await client.store.query('permissions', {
+    where: { 
+      userId: { eq: session.sub },
+      permission: { eq: value.permission }
+    }
+  });
+
+  return permissions.length > 0;
 }
 ```
+
+**auth.json:**
+```json
+{
+  "rules": [
+    {
+      "namespace": "room:*",
+      "paths": [
+        {
+          "path": "messages.*",
+          "write": { "hook": "isRoomMember" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The CLI automatically spins up the Bun Hook Server and manages the IPC/WebSocket connection. See [AUTH_SPEC.md](./AUTH_SPEC.md) for complete details.
 
 ---
 
@@ -1045,7 +1069,6 @@ HOST=0.0.0.0
 
 # Authentication
 JWT_SECRET=your-secret-key-here
-WEBHOOK_SECRET=webhook-auth-token
 
 # Database
 DATA_DIR=./data
@@ -1162,43 +1185,52 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ---
 
-### Example 3: Custom Auth Webhook
+### Example 3: Complex Authorization with Hook Server
 
-If JSON rules aren't enough, use a webhook for custom logic:
+If `auth.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic:
 
-**zyncbase-config.json:**
-```json
-{
-  "auth": {
-    "jwt": {
-      "secret": "${JWT_SECRET}"
-    },
-    "webhook": {
-      "url": "http://localhost:4000/auth",
-      "timeout": 1000
+**zyncbase.auth.ts:**
+```typescript
+import { createAdminClient } from '@zyncbase/server';
+
+const client = createAdminClient();
+
+export async function checkDocumentAccess({ session, namespace, path, value }) {
+  const workspaceId = namespace.split(':')[1];
+  
+  // Query ZyncBase using the same API as your frontend
+  const memberships = await client.store.query('workspace_members', {
+    where: { 
+      userId: { eq: session.sub },
+      workspaceId: { eq: workspaceId }
     }
-  }
+  });
+
+  if (memberships.length === 0) return false;
+  
+  const role = memberships[0].role;
+  return role === 'admin' || role === 'editor';
 }
 ```
 
-**Your webhook receives:**
+**auth.json:**
 ```json
 {
-  "userId": "user-123",
-  "namespace": "room:abc-123",
-  "operation": "read",
-  "jwt": { "userId": "user-123", "tenantId": "tenant-456" }
+  "rules": [
+    {
+      "namespace": "workspace:*",
+      "paths": [
+        {
+          "path": "documents.*",
+          "write": { "hook": "checkDocumentAccess" }
+        }
+      ]
+    }
+  ]
 }
 ```
 
-**And returns:**
-```json
-{
-  "allowed": true
-}
-```
-
-This way, you can write custom auth logic in **any language** (Node.js, Python, Go, etc.) without touching Zig.
+The Hook Server is automatically managed by the ZyncBase CLI - you just write TypeScript functions and the CLI handles deployment, IPC, and connection management. See [AUTH_SPEC.md](./AUTH_SPEC.md) for details.
 
 ---
 

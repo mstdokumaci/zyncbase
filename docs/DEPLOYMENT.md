@@ -74,7 +74,6 @@ services:
     environment:
       # Authentication
       - JWT_SECRET=${JWT_SECRET}
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
       
       # Server Configuration
       - ZYNCBASE_PORT=3000
@@ -99,11 +98,8 @@ services:
       - MSGPACK_MAX_ARRAY_LENGTH=100000
       - MSGPACK_MAX_MAP_SIZE=100000
       
-      # Hook Server Configuration
-      - HOOK_SERVER_URL=ws://localhost:3001/hooks
-      - HOOK_SERVER_TIMEOUT_MS=5000
-      - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5
-      - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60
+      # Note: Hook Server is automatically managed by ZyncBase CLI
+      # No configuration needed - write auth logic in zyncbase.auth.ts
       
       # TLS Configuration (optional)
       - TLS_ENABLED=false
@@ -127,20 +123,7 @@ services:
       retries: 3
       start_period: 40s
     
-  # Bundled Hook Server (automatically started with ZyncBase)
-  hook-server:
-    image: zyncbase/hook-server:latest
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./hooks:/hooks
-    environment:
-      - HOOK_SERVER_PORT=3001
-      - HOOKS_DIR=/hooks
-      - HOT_RELOAD=true
-    restart: unless-stopped
-    depends_on:
-      - zyncbase
+**Note**: The Hook Server shown in the docker-compose example is automatically managed by ZyncBase. The environment variables shown (HOOK_SERVER_PORT, HOOKS_DIR, HOT_RELOAD) are internal to the bundled Hook Server and don't need to be configured by developers. You only need to write your hook functions in `zyncbase.auth.ts`.
     
   # Optional: Nginx reverse proxy
   nginx:
@@ -213,7 +196,6 @@ Complete list of all environment variables supported by ZyncBase:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_SECRET` | *required* | Secret key for JWT token validation |
-| `WEBHOOK_SECRET` | *required* | Secret for webhook authentication |
 | `TLS_ENABLED` | `false` | Enable TLS/SSL for WebSocket connections |
 | `TLS_CERT_PATH` | - | Path to TLS certificate file |
 | `TLS_KEY_PATH` | - | Path to TLS private key file |
@@ -254,17 +236,15 @@ Complete list of all environment variables supported by ZyncBase:
 | `MSGPACK_MAX_ARRAY_LENGTH` | `100000` | Maximum array length |
 | `MSGPACK_MAX_MAP_SIZE` | `100000` | Maximum map size |
 
-### Hook Server Configuration
+### Hook Server
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HOOK_SERVER_URL` | `ws://localhost:3001/hooks` | WebSocket URL for Hook Server |
-| `HOOK_SERVER_TIMEOUT_MS` | `5000` | Timeout for authorization requests (5s) |
-| `HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD` | `5` | Failures before circuit breaker opens |
-| `HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC` | `60` | Circuit breaker timeout (60s) |
-| `HOOK_SERVER_TLS_ENABLED` | `false` | Use TLS for Hook Server connection |
-| `HOOKS_DIR` | `./hooks` | Directory containing hook TypeScript files |
-| `HOT_RELOAD` | `true` | Enable hot-reload for hook files |
+**Note**: The Hook Server is automatically managed by the ZyncBase CLI. You don't configure it via environment variables. Instead:
+
+1. Write authorization logic in `zyncbase.auth.ts`
+2. Run `zyncbase dev` or `zyncbase start` - the CLI automatically spins up the Hook Server
+3. The Hook Server connects to the Zig core via internal IPC/WebSocket
+
+See [AUTH_SPEC.md](./AUTH_SPEC.md) and [AUTH_EXCHANGE.md](./AUTH_EXCHANGE.md) for details on writing Hook Server functions.
 
 ### Logging
 
@@ -287,7 +267,6 @@ Complete list of all environment variables supported by ZyncBase:
 
 # Authentication
 JWT_SECRET=your-secret-key-here-change-in-production
-WEBHOOK_SECRET=webhook-auth-token-change-in-production
 
 # Server
 ZYNCBASE_PORT=3000
@@ -305,9 +284,6 @@ RATE_LIMIT_CONNECTIONS_PER_IP=10
 MAX_MESSAGE_SIZE=10485760
 
 # Hook Server
-HOOK_SERVER_URL=ws://localhost:3001/hooks
-HOOK_SERVER_TIMEOUT_MS=5000
-
 # Logging
 LOG_LEVEL=info
 LOG_FORMAT=json
@@ -315,11 +291,14 @@ LOG_FORMAT=json
 # Monitoring
 METRICS_ENABLED=true
 METRICS_PORT=9090
+
+# Note: Hook Server is automatically managed by CLI
+# No environment variables needed - write logic in zyncbase.auth.ts
 ```
 
 ---
 
-## Bundled Hook Server
+## Hook Server (Automatic Management)
 
 ZyncBase includes a bundled Hook Server that runs alongside the main server, providing authorization and custom hook functionality without requiring separate deployment or management.
 
@@ -503,27 +482,26 @@ export async function afterWrite(event: WriteEvent): Promise<void> {
 }
 ```
 
-### Hook Server Configuration
+### Hook Server (Automatic Management)
 
-Configure the Hook Server via environment variables:
+**Note**: The Hook Server is automatically managed by the ZyncBase CLI. No configuration needed in environment variables or config files.
 
-```yaml
-services:
-  zyncbase:
-    environment:
-      # Hook Server Connection
-      - HOOK_SERVER_URL=ws://localhost:3001/hooks
-      - HOOK_SERVER_TIMEOUT_MS=5000
-      - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5
-      - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60
-      
-      # Hook Files
-      - HOOKS_DIR=/hooks
-      - HOT_RELOAD=true
-      
-      # TLS (optional)
-      - HOOK_SERVER_TLS_ENABLED=false
-```
+**How it works:**
+1. Write authorization logic in `zyncbase.auth.ts`
+2. Run `zyncbase dev` or `zyncbase start`
+3. The CLI automatically spins up the Hook Server and manages the internal IPC/WebSocket connection
+
+**What you control:**
+- Authorization logic in TypeScript (`zyncbase.auth.ts`)
+- Hook function implementations
+
+**What the CLI manages automatically:**
+- Hook Server process lifecycle
+- Internal connection to Zig core
+- Hot-reloading of hook files
+- Circuit breaker and error handling
+
+See [AUTH_SPEC.md](./AUTH_SPEC.md) and [AUTH_EXCHANGE.md](./AUTH_EXCHANGE.md) for details on writing Hook Server functions.
 
 ### Hot Reload
 
@@ -738,17 +716,12 @@ ZyncBase includes a circuit breaker to handle Hook Server failures gracefully:
 - **Open** (failing): Requests fail fast without contacting Hook Server
 - **Half-Open** (testing): Single request tests if Hook Server recovered
 
-**Configuration:**
-```yaml
-environment:
-  - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5  # Open after 5 failures
-  - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60  # Test recovery after 60s
-```
-
 **Behavior when circuit is open:**
 - Authorization requests are **denied by default** (fail secure)
 - Cached authorization results are still used
 - Circuit automatically tests recovery after timeout
+
+**Note**: Circuit breaker settings are automatically managed by ZyncBase. Focus on fixing the underlying issues in your hook functions rather than tuning circuit breaker parameters.
 
 ### Performance Considerations
 
@@ -758,17 +731,13 @@ environment:
 - Reduces Hook Server load for repeated operations
 - Balance security (short TTL) vs performance (long TTL)
 
-**Timeout Configuration:**
-```yaml
-environment:
-  - HOOK_SERVER_TIMEOUT_MS=5000  # 5 second timeout
-```
-
 **Best Practices:**
 - Keep hook logic fast (< 100ms)
 - Use caching for expensive operations
 - Implement proper error handling
-- Monitor Hook Server latency metrics
+- Monitor Hook Server latency via health endpoint
+
+**Note**: Hook Server timeout and connection settings are automatically managed by the ZyncBase CLI. Focus on optimizing your hook functions rather than tuning timeouts.
 
 ### Security
 
@@ -777,18 +746,12 @@ environment:
 - Not exposed to external network
 - Communication stays within the container/host
 
-**TLS for Production:**
-```yaml
-environment:
-  - HOOK_SERVER_TLS_ENABLED=true
-  - HOOK_SERVER_CERT_PATH=/config/ssl/hook-server-cert.pem
-  - HOOK_SERVER_KEY_PATH=/config/ssl/hook-server-key.pem
-```
-
 **Fail Secure:**
 - When Hook Server is unavailable, authorization is **denied**
 - Circuit breaker prevents cascading failures
 - Cached permissions continue to work during outages
+
+**Note**: TLS and security settings for Hook Server communication are automatically managed by ZyncBase.
 
 ### Troubleshooting
 
@@ -825,13 +788,11 @@ docker-compose logs zyncbase | grep "hook-server"
 
 If you previously ran Hook Server separately, migration is simple:
 
-**Before (separate deployment):**
+**Before (if you had a separate Hook Server):**
 ```yaml
 services:
   zyncbase:
     image: zyncbase/server:latest
-    environment:
-      - HOOK_SERVER_URL=ws://hook-server:3001/hooks
   
   hook-server:
     image: my-custom-hook-server:latest
@@ -963,7 +924,6 @@ Never commit secrets to git:
 ```bash
 # .env (add to .gitignore)
 JWT_SECRET=your-secret-key-here
-WEBHOOK_SECRET=webhook-auth-token
 ```
 
 ```json

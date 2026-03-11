@@ -235,7 +235,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - ✅ Familiar pattern (like nginx.conf)
 - ✅ No compilation needed
 - ⚠️ Less flexible than code
-- ⚠️ Need webhook for complex auth logic
+- ⚠️ Need Hook Server (TypeScript) for complex auth logic
 
 ---
 

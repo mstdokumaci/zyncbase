@@ -694,22 +694,12 @@ curl -X POST http://localhost:3000/authorize -d '{"user_id":"test"}'
 
 **Solutions**:
 
-1. **Increase timeout**:
-```zig
-.hook_server_timeout_ms = 10000,  // 10 seconds instead of 5
-```
-
-2. **Optimize hook code**:
+1. **Optimize hook code**:
 - Avoid synchronous database queries
 - Use caching for repeated checks
 - Minimize external API calls
 
-3. **Increase circuit breaker threshold**:
-```zig
-.circuit_breaker_threshold = 10,  // Allow more failures
-```
-
-4. **Enable authorization caching**:
+2. **Enable authorization caching**:
 ```typescript
 // In hook code
 return {
@@ -793,8 +783,7 @@ Use this checklist when deploying or optimizing ZyncBase:
 - [ ] Checkpoint thresholds configured
 - [ ] Connection limits set appropriately
 - [ ] Worker thread count matches CPU cores
-- [ ] Hook Server timeout configured
-- [ ] Circuit breaker thresholds set
+- [ ] Hook Server functions optimized (if using auth hooks)
 
 ### Monitoring Setup
 
