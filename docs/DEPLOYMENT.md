@@ -57,6 +57,8 @@ docker run -p 3000:3000 -v $(pwd)/data:/data my-zyncbase-server
 
 ### Docker Compose
 
+Complete production-ready docker-compose.yml with all services:
+
 ```yaml
 version: '3.8'
 
@@ -68,11 +70,77 @@ services:
     volumes:
       - ./config:/config
       - ./data:/data
+      - ./hooks:/hooks
     environment:
+      # Authentication
       - JWT_SECRET=${JWT_SECRET}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      
+      # Server Configuration
+      - ZYNCBASE_PORT=3000
+      - ZYNCBASE_HOST=0.0.0.0
+      - ZYNCBASE_ENV=production
+      
+      # Database Configuration
+      - DB_PATH=/data/zyncbase.db
+      - WAL_SIZE_THRESHOLD=10485760
+      - CHECKPOINT_INTERVAL_SEC=300
+      
+      # Security
+      - MAX_CONNECTIONS=100000
+      - RATE_LIMIT_MESSAGES_PER_SEC=100
+      - RATE_LIMIT_CONNECTIONS_PER_IP=10
+      - MAX_MESSAGE_SIZE=10485760
+      
+      # MessagePack Parser Limits
+      - MSGPACK_MAX_DEPTH=32
+      - MSGPACK_MAX_SIZE=10485760
+      - MSGPACK_MAX_STRING_LENGTH=1048576
+      - MSGPACK_MAX_ARRAY_LENGTH=100000
+      - MSGPACK_MAX_MAP_SIZE=100000
+      
+      # Hook Server Configuration
+      - HOOK_SERVER_URL=ws://localhost:3001/hooks
+      - HOOK_SERVER_TIMEOUT_MS=5000
+      - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5
+      - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60
+      
+      # TLS Configuration (optional)
+      - TLS_ENABLED=false
+      - TLS_CERT_PATH=/config/ssl/cert.pem
+      - TLS_KEY_PATH=/config/ssl/key.pem
+      
+      # Logging
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+      
+      # Monitoring
+      - METRICS_ENABLED=true
+      - METRICS_PORT=9090
+      
     command: ["zyncbase-server", "--config", "/config/zyncbase-config.json"]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+  # Bundled Hook Server (automatically started with ZyncBase)
+  hook-server:
+    image: zyncbase/hook-server:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./hooks:/hooks
+    environment:
+      - HOOK_SERVER_PORT=3001
+      - HOOKS_DIR=/hooks
+      - HOT_RELOAD=true
+    restart: unless-stopped
+    depends_on:
+      - zyncbase
     
   # Optional: Nginx reverse proxy
   nginx:
@@ -86,12 +154,167 @@ services:
     depends_on:
       - zyncbase
     restart: unless-stopped
+    
+  # Optional: Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    restart: unless-stopped
+    
+  # Optional: Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
 ```
 
 ### Run with Docker Compose
 
 ```bash
+# Single command deployment
 docker-compose up -d
+
+# View logs
+docker-compose logs -f zyncbase
+
+# Stop services
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes data)
+docker-compose down -v
+```
+
+---
+
+## Environment Variables Reference
+
+Complete list of all environment variables supported by ZyncBase:
+
+### Authentication & Security
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | *required* | Secret key for JWT token validation |
+| `WEBHOOK_SECRET` | *required* | Secret for webhook authentication |
+| `TLS_ENABLED` | `false` | Enable TLS/SSL for WebSocket connections |
+| `TLS_CERT_PATH` | - | Path to TLS certificate file |
+| `TLS_KEY_PATH` | - | Path to TLS private key file |
+
+### Server Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ZYNCBASE_PORT` | `3000` | Port for WebSocket server |
+| `ZYNCBASE_HOST` | `0.0.0.0` | Host address to bind to |
+| `ZYNCBASE_ENV` | `development` | Environment: `development`, `production` |
+| `MAX_CONNECTIONS` | `100000` | Maximum concurrent WebSocket connections |
+
+### Database Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_PATH` | `./data/zyncbase.db` | Path to SQLite database file |
+| `WAL_SIZE_THRESHOLD` | `10485760` | WAL size threshold for checkpoint (10MB) |
+| `CHECKPOINT_INTERVAL_SEC` | `300` | Time interval for checkpoints (5 minutes) |
+| `CHECKPOINT_MODE` | `passive` | Checkpoint mode: `passive`, `full`, `truncate` |
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_MESSAGES_PER_SEC` | `100` | Max messages per second per connection |
+| `RATE_LIMIT_CONNECTIONS_PER_IP` | `10` | Max connections per IP address |
+| `MAX_MESSAGE_SIZE` | `10485760` | Maximum message size in bytes (10MB) |
+
+### MessagePack Parser Security Limits
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MSGPACK_MAX_DEPTH` | `32` | Maximum nesting depth for MessagePack |
+| `MSGPACK_MAX_SIZE` | `10485760` | Maximum message size (10MB) |
+| `MSGPACK_MAX_STRING_LENGTH` | `1048576` | Maximum string length (1MB) |
+| `MSGPACK_MAX_ARRAY_LENGTH` | `100000` | Maximum array length |
+| `MSGPACK_MAX_MAP_SIZE` | `100000` | Maximum map size |
+
+### Hook Server Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HOOK_SERVER_URL` | `ws://localhost:3001/hooks` | WebSocket URL for Hook Server |
+| `HOOK_SERVER_TIMEOUT_MS` | `5000` | Timeout for authorization requests (5s) |
+| `HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD` | `5` | Failures before circuit breaker opens |
+| `HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC` | `60` | Circuit breaker timeout (60s) |
+| `HOOK_SERVER_TLS_ENABLED` | `false` | Use TLS for Hook Server connection |
+| `HOOKS_DIR` | `./hooks` | Directory containing hook TypeScript files |
+| `HOT_RELOAD` | `true` | Enable hot-reload for hook files |
+
+### Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | `json` | Log format: `json`, `text` |
+
+### Monitoring
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |
+| `METRICS_PORT` | `9090` | Port for metrics endpoint |
+
+### Example .env File
+
+```bash
+# .env (add to .gitignore)
+
+# Authentication
+JWT_SECRET=your-secret-key-here-change-in-production
+WEBHOOK_SECRET=webhook-auth-token-change-in-production
+
+# Server
+ZYNCBASE_PORT=3000
+ZYNCBASE_ENV=production
+MAX_CONNECTIONS=100000
+
+# Database
+DB_PATH=/data/zyncbase.db
+WAL_SIZE_THRESHOLD=10485760
+CHECKPOINT_INTERVAL_SEC=300
+
+# Security
+RATE_LIMIT_MESSAGES_PER_SEC=100
+RATE_LIMIT_CONNECTIONS_PER_IP=10
+MAX_MESSAGE_SIZE=10485760
+
+# Hook Server
+HOOK_SERVER_URL=ws://localhost:3001/hooks
+HOOK_SERVER_TIMEOUT_MS=5000
+
+# Logging
+LOG_LEVEL=info
+LOG_FORMAT=json
+
+# Monitoring
+METRICS_ENABLED=true
+METRICS_PORT=9090
 ```
 
 ---
@@ -382,39 +605,186 @@ Always use TLS/SSL for production:
 
 ## Monitoring
 
+## Monitoring
+
 ### Health Check Endpoint
+
+ZyncBase provides a comprehensive health check endpoint at `/health`:
 
 ```bash
 curl http://localhost:3000/health
 ```
 
-Response:
+**Healthy Response (200 OK):**
 ```json
 {
   "status": "healthy",
   "uptime": 3600,
-  "connections": 1234,
+  "version": "1.0.0",
+  "connections": {
+    "active": 1234,
+    "max": 100000
+  },
   "memory": {
     "used": 512000000,
-    "total": 4000000000
+    "total": 4000000000,
+    "percentage": 12.8
+  },
+  "database": {
+    "status": "healthy",
+    "wal_size": 5242880,
+    "last_checkpoint": "2026-03-09T10:25:00Z"
+  },
+  "hook_server": {
+    "status": "connected",
+    "circuit_breaker": "closed",
+    "latency_ms": 2.5
+  },
+  "cache": {
+    "entries": 150,
+    "hit_rate": 0.95,
+    "memory_bytes": 15728640
   }
 }
 ```
 
+**Unhealthy Response (503 Service Unavailable):**
+```json
+{
+  "status": "unhealthy",
+  "errors": [
+    {
+      "component": "database",
+      "message": "Database connection failed",
+      "code": "DB_CONNECTION_ERROR"
+    },
+    {
+      "component": "hook_server",
+      "message": "Circuit breaker open",
+      "code": "CIRCUIT_BREAKER_OPEN"
+    }
+  ]
+}
+```
+
+### Health Check Components
+
+The health check validates:
+
+1. **Server Status**: Process is running and responsive
+2. **Database**: SQLite connection is healthy, WAL size is reasonable
+3. **Hook Server**: Connection is established, circuit breaker is closed
+4. **Memory**: Memory usage is within acceptable limits
+5. **Cache**: Lock-free cache is operational
+
+### Using Health Checks in Docker
+
+```yaml
+services:
+  zyncbase:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### Using Health Checks in Kubernetes
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: zyncbase
+spec:
+  containers:
+  - name: zyncbase
+    image: zyncbase/server:latest
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 3000
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 2
+```
+
 ### Prometheus Metrics
 
-ZyncBase exposes Prometheus metrics at `/metrics`:
+ZyncBase exposes comprehensive Prometheus metrics at `/metrics`:
 
 ```bash
 curl http://localhost:3000/metrics
 ```
 
-**Key metrics:**
-- `zyncbase_connections_total` - Total active connections
-- `zyncbase_messages_total` - Total messages processed
-- `zyncbase_message_latency_seconds` - Message processing latency
-- `zyncbase_memory_bytes` - Memory usage
-- `zyncbase_cpu_usage_percent` - CPU usage
+**Connection Metrics:**
+- `zyncbase_connections_total` - Total active WebSocket connections
+- `zyncbase_connections_max` - Maximum configured connections
+- `zyncbase_messages_total` - Total messages processed (counter)
+- `zyncbase_messages_per_second` - Current message rate (gauge)
+- `zyncbase_message_latency_seconds` - Message processing latency (histogram)
+- `zyncbase_bytes_transferred_total` - Total bytes sent/received (counter)
+
+**Cache Metrics:**
+- `zyncbase_cache_entries` - Number of cache entries (gauge)
+- `zyncbase_cache_hit_rate` - Cache hit rate (gauge, 0-1)
+- `zyncbase_cache_memory_bytes` - Cache memory usage (gauge)
+- `zyncbase_cache_ref_count_total` - Total reference count across all entries (gauge)
+
+**Checkpoint Metrics:**
+- `zyncbase_checkpoint_count_total` - Total checkpoints performed (counter)
+- `zyncbase_checkpoint_failed_total` - Failed checkpoint attempts (counter)
+- `zyncbase_checkpoint_duration_seconds` - Checkpoint duration (histogram)
+- `zyncbase_wal_size_bytes` - Current WAL file size (gauge)
+- `zyncbase_last_checkpoint_timestamp` - Unix timestamp of last checkpoint (gauge)
+
+**Hook Server Metrics:**
+- `zyncbase_hook_server_status` - Hook Server connection status (gauge: 0=disconnected, 1=connected)
+- `zyncbase_hook_server_circuit_breaker_state` - Circuit breaker state (gauge: 0=closed, 1=open, 2=half-open)
+- `zyncbase_hook_server_authorization_latency_seconds` - Authorization request latency (histogram)
+- `zyncbase_hook_server_failures_total` - Total Hook Server failures (counter)
+- `zyncbase_hook_server_authorizations_total` - Total authorization requests (counter)
+
+**Error Metrics:**
+- `zyncbase_errors_total` - Total errors by type (counter with `error_type` label)
+- `zyncbase_rate_limit_violations_total` - Rate limit violations (counter)
+- `zyncbase_parsing_errors_total` - MessagePack parsing errors (counter with `error_type` label)
+- `zyncbase_security_events_total` - Security events (counter with `event_type` label)
+
+**Subscription Metrics:**
+- `zyncbase_subscriptions_active` - Active subscriptions (gauge)
+- `zyncbase_subscription_matching_duration_seconds` - Subscription matching latency (histogram)
+- `zyncbase_subscription_notifications_total` - Total notifications sent (counter)
+
+**System Metrics:**
+- `zyncbase_memory_bytes` - Memory usage (gauge)
+- `zyncbase_cpu_usage_percent` - CPU usage percentage (gauge)
+- `zyncbase_uptime_seconds` - Server uptime (gauge)
+
+### Example Prometheus Configuration
+
+```yaml
+# prometheus.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'zyncbase'
+    static_configs:
+      - targets: ['zyncbase:9090']
+    metrics_path: '/metrics'
+```
 
 ### Grafana Dashboard
 
@@ -635,34 +1005,123 @@ net.ipv4.ip_local_port_range = 1024 65535
 
 ### Backup Strategy
 
+ZyncBase uses SQLite with WAL (Write-Ahead Logging) mode, which requires backing up both the main database file and the WAL file for consistency.
+
+#### Simple Backup (Offline)
+
 ```bash
 #!/bin/bash
-# backup.sh
+# backup-offline.sh
 
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="/backups"
 DATA_DIR="/opt/zyncbase/data"
 
-# Stop writes (optional)
-# systemctl stop zyncbase
+# Stop server to ensure consistency
+systemctl stop zyncbase
 
-# Backup SQLite database
-sqlite3 $DATA_DIR/zyncbase.db ".backup $BACKUP_DIR/zyncbase-$DATE.db"
+# Backup database and WAL
+cp $DATA_DIR/zyncbase.db $BACKUP_DIR/zyncbase-$DATE.db
+cp $DATA_DIR/zyncbase.db-wal $BACKUP_DIR/zyncbase-$DATE.db-wal
+cp $DATA_DIR/zyncbase.db-shm $BACKUP_DIR/zyncbase-$DATE.db-shm
 
 # Backup config
 tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/zyncbase/*.json
 
-# Resume writes
-# systemctl start zyncbase
+# Resume server
+systemctl start zyncbase
+
+# Upload to S3 (optional)
+aws s3 cp $BACKUP_DIR/zyncbase-$DATE.db s3://my-backups/
+
+# Cleanup old backups (keep last 7 days)
+find $BACKUP_DIR -name "zyncbase-*.db" -mtime +7 -delete
+```
+
+#### Online Backup (Using SQLite Backup API)
+
+```bash
+#!/bin/bash
+# backup-online.sh
+
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/backups"
+DATA_DIR="/opt/zyncbase/data"
+
+# Use SQLite backup command (online, consistent)
+sqlite3 $DATA_DIR/zyncbase.db ".backup $BACKUP_DIR/zyncbase-$DATE.db"
+
+# Backup config
+tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/zyncbase/*.json
 
 # Upload to S3 (optional)
 aws s3 cp $BACKUP_DIR/zyncbase-$DATE.db s3://my-backups/
 
 # Cleanup old backups
 find $BACKUP_DIR -name "zyncbase-*.db" -mtime +7 -delete
+
+echo "✓ Backup completed: zyncbase-$DATE.db"
+```
+
+#### Continuous Backup (WAL Archiving)
+
+For point-in-time recovery, archive WAL files continuously:
+
+```bash
+#!/bin/bash
+# backup-wal-continuous.sh
+
+DATA_DIR="/opt/zyncbase/data"
+WAL_ARCHIVE="/backups/wal-archive"
+
+mkdir -p $WAL_ARCHIVE
+
+# Run continuously
+while true; do
+  # Wait for WAL checkpoint
+  sleep 60
+  
+  # Archive WAL file if it exists and has changed
+  if [ -f "$DATA_DIR/zyncbase.db-wal" ]; then
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    cp $DATA_DIR/zyncbase.db-wal $WAL_ARCHIVE/wal-$TIMESTAMP
+    
+    # Upload to S3
+    aws s3 cp $WAL_ARCHIVE/wal-$TIMESTAMP s3://my-backups/wal/
+  fi
+done
+```
+
+### Automated Backup with Cron
+
+```bash
+# Add to crontab
+crontab -e
+
+# Backup every 6 hours
+0 */6 * * * /opt/zyncbase/scripts/backup-online.sh
+
+# Backup daily at 2 AM
+0 2 * * * /opt/zyncbase/scripts/backup-offline.sh
+```
+
+### Docker Backup
+
+```bash
+# Backup from Docker container
+docker exec zyncbase sqlite3 /data/zyncbase.db ".backup /data/backup.db"
+docker cp zyncbase:/data/backup.db ./backups/zyncbase-$(date +%Y%m%d).db
+
+# Or backup the entire data volume
+docker run --rm \
+  -v zyncbase_data:/data \
+  -v $(pwd)/backups:/backup \
+  alpine tar czf /backup/zyncbase-data-$(date +%Y%m%d).tar.gz /data
 ```
 
 ### Recovery
+
+#### Simple Restore
 
 ```bash
 # Stop server
@@ -671,11 +1130,141 @@ systemctl stop zyncbase
 # Restore database
 cp /backups/zyncbase-20260309.db /opt/zyncbase/data/zyncbase.db
 
+# Remove WAL files (will be recreated)
+rm -f /opt/zyncbase/data/zyncbase.db-wal
+rm -f /opt/zyncbase/data/zyncbase.db-shm
+
 # Restore config
 tar -xzf /backups/config-20260309.tar.gz -C /opt/zyncbase
 
+# Verify database integrity
+sqlite3 /opt/zyncbase/data/zyncbase.db "PRAGMA integrity_check;"
+
 # Start server
 systemctl start zyncbase
+
+echo "✓ Restore completed"
+```
+
+#### Point-in-Time Recovery
+
+```bash
+#!/bin/bash
+# restore-point-in-time.sh
+
+TARGET_TIME="2026-03-09 14:30:00"
+BACKUP_DIR="/backups"
+WAL_ARCHIVE="/backups/wal-archive"
+DATA_DIR="/opt/zyncbase/data"
+
+# Stop server
+systemctl stop zyncbase
+
+# Find base backup before target time
+BASE_BACKUP=$(find $BACKUP_DIR -name "zyncbase-*.db" -type f | \
+  awk -F'-' '{print $2}' | \
+  awk -v target="$TARGET_TIME" '$0 < target {print}' | \
+  sort -r | head -1)
+
+# Restore base backup
+cp $BACKUP_DIR/zyncbase-$BASE_BACKUP.db $DATA_DIR/zyncbase.db
+
+# Apply WAL files up to target time
+for wal in $(find $WAL_ARCHIVE -name "wal-*" -type f | sort); do
+  WAL_TIME=$(basename $wal | sed 's/wal-//' | sed 's/_/ /')
+  
+  if [[ "$WAL_TIME" < "$TARGET_TIME" ]]; then
+    # Apply WAL file
+    sqlite3 $DATA_DIR/zyncbase.db ".restore $wal"
+  else
+    break
+  fi
+done
+
+# Verify integrity
+sqlite3 $DATA_DIR/zyncbase.db "PRAGMA integrity_check;"
+
+# Start server
+systemctl start zyncbase
+
+echo "✓ Point-in-time recovery completed to $TARGET_TIME"
+```
+
+#### Docker Restore
+
+```bash
+# Stop container
+docker-compose down
+
+# Restore database
+docker cp ./backups/zyncbase-20260309.db zyncbase:/data/zyncbase.db
+
+# Or restore entire volume
+docker run --rm \
+  -v zyncbase_data:/data \
+  -v $(pwd)/backups:/backup \
+  alpine tar xzf /backup/zyncbase-data-20260309.tar.gz -C /
+
+# Start container
+docker-compose up -d
+```
+
+### Backup Verification
+
+Always verify backups are valid:
+
+```bash
+#!/bin/bash
+# verify-backup.sh
+
+BACKUP_FILE=$1
+
+# Check file exists
+if [ ! -f "$BACKUP_FILE" ]; then
+  echo "❌ Backup file not found: $BACKUP_FILE"
+  exit 1
+fi
+
+# Check SQLite integrity
+sqlite3 $BACKUP_FILE "PRAGMA integrity_check;" | grep -q "ok"
+if [ $? -eq 0 ]; then
+  echo "✓ Backup integrity verified: $BACKUP_FILE"
+else
+  echo "❌ Backup integrity check failed: $BACKUP_FILE"
+  exit 1
+fi
+
+# Check file size (should be > 0)
+SIZE=$(stat -f%z "$BACKUP_FILE" 2>/dev/null || stat -c%s "$BACKUP_FILE")
+if [ $SIZE -gt 0 ]; then
+  echo "✓ Backup size: $(numfmt --to=iec-i --suffix=B $SIZE)"
+else
+  echo "❌ Backup file is empty"
+  exit 1
+fi
+```
+
+### Backup Best Practices
+
+1. **Test Restores Regularly**: Verify backups can be restored successfully
+2. **Multiple Backup Locations**: Store backups in multiple locations (local + cloud)
+3. **Retention Policy**: Keep daily backups for 7 days, weekly for 4 weeks, monthly for 1 year
+4. **Monitor Backup Jobs**: Alert on backup failures
+5. **Encrypt Backups**: Use encryption for backups stored off-site
+6. **Document Recovery Procedures**: Keep recovery runbooks up to date
+
+### Backup Encryption
+
+```bash
+# Encrypt backup with GPG
+gpg --symmetric --cipher-algo AES256 zyncbase-backup.db
+
+# Decrypt backup
+gpg --decrypt zyncbase-backup.db.gpg > zyncbase-backup.db
+
+# Or use OpenSSL
+openssl enc -aes-256-cbc -salt -in zyncbase-backup.db -out zyncbase-backup.db.enc
+openssl enc -d -aes-256-cbc -in zyncbase-backup.db.enc -out zyncbase-backup.db
 ```
 
 ---
