@@ -114,8 +114,18 @@ test "MessagePack parser: max depth exceeded" {
     // Depth 2: second nested array (should fail here)
     const data = [_]u8{ 0x91, 0x91, 0x91, 0x90 }; // [[[[]]]]
 
+    // Verify it rejects nesting at exactly the limit
     const result = parser.parse(&data);
-    try testing.expectError(error.MaxDepthExceeded, result);
+    if (result) |val| {
+        parser.freeValue(val);
+        std.debug.print("UNEXPECTED SUCCESS: parsed deep nesting that should have been rejected (depth={d})\n", .{2});
+        return error.UnexpectedSuccess;
+    } else |err| {
+        if (err != error.MaxDepthExceeded) {
+            std.debug.print("UNEXPECTED ERROR: expected MaxDepthExceeded, got {s}\n", .{@errorName(err)});
+            return err;
+        }
+    }
 }
 
 test "MessagePack parser: max size exceeded" {
@@ -292,7 +302,7 @@ test "MessagePack parser: fuzz test with random data" {
 }
 
 // Property test: Deeply nested structures are rejected
-test "MessagePack parser: property - deep nesting rejected" {
+test "Property 2: MessagePack parser - deep nesting rejected" {
     const allocator = testing.allocator;
     const max_depth = 5;
     const parser = try MessagePackParser.init(allocator, .{ .max_depth = max_depth });

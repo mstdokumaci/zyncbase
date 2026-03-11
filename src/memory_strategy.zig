@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 pub const MemoryStrategy = struct {
     /// General-purpose allocator for long-lived allocations (server lifetime)
     /// Used for: State tree, subscriptions, cache entries
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }),
 
     /// Arena allocator for per-request temporary allocations (freed in bulk)
     /// Used for: Request parsing, response building, temporary buffers
@@ -23,13 +23,20 @@ pub const MemoryStrategy = struct {
         // Use page allocator for pools to avoid mutex deadlock with GPA
         const pool_allocator = std.heap.page_allocator;
 
-        return MemoryStrategy{
+        var self = MemoryStrategy{
             .gpa = .{},
             .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-            .message_pool = try Pool(Message).init(pool_allocator, 1000),
-            .buffer_pool = try Pool(Buffer).init(pool_allocator, 1000),
-            .connection_pool = try Pool(Connection).init(pool_allocator, 100_000),
+            .message_pool = undefined,
+            .buffer_pool = undefined,
+            .connection_pool = undefined,
         };
+
+        // Initialize pools with the instance being created to avoid copies
+        self.message_pool = try Pool(Message).init(pool_allocator, 1000);
+        self.buffer_pool = try Pool(Buffer).init(pool_allocator, 1000);
+        self.connection_pool = try Pool(Connection).init(pool_allocator, 100_000);
+
+        return self;
     }
 
     /// Deinitialize the memory strategy and free all resources
@@ -89,75 +96,101 @@ pub const MemoryStrategy = struct {
     }
 };
 
-/// Generic object pool for reusing fixed-size objects
+/// Generic object pool for reusing fixed-size objects.
+/// Uses a lock-free atomic stack to avoid mutex contention.
 pub fn Pool(comptime T: type) type {
     return struct {
         const Self = @This();
 
+        /// Node structure for the intrusive linked list
+        const Node = struct {
+            next: std.atomic.Value(?*Node),
+            data: T,
+        };
+
+        /// Tagged pointer to handle ABA problem
+        const TaggedPtr = packed struct {
+            ptr: ?*Node,
+            gen: usize,
+        };
+
         allocator: Allocator,
-        available: std.ArrayList(*T),
-        mutex: std.Thread.Mutex,
+        head: std.atomic.Value(u128) align(16),
         capacity: usize,
+        count: std.atomic.Value(usize),
 
         /// Initialize a pool with the given capacity
         pub fn init(allocator: Allocator, capacity: usize) !Self {
+            const initial_tagged = TaggedPtr{ .ptr = null, .gen = 0 };
             return Self{
                 .allocator = allocator,
-                .available = std.ArrayList(*T){},
-                .mutex = std.Thread.Mutex{},
+                .head = std.atomic.Value(u128).init(@bitCast(initial_tagged)),
                 .capacity = capacity,
+                .count = std.atomic.Value(usize).init(0),
             };
         }
 
         /// Deinitialize the pool and free all objects
         pub fn deinit(self: *Self) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            for (self.available.items) |item| {
-                self.allocator.destroy(item);
+            // Swap out the head to prevent any concurrent access during deinit
+            var ptr = @as(TaggedPtr, @bitCast(self.head.swap(0, .acquire))).ptr;
+            while (ptr) |node| {
+                const next = node.next.load(.monotonic);
+                self.allocator.destroy(node);
+                ptr = next;
             }
-            self.available.deinit(self.allocator);
         }
 
         /// Acquire an object from the pool, or allocate a new one if pool is empty
         pub fn acquire(self: *Self) !*T {
-            {
-                self.mutex.lock();
-                defer self.mutex.unlock();
-
-                if (self.available.items.len > 0) {
-                    return self.available.pop() orelse unreachable;
+            var current_raw = self.head.load(.acquire);
+            while (true) {
+                const current: TaggedPtr = @bitCast(current_raw);
+                const node = current.ptr orelse break;
+                const next_node = node.next.load(.acquire);
+                const next_tagged = TaggedPtr{ .ptr = next_node, .gen = current.gen + 1 };
+                if (self.head.cmpxchgStrong(current_raw, @bitCast(next_tagged), .acq_rel, .acquire)) |actual| {
+                    current_raw = actual;
+                } else {
+                    _ = self.count.fetchSub(1, .release);
+                    return &node.data;
                 }
             }
 
-            // Pool is empty, allocate a new object (outside mutex to avoid deadlock)
-            const item = try self.allocator.create(T);
+            // Pool is empty, allocate a new object
+            const node = try self.allocator.create(Node);
+            node.next = std.atomic.Value(?*Node).init(null);
 
-            // Initialize the object if it has an init method
-            const type_info = @typeInfo(T);
-            if (type_info == .@"struct" and @hasDecl(T, "init")) {
-                item.* = T.init();
+            // Initialize the object ONLY if it's new
+            const ti = @typeInfo(T);
+            if (ti == .@"struct" and @hasDecl(T, "init")) {
+                node.data = T.init();
             }
 
-            return item;
+            return &node.data;
         }
 
         /// Release an object back to the pool
         /// If pool is at capacity, the object is freed instead
-        pub fn release(self: *Self, item: *T) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+        pub fn release(self: *Self, item_ptr: *T) void {
+            // Recover Node pointer from data pointer
+            const node: *Node = @alignCast(@fieldParentPtr("data", item_ptr));
 
-            if (self.available.items.len < self.capacity) {
-                self.available.append(self.allocator, item) catch {
-                    // If append fails, just free the object
-                    self.allocator.destroy(item);
-                    return;
-                };
+            if (self.count.load(.acquire) < self.capacity) {
+                var current_raw = self.head.load(.acquire);
+                while (true) {
+                    const current: TaggedPtr = @bitCast(current_raw);
+                    node.next.store(current.ptr, .release);
+                    const next_tagged = TaggedPtr{ .ptr = node, .gen = current.gen + 1 };
+                    if (self.head.cmpxchgStrong(current_raw, @bitCast(next_tagged), .acq_rel, .acquire)) |actual| {
+                        current_raw = actual;
+                    } else {
+                        _ = self.count.fetchAdd(1, .release);
+                        return;
+                    }
+                }
             } else {
-                // Pool is at capacity, free the object
-                self.allocator.destroy(item);
+                self.allocator.destroy(node);
             }
         }
     };

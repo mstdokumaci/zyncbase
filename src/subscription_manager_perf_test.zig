@@ -127,8 +127,9 @@ test "performance: subscription matching < 1ms for 10k subscriptions" {
     std.debug.print("  Target: < 10.0 ms\n", .{});
 
     // Verify performance requirement: < 10ms for 10k subscriptions
-    // (The requirement is about matching speed, not about how many matches are found)
-    try testing.expect(duration_ms < 10.0);
+    // Relax for TSan
+    const target_ms: f64 = if (@import("builtin").sanitize_thread) 50.0 else 10.0;
+    try testing.expect(duration_ms < target_ms);
 
     // Verify we found the expected matches
     // Empty filters (2000) + status=active (2000) + status=active AND priority>5 (2000) + priority<=10 (2000) + contains "urgent" (2000)
@@ -320,5 +321,7 @@ test "performance: efficient namespace+collection indexing" {
     try testing.expectEqual(subs_per_combo, matches.len);
 
     // Should be very fast since we only check 100 subscriptions
-    try testing.expect(duration_us < 1000.0); // < 1 millisecond
+    // Relax for TSan
+    const target_us: f64 = if (@import("builtin").sanitize_thread) 5000.0 else 1000.0;
+    try testing.expect(duration_us < target_us); // < 1 millisecond (un-sanitized)
 }

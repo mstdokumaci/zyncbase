@@ -176,21 +176,32 @@ pub const SubscriptionManager = struct {
     }
 
     /// Find all subscriptions that match a row change
+    /// Find all subscriptions that match a row change
     pub fn findMatchingSubscriptions(
         self: *SubscriptionManager,
         change: RowChange,
     ) ![]SubscriptionId {
-        var matches = std.ArrayList(SubscriptionId){};
+        var matches = std.ArrayListUnmanaged(SubscriptionId){};
         errdefer matches.deinit(self.allocator);
 
-        // Build index key
-        const key = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}:{s}",
-            .{ change.namespace, change.collection },
-        );
-        defer self.allocator.free(key);
+        // Use a fixed-size buffer for key to avoid allocation in hot path
+        var key_buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ change.namespace, change.collection }) catch {
+            // Fallback to allocation if buffer is too small (rare)
+            const heap_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ change.namespace, change.collection });
+            defer self.allocator.free(heap_key);
+            return self.findMatchingWithKey(heap_key, change, &matches);
+        };
 
+        return self.findMatchingWithKey(key, change, &matches);
+    }
+
+    fn findMatchingWithKey(
+        self: *SubscriptionManager,
+        key: []const u8,
+        change: RowChange,
+        matches: *std.ArrayListUnmanaged(SubscriptionId),
+    ) ![]SubscriptionId {
         // Get candidates from index
         const candidates = self.index.get(key) orelse return matches.toOwnedSlice(self.allocator);
 

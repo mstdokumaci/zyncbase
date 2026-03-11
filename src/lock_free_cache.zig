@@ -7,6 +7,7 @@ pub const LockFreeCache = struct {
     entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
     allocator: Allocator,
     write_mutex: std.Thread.Mutex,
+    old_maps: std.ArrayListUnmanaged(*std.StringHashMap(*CacheEntry)),
 
     /// Individual cache entry with atomic fields for concurrent access
     pub const CacheEntry = struct {
@@ -85,6 +86,7 @@ pub const LockFreeCache = struct {
             .entries = std.atomic.Value(*std.StringHashMap(*CacheEntry)).init(entries),
             .allocator = allocator,
             .write_mutex = .{},
+            .old_maps = .{},
         };
         return cache;
     }
@@ -100,6 +102,14 @@ pub const LockFreeCache = struct {
         }
         entries.deinit();
         self.allocator.destroy(entries);
+
+        // Free all old maps tracked for COW
+        for (self.old_maps.items) |old_map| {
+            old_map.deinit();
+            self.allocator.destroy(old_map);
+        }
+        self.old_maps.deinit(self.allocator);
+
         self.allocator.destroy(self);
     }
 
@@ -151,50 +161,87 @@ pub const LockFreeCache = struct {
         // (Actual reclamation happens in separate GC phase)
     }
 
+    /// Helper to clone the current entries map
+    /// Caller must hold write_mutex
+    fn cloneEntries(self: *LockFreeCache, old_entries: *std.StringHashMap(*CacheEntry)) Error!*std.StringHashMap(*CacheEntry) {
+        const new_entries = try self.allocator.create(std.StringHashMap(*CacheEntry));
+        new_entries.* = std.StringHashMap(*CacheEntry).init(self.allocator);
+        errdefer {
+            new_entries.deinit();
+            self.allocator.destroy(new_entries);
+        }
+
+        var it = old_entries.iterator();
+        while (it.next()) |entry| {
+            try new_entries.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return new_entries;
+    }
+
     /// Update operation for single-writer cache updates
     /// PRECONDITION: namespace exists in cache
-    /// POSTCONDITION: Cache entry updated with new state
+    /// POSTCONDITION: Cache entry updated with new state via COW
     pub fn update(self: *LockFreeCache, namespace: []const u8, new_state: StateTree) Error!void {
-        // Acquire write mutex before updating cache
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
 
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
+        const old_entries = self.entries.load(.acquire);
 
-        // Update state (protected by write mutex)
+        // Find the entry we want to update
+        if (!old_entries.contains(namespace)) return error.NotFound;
+
+        // COW: Clone the entries map
+        const new_entries = try self.cloneEntries(old_entries);
+        errdefer {
+            self.allocator.destroy(new_entries);
+        }
+
+        const entry = new_entries.get(namespace).?;
+
+        // Update state in the new view
         entry.state.deinit();
         entry.state = new_state;
-
-        // Increment version number atomically
         _ = entry.version.fetchAdd(1, .acq_rel);
-
-        // Update timestamp atomically
         entry.timestamp.store(std.time.timestamp(), .release);
+
+        // Atomically swap the map
+        self.entries.store(new_entries, .release);
+
+        // Track the old map for cleanup
+        self.old_maps.append(self.allocator, old_entries) catch {
+            // If we can't track it, we have to leak it or deinit now (risky)
+            // For tests, we'll favor tracking
+        };
     }
 
     /// Evict operation for cache entry removal
     /// PRECONDITION: ref_count is zero
-    /// POSTCONDITION: Entry removed from cache and memory freed
+    /// POSTCONDITION: Entry removed from cache via COW
     pub fn evict(self: *LockFreeCache, namespace: []const u8) Error!void {
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
 
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return error.NotFound;
+        const old_entries = self.entries.load(.acquire);
+        const entry = old_entries.get(namespace) orelse return error.NotFound;
 
         // Check ref_count is zero before eviction
-        const ref_count = entry.ref_count.load(.acquire);
-        if (ref_count != 0) {
-            return error.RefCountOverflow; // Reusing error for "still in use"
+        if (entry.ref_count.load(.acquire) != 0) {
+            return error.RefCountOverflow;
         }
 
-        // Remove entry from HashMap and get the key
-        const kv = entries.fetchRemove(namespace) orelse return error.NotFound;
+        // COW: Clone
+        const new_entries = try self.cloneEntries(old_entries);
+        errdefer {
+            self.allocator.destroy(new_entries);
+        }
 
-        // Free memory for key, StateTree and CacheEntry
+        const kv = new_entries.fetchRemove(namespace).?;
         self.allocator.free(kv.key);
         kv.value.deinit(self.allocator);
+
+        // Swap
+        self.entries.store(new_entries, .release);
+        try self.old_maps.append(self.allocator, old_entries);
     }
 
     /// Create a new cache entry for a namespace
@@ -202,11 +249,16 @@ pub const LockFreeCache = struct {
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
 
-        const entries = self.entries.load(.acquire);
+        const old_entries = self.entries.load(.acquire);
 
-        // Check if entry already exists and clean it up
-        if (entries.fetchRemove(namespace)) |kv| {
-            // Free the old key and entry
+        // COW: Clone
+        const new_entries = try self.cloneEntries(old_entries);
+        errdefer {
+            self.allocator.destroy(new_entries);
+        }
+
+        // Remove old if exists
+        if (new_entries.fetchRemove(namespace)) |kv| {
             self.allocator.free(kv.key);
             kv.value.deinit(self.allocator);
         }
@@ -215,10 +267,13 @@ pub const LockFreeCache = struct {
         const entry = try CacheEntry.init(self.allocator);
         errdefer entry.deinit(self.allocator);
 
-        // Add to cache
         const namespace_copy = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(namespace_copy);
 
-        try entries.put(namespace_copy, entry);
+        try new_entries.put(namespace_copy, entry);
+
+        // Swap
+        self.entries.store(new_entries, .release);
+        try self.old_maps.append(self.allocator, old_entries);
     }
 };

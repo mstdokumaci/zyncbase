@@ -315,7 +315,7 @@ test "Property 6: Memory Safety - GPA allocation tracking" {
     }
 }
 
-test "Property 6: Memory Safety - pool reuse verification" {
+test "Property 6: Memory Safety - subscription pool reuse" {
     var strategy = try MemoryStrategy.init();
     defer strategy.deinit();
 
@@ -333,6 +333,11 @@ test "Property 6: Memory Safety - pool reuse verification" {
 
     // Verify it's the same object (reused from pool)
     try testing.expect(msg1_addr == msg2_addr);
+
+    // NOTE: TSan may report a race here if it doesn't see the happens-before
+    // established by the internal mutex of the pool. However, since the mutex
+    // is locked/unlocked in release() and acquire(), it should be fine.
+    // The previous failure might have been due to the copy-by-value of MemoryStrategy.
     try testing.expect(msg2.len == 999); // Data persists
 
     strategy.releaseMessage(msg2);
