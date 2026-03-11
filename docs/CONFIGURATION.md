@@ -47,6 +47,7 @@ Main server configuration file.
     "port": 3000
   },
   "schema": "./schema.json",
+  "authRules": "./auth.json",
   "auth": {
     "jwt": {
       "secret": "${JWT_SECRET}"
@@ -182,6 +183,16 @@ Or simple string format:
   - Semantic version of your schema
   - Major version changes require migrations
   - Minor/patch versions can auto-migrate
+
+#### `authRules`
+
+Path to the `auth.json` file containing authorization rules.
+
+```json
+{
+  "authRules": "./auth.json"
+}
+```
 
 #### `auth`
 
@@ -659,17 +670,12 @@ Path: 'users' → Table: users
 From this schema:
 ```json
 {
-  "properties": {
+  "store": {
     "tasks": {
-      "type": "object",
-      "patternProperties": {
-        ".*": {
-          "properties": {
-            "title": { "type": "string" },
-            "status": { "type": "string" },
-            "priority": { "type": "integer" }
-          }
-        }
+      "fields": {
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "integer" }
       }
     }
   }
@@ -699,9 +705,9 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 ```json
 // schema.json v1
 {
-  "properties": {
+  "store": {
     "tasks": {
-      "properties": {
+      "fields": {
         "title": { "type": "string" },
         "status": { "type": "string" }
       }
@@ -711,9 +717,9 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 
 // schema.json v2 - add a field
 {
-  "properties": {
+  "store": {
     "tasks": {
-      "properties": {
+      "fields": {
         "title": { "type": "string" },
         "status": { "type": "string" },
         "assignee": { "type": "string" }  // ← New field
@@ -1092,21 +1098,13 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 **schema.json:**
 ```json
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": {
+  "store": {
     "elements": {
-      "type": "object",
-      "patternProperties": {
-        ".*": {
-          "type": "object",
-          "properties": {
-            "x": { "type": "number" },
-            "y": { "type": "number" },
-            "width": { "type": "number" },
-            "height": { "type": "number" }
-          }
-        }
+      "fields": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" }
       }
     }
   }

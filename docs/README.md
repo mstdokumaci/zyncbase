@@ -58,21 +58,13 @@ Create `schema.json`:
 
 ```json
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": {
+  "store": {
     "elements": {
-      "type": "object",
-      "patternProperties": {
-        ".*": {
-          "type": "object",
-          "properties": {
-            "x": { "type": "number" },
-            "y": { "type": "number" },
-            "width": { "type": "number" },
-            "height": { "type": "number" }
-          }
-        }
+      "fields": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" }
       }
     }
   }
@@ -87,7 +79,8 @@ import { createClient } from '@zyncbase/client'
 const client = createClient({
   url: 'ws://localhost:3000',
   auth: { token: userJWT },
-  namespace: 'room:abc-123'
+  storeNamespace: 'room:abc-123',
+  presenceNamespace: 'room:abc-123'
 })
 
 await client.connect()
@@ -101,6 +94,9 @@ client.store.subscribe('elements', (elements) => {
 client.store.set('elements.rect-1', {
   x: 100, y: 100, width: 200, height: 150
 })
+
+// Remove an item
+client.store.remove('elements.rect-2')
 
 // Show presence
 client.presence.set({ cursor: { x, y }, color: '#ff0000' })

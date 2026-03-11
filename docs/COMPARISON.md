@@ -13,7 +13,7 @@ This document compares ZyncBase with the major Backend-as-a-Service (BaaS) platf
 | **Real-time latency** | ~100ms | ~500ms | ~200ms | **<10ms** |
 | **Presence awareness** | Manual | Extra cost | ❌ | **Built-in** |
 | **Multi-tenant isolation** | Manual | RLS | Manual | **Built-in** |
-| **Schema validation** | ❌ | Backend only | Backend only | **Both sides** |
+| **Schema validation** | ❌ | Backend only | Backend only | **Backend + SDK Types** |
 | **Deployment** | Managed only | Complex | Single binary | **Single binary** |
 | **Configuration** | GUI | SQL + GUI | Go code | **JSON files** |
 | **Vendor lock-in** | High | Medium | None | **None** |

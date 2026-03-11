@@ -235,12 +235,11 @@ client.presence.set({
 const alicePresence = client.presence.get('user-123')
 // Returns: { cursor: { x: 100, y: 200 }, color: '#ff0000', name: 'Alice' }
 
-// Get all users
-const allUsers = client.presence.getAll()
-// Returns: [
-//   { userId: 'user-123', data: { ... }, joinedAt: 1234567890 },
-//   { userId: 'user-456', data: { ... }, joinedAt: 1234567891 }
-// ]
+// Get only other users (default)
+const others = client.presence.getAll()
+
+// Get everyone including self
+const everyone = client.presence.getAll({ includeSelf: true })
 ```
 
 ### Subscribe to Changes

@@ -300,9 +300,9 @@ ZyncBase targets the following performance characteristics:
 
 Every architectural decision involves trade-offs. Here are ZyncBase's conscious limitations:
 
-### 1. Vertical Scaling Only (v2.0)
+### 1. Vertical Scaling Only (v1.0)
 - **Decision**: Focus on single-node performance
-- **Trade-off**: No horizontal scaling in v2.0
+- **Trade-off**: No horizontal scaling in v1.0
 - **Rationale**: Most apps don't need it, adds complexity
 - **Future**: Can add in v2.5+ if needed
 
@@ -312,7 +312,7 @@ Every architectural decision involves trade-offs. Here are ZyncBase's conscious 
 - **Rationale**: 10k writes/sec is sufficient for most apps
 - **Mitigation**: Batch writes for higher throughput
 
-### 3. No Complex Queries (v2.0)
+### 3. No Complex Queries (v1.0)
 - **Decision**: Simple query language, no joins
 - **Trade-off**: Less powerful than SQL
 - **Rationale**: Real-time apps rarely need complex queries
@@ -325,7 +325,7 @@ Every architectural decision involves trade-offs. Here are ZyncBase's conscious 
 - **Mitigation**: Webhooks for custom logic
 
 ### 5. No Built-in Horizontal Scaling
-- **Decision**: No clustering in v2.0
+- **Decision**: No clustering in v1.0
 - **Trade-off**: Can't scale beyond one node
 - **Rationale**: Vertical scaling is sufficient for most apps
 - **Future**: LiteFS or Marmot for horizontal scaling
@@ -416,7 +416,7 @@ Every architectural decision involves trade-offs. Here are ZyncBase's conscious 
    - Limited to ~10k req/sec total
    - Wastes SQLite parallel read capability
 
-2. **Thread-per-namespace** (rejected for v2.0)
+2. **Thread-per-namespace** (rejected for v1.0)
    - More complex than read/write separation
    - Harder to load balance
    - Can revisit in v2.5+ if needed

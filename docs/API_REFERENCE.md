@@ -110,7 +110,17 @@ const userName = client.store.get('user.name')
 
 #### `store.set(path, value)`
 
-Write a value to the state tree. Automatically syncs to server and all connected clients.
+Write a value to the state tree. **Optimistic by default**: the update is applied immediately to the local state and then synchronized with the server. If the server rejects the update (e.g., due to a validation or permission error), the local state is automatically reverted.
+
+Errors are handled via the global `client.on('error', ...)` event listener.
+
+```typescript
+// Example: Global error handling
+client.on('error', (err) => {
+  console.error('Operation failed:', err.message)
+  showNotification('Error', err.message)
+})
+```
 
 ```typescript
 // Set entire object
@@ -134,6 +144,23 @@ client.store.set('tasks', [
 **Parameters:**
 - `path` (string) - Dot-notation path
 - `value` (any) - Value to set (must match schema)
+
+**Returns:** `void`
+
+#### `store.remove(path)`
+
+Removes a value from the state tree at the specified path. Automatically syncs to server and all connected clients.
+
+```typescript
+// Remove an entire object
+client.store.remove('elements.rect-1')
+
+// Remove a specific property (if permitted by schema)
+client.store.remove('user.status')
+```
+
+**Parameters:**
+- `path` (string) - Dot-notation path
 
 **Returns:** `void`
 
@@ -405,17 +432,25 @@ const alicePresence = client.presence.get('user-123')
 
 ---
 
-#### `presence.getAll()`
+#### `presence.getAll(options?)`
 
-Get all users' presence data in the current namespace.
+Returns all users' presence data in the current namespace. **Excludes the local user by default.**
 
 ```typescript
+// Get only other users
 const others = client.presence.getAll()
-// Returns: [
-//   { userId: 'user-123', data: { cursor: {...}, color: '...' } },
-//   { userId: 'user-456', data: { cursor: {...}, color: '...' } }
-// ]
+
+// Get everyone including self
+const everyone = client.presence.getAll({ includeSelf: true })
 ```
+
+**Parameters:**
+- `options` (object, optional)
+  - `includeSelf` (boolean) - Whether to include the local user in the result. Default: `false`.
+
+**Returns:** `Array<PresenceEntry>`
+
+---
 
 **Returns:** Array of `{ userId, data }` objects
 

@@ -45,19 +45,23 @@ These changes work automatically in all environments:
 ```json
 // Before
 {
-  "tasks": {
-    "properties": {
-      "title": { "type": "string" }
+  "store": {
+    "tasks": {
+      "fields": {
+        "title": { "type": "string" }
+      }
     }
   }
 }
 
 // After
 {
-  "tasks": {
-    "properties": {
-      "title": { "type": "string" },
-      "assignee": { "type": "string" }  // ← Auto-migrates
+  "store": {
+    "tasks": {
+      "fields": {
+        "title": { "type": "string" },
+        "assignee": { "type": "string" }  // ← Auto-migrates
+      }
     }
   }
 }
@@ -74,11 +78,13 @@ These changes work automatically in all environments:
 ✅ **Add index**
 ```json
 {
-  "tasks": {
-    "properties": {
-      "status": { 
-        "type": "string",
-        "index": true  // ← Auto-migrates
+  "store": {
+    "tasks": {
+      "fields": {
+        "status": { 
+          "type": "string",
+          "index": true  // ← Auto-migrates
+        }
       }
     }
   }
@@ -252,9 +258,9 @@ $ vim schema.json
 ```json
 {
   "version": "2.0.0",  // ← Bump major version
-  "properties": {
+  "store": {
     "tasks": {
-      "properties": {
+      "fields": {
         "priority": { "type": "string" }  // ← Changed from integer
       }
     }
@@ -756,7 +762,7 @@ $ zyncbase migrate up
 ```json
 {
   "version": "1.2.0",
-  "properties": { ... }
+  "store": { ... }
 }
 ```
 

@@ -1175,9 +1175,9 @@ For production, consider LiteFS for continuous replication:
 - Automatic checkpointing thresholds
 - Manual checkpoints during low traffic
 
-### No Horizontal Scaling (v2.0)
+### No Horizontal Scaling (v1.0)
 
-**Limitation**: Single-node only in v2.0
+**Limitation**: Single-node only in v1.0
 
 **Impact**: Cannot scale beyond one server
 

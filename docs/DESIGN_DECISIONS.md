@@ -12,7 +12,8 @@ This document explains the architectural and design decisions behind ZyncBase.
 2. [Query Language Design](#query-language-design)
 3. [Architecture Decisions](#architecture-decisions)
 4. [Implementation Roadmap](#implementation-roadmap)
-5. [Open Questions](#open-questions)
+5. [Resolved Implementation Questions](#resolved-implementation-questions)
+6. [Open Design Work](#open-design-work)
 
 ---
 
@@ -153,28 +154,68 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 **Date**: 2026-03-08  
 **Status**: Accepted
 
-**Context**: Should v2.0 support horizontal scaling?
+**Context**: Should v1.0 support horizontal scaling?
 
-**Decision**: No. ZyncBase is designed exclusively for vertical scaling (single server, all CPU cores).
+**Decision**: No. ZyncBase is designed exclusively for vertical scaling (single server, all CPU cores). In order to efficiently optimize performance, horizontal scaling is completely removed from the vision for now.
 
 **Rationale**:
-- Horizontal scaling adds significant complexity
-- Distributed consensus, data sharding, network overhead
-- Contradicts core principles of simplicity and performance
-- Vertical scaling sufficient for 100k+ connections
+- Most collaborative apps don't reach 100k concurrent users per server
+- Simpler architecture = faster development and better reliability
+- Vertical scaling to 100k+ connections is sufficient for 99% of use cases
+- No distributed state complexity (no raft/paxos)
 
 **Consequences**:
-- ✅ Simpler architecture
-- ✅ Better performance (no network overhead)
-- ✅ Easier to deploy and maintain
-- ❌ Limited to single server capacity
-- ❌ No geographic distribution
-
-**Alternative**: If you need horizontal scaling, use a distributed database like CockroachDB or Cassandra instead.
+- ✅ Best-in-class single-node performance
+- ✅ Simplest operational model
+- ✅ High reliability
+- ❌ Hard limit of ~100k concurrent users per node
+- ❌ Requires vertical scaling for growth
 
 ---
 
-### ADR-005: Configuration-First (Zero-Zig)
+### ADR-005: Optimistic Writes by Default
+
+**Date**: 2026-03-09  
+**Status**: Accepted
+
+**Context**: How should the Client SDK handle real-time state updates?
+
+**Decision**: All writes (`store.set`, `store.remove`) are optimistic by default. Changes are applied immediately to the local cache and synchronized with the server asynchronously.
+
+**Rationale**:
+- Zero-latency perceived performance for users
+- Matches standard real-time collaboration patterns (Firebase model)
+- Simplifies UI code (no waiting for API responses)
+
+**Consequences**:
+- ✅ Instant UI feedback
+- ✅ Simplified frontend code
+- ⚠️ Requires automatic local state revert on server rejection
+- ⚠️ Errors must be handled via global event listeners
+
+---
+
+### ADR-006: Server-side Only Validation
+
+**Date**: 2026-03-09  
+**Status**: Accepted
+
+**Context**: Should the Client SDK replicate the server's validation logic?
+
+**Decision**: No. Validation is enforced strictly on the server. The Client SDK uses TypeScript types generated from the schema for developer experience (DX), but does not run schema validation at runtime.
+
+**Rationale**:
+- Prevents version-coupling between server and client
+- Keeps the Client SDK lightweight
+- Server must validate anyway for security; client validation is redundant
+
+**Consequences**:
+- ✅ Smaller SDK bundle size
+- ✅ No "stale schema" bugs on clients
+- ⚠️ Errors only discovered after server round-trip (handled via optimistic revert)
+---
+
+### ADR-007: Configuration-First (Zero-Zig)
 
 **Date**: 2026-03-09  
 **Status**: Accepted
@@ -198,7 +239,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ---
 
-### ADR-006: Prisma-Inspired Query Language
+### ADR-008: Prisma-Inspired Query Language
 
 **Date**: 2026-03-09  
 **Status**: Accepted
@@ -223,7 +264,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ## Implementation Roadmap
 
-### Phase 1: Core (Weeks 1-4)
+### Phase 1: Core
 
 **Goal**: Basic real-time state sync
 
@@ -232,50 +273,47 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - [ ] Lock-free cache implementation
 - [ ] SQLite integration with WAL
 - [ ] MessagePack serialization
-- [ ] Basic authentication (JWT)
 
 **Deliverable**: Echo server with real-time sync
 
 ---
 
-### Phase 2: Store API (Weeks 5-8)
+### Phase 2: Store API
 
 **Goal**: Path-based state access
 
 - [ ] Store.get() implementation
-- [ ] Store.set() implementation
+- [ ] Store.set() and Store.remove() implementation
 - [ ] Store.subscribe() implementation
-- [ ] Schema validation (JSON Schema)
+- [ ] Schema validation (Server-side)
 - [ ] Namespace isolation
-- [ ] Authorization rules (auth.json)
+- [ ] Authorization engine (Basic)
 
 **Deliverable**: Collaborative whiteboard demo
 
 ---
 
-### Phase 3: Query API (Weeks 9-12)
+### Phase 3: Query API
 
-**Goal**: Collection filtering and sorting
+**Goal**: Collection filtering and sorting (MVP Scope)
 
 - [ ] Query parser
 - [ ] Query executor (SQLite)
-- [ ] All operators (eq, gte, contains, etc.)
-- [ ] OR conditions
-- [ ] Sorting
-- [ ] Pagination
+- [ ] MVP Operators (`eq`, `in`, `gt`/`lt`, `startsWith`)
+- [ ] Sorting (Single-field)
+- [ ] Pagination (Cursor-based)
 - [ ] Real-time query subscriptions
 
 **Deliverable**: Multi-tenant dashboard demo
 
 ---
 
-### Phase 4: Presence API (Weeks 13-16)
+### Phase 4: Presence API
 
 **Goal**: User awareness
 
 - [ ] Presence.set() implementation
-- [ ] Presence.get() implementation
-- [ ] Presence.getAll() implementation
+- [ ] Presence.getAll() implementation (self-excluded by default)
 - [ ] Presence.subscribe() implementation
 - [ ] Ephemeral storage (RAM only)
 - [ ] Automatic cleanup on disconnect
@@ -284,23 +322,21 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ---
 
-### Phase 5: Client SDK (Weeks 17-20)
+### Phase 5: Client SDK
 
 **Goal**: TypeScript client library
 
 - [ ] Core client implementation
 - [ ] Connection management
 - [ ] Reconnection logic
-- [ ] TypeScript types
+- [ ] TypeScript types generation
 - [ ] React integration
-- [ ] Vue integration
-- [ ] Svelte integration
 
-**Deliverable**: npm package @ZyncBase/client
+**Deliverable**: npm package @zyncbase/client
 
 ---
 
-### Phase 6: Production Ready (Weeks 21-24)
+### Phase 6: Production Ready
 
 **Goal**: Production hardening
 
@@ -309,148 +345,80 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - [ ] Monitoring (Prometheus metrics)
 - [ ] Health check endpoint
 - [ ] Graceful shutdown
-- [ ] Hot reload for config
 - [ ] Documentation
 - [ ] Examples
 
-**Deliverable**: v2.0.0 release
+**Deliverable**: v1.0.0 release
 
 ---
 
-## Open Questions
+## Out of V1 Scope
 
-### 1. Lock-Free Cache Implementation?
+To focus on a rock-solid core, the following features are explicitly deferred:
 
-**Question**: Which lock-free data structure for the cache?
+- **Frameworks**: Vue and Svelte integrations (Roadmap: post-v1)
+- **Tooling**: Admin UI & detailed Firebase/Supabase migration guides (Roadmap: post-v1)
+- **Features**: Offline support, Full-text search (FTS5), and Aggregation queries (Roadmap: post-v1)
+- **Advanced Queries**: Multi-field sorting (Roadmap: post-v1)
+- **DevOps**: Kubernetes official deployment guide (Roadmap: post-v1)
+- **DX**: Hot reload for server configuration (v1: server restart is minimum)
 
-**Options:**
-- **RCU (Read-Copy-Update)**: Linux kernel approach, complex
-- **Atomic reference counting**: Simpler, good enough
-- **Hazard pointers**: More complex, better performance
-
-**Decision**: Start with atomic reference counting, optimize later if needed
-
-**Critical Note**: The lock-free cache MUST use proper atomic operations. If it falls back to a global mutex, it will negate all benefits of the multi-threaded architecture and limit performance to single-threaded levels (~10k req/sec instead of 170k req/sec).
 
 ---
 
-### 2. MessagePack Parser Security
+## Resolved Implementation Questions
 
-**Question**: How to prevent stack overflow from malicious payloads?
+The following items were previously listed as "Open Questions" and have now been resolved.
 
-**Decision**: Use iterative parser (not recursive) to prevent:
-- **Stack overflow** from deeply nested objects
-- **Size bombs** from excessive data
-- **Depth bombs** from nested structures
+### ADR-009: Lock-Free Cache — Atomic Reference Counting
 
-The parser must be security-hardened against untrusted client input.
+**Date**: 2026-03-09  
+**Status**: Accepted
 
----
+**Context**: Which lock-free data structure for the in-memory cache?
 
-### 3. uWebSockets Compression?
+**Decision**: Start with atomic reference counting. Optimize to RCU or hazard pointers only if profiling shows it is the bottleneck.
 
-**Question**: Should we enable per-message deflate compression?
-
-**Options:**
-- No compression (faster, more bandwidth)
-- Per-message deflate (standard, slower)
-- Custom compression (optimized for our use case)
-
-**Decision**: TBD based on bandwidth measurements
+**Critical Note**: The lock-free cache MUST use proper atomic operations. A global mutex fallback would negate all multi-threading benefits (~10k req/sec instead of 170k req/sec).
 
 ---
 
-### 4. MessagePack vs JSON?
+### ADR-010: Iterative MessagePack Parser
 
-**Question**: Binary protocol or text protocol?
+**Date**: 2026-03-09  
+**Status**: Accepted
 
-**Options:**
-- MessagePack (smaller, faster, binary)
-- JSON (human-readable, easier debugging)
-- Both (let client choose)
+**Context**: How to prevent stack overflow from malicious client payloads?
 
-**Decision**: MessagePack for production, JSON for debugging
+**Decision**: Use an iterative (not recursive) parser with hard limits on nesting depth and payload size. The parser must be security-hardened against untrusted client input.
 
 ---
 
-### 5. Admin UI?
+### ADR-011: MessagePack for Production, JSON for Debug
 
-**Question**: Should we build an admin UI?
+**Date**: 2026-03-09  
+**Status**: Accepted
 
-**Options:**
-- Web-based UI (like PocketBase)
-- CLI only
-- Both
+**Context**: Binary protocol or text protocol for the wire format?
 
-**Decision**: CLI first, web UI in v2.1
+**Decision**: MessagePack for production (smaller, faster). JSON mode available via a debug flag for development and troubleshooting.
 
 ---
 
-### 6. Bun Integration?
+### ADR-012: No WebSocket Compression (v1.0)
 
-**Question**: Should we provide Bun-specific optimizations?
+**Date**: 2026-03-09  
+**Status**: Accepted
 
-**Considerations:**
-- Bun uses same uWebSockets engine
-- Could share code/learnings
-- Potential collaboration opportunity
+**Context**: Should we enable per-message deflate compression on WebSocket connections?
 
-**Decision**: TBD - reach out to Bun team for feedback
+**Decision**: No compression in v1.0. MessagePack is already compact. Compression adds CPU overhead and latency. Revisit based on real-world bandwidth measurements post-launch.
 
 ---
 
-### 7. Complex Query Patterns?
+## Open Design Work
 
-**Question**: How to handle complex nested queries?
-
-**Examples:**
-- Multiple OR conditions
-- NOT operator
-- Nested AND/OR combinations
-- Subqueries
-
-**Status**: Needs more design work
-
----
-
-### 8. Conflict Resolution Strategy?
-
-**Question**: How to handle concurrent edits?
-
-**Options:**
-- Last-write-wins (simple)
-- CRDTs (complex, automatic)
-- Operational Transform (complex, precise)
-- Custom merge functions (flexible)
-
-**Decision**: TBD - depends on use case
-
----
-
-### 9. Offline Support?
-
-**Question**: How to handle offline clients?
-
-**Options:**
-- Queue mutations locally
-- Sync on reconnect
-- Conflict resolution
-- Delta sync
-
-**Decision**: TBD - Phase 2 feature
-
----
-
-### 10. Schema Evolution?
-
-**Question**: How to handle schema changes?
-
-**Options:**
-- Migrations (like SQL)
-- Versioning (multiple schemas)
-- Automatic (best effort)
-
-**Decision**: TBD - needs more thought
+For items still requiring dedicated design work, see [design_todo.md](./design_todo.md).
 
 ---
 
@@ -466,7 +434,7 @@ This is a living document. If you have feedback or suggestions, please:
 
 ## References
 
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Technical architecture
-- [research.md](../research.md) - Technical research and validation
+- [Architecture](./architecture/README.md) - Technical architecture
+- [Research](./architecture/RESEARCH.md) - Technical research and validation
 - [API Reference](./API_REFERENCE.md) - Client SDK documentation
 - [Comparison](./COMPARISON.md) - vs Firebase/Supabase/PocketBase
