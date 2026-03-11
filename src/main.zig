@@ -16,6 +16,7 @@ test {
     _ = @import("subscription_manager_property_test.zig");
     _ = @import("subscription_manager_perf_test.zig");
     _ = @import("request_handler_test.zig");
+    _ = @import("memory_safety_property_test.zig");
 }
 
 pub fn main() !void {

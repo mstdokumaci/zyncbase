@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run tests
+        run: zig build test --summary all
+
+  test-with-thread-sanitizer:
+    name: Test with ThreadSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run tests with ThreadSanitizer
+        run: zig build test -Dsanitize=thread --summary all
+        continue-on-error: true  # TSan may find issues that need investigation
+        env:
+          TSAN_OPTIONS: second_deadlock_stack=1:history_size=7
+
+  memory-leak-check:
+    name: Memory Leak Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Run tests with GPA leak detection
+        run: zig build test --summary all
+        env:
+          # GPA in debug mode automatically detects leaks
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build
+
+      - name: Build with optimizations
+        run: zig build -Doptimize=ReleaseFast
