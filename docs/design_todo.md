@@ -30,27 +30,27 @@ Items requiring dedicated design work before implementation. Each item should re
 
 ## High Priority (Impacts API surface)
 
-### 4. Error Taxonomy
+### 5. Error Taxonomy
 **Why**: Only six error codes exist in API_REFERENCE. No formal error handling strategy.
 **Decision needed**: Complete error taxonomy (connection, auth, validation, rate-limit, server errors), retry semantics, error propagation to client.
 
-### 5. Batch Operations API
+### 6. Batch Operations API
 **Why**: Referenced in QUERY_ENGINE.md best practices but not documented in API_REFERENCE.
 **Decision needed**: API surface (`store.batch()`), transaction semantics, error handling for partial failures.
 
-### 6. Real-time Subscription Invalidation Strategy
+### 7. Real-time Subscription Invalidation Strategy
 **Why**: QUERY_ENGINE.md describes two approaches (table-grained vs fine-grained) but doesn't commit.
 **Decision needed**: Which strategy to implement, performance implications, fallback behavior.
 
-### 7. Connection Status API
+### 8. Connection Status API
 **Why**: Developers need observable connection state for UI feedback.
 **Decision needed**: Status values (`connecting` | `connected` | `disconnected` | `reconnecting`), React hook API (`useClient()`), event model.
 
-### 8. Cursor-based Pagination for Real-time Queries
+### 9. Cursor-based Pagination for Real-time Queries
 **Why**: Offset-based pagination breaks when items are inserted in real-time.
 **Decision needed**: Cursor format, interaction with subscriptions, `loadMore` API design.
 
-### 9. Query API MVP Scope
+### 10. Query API MVP Scope
 **Why**: We need to limit the scope of the v1 query engine to the most critical operators to ship faster.
 **Decision needed**: Formally drop complex operators (e.g., regex, full-text, complex joins) and define the exact boolean logic (AND/OR) boundaries for v1.
 **Status**: Limit to `eq`, `in`, `gt`/`lt`, and `startsWith`.
@@ -59,14 +59,22 @@ Items requiring dedicated design work before implementation. Each item should re
 
 ## Medium Priority (Impacts DX / extensibility)
 
-### 10. Configuration Extensibility (Webhook Hooks)
+### 11. Configuration Extensibility (Webhook Hooks)
 **Why**: JSON-only config will hit limits for rate limiting rules, custom validation, computed fields.
 **Decision needed**: Make webhook hooks first-class, define hook points, request/response contract.
 
-### 10. Offline Support
+### 12. Offline Support
 **Why**: Listed as a selling point but has zero design. Massively complex.
 **Decision needed**: Whether to pursue at all in near-term. If yes: local storage strategy, sync queue, client-side conflict resolution.
 **Status**: Scoped out of v1. Design only when revisited.
+
+### 13. Data Structure & Primary Key Conventions
+**Why**: The wire protocol needs a canonical format for data access, and the client SDK return types must be completely consistent.
+**Decision needed**: Formalize the Relational-Document Hybrid Model:
+- Canonical path format for wire protocol is `['Table', 'PrimaryKey', 'Column(s)']`.
+- SDK must parse dot-notation strings into this array format before transmission.
+- Return types: Collections as Arrays, Documents as Objects, Properties as Scalars.
+- Presence: Always return Arrays for `getAll` and `subscribe`, injecting `userId` into items.
 
 ---
 
@@ -86,3 +94,4 @@ Items requiring dedicated design work before implementation. Each item should re
 | 10 | Query API MVP Scope | ❌ Not started | — |
 | 11 | Config Extensibility | ❌ Not started | — |
 | 12 | Offline Support | 🔒 Scoped out of v1 | — |
+| 13 | Data Structure & Primary Key Conventions | ❌ Not started | — |

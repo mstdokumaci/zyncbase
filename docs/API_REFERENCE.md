@@ -101,9 +101,13 @@ const userName = client.store.get('user.name')
 ```
 
 **Parameters:**
-- `path` (string) - Dot-notation path to the value
+- `path` (string | string[]) - Path to the value (e.g., `'items'`, `['items', id]`, or `'items.item-1.name'`)
 
-**Returns:** The value at the path, or `undefined` if not found
+**Returns:** 
+- **Array of Objects**: If the path points to a root collection (e.g., `'items'`).
+- **Single Object**: If the path points to a specific document (e.g., `'items.item-1'`).
+- **Exact Value**: If the path points to a specific property (e.g., `'items.item-1.name'`).
+- `undefined`: If the path is not found.
 
 ---
 
@@ -133,15 +137,17 @@ client.store.set('elements.rect-1', {
 // Set nested property
 client.store.set('user.name', 'Alice')
 
-// Set array
+// Set array (replaces entire collection)
 client.store.set('tasks', [
   { id: 1, title: 'Task 1' },
   { id: 2, title: 'Task 2' }
 ])
 ```
 
+**ID Extraction**: When calling `set()` on a document path (e.g., `elements.rect-1`), the SDK automatically extracts the ID (`rect-1`) from the path and merges it into the object. You do not need to include the `id` in the object body unless you choose to.
+
 **Parameters:**
-- `path` (string) - Dot-notation path
+- `path` (string | string[]) - Dot-notation path or Array
 - `value` (any) - Value to set (must match schema)
 
 **Returns:** `void`
@@ -159,7 +165,7 @@ client.store.remove('user.status')
 ```
 
 **Parameters:**
-- `path` (string) - Dot-notation path
+- `path` (string | string[]) - Dot-notation path or Array
 
 **Returns:** `void`
 
@@ -190,10 +196,24 @@ unsubscribe()
 ```
 
 **Parameters:**
-- `path` (string) - Dot-notation path
-- `callback` (function) - Called when value changes
+- `path` (string | string[]) - Path to watch
+- `callback` (function) - Called when value changes. Receives an **Array** for collections, an **Object** for documents, or a **Value** for properties.
 
 **Returns:** Unsubscribe function
+
+---
+
+### Path Syntax (Strings vs Arrays)
+
+To avoid tedious string concatenation when using variables (like IDs), all SDK methods accept both dot-notation strings and Arrays of strings.
+
+**The Array is the canonical format.** Dot-notation strings are converted to arrays before being sent over the wire.
+
+```typescript
+// These are equivalent:
+client.store.get('items.item-1.name')
+client.store.get(['items', itemId, 'name'])
+```
 
 ---
 
@@ -447,42 +467,37 @@ const everyone = client.presence.getAll({ includeSelf: true })
 - `options` (object, optional)
   - `includeSelf` (boolean) - Whether to include the local user in the result. Default: `false`.
 
-**Returns:** `Array<PresenceEntry>`
-
----
-
-**Returns:** Array of `{ userId, data }` objects
+**Returns:** `Array<PresenceEntry>` - Each object includes the user's data plus their `userId`.
 
 ---
 
 #### `presence.subscribe(callback)`
 
-Subscribe to presence changes in the current presence namespace.
+Subscribe to real-time presence changes for all users in the namespace.
 
 ```typescript
 const unsubscribe = client.presence.subscribe((presenceList) => {
-  // Render cursors for all users in this namespace
+  // Callback receives an Array of PresenceEntry objects
   renderCursors(presenceList)
 })
-
-// Cleanup
-unsubscribe()
 ```
 
 **Parameters:**
-- `callback` (function) - Called when presence changes
+- `callback` (function) - Fired whenever any user joins, leaves, or updates. Receives the full `Array` of online users.
 
 **Callback receives:**
 ```typescript
 [
   { 
     userId: 'user-123', 
-    data: { cursor: { x: 100, y: 200 }, color: '#ff0000' },
+    cursor: { x: 100, y: 200 }, 
+    color: '#ff0000',
     joinedAt: 1234567890
   },
   { 
     userId: 'user-456', 
-    data: { cursor: { x: 300, y: 400 }, color: '#00ff00' },
+    cursor: { x: 300, y: 400 }, 
+    color: '#00ff00',
     joinedAt: 1234567891
   }
 ]
