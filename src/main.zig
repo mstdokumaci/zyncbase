@@ -20,6 +20,8 @@ test {
     _ = @import("request_handler_test.zig");
     _ = @import("memory_safety_property_test.zig");
     _ = @import("config_loader_test.zig");
+    _ = @import("storage_engine_test.zig");
+    _ = @import("storage_engine_property_test.zig");
 }
 
 pub fn main() !void {

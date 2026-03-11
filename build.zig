@@ -11,6 +11,13 @@ pub fn build(b: *std.Build) void {
         "Enable sanitizer: address, leak, or thread",
     );
 
+    // Add SQLite dependency
+    const sqlite_dep = b.dependency("sqlite", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const sqlite_module = sqlite_dep.module("sqlite");
+
     // Create the main executable
     const exe = b.addExecutable(.{
         .name = "zyncbase",
@@ -20,6 +27,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Add SQLite module to executable
+    exe.root_module.addImport("sqlite", sqlite_module);
 
     // Apply sanitizer if specified
     if (sanitize) |san| {
@@ -39,6 +49,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Add SQLite module to tests
+    tests.root_module.addImport("sqlite", sqlite_module);
 
     linkUWS(b, tests);
 
