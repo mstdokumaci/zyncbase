@@ -42,12 +42,18 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // Create test step
+    const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
+
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
+        .filters = if (test_filter) |filter|
+            b.allocator.dupe([]const u8, &.{filter}) catch unreachable
+        else
+            &.{},
     });
 
     // Add SQLite module to tests
@@ -74,19 +80,41 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     // Link system libraries
     step.linkSystemLibrary("pthread");
 
+    const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
+
+    var b_b_path: []const u8 = "vendor/boringssl/build";
+    var b_b_include: []const u8 = "vendor/boringssl/include";
+    var is_absolute = false;
+
+    if (is_linux) {
+        if (std.process.getEnvVarOwned(b.allocator, "ZYNCBASE_LINUX_BORINGSSL_PATH")) |env_path| {
+            b_b_path = env_path;
+            is_absolute = true;
+            b_b_include = b.fmt("{s}/../boringssl/include", .{b_b_path});
+        } else |_| {}
+    }
+
     // Add include paths - BoringSSL must come first to override system OpenSSL
-    step.addIncludePath(b.path("vendor/boringssl/include"));
+    if (is_absolute) {
+        step.addIncludePath(.{ .cwd_relative = b_b_include });
+    } else {
+        step.addIncludePath(b.path(b_b_include));
+    }
     step.addIncludePath(b.path("vendor/bun/packages/bun-uws/src"));
     step.addIncludePath(b.path("vendor/bun/packages/bun-usockets/src"));
     step.addIncludePath(b.path("vendor/bun/src/deps"));
     step.addIncludePath(b.path("src")); // For uws_wrapper.h
 
     // Link BoringSSL (built separately with CMake)
-    step.addObjectFile(b.path("vendor/boringssl/build/libdecrepit.a"));
-    step.addObjectFile(b.path("vendor/boringssl/build/libssl.a"));
-    step.addObjectFile(b.path("vendor/boringssl/build/libcrypto.a"));
-
-    const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
+    if (is_absolute) {
+        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libdecrepit.a", .{b_b_path}) });
+        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libssl.a", .{b_b_path}) });
+        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libcrypto.a", .{b_b_path}) });
+    } else {
+        step.addObjectFile(b.path(b.fmt("{s}/libdecrepit.a", .{b_b_path})));
+        step.addObjectFile(b.path(b.fmt("{s}/libssl.a", .{b_b_path})));
+        step.addObjectFile(b.path(b.fmt("{s}/libcrypto.a", .{b_b_path})));
+    }
 
     // BoringSSL's crypto library requires libdl on Linux for dynamic loading
     if (is_linux) {
