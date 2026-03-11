@@ -11,6 +11,7 @@ pub const StorageEngine = struct {
     write_thread: ?std.Thread = null,
     shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
+    transaction_active: std.atomic.Value(bool),
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
@@ -74,6 +75,7 @@ pub const StorageEngine = struct {
             .write_queue = try WriteQueue.init(allocator, 1000),
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
+            .transaction_active = std.atomic.Value(bool).init(false),
         };
 
         // Start write thread
@@ -111,7 +113,13 @@ pub const StorageEngine = struct {
     }
 
     pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        // Queue write operation
+        // If a manual transaction is active, execute directly
+        if (self.transaction_active.load(.acquire)) {
+            try self.executeSet(namespace, path, value);
+            return;
+        }
+
+        // Otherwise, queue write operation for batch processing
         const op = WriteOp{
             .type = .set,
             .namespace = try self.allocator.dupe(u8, namespace),
@@ -141,7 +149,13 @@ pub const StorageEngine = struct {
     }
 
     pub fn delete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        // Queue delete operation
+        // If a manual transaction is active, execute directly
+        if (self.transaction_active.load(.acquire)) {
+            try self.executeDelete(namespace, path);
+            return;
+        }
+
+        // Otherwise, queue delete operation for batch processing
         const op = WriteOp{
             .type = .delete,
             .namespace = try self.allocator.dupe(u8, namespace),
@@ -202,15 +216,31 @@ pub const StorageEngine = struct {
     }
 
     pub fn beginTransaction(self: *StorageEngine) !void {
+        if (self.transaction_active.load(.acquire)) {
+            return error.TransactionAlreadyActive;
+        }
         try self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
+        self.transaction_active.store(true, .release);
     }
 
     pub fn commitTransaction(self: *StorageEngine) !void {
+        if (!self.transaction_active.load(.acquire)) {
+            return error.NoActiveTransaction;
+        }
         try self.writer_conn.exec("COMMIT", .{}, .{});
+        self.transaction_active.store(false, .release);
     }
 
     pub fn rollbackTransaction(self: *StorageEngine) !void {
+        if (!self.transaction_active.load(.acquire)) {
+            return error.NoActiveTransaction;
+        }
         try self.writer_conn.exec("ROLLBACK", .{}, .{});
+        self.transaction_active.store(false, .release);
+    }
+
+    pub fn isTransactionActive(self: *StorageEngine) bool {
+        return self.transaction_active.load(.acquire);
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
@@ -263,7 +293,10 @@ pub const StorageEngine = struct {
                 (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
 
             if (should_flush) {
-                try self.executeBatch(batch.items);
+                self.executeBatch(batch.items) catch |err| {
+                    std.log.err("Failed to execute batch, transaction rolled back: {}", .{err});
+                    // Transaction is automatically rolled back by errdefer in executeBatch
+                };
                 for (batch.items) |op| {
                     op.deinit(self.allocator);
                 }
@@ -277,14 +310,34 @@ pub const StorageEngine = struct {
 
         // Flush remaining operations on shutdown
         if (batch.items.len > 0) {
-            try self.executeBatch(batch.items);
+            self.executeBatch(batch.items) catch |err| {
+                std.log.err("Failed to execute final batch on shutdown, transaction rolled back: {}", .{err});
+                // Transaction is automatically rolled back by errdefer in executeBatch
+            };
         }
     }
 
     fn executeBatch(self: *StorageEngine, ops: []const WriteOp) !void {
-        // Begin transaction
-        try self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
-        errdefer self.writer_conn.exec("ROLLBACK", .{}, .{}) catch {};
+        // Check if a manual transaction is already active
+        // This shouldn't happen since manual transactions execute directly,
+        // but we check to be safe
+        const manual_transaction_active = self.transaction_active.load(.acquire);
+
+        if (!manual_transaction_active) {
+            // Begin transaction and track state
+            try self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
+            self.transaction_active.store(true, .release);
+        }
+
+        // Ensure rollback on error (only if we started the transaction)
+        errdefer {
+            if (!manual_transaction_active) {
+                self.writer_conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
+                    std.log.err("Failed to rollback transaction: {}", .{rollback_err});
+                };
+                self.transaction_active.store(false, .release);
+            }
+        }
 
         // Execute all operations
         for (ops) |op| {
@@ -294,8 +347,11 @@ pub const StorageEngine = struct {
             }
         }
 
-        // Commit transaction
-        try self.writer_conn.exec("COMMIT", .{}, .{});
+        // Commit transaction and clear state (only if we started the transaction)
+        if (!manual_transaction_active) {
+            try self.writer_conn.exec("COMMIT", .{}, .{});
+            self.transaction_active.store(false, .release);
+        }
     }
 
     fn executeSet(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {

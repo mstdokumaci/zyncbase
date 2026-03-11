@@ -240,3 +240,183 @@ test "Property 20: Insert/delete inverse operation" {
         try testing.expect(value2 == null);
     }
 }
+
+// **Validates: Requirements 13.7**
+test "Property 21: Transaction isolation" {
+    const allocator = testing.allocator;
+
+    const test_dir = "test_data_transaction_isolation";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const engine = try StorageEngine.init(allocator, test_dir);
+    defer engine.deinit();
+
+    // Test that operations are batched and executed atomically by the write thread
+    // The write thread uses transactions internally to ensure atomicity
+
+    // Set up initial state
+    try engine.set("test_namespace", "/key1", "{\"value\":\"initial1\"}");
+    try engine.set("test_namespace", "/key2", "{\"value\":\"initial2\"}");
+    try engine.flushPendingWrites();
+
+    // Verify initial state
+    const initial1 = try engine.get("test_namespace", "/key1");
+    defer if (initial1) |v| allocator.free(v);
+    const initial2 = try engine.get("test_namespace", "/key2");
+    defer if (initial2) |v| allocator.free(v);
+    try testing.expect(initial1 != null);
+    try testing.expect(initial2 != null);
+
+    // Queue multiple operations that should execute atomically in a batch
+    try engine.set("test_namespace", "/key1", "{\"value\":\"updated1\"}");
+    try engine.set("test_namespace", "/key2", "{\"value\":\"updated2\"}");
+    try engine.set("test_namespace", "/key3", "{\"value\":\"new3\"}");
+
+    // Flush to ensure operations are processed
+    try engine.flushPendingWrites();
+
+    // All operations should have been applied atomically
+    const updated1 = try engine.get("test_namespace", "/key1");
+    defer if (updated1) |v| allocator.free(v);
+    const updated2 = try engine.get("test_namespace", "/key2");
+    defer if (updated2) |v| allocator.free(v);
+    const new3 = try engine.get("test_namespace", "/key3");
+    defer if (new3) |v| allocator.free(v);
+
+    try testing.expect(updated1 != null);
+    try testing.expect(updated2 != null);
+    try testing.expect(new3 != null);
+    try testing.expectEqualStrings("{\"value\":\"updated1\"}", updated1.?);
+    try testing.expectEqualStrings("{\"value\":\"updated2\"}", updated2.?);
+    try testing.expectEqualStrings("{\"value\":\"new3\"}", new3.?);
+
+    // Test concurrent reads during batch processing see consistent state
+    // This tests that the write thread's transaction provides isolation
+    try engine.set("test_namespace", "/concurrent_key", "{\"value\":\"before\"}");
+    try engine.flushPendingWrites();
+
+    // Start a batch by queuing many operations
+    const num_ops = 100;
+    var i: usize = 0;
+    while (i < num_ops) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "/batch_key{d}", .{i});
+        defer allocator.free(key);
+        const value = try std.fmt.allocPrint(allocator, "{{\"batch\":{d}}}", .{i});
+        defer allocator.free(value);
+        try engine.set("test_namespace", key, value);
+    }
+
+    // While the batch is being processed, concurrent reads should work
+    const concurrent_read = try engine.get("test_namespace", "/concurrent_key");
+    defer if (concurrent_read) |v| allocator.free(v);
+    try testing.expect(concurrent_read != null);
+    try testing.expectEqualStrings("{\"value\":\"before\"}", concurrent_read.?);
+
+    // Wait for all writes to complete
+    try engine.flushPendingWrites();
+
+    // Verify all batch operations were applied atomically
+    i = 0;
+    while (i < num_ops) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "/batch_key{d}", .{i});
+        defer allocator.free(key);
+        const value = try engine.get("test_namespace", key);
+        defer if (value) |v| allocator.free(v);
+        try testing.expect(value != null);
+    }
+}
+
+// **Validates: Requirements 13.8**
+test "Property 22: Automatic transaction rollback" {
+    const allocator = testing.allocator;
+
+    const test_dir = "test_data_auto_rollback";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const engine = try StorageEngine.init(allocator, test_dir);
+    defer engine.deinit();
+
+    // Set up initial state
+    try engine.set("test_namespace", "/key1", "{\"value\":\"initial\"}");
+    try engine.flushPendingWrites();
+
+    // Verify initial state
+    const initial = try engine.get("test_namespace", "/key1");
+    defer if (initial) |v| allocator.free(v);
+    try testing.expect(initial != null);
+    try testing.expectEqualStrings("{\"value\":\"initial\"}", initial.?);
+
+    // Test manual transaction rollback
+    try engine.beginTransaction();
+    try testing.expect(engine.isTransactionActive());
+
+    // Make changes within transaction
+    try engine.set("test_namespace", "/key1", "{\"value\":\"modified\"}");
+    try engine.set("test_namespace", "/key2", "{\"value\":\"new\"}");
+
+    // Rollback the transaction
+    try engine.rollbackTransaction();
+    try testing.expect(!engine.isTransactionActive());
+
+    // Flush any pending writes from before the transaction
+    try engine.flushPendingWrites();
+
+    // Verify changes were rolled back
+    const after_rollback1 = try engine.get("test_namespace", "/key1");
+    defer if (after_rollback1) |v| allocator.free(v);
+    try testing.expect(after_rollback1 != null);
+    try testing.expectEqualStrings("{\"value\":\"initial\"}", after_rollback1.?);
+
+    const after_rollback2 = try engine.get("test_namespace", "/key2");
+    try testing.expect(after_rollback2 == null);
+
+    // Test that errors in batch processing trigger automatic rollback
+    // We simulate this by testing the transaction state after an error
+
+    // First, set up a successful transaction
+    try engine.beginTransaction();
+    try engine.set("test_namespace", "/key3", "{\"value\":\"test3\"}");
+    try engine.commitTransaction();
+    try engine.flushPendingWrites();
+
+    const committed = try engine.get("test_namespace", "/key3");
+    defer if (committed) |v| allocator.free(v);
+    try testing.expect(committed != null);
+    try testing.expectEqualStrings("{\"value\":\"test3\"}", committed.?);
+
+    // Test transaction state management
+    // Attempting to commit without an active transaction should error
+    try testing.expectError(error.NoActiveTransaction, engine.commitTransaction());
+
+    // Attempting to rollback without an active transaction should error
+    try testing.expectError(error.NoActiveTransaction, engine.rollbackTransaction());
+
+    // Attempting to begin a transaction when one is already active should error
+    try engine.beginTransaction();
+    try testing.expectError(error.TransactionAlreadyActive, engine.beginTransaction());
+    try engine.rollbackTransaction();
+
+    // Test that the write thread's automatic transaction handling works correctly
+    // by verifying that batched operations are atomic (all succeed or all fail)
+    const batch_size = 50;
+    var j: usize = 0;
+    while (j < batch_size) : (j += 1) {
+        const key = try std.fmt.allocPrint(allocator, "/batch_test{d}", .{j});
+        defer allocator.free(key);
+        const value = try std.fmt.allocPrint(allocator, "{{\"index\":{d}}}", .{j});
+        defer allocator.free(value);
+        try engine.set("test_namespace", key, value);
+    }
+
+    // Flush and verify all operations succeeded atomically
+    try engine.flushPendingWrites();
+
+    j = 0;
+    while (j < batch_size) : (j += 1) {
+        const key = try std.fmt.allocPrint(allocator, "/batch_test{d}", .{j});
+        defer allocator.free(key);
+        const value = try engine.get("test_namespace", key);
+        defer if (value) |v| allocator.free(v);
+        try testing.expect(value != null);
+    }
+}

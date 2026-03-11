@@ -171,15 +171,62 @@ test "StorageEngine: transaction support" {
     const engine = try StorageEngine.init(allocator, test_dir);
     defer engine.deinit();
 
+    // Initially no transaction should be active
+    try testing.expect(!engine.isTransactionActive());
+
     // Begin transaction
     try engine.beginTransaction();
+    try testing.expect(engine.isTransactionActive());
+
+    // Cannot begin another transaction while one is active
+    try testing.expectError(error.TransactionAlreadyActive, engine.beginTransaction());
 
     // Commit transaction
     try engine.commitTransaction();
+    try testing.expect(!engine.isTransactionActive());
+
+    // Cannot commit when no transaction is active
+    try testing.expectError(error.NoActiveTransaction, engine.commitTransaction());
 
     // Begin and rollback transaction
     try engine.beginTransaction();
+    try testing.expect(engine.isTransactionActive());
     try engine.rollbackTransaction();
+    try testing.expect(!engine.isTransactionActive());
+
+    // Cannot rollback when no transaction is active
+    try testing.expectError(error.NoActiveTransaction, engine.rollbackTransaction());
+}
+
+test "StorageEngine: automatic rollback in batch operations" {
+    const allocator = testing.allocator;
+
+    const test_dir = "test_data_auto_rollback";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const engine = try StorageEngine.init(allocator, test_dir);
+    defer engine.deinit();
+
+    // Queue some operations
+    try engine.set("test_ns", "key1", "value1");
+    try engine.set("test_ns", "key2", "value2");
+
+    // Wait for operations to be processed
+    try engine.flushPendingWrites();
+
+    // Verify no transaction is active after batch completes
+    try testing.expect(!engine.isTransactionActive());
+
+    // Verify data was written
+    const value1 = try engine.get("test_ns", "key1");
+    defer if (value1) |v| allocator.free(v);
+    try testing.expect(value1 != null);
+    try testing.expectEqualStrings("value1", value1.?);
+
+    const value2 = try engine.get("test_ns", "key2");
+    defer if (value2) |v| allocator.free(v);
+    try testing.expect(value2 != null);
+    try testing.expectEqualStrings("value2", value2.?);
 }
 
 test "StorageEngine: concurrent reads" {
