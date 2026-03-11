@@ -114,9 +114,14 @@ That's it! You now have real-time collaboration with presence awareness.
 - **[Query Language](./QUERY_LANGUAGE.md)** - Filtering, sorting, and pagination syntax
 - **[Configuration](./CONFIGURATION.md)** - Server setup and config files
 - **[Migrations](./MIGRATIONS.md)** - Schema changes and data migrations
+- **[Presence System](./PRESENCE.md)** - Real-time cursors, status, and collaboration
 - **[Deployment](./DEPLOYMENT.md)** - Docker, production, security
 - **[Comparison](./COMPARISON.md)** - vs Firebase/Supabase/PocketBase
 - **[Design Decisions](./DESIGN_DECISIONS.md)** - High-level architecture decisions
+
+### Internal Specifications
+- **[Wire Protocol](./WIRE_PROTOCOL.md)** - Complete client-server MessagePack protocol
+- **[Authorization Format](./AUTH_SPEC.md)** - Declarative rule syntax and Sidecar IPC
 
 ### Technical Documentation
 - **[Architecture](./architecture/README.md)** - Deep dive into ZyncBase internals

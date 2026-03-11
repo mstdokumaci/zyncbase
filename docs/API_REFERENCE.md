@@ -11,7 +11,7 @@ Complete reference for the ZyncBase TypeScript/JavaScript client SDK.
 1. [Core Concepts](#core-concepts)
 2. [Store API](#store-api-path-based-state-access)
 3. [Query API](#query-api-path-filtering) - See also: [Query Language Reference](./QUERY_LANGUAGE.md)
-4. [Presence API](#presence-api-user-awareness)
+4. [Presence API](#presence-api-user-awareness) - See also: [Presence System](./PRESENCE.md)
 5. [Connection Management](#connection-management)
 6. [Framework Integrations](#framework-integrations)
 
@@ -68,7 +68,7 @@ tenant:acme                                    // Broad access (all data)
       └─ tenant:acme:workspace:ws-1:document:doc-123  // Document-scoped
 ```
 
-Auth rules determine which namespaces you can access. See [Configuration](./CONFIGURATION.md) for auth setup.
+Auth rules determine which namespaces you can access. See [Authorization Format](./AUTH_SPEC.md) for rule syntax and [Configuration](./CONFIGURATION.md) for setup.
 
 ---
 
