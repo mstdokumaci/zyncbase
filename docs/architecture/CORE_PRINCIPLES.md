@@ -6,7 +6,7 @@
 
 ## Design Philosophy
 
-STX v2.0 is built on four core principles that guide every architectural decision:
+zyncBase v2.0 is built on four core principles that guide every architectural decision:
 
 ### 1. Performance First
 - Zero-copy where possible
@@ -78,7 +78,7 @@ Zig was chosen as the primary implementation language for several critical reaso
 
 | Language | Memory Model | Concurrency | GC Overhead | C Interop | Binary Size |
 |----------|--------------|-------------|-------------|-----------|-------------|
-| **Zig (STX)** | Manual / Explicit | Native Threads | None | Zero-cost ABI | ~15MB |
+| **Zig (zyncBase)** | Manual / Explicit | Native Threads | None | Zero-cost ABI | ~15MB |
 | **Go (PocketBase)** | GC / Implicit | Goroutines (CSP) | Periodic Pauses | CGO Penalty | ~12MB |
 | **Rust (Deno)** | Ownership / Borrow | Async / Await | None | Safe FFI Wrapper | ~100MB |
 | **JavaScript (Node.js)** | GC / Implicit | Event Loop | Significant | N-API / Addons | >100MB |
@@ -138,7 +138,7 @@ uWebSockets is built on µSockets, which provides:
 | Concurrency Model | Multi-threaded Event Loop | Single-threaded Event Loop | Event Loop / Workers |
 | Memory per Connection | < 1KB | ~5KB | ~3KB |
 
-**Key Insight**: uWebSockets provides the same performance as Bun because they use the same underlying engine. By using it directly, STX achieves Bun-level performance.
+**Key Insight**: uWebSockets provides the same performance as Bun because they use the same underlying engine. By using it directly, zyncBase achieves Bun-level performance.
 
 ---
 
@@ -221,22 +221,22 @@ Write-Ahead Logging (WAL) mode transforms SQLite's concurrency model:
 
 ## Zero-Zig Philosophy
 
-STX follows a "configuration-first" approach inspired by infrastructure tools:
+zyncBase follows a "configuration-first" approach inspired by infrastructure tools:
 
 ### Inspiration
 
-**Think of STX like:**
+**Think of zyncBase like:**
 - **Nginx** - You don't write C, you edit nginx.conf
 - **PostgreSQL** - You don't write C, you write SQL and config files
 - **Redis** - You don't write C, you use redis.conf
 
-**STX is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
+**zyncBase is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
 
 ### Configuration Files
 
-Users configure STX with three JSON files:
+Users configure zyncBase with three JSON files:
 
-1. **stx.config.json** - Server settings, auth, namespaces
+1. **zyncBase.config.json** - Server settings, auth, namespaces
 2. **schema.json** - JSON Schema for data validation
 3. **auth.json** - Declarative authorization rules
 
@@ -260,7 +260,7 @@ But 95% of use cases need only JSON configuration.
 
 ## Performance Targets
 
-STX v2.0 targets the following performance characteristics:
+zyncBase v2.0 targets the following performance characteristics:
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
@@ -298,7 +298,7 @@ STX v2.0 targets the following performance characteristics:
 
 ## Trade-offs and Limitations
 
-Every architectural decision involves trade-offs. Here are STX's conscious limitations:
+Every architectural decision involves trade-offs. Here are zyncBase's conscious limitations:
 
 ### 1. Vertical Scaling Only (v2.0)
 - **Decision**: Focus on single-node performance

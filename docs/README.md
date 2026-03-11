@@ -1,34 +1,34 @@
-# STX v2.0 - Real-Time Collaborative State Manager
+# zyncBase v2.0 - Real-Time Collaborative State Manager
 
 **Status**: Draft  
 **Last Updated**: 2026-03-09
 
 ---
 
-## 🎯 What is STX?
+## 🎯 What is zyncBase?
 
-**STX is a self-hosted, real-time collaborative state manager with built-in network sync, presence awareness, and multi-tenant isolation.**
+**zyncBase is a self-hosted, real-time collaborative state manager with built-in network sync, presence awareness, and multi-tenant isolation.**
 
 **The Problem**: Firebase costs explode with success and locks you in. Supabase is slow at scale. Building real-time features from scratch is complex.
 
-**The Solution**: STX gives you Firebase's real-time features with predictable costs, no vendor lock-in, and full control over your infrastructure.
+**The Solution**: zyncBase gives you Firebase's real-time features with predictable costs, no vendor lock-in, and full control over your infrastructure.
 
 ---
 
 ## The "Better Than" Strategy
 
-STX isn't trying to be everything to everyone. It's laser-focused on being the **best choice for real-time collaborative applications**.
+zyncBase isn't trying to be everything to everyone. It's laser-focused on being the **best choice for real-time collaborative applications**.
 
 | What You Need | Best Choice | Why |
 |---------------|-------------|-----|
-| **Real-time collaboration** | **STX** | Built for this, 200k+ req/sec, presence included |
+| **Real-time collaboration** | **zyncBase** | Built for this, 200k+ req/sec, presence included |
 | **Complex SQL queries** | Supabase | PostgreSQL is better for complex joins |
 | **Serverless functions** | Firebase | Managed cloud, auto-scaling |
 | **Simple CRUD API** | PocketBase | Simpler if you don't need real-time |
-| **Mobile offline-first** | **STX** | Optimistic updates, conflict resolution |
-| **Multi-tenant SaaS** | **STX** | Namespace isolation built-in |
+| **Mobile offline-first** | **zyncBase** | Optimistic updates, conflict resolution |
+| **Multi-tenant SaaS** | **zyncBase** | Namespace isolation built-in |
 
-**STX's Unfair Advantages:**
+**zyncBase's Unfair Advantages:**
 
 1. **Performance** - 20x faster than Supabase real-time, 2x faster than PocketBase
 2. **Presence** - Built-in, not an afterthought or extra cost
@@ -45,11 +45,11 @@ STX isn't trying to be everything to everyone. It's laser-focused on being the *
 
 ```bash
 # Download binary
-curl -L https://stx.dev/download/latest -o stx-server
-chmod +x stx-server
+curl -L https://zyncBase.dev/download/latest -o zyncBase-server
+chmod +x zyncBase-server
 
 # Run with default config
-./stx-server
+./zyncBase-server
 ```
 
 ### 2. Define Your Schema
@@ -82,7 +82,7 @@ Create `schema.json`:
 ### 3. Connect from Client
 
 ```typescript
-import { createClient } from '@stx/client'
+import { createClient } from '@zyncBase/client'
 
 const client = createClient({
   url: 'ws://localhost:3000',
@@ -123,7 +123,7 @@ That's it! You now have real-time collaboration with presence awareness.
 - **[Design Decisions](./DESIGN_DECISIONS.md)** - High-level architecture decisions
 
 ### Technical Documentation
-- **[Architecture](./architecture/README.md)** - Deep dive into STX internals
+- **[Architecture](./architecture/README.md)** - Deep dive into zyncBase internals
   - [Core Principles](./architecture/CORE_PRINCIPLES.md) - Design philosophy and technology choices
   - [Threading Model](./architecture/THREADING.md) - Multi-threaded architecture
   - [Storage Layer](./architecture/STORAGE.md) - SQLite optimization
@@ -133,28 +133,28 @@ That's it! You now have real-time collaboration with presence awareness.
 
 ---
 
-## Why Developers Choose STX
+## Why Developers Choose zyncBase
 
 ### Not Another State Manager
 
-STX is **NOT** a replacement for Zustand, Redux, or Jotai. Those are great for local state.
+zyncBase is **NOT** a replacement for Zustand, Redux, or Jotai. Those are great for local state.
 
-STX is for when you need:
+zyncBase is for when you need:
 - **Real-time collaboration** - Multiple users editing the same data simultaneously
 - **Presence awareness** - See who's online, where their cursor is, what they're selecting
 - **Multi-tenant SaaS** - Isolated state per customer with efficient resource sharing
 - **Offline-first apps** - Automatic conflict resolution when reconnecting
 
-### When to Use STX
+### When to Use zyncBase
 
-**Use STX when you need:**
+**Use zyncBase when you need:**
 - ✅ Real-time collaboration (multiple users editing same data)
 - ✅ Presence awareness (see who's online, where they are)
 - ✅ Multi-tenant isolation (SaaS with per-customer state)
 - ✅ Offline-first with sync (mobile apps, unreliable networks)
 - ✅ Conflict resolution (automatic merging of concurrent edits)
 
-**Don't use STX when:**
+**Don't use zyncBase when:**
 - ❌ You just need local state management → Use Zustand
 - ❌ You need server state caching → Use TanStack Query
 - ❌ You need complex state machines → Use XState
@@ -164,12 +164,12 @@ STX is for when you need:
 
 ## Zero-Zig Philosophy
 
-**You don't need to know Zig to use STX.** The server is a single binary that you configure with JSON files. Think of it like:
+**You don't need to know Zig to use zyncBase.** The server is a single binary that you configure with JSON files. Think of it like:
 - **Nginx** - You don't write C, you edit nginx.conf
 - **PostgreSQL** - You don't write C, you write SQL and config files
 - **Redis** - You don't write C, you use redis.conf
 
-**STX is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
+**zyncBase is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
 
 **No Zig compilation. No build steps. Just configuration.**
 
@@ -177,10 +177,10 @@ STX is for when you need:
 
 ## Community & Support
 
-- **GitHub**: [github.com/stx/stx](https://github.com/stx/stx)
-- **Discord**: [discord.gg/stx](https://discord.gg/stx)
-- **Documentation**: [stx.dev/docs](https://stx.dev/docs)
-- **Examples**: [github.com/stx/examples](https://github.com/stx/examples)
+- **GitHub**: [github.com/zyncBase/zyncBase](https://github.com/zyncBase/zyncBase)
+- **Discord**: [discord.gg/zyncBase](https://discord.gg/zyncBase)
+- **Documentation**: [zyncBase.dev/docs](https://zyncBase.dev/docs)
+- **Examples**: [github.com/zyncBase/examples](https://github.com/zyncBase/examples)
 
 ---
 

@@ -1,4 +1,4 @@
-# STX v2.0 - Architecture Documentation
+# zyncBase v2.0 - Architecture Documentation
 
 **Status**: Draft  
 **Last Updated**: 2026-03-09  
@@ -9,7 +9,7 @@
 
 ## Overview
 
-STX v2.0 is a self-hosted, real-time collaborative state manager built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
+zyncBase v2.0 is a self-hosted, real-time collaborative state manager built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
 
 ### Target Performance
 
@@ -99,7 +99,7 @@ Technical analysis validating all architectural assumptions with citations.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     STX Server (Zig + uWebSockets)          │
+│                     zyncBase Server (Zig + uWebSockets)          │
 │                                                             │
 │  ┌───────────────────────────────────────────────────────┐ │
 │  │         uWebSockets (C++) - Network Layer             │ │
@@ -116,7 +116,7 @@ Technical analysis validating all architectural assumptions with citations.
 │  └───────────────────────────┬───────────────────────────┘ │
 │                              │                             │
 │  ┌───────────────────────────▼───────────────────────────┐ │
-│  │       STX Core Engine (Zig) - MULTI-THREADED         │ │
+│  │       zyncBase Core Engine (Zig) - MULTI-THREADED         │ │
 │  │                                                       │ │
 │  │  ┌──────────────────────────────────────────────┐   │ │
 │  │  │  Lock-Free Cache (Parallel Reads)            │   │ │
@@ -183,7 +183,7 @@ Key: ═══ Parallel execution paths (scales with CPU cores)
 
 ## Storage Architecture
 
-STX uses different storage strategies for different data types:
+zyncBase uses different storage strategies for different data types:
 
 ### Store Data → SQLite
 - **Persistent** - Survives server restarts
@@ -211,7 +211,7 @@ STX uses different storage strategies for different data types:
 
 | Solution | Req/Sec | Connections | Architecture | Notes |
 |----------|---------|-------------|--------------|-------|
-| **STX (Zig + uWebSockets)** | 200k+ | 100k+ | Multi-threaded core | Our target (17x vs single-threaded) |
+| **zyncBase (Zig + uWebSockets)** | 200k+ | 100k+ | Multi-threaded core | Our target (17x vs single-threaded) |
 | **Bun (Zig + uWebSockets)** | 200k+ | Millions | Multi-threaded | Same stack as us |
 | **PocketBase (Go)** | 10k | 100k+ | Single-threaded | Proven baseline |
 | **Firebase** | Unknown | Millions | Distributed | Proprietary |

@@ -1,14 +1,14 @@
-# STX vs Firebase vs Supabase vs PocketBase
+# zyncBase vs Firebase vs Supabase vs PocketBase
 
 **Last Updated**: 2026-03-09
 
-This document compares STX with the major Backend-as-a-Service (BaaS) platforms to help you choose the right tool for your project.
+This document compares zyncBase with the major Backend-as-a-Service (BaaS) platforms to help you choose the right tool for your project.
 
 ---
 
 ## Quick Comparison Table
 
-| Feature | Firebase | Supabase | PocketBase | STX |
+| Feature | Firebase | Supabase | PocketBase | zyncBase |
 |---------|----------|----------|------------|-----|
 | **Real-time latency** | ~100ms | ~500ms | ~200ms | **<10ms** |
 | **Presence awareness** | Manual | Extra cost | ❌ | **Built-in** |
@@ -110,10 +110,10 @@ await pb.collection('elements').update('rect-1', {
 // Presence - not available
 ```
 
-**STX:**
+**zyncBase:**
 ```typescript
 // Setup
-import { createClient } from '@stx/client'
+import { createClient } from '@zyncBase/client'
 
 const client = createClient({
   url: 'ws://localhost:3000',
@@ -138,7 +138,7 @@ client.presence.set({ cursor: { x, y }, color: '#ff0000' })
 const others = client.presence.getAll()
 ```
 
-**Winner: STX** - Simplest API, presence included, fastest real-time updates
+**Winner: zyncBase** - Simplest API, presence included, fastest real-time updates
 
 ---
 
@@ -176,7 +176,7 @@ pb.OnRecordBeforeCreateRequest().Add(func(e *core.RecordCreateEvent) error {
 // Requires Go code, not just config
 ```
 
-**STX:**
+**zyncBase:**
 ```typescript
 // Namespace isolation - automatic
 const client = createClient({
@@ -195,7 +195,7 @@ client.store.subscribe('projects', (projects) => {
 // Impossible to access other tenant's data
 ```
 
-**Winner: STX** - Automatic isolation, no manual filtering, impossible to mess up
+**Winner: zyncBase** - Automatic isolation, no manual filtering, impossible to mess up
 
 ---
 
@@ -233,7 +233,7 @@ const records = await pb.collection('events').getList(1, 50, {
 // But real-time is limited
 ```
 
-**STX:**
+**zyncBase:**
 ```typescript
 // One-off query (for SSR, validation, exports)
 const events = await client.query('events', {
@@ -250,7 +250,7 @@ const unsubscribe = client.subscribe('events', {
 })
 
 // Or use framework integration (automatic cleanup)
-import { useQuery } from '@stx/react'
+import { useQuery } from '@zyncBase/react'
 
 function Dashboard() {
   const events = useQuery('events', {
@@ -261,7 +261,7 @@ function Dashboard() {
 }
 ```
 
-**Winner: STX** - Fast queries + fast real-time subscriptions + great framework DX
+**Winner: zyncBase** - Fast queries + fast real-time subscriptions + great framework DX
 
 ---
 
@@ -272,7 +272,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 1. Unpredictable Pricing (Firebase)
 **Problem**: Costs spike with success, per-operation billing
 
-**STX Solution**:
+**zyncBase Solution**:
 - Self-hosted on your infrastructure
 - No per-operation charges
 - Predictable server costs
@@ -281,7 +281,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 2. Vendor Lock-in (Firebase)
 **Problem**: Proprietary APIs, difficult migration, can't self-host
 
-**STX Solution**:
+**zyncBase Solution**:
 - Open source MIT license
 - Standard WebSocket protocol
 - Your data on your servers
@@ -290,7 +290,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 3. Performance at Scale (Supabase)
 **Problem**: Slow queries, high latency, concurrent connection limits
 
-**STX Solution**:
+**zyncBase Solution**:
 - Deploy close to your users (self-hosted)
 - Optimized for real-time state sync (not general database)
 - Efficient binary protocol (MessagePack)
@@ -299,15 +299,15 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 4. Complex Queries are Painful (Firebase)
 **Problem**: NoSQL limitations, zig-zag joins
 
-**STX Solution**:
+**zyncBase Solution**:
 - Not a database - use any DB for persistence
-- STX handles state sync
+- zyncBase handles state sync
 - Query API for filtering and sorting
 
 ### 5. Logic Outside Codebase (Firebase)
 **Problem**: Database rules in GUI, hard to version control
 
-**STX Solution**:
+**zyncBase Solution**:
 - All logic in JSON config files
 - Version controlled with your app
 - Testable with standard tools
@@ -316,7 +316,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 6. Self-hosting Complexity (Supabase)
 **Problem**: Difficult setup, missing features, poor docs
 
-**STX Solution**:
+**zyncBase Solution**:
 - Single binary deployment
 - Deploy anywhere (Docker, VPS, cloud)
 - No feature differences
@@ -325,7 +325,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 ### 7. Real-time is Expensive (Firebase/Supabase)
 **Problem**: Bandwidth charges, presence costs extra
 
-**STX Solution**:
+**zyncBase Solution**:
 - Real-time is the core feature
 - Presence built-in (no extra cost)
 - Efficient protocol reduces bandwidth
@@ -375,15 +375,15 @@ Based on 2024-2026 developer feedback, the top complaints are:
 
 ---
 
-## When NOT to Use STX
+## When NOT to Use zyncBase
 
-Be honest about what STX is NOT good for:
+Be honest about what zyncBase is NOT good for:
 
 - ❌ **Complex SQL queries** → Use Supabase (PostgreSQL is better)
 - ❌ **Serverless functions** → Use Firebase (managed cloud, auto-scaling)
 - ❌ **Simple CRUD without real-time** → Use PocketBase (simpler)
 - ❌ **Static sites** → Use nothing, just React state
-- ❌ **Horizontal scaling** → STX is vertical-only (single server)
+- ❌ **Horizontal scaling** → zyncBase is vertical-only (single server)
 
 ---
 

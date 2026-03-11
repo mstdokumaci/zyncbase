@@ -6,7 +6,7 @@
 
 ## Overview
 
-STX uses uWebSockets (C++) as its networking foundation, integrated directly with Zig for maximum performance. This is the same engine that powers Bun, providing 200,000+ requests/second with microsecond latency.
+zyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig for maximum performance. This is the same engine that powers Bun, providing 200,000+ requests/second with microsecond latency.
 
 **Key Innovation**: Direct Zig + uWebSockets integration = Bun-level performance without JavaScript overhead
 
@@ -74,7 +74,7 @@ STX uses uWebSockets (C++) as its networking foundation, integrated directly wit
 // build.zig - Link uWebSockets
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
-        .name = "stx-server",
+        .name = "zyncBase-server",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,

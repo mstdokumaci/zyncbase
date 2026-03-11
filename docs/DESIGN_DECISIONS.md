@@ -1,8 +1,8 @@
-# STX Design Decisions
+# zyncBase Design Decisions
 
 **Last Updated**: 2026-03-09
 
-This document explains the architectural and design decisions behind STX v2.0.
+This document explains the architectural and design decisions behind zyncBase v2.0.
 
 ---
 
@@ -45,7 +45,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ### Our improvements over Prisma
 
-| Aspect | Prisma | STX | Why |
+| Aspect | Prisma | zyncBase | Why |
 |--------|--------|-----|-----|
 | AND operator | `AND: [...]` | Implicit at root | Simpler for common case |
 | OR operator | `OR: [...]` | `or: [...]` | Consistent lowercase |
@@ -65,7 +65,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 // Prisma style
 { AND: [{ age: { gte: 18 } }, { status: { equals: 'active' } }] }
 
-// STX style (implicit AND)
+// zyncBase style (implicit AND)
 { age: { gte: 18 }, status: { eq: 'active' } }
 ```
 
@@ -155,7 +155,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 **Context**: Should v2.0 support horizontal scaling?
 
-**Decision**: No. STX is designed exclusively for vertical scaling (single server, all CPU cores).
+**Decision**: No. zyncBase is designed exclusively for vertical scaling (single server, all CPU cores).
 
 **Rationale**:
 - Horizontal scaling adds significant complexity
@@ -296,7 +296,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - [ ] Vue integration
 - [ ] Svelte integration
 
-**Deliverable**: npm package @stx/client
+**Deliverable**: npm package @zyncBase/client
 
 ---
 

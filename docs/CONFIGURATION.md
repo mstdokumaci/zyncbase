@@ -1,15 +1,15 @@
-# STX Server Configuration
+# zyncBase Server Configuration
 
 **Last Updated**: 2026-03-09
 
-Complete guide to configuring the STX server with JSON files.
+Complete guide to configuring the zyncBase server with JSON files.
 
 ---
 
 ## Table of Contents
 
 1. [Configuration-First Approach](#configuration-first-approach)
-2. [stx.config.json](#stxconfigjson)
+2. [zyncBase.config.json](#zyncBaseconfigjson)
 3. [schema.json](#schemajson)
 4. [Schema Migrations](#schema-migrations)
 5. [auth.json](#authjson)
@@ -20,13 +20,13 @@ Complete guide to configuring the STX server with JSON files.
 
 ## Configuration-First Approach
 
-STX uses **JSON configuration files** instead of requiring you to write server code. The Zig binary reads these configs and handles everything.
+zyncBase uses **JSON configuration files** instead of requiring you to write server code. The Zig binary reads these configs and handles everything.
 
 **Directory structure:**
 ```
 my-app/
-├── stx-server          # Downloaded binary (or use Docker)
-├── stx.config.json     # Main server configuration
+├── zyncBase-server          # Downloaded binary (or use Docker)
+├── zyncBase.config.json     # Main server configuration
 ├── schema.json         # Your data schema (JSON Schema format)
 ├── auth.json           # Authentication & authorization rules
 └── client/
@@ -35,7 +35,7 @@ my-app/
 
 ---
 
-## stx.config.json
+## zyncBase.config.json
 
 Main server configuration file.
 
@@ -73,7 +73,7 @@ Main server configuration file.
       "secret": "${JWT_SECRET}",
       "algorithm": "HS256",
       "issuer": "your-app",
-      "audience": "stx-server"
+      "audience": "zyncBase-server"
     },
     "webhook": {
       "url": "http://localhost:4000/auth",
@@ -194,7 +194,7 @@ Authentication and authorization configuration.
       "secret": "${JWT_SECRET}",     // JWT signing secret
       "algorithm": "HS256",           // Algorithm (HS256, RS256, etc.)
       "issuer": "your-app",           // Expected issuer
-      "audience": "stx-server"        // Expected audience
+      "audience": "zyncBase-server"        // Expected audience
     },
     "webhook": {
       "url": "http://localhost:4000/auth",  // Custom auth webhook
@@ -285,7 +285,7 @@ Performance tuning.
 
 ## schema.json
 
-Define your data structure using STX's store-based schema format.
+Define your data structure using zyncBase's store-based schema format.
 
 ### Example: Collaborative Canvas
 
@@ -368,7 +368,7 @@ Define your data structure using STX's store-based schema format.
 }
 ```
 
-**What STX generates (you don't need to know this):**
+**What zyncBase generates (you don't need to know this):**
 ```sql
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
@@ -386,7 +386,7 @@ CREATE TABLE users (
 
 ### Schema Structure
 
-STX uses a **store-based** schema format. Define your data store structure:
+zyncBase uses a **store-based** schema format. Define your data store structure:
 
 ```json
 {
@@ -405,7 +405,7 @@ STX uses a **store-based** schema format. Define your data store structure:
 
 ### Nested Fields (Automatic Flattening)
 
-STX automatically flattens nested objects for efficient querying:
+zyncBase automatically flattens nested objects for efficient querying:
 
 ```json
 {
@@ -430,7 +430,7 @@ STX automatically flattens nested objects for efficient querying:
 **Client API (nested objects work naturally):**
 ```typescript
 // Set nested field
-await stx.set('users.user-1', {
+await zyncBase.set('users.user-1', {
   name: 'Alice',
   address: {
     street: '123 Main St',
@@ -440,7 +440,7 @@ await stx.set('users.user-1', {
 })
 
 // Query nested field
-const users = await stx.query('users', {
+const users = await zyncBase.query('users', {
   where: { 'address.city': 'San Francisco' }
 })
 ```
@@ -457,7 +457,7 @@ const users = await stx.query('users', {
 
 ### Arrays
 
-STX supports arrays with specific constraints:
+zyncBase supports arrays with specific constraints:
 
 **✅ Simple arrays (primitives):**
 ```json
@@ -477,7 +477,7 @@ STX supports arrays with specific constraints:
 
 **Client API:**
 ```typescript
-await stx.set('tasks.task-1', {
+await zyncBase.set('tasks.task-1', {
   tags: ["urgent", "backend"]
 })
 ```
@@ -530,24 +530,24 @@ await stx.set('tasks.task-1', {
 **Client API:**
 ```typescript
 // Create project
-await stx.set('projects.proj-1', { name: 'My Project' })
+await zyncBase.set('projects.proj-1', { name: 'My Project' })
 
 // Add members
-await stx.set('project_members.member-1', {
+await zyncBase.set('project_members.member-1', {
   projectId: 'proj-1',
   userId: 'user-1',
   role: 'admin'
 })
 
 // Query members
-const members = await stx.query('project_members', {
+const members = await zyncBase.query('project_members', {
   where: { projectId: 'proj-1' }
 })
 ```
 
 ### References (Relations Between Paths)
 
-STX supports references between paths for relational data:
+zyncBase supports references between paths for relational data:
 
 ```json
 {
@@ -574,16 +574,16 @@ STX supports references between paths for relational data:
 **Client API:**
 ```typescript
 // Create project
-await stx.set('projects.proj-1', { name: 'My Project' })
+await zyncBase.set('projects.proj-1', { name: 'My Project' })
 
 // Create task that references project
-await stx.set('tasks.task-1', {
+await zyncBase.set('tasks.task-1', {
   title: 'Build feature',
   projectId: 'proj-1'
 })
 
 // Delete project (cascades to tasks)
-await stx.remove('projects.proj-1')
+await zyncBase.remove('projects.proj-1')
 // task-1 is automatically deleted
 ```
 
@@ -597,7 +597,7 @@ await stx.remove('projects.proj-1')
 - Data integrity enforced automatically
 - Cascading deletes work as expected
 - Efficient queries across related paths
-- Frontend just uses IDs - STX handles the rest
+- Frontend just uses IDs - zyncBase handles the rest
 
 ### JSON Schema Tips
 
@@ -642,7 +642,7 @@ await stx.remove('projects.proj-1')
 
 ## Schema Migrations
 
-STX automatically generates SQLite tables from your schema.json and handles migrations intelligently based on your environment.
+zyncBase automatically generates SQLite tables from your schema.json and handles migrations intelligently based on your environment.
 
 ### How It Works
 
@@ -676,7 +676,7 @@ From this schema:
 }
 ```
 
-STX generates:
+zyncBase generates:
 ```sql
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
@@ -725,7 +725,7 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 
 **What happens:**
 ```bash
-$ stx-server start
+$ zyncBase-server start
 ✓ Schema change detected
 ✓ Adding column 'tasks.assignee'
 ✓ Creating index on 'tasks.assignee'
@@ -739,7 +739,7 @@ $ stx-server start
 **Development Mode (Fast Iteration):**
 
 ```json
-// stx.config.json
+// zyncBase.config.json
 {
   "environment": "development",
   "schema": {
@@ -755,7 +755,7 @@ Behavior:
 # Change field type
 $ vim schema.json  # priority: integer → string
 
-$ stx-server start
+$ zyncBase-server start
 ⚠ Destructive schema change detected
 ⚠ Field 'tasks.priority' type changed: integer → string
 ⚠ This will DROP and recreate the table (data loss!)
@@ -772,7 +772,7 @@ Continue? [y/N]: y
 **Production Mode (Safety First):**
 
 ```json
-// stx.config.json
+// zyncBase.config.json
 {
   "environment": "production",
   "schema": {
@@ -786,7 +786,7 @@ Continue? [y/N]: y
 Behavior:
 ```bash
 # Same change in production
-$ stx-server start
+$ zyncBase-server start
 ✗ Cannot start: destructive schema change detected
 ✗ Field 'tasks.priority' type changed: integer → string
 
@@ -794,10 +794,10 @@ This requires a manual migration.
 
 Options:
 1. Revert schema.json to previous version
-2. Create migration: stx migrate create change_priority_type
-3. Force (data loss): stx-server start --force-schema
+2. Create migration: zyncBase migrate create change_priority_type
+3. Force (data loss): zyncBase-server start --force-schema
 
-See: https://stx.dev/docs/MIGRATIONS.md
+See: https://zyncBase.dev/docs/MIGRATIONS.md
 ```
 
 ### Schema Versioning
@@ -820,21 +820,21 @@ See: https://stx.dev/docs/MIGRATIONS.md
 
 ```bash
 # Patch/Minor - auto-migrates
-$ stx-server start
+$ zyncBase-server start
 ✓ Schema version: 1.2.0 → 1.3.0 (minor)
 ✓ Auto-migrating additive changes
 ✓ Server started
 
 # Major - requires explicit migration
-$ stx-server start
+$ zyncBase-server start
 ✗ Schema version: 1.3.0 → 2.0.0 (major)
 ✗ Breaking changes require migration
 
 Create migration:
-  stx migrate create v2_breaking_changes
+  zyncBase migrate create v2_breaking_changes
 
 Or force in development:
-  stx-server start --force-schema
+  zyncBase-server start --force-schema
 ```
 
 ### What Auto-Migrates
@@ -855,19 +855,19 @@ Or force in development:
 
 ```bash
 # Check migration status
-stx migrate status
+zyncBase migrate status
 
 # Create new migration
-stx migrate create add_assignee_field
+zyncBase migrate create add_assignee_field
 
 # Apply migrations
-stx migrate up
+zyncBase migrate up
 
 # Rollback last migration
-stx migrate down
+zyncBase migrate down
 
 # Dry run (see what would happen)
-stx migrate up --dry-run
+zyncBase migrate up --dry-run
 ```
 
 ### Environment-Specific Behavior
@@ -888,7 +888,7 @@ stx migrate up --dry-run
 $ vim schema.json  # Add 'assignee' field
 
 # 2. Start server
-$ stx-server start
+$ zyncBase-server start
 ✓ Auto-migrated: added column 'tasks.assignee'
 ```
 
@@ -898,7 +898,7 @@ $ stx-server start
 $ vim schema.json  # priority: integer → string
 
 # 2. Start server
-$ stx-server start --dev
+$ zyncBase-server start --dev
 ⚠ Destructive change: field type changed
 ⚠ Data in 'tasks' will be lost
 Continue? [y/N]: y
@@ -914,16 +914,16 @@ $ node scripts/seed-dev-data.js
 $ vim schema.json  # version: "1.3.0" → "2.0.0"
 
 # 2. Create migration
-$ stx migrate create v2_change_priority_type
+$ zyncBase migrate create v2_change_priority_type
 
 # 3. Write migration
 $ vim migrations/003_v2_change_priority_type.sql
 
 # 4. Apply migration
-$ stx migrate up
+$ zyncBase migrate up
 
 # 5. Deploy
-$ stx-server start
+$ zyncBase-server start
 ✓ Migrations applied
 ✓ Server started
 ```
@@ -1028,7 +1028,7 @@ Define reusable functions that execute SQL queries:
 
 ## Environment Variables
 
-STX supports environment variable substitution using `${VAR_NAME}` syntax.
+zyncBase supports environment variable substitution using `${VAR_NAME}` syntax.
 
 ### .env file
 
@@ -1074,7 +1074,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 1: Collaborative Whiteboard
 
-**stx.config.json:**
+**zyncBase.config.json:**
 ```json
 {
   "server": { "port": 3000 },
@@ -1132,7 +1132,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 2: Multi-tenant SaaS
 
-**stx.config.json:**
+**zyncBase.config.json:**
 ```json
 {
   "server": { "port": 3000 },
@@ -1168,7 +1168,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 If JSON rules aren't enough, use a webhook for custom logic:
 
-**stx.config.json:**
+**zyncBase.config.json:**
 ```json
 {
   "auth": {
@@ -1206,18 +1206,18 @@ This way, you can write custom auth logic in **any language** (Node.js, Python, 
 
 ## Hot Reload
 
-STX watches config files and reloads automatically when they change:
+zyncBase watches config files and reloads automatically when they change:
 
 ```bash
 # Edit config
-vim stx.config.json
+vim zyncBase.config.json
 
 # Server automatically reloads
 # No restart needed!
 ```
 
 **What triggers reload:**
-- `stx.config.json` changes
+- `zyncBase.config.json` changes
 - `schema.json` changes
 - `auth.json` changes
 
@@ -1229,13 +1229,13 @@ vim stx.config.json
 
 ## Validation
 
-STX validates all config files on startup and provides clear error messages:
+zyncBase validates all config files on startup and provides clear error messages:
 
 ```bash
-$ ./stx-server
+$ ./zyncBase-server
 
 Error: Invalid configuration
-  File: stx.config.json
+  File: zyncBase.config.json
   Line: 12
   Issue: Missing required field "schema"
   
@@ -1248,4 +1248,4 @@ Fix: Add "schema": "./schema.json" to your config
 
 - [API Reference](./API_REFERENCE.md) - Learn the client SDK
 - [Deployment](./DEPLOYMENT.md) - Deploy to production
-- [Examples](https://github.com/stx/examples) - See complete examples
+- [Examples](https://github.com/zyncBase/examples) - See complete examples

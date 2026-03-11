@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09
 
-Complete guide to managing schema changes and data migrations in STX.
+Complete guide to managing schema changes and data migrations in zyncBase.
 
 ---
 
@@ -23,7 +23,7 @@ Complete guide to managing schema changes and data migrations in STX.
 
 ## Overview
 
-STX automatically generates SQLite tables from your `schema.json` and intelligently handles schema changes based on your environment.
+zyncBase automatically generates SQLite tables from your `schema.json` and intelligently handles schema changes based on your environment.
 
 ### Key Concepts
 
@@ -163,11 +163,11 @@ These changes require explicit migrations in production:
 
 ### Fast Iteration Mode
 
-In development, STX allows destructive changes for rapid iteration.
+In development, zyncBase allows destructive changes for rapid iteration.
 
 **Configuration:**
 ```json
-// stx.config.json
+// zyncBase.config.json
 {
   "environment": "development",
   "schema": {
@@ -186,7 +186,7 @@ $ vim schema.json
 # Change: priority: integer → string
 
 # 2. Start server
-$ stx-server start --dev
+$ zyncBase-server start --dev
 
 ⚠ Destructive schema change detected
 ⚠ Field 'tasks.priority' type changed: integer → string
@@ -210,7 +210,7 @@ $ node scripts/seed-dev-data.js
 For automated workflows:
 
 ```bash
-$ stx-server start --dev --force-schema
+$ zyncBase-server start --dev --force-schema
 ✓ Table recreated (no confirmation)
 ```
 
@@ -227,11 +227,11 @@ $ stx-server start --dev --force-schema
 
 ### Safety First
 
-In production, STX blocks destructive changes and requires explicit migrations.
+In production, zyncBase blocks destructive changes and requires explicit migrations.
 
 **Configuration:**
 ```json
-// stx.config.json
+// zyncBase.config.json
 {
   "environment": "production",
   "schema": {
@@ -264,7 +264,7 @@ $ vim schema.json
 
 ```bash
 # 2. Create migration
-$ stx migrate create v2_change_priority_type
+$ zyncBase migrate create v2_change_priority_type
 
 Created: migrations/003_v2_change_priority_type.sql
 
@@ -311,19 +311,19 @@ COMMIT;
 
 ```bash
 # 4. Test migration (dry run)
-$ stx migrate up --dry-run
+$ zyncBase migrate up --dry-run
 
 Would apply:
   003_v2_change_priority_type.sql
 
 # 5. Apply migration
-$ stx migrate up
+$ zyncBase migrate up
 
 ✓ Applied: 003_v2_change_priority_type.sql
 ✓ Schema version: 1.3.0 → 2.0.0
 
 # 6. Deploy
-$ stx-server start
+$ zyncBase-server start
 ✓ Migrations applied
 ✓ Server started
 ```
@@ -335,7 +335,7 @@ $ stx-server start
 ### Check Status
 
 ```bash
-$ stx migrate status
+$ zyncBase migrate status
 
 Current schema version: 1.3.0
 Database version: 1.3.0
@@ -349,12 +349,12 @@ Applied migrations: 2
 ### Create Migration
 
 ```bash
-$ stx migrate create <name>
+$ zyncBase migrate create <name>
 
 # Examples
-$ stx migrate create add_assignee_field
-$ stx migrate create v2_change_priority_type
-$ stx migrate create remove_deprecated_fields
+$ zyncBase migrate create add_assignee_field
+$ zyncBase migrate create v2_change_priority_type
+$ zyncBase migrate create remove_deprecated_fields
 ```
 
 Creates: `migrations/<timestamp>_<name>.sql`
@@ -363,33 +363,33 @@ Creates: `migrations/<timestamp>_<name>.sql`
 
 ```bash
 # Apply all pending migrations
-$ stx migrate up
+$ zyncBase migrate up
 
 # Apply specific number of migrations
-$ stx migrate up --steps 1
+$ zyncBase migrate up --steps 1
 
 # Dry run (see what would happen)
-$ stx migrate up --dry-run
+$ zyncBase migrate up --dry-run
 ```
 
 ### Rollback Migrations
 
 ```bash
 # Rollback last migration
-$ stx migrate down
+$ zyncBase migrate down
 
 # Rollback specific number of migrations
-$ stx migrate down --steps 2
+$ zyncBase migrate down --steps 2
 
 # Dry run
-$ stx migrate down --dry-run
+$ zyncBase migrate down --dry-run
 ```
 
 ### Reset Database
 
 ```bash
 # Drop all tables and reapply migrations
-$ stx migrate reset
+$ zyncBase migrate reset
 
 ⚠ This will delete all data!
 Continue? [y/N]: y
@@ -525,18 +525,18 @@ COMMIT;
 
 ## Complex Migrations
 
-For complex data transformations, use STX's Admin API with external scripts.
+For complex data transformations, use zyncBase's Admin API with external scripts.
 
 ### Admin API
 
-STX provides HTTP endpoints for data export/import:
+zyncBase provides HTTP endpoints for data export/import:
 
 ```bash
 # Enable admin API
 ```
 
 ```json
-// stx.config.json
+// zyncBase.config.json
 {
   "admin": {
     "enabled": true,
@@ -578,9 +578,9 @@ COMMIT;
 **Step 2: External Script (data transformation)**
 ```typescript
 // scripts/migrate_priority.ts
-import { STXAdmin } from '@stx/admin'
+import { zyncBaseAdmin } from '@zyncBase/admin'
 
-const admin = new STXAdmin('http://localhost:3000', {
+const admin = new zyncBaseAdmin('http://localhost:3000', {
   token: process.env.ADMIN_TOKEN
 })
 
@@ -651,7 +651,7 @@ COMMIT;
 **Step 4: Run Migration**
 ```bash
 # Apply first migration (schema change)
-$ stx migrate up
+$ zyncBase migrate up
 
 # Run transformation script
 $ node scripts/migrate_priority.ts
@@ -659,10 +659,10 @@ $ node scripts/migrate_priority.ts
 ✓ Migration complete
 
 # Apply final migration (cleanup)
-$ stx migrate up
+$ zyncBase migrate up
 
 # Verify
-$ stx migrate status
+$ zyncBase migrate status
 ✓ All migrations applied
 ```
 
@@ -672,17 +672,17 @@ $ stx migrate status
 
 ### Automatic Rollback
 
-STX tracks applied migrations and can rollback:
+zyncBase tracks applied migrations and can rollback:
 
 ```bash
 # Rollback last migration
-$ stx migrate down
+$ zyncBase migrate down
 
 Rolling back: 003_v2_change_priority_type.sql
 ✓ Rolled back
 
 # Rollback multiple migrations
-$ stx migrate down --steps 2
+$ zyncBase migrate down --steps 2
 ```
 
 ### Manual Rollback
@@ -711,13 +711,13 @@ COMMIT;
 
 ```bash
 # Backup database
-$ sqlite3 data/stx.db ".backup data/stx-backup-$(date +%Y%m%d).db"
+$ sqlite3 data/zyncBase.db ".backup data/zyncBase-backup-$(date +%Y%m%d).db"
 
 # Apply migration
-$ stx migrate up
+$ zyncBase migrate up
 
 # If something goes wrong, restore
-$ cp data/stx-backup-20260309.db data/stx.db
+$ cp data/zyncBase-backup-20260309.db data/zyncBase.db
 ```
 
 ### Point-in-Time Recovery
@@ -725,11 +725,11 @@ $ cp data/stx-backup-20260309.db data/stx.db
 For production, use continuous backup:
 
 ```bash
-# Enable WAL mode (already default in STX)
+# Enable WAL mode (already default in zyncBase)
 PRAGMA journal_mode = WAL;
 
 # Backup WAL file periodically
-$ cp data/stx.db-wal data/backups/stx-wal-$(date +%Y%m%d-%H%M%S)
+$ cp data/zyncBase.db-wal data/backups/zyncBase-wal-$(date +%Y%m%d-%H%M%S)
 ```
 
 ---
@@ -740,12 +740,12 @@ $ cp data/stx.db-wal data/backups/stx-wal-$(date +%Y%m%d-%H%M%S)
 
 ```bash
 # Test in development first
-$ stx migrate up --dry-run
-$ stx migrate up
+$ zyncBase migrate up --dry-run
+$ zyncBase migrate up
 
 # Test rollback
-$ stx migrate down
-$ stx migrate up
+$ zyncBase migrate down
+$ zyncBase migrate up
 
 # Then apply to staging
 # Then apply to production
@@ -768,11 +768,11 @@ $ stx migrate up
 
 ```bash
 # Good - one change per migration
-$ stx migrate create add_assignee_field
-$ stx migrate create add_priority_field
+$ zyncBase migrate create add_assignee_field
+$ zyncBase migrate create add_priority_field
 
 # Bad - multiple unrelated changes
-$ stx migrate create add_many_fields
+$ zyncBase migrate create add_many_fields
 ```
 
 ### 4. Document Complex Migrations
@@ -796,10 +796,10 @@ COMMIT;
 
 ```bash
 # Always backup first
-$ sqlite3 data/stx.db ".backup data/stx-backup.db"
+$ sqlite3 data/zyncBase.db ".backup data/zyncBase-backup.db"
 
 # Then migrate
-$ stx migrate up
+$ zyncBase migrate up
 ```
 
 ### 6. Use Transactions
@@ -819,13 +819,13 @@ If anything fails, the entire migration rolls back.
 
 ```bash
 # Apply migration
-$ stx migrate up
+$ zyncBase migrate up
 
 # Test rollback
-$ stx migrate down
+$ zyncBase migrate down
 
 # Reapply
-$ stx migrate up
+$ zyncBase migrate up
 ```
 
 ---
@@ -835,7 +835,7 @@ $ stx migrate up
 ### Migration Failed
 
 ```bash
-$ stx migrate up
+$ zyncBase migrate up
 
 Error: Migration failed
   File: migrations/003_change_priority.sql
@@ -846,34 +846,34 @@ Error: Migration failed
 **Solution:**
 1. Check migration SQL syntax
 2. Verify table/column names
-3. Run `stx migrate down` to rollback
+3. Run `zyncBase migrate down` to rollback
 4. Fix migration file
-5. Run `stx migrate up` again
+5. Run `zyncBase migrate up` again
 
 ### Schema Out of Sync
 
 ```bash
-$ stx-server start
+$ zyncBase-server start
 
 Error: Schema version mismatch
   schema.json: 2.0.0
   database: 1.3.0
   
-Apply migrations: stx migrate up
+Apply migrations: zyncBase migrate up
 ```
 
 **Solution:**
 ```bash
-$ stx migrate up
+$ zyncBase migrate up
 ✓ Migrations applied
-$ stx-server start
+$ zyncBase-server start
 ✓ Server started
 ```
 
 ### Destructive Change in Production
 
 ```bash
-$ stx-server start
+$ zyncBase-server start
 
 Error: Destructive schema change detected
   Field 'tasks.priority' type changed
@@ -883,9 +883,9 @@ This requires a migration.
 
 **Solution:**
 1. Revert schema.json to previous version, OR
-2. Create migration: `stx migrate create change_priority_type`
+2. Create migration: `zyncBase migrate create change_priority_type`
 3. Write migration SQL
-4. Apply migration: `stx migrate up`
+4. Apply migration: `zyncBase migrate up`
 
 ### Data Loss After Migration
 
@@ -898,16 +898,16 @@ This requires a migration.
 **Recovery:**
 ```bash
 # Restore from backup
-$ cp data/stx-backup.db data/stx.db
+$ cp data/zyncBase-backup.db data/zyncBase.db
 
 # Rollback migration
-$ stx migrate down
+$ zyncBase migrate down
 
 # Fix migration
 $ vim migrations/003_change_priority.sql
 
 # Reapply
-$ stx migrate up
+$ zyncBase migrate up
 ```
 
 ---

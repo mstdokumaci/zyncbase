@@ -1,8 +1,8 @@
-# STX Deployment Guide
+# zyncBase Deployment Guide
 
 **Last Updated**: 2026-03-09
 
-Complete guide to deploying STX in production.
+Complete guide to deploying zyncBase in production.
 
 ---
 
@@ -20,7 +20,7 @@ Complete guide to deploying STX in production.
 
 ## Deployment Options
 
-STX can be deployed in multiple ways:
+zyncBase can be deployed in multiple ways:
 
 1. **Docker** - Recommended for most use cases
 2. **Binary** - Direct binary deployment on VPS
@@ -34,25 +34,25 @@ STX can be deployed in multiple ways:
 ### Basic Dockerfile
 
 ```dockerfile
-FROM stx/server:latest
+FROM zyncBase/server:latest
 
-COPY stx.config.json /config/
+COPY zyncBase.config.json /config/
 COPY schema.json /config/
 COPY auth.json /config/
 
 EXPOSE 3000
 
-CMD ["stx-server", "--config", "/config/stx.config.json"]
+CMD ["zyncBase-server", "--config", "/config/zyncBase.config.json"]
 ```
 
 ### Build and Run
 
 ```bash
 # Build
-docker build -t my-stx-server .
+docker build -t my-zyncBase-server .
 
 # Run
-docker run -p 3000:3000 -v $(pwd)/data:/data my-stx-server
+docker run -p 3000:3000 -v $(pwd)/data:/data my-zyncBase-server
 ```
 
 ### Docker Compose
@@ -61,8 +61,8 @@ docker run -p 3000:3000 -v $(pwd)/data:/data my-stx-server
 version: '3.8'
 
 services:
-  stx:
-    image: stx/server:latest
+  zyncBase:
+    image: zyncBase/server:latest
     ports:
       - "3000:3000"
     volumes:
@@ -71,7 +71,7 @@ services:
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-    command: ["stx-server", "--config", "/config/stx.config.json"]
+    command: ["zyncBase-server", "--config", "/config/zyncBase.config.json"]
     restart: unless-stopped
     
   # Optional: Nginx reverse proxy
@@ -84,7 +84,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf
       - ./ssl:/etc/nginx/ssl
     depends_on:
-      - stx
+      - zyncBase
     restart: unless-stopped
 ```
 
@@ -102,37 +102,37 @@ docker-compose up -d
 
 ```bash
 # Linux
-curl -L https://stx.dev/download/latest/linux-x64 -o stx-server
-chmod +x stx-server
+curl -L https://zyncBase.dev/download/latest/linux-x64 -o zyncBase-server
+chmod +x zyncBase-server
 
 # macOS
-curl -L https://stx.dev/download/latest/darwin-x64 -o stx-server
-chmod +x stx-server
+curl -L https://zyncBase.dev/download/latest/darwin-x64 -o zyncBase-server
+chmod +x zyncBase-server
 
 # Windows
-curl -L https://stx.dev/download/latest/windows-x64.exe -o stx-server.exe
+curl -L https://zyncBase.dev/download/latest/windows-x64.exe -o zyncBase-server.exe
 ```
 
 ### Run Directly
 
 ```bash
-./stx-server --config stx.config.json
+./zyncBase-server --config zyncBase.config.json
 ```
 
 ### Systemd Service
 
-Create `/etc/systemd/system/stx.service`:
+Create `/etc/systemd/system/zyncBase.service`:
 
 ```ini
 [Unit]
-Description=STX Real-time State Manager
+Description=zyncBase Real-time State Manager
 After=network.target
 
 [Service]
 Type=simple
-User=stx
-WorkingDirectory=/opt/stx
-ExecStart=/opt/stx/stx-server --config /opt/stx/stx.config.json
+User=zyncBase
+WorkingDirectory=/opt/zyncBase
+ExecStart=/opt/zyncBase/zyncBase-server --config /opt/zyncBase/zyncBase.config.json
 Restart=always
 RestartSec=10
 
@@ -141,7 +141,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/stx/data
+ReadWritePaths=/opt/zyncBase/data
 
 [Install]
 WantedBy=multi-user.target
@@ -151,22 +151,22 @@ WantedBy=multi-user.target
 
 ```bash
 # Copy files
-sudo mkdir -p /opt/stx
-sudo cp stx-server /opt/stx/
-sudo cp stx.config.json /opt/stx/
-sudo cp schema.json /opt/stx/
-sudo cp auth.json /opt/stx/
+sudo mkdir -p /opt/zyncBase
+sudo cp zyncBase-server /opt/zyncBase/
+sudo cp zyncBase.config.json /opt/zyncBase/
+sudo cp schema.json /opt/zyncBase/
+sudo cp auth.json /opt/zyncBase/
 
 # Create user
-sudo useradd -r -s /bin/false stx
-sudo chown -R stx:stx /opt/stx
+sudo useradd -r -s /bin/false zyncBase
+sudo chown -R zyncBase:zyncBase /opt/zyncBase
 
 # Enable service
-sudo systemctl enable stx
-sudo systemctl start stx
+sudo systemctl enable zyncBase
+sudo systemctl start zyncBase
 
 # Check status
-sudo systemctl status stx
+sudo systemctl status zyncBase
 ```
 
 ---
@@ -199,7 +199,7 @@ Use a reverse proxy (Nginx, Caddy) for TLS termination:
 
 **nginx.conf:**
 ```nginx
-upstream stx {
+upstream zyncBase {
     server localhost:3000;
 }
 
@@ -211,7 +211,7 @@ server {
     ssl_certificate_key /etc/nginx/ssl/key.pem;
 
     location / {
-        proxy_pass http://stx;
+        proxy_pass http://zyncBase;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -242,7 +242,7 @@ server {
 **Docker:**
 ```yaml
 services:
-  stx:
+  zyncBase:
     deploy:
       resources:
         limits:
@@ -277,10 +277,10 @@ CPUQuota=400%
 # Backup script
 #!/bin/bash
 DATE=$(date +%Y%m%d_%H%M%S)
-tar -czf /backups/stx-$DATE.tar.gz /opt/stx/data
+tar -czf /backups/zyncBase-$DATE.tar.gz /opt/zyncBase/data
 
 # Keep only last 7 days
-find /backups -name "stx-*.tar.gz" -mtime +7 -delete
+find /backups -name "zyncBase-*.tar.gz" -mtime +7 -delete
 ```
 
 ### 7. Monitor Performance
@@ -349,11 +349,11 @@ Protect against brute force attacks:
 
 ```ini
 # /etc/fail2ban/jail.local
-[stx]
+[zyncBase]
 enabled = true
 port = 443
-filter = stx
-logpath = /var/log/stx/access.log
+filter = zyncBase
+logpath = /var/log/zyncBase/access.log
 maxretry = 5
 bantime = 3600
 ```
@@ -367,9 +367,9 @@ Use encrypted volumes:
 ```bash
 # Linux (LUKS)
 sudo cryptsetup luksFormat /dev/sdb
-sudo cryptsetup open /dev/sdb stx-data
-sudo mkfs.ext4 /dev/mapper/stx-data
-sudo mount /dev/mapper/stx-data /opt/stx/data
+sudo cryptsetup open /dev/sdb zyncBase-data
+sudo mkfs.ext4 /dev/mapper/zyncBase-data
+sudo mount /dev/mapper/zyncBase-data /opt/zyncBase/data
 ```
 
 #### Encrypt Data in Transit
@@ -404,26 +404,26 @@ Response:
 
 ### Prometheus Metrics
 
-STX exposes Prometheus metrics at `/metrics`:
+zyncBase exposes Prometheus metrics at `/metrics`:
 
 ```bash
 curl http://localhost:3000/metrics
 ```
 
 **Key metrics:**
-- `stx_connections_total` - Total active connections
-- `stx_messages_total` - Total messages processed
-- `stx_message_latency_seconds` - Message processing latency
-- `stx_memory_bytes` - Memory usage
-- `stx_cpu_usage_percent` - CPU usage
+- `zyncBase_connections_total` - Total active connections
+- `zyncBase_messages_total` - Total messages processed
+- `zyncBase_message_latency_seconds` - Message processing latency
+- `zyncBase_memory_bytes` - Memory usage
+- `zyncBase_cpu_usage_percent` - CPU usage
 
 ### Grafana Dashboard
 
-Import the STX dashboard:
+Import the zyncBase dashboard:
 
 ```bash
 # Download dashboard
-curl -L https://stx.dev/grafana/dashboard.json -o stx-dashboard.json
+curl -L https://zyncBase.dev/grafana/dashboard.json -o zyncBase-dashboard.json
 
 # Import to Grafana
 # Dashboards > Import > Upload JSON file
@@ -468,22 +468,22 @@ services:
 
 ```yaml
 groups:
-  - name: stx
+  - name: zyncBase
     rules:
       - alert: HighConnectionCount
-        expr: stx_connections_total > 90000
+        expr: zyncBase_connections_total > 90000
         for: 5m
         annotations:
           summary: "High connection count"
           
       - alert: HighMemoryUsage
-        expr: stx_memory_bytes > 3500000000
+        expr: zyncBase_memory_bytes > 3500000000
         for: 5m
         annotations:
           summary: "High memory usage"
           
       - alert: HighLatency
-        expr: stx_message_latency_seconds > 0.1
+        expr: zyncBase_message_latency_seconds > 0.1
         for: 5m
         annotations:
           summary: "High message latency"
@@ -502,7 +502,7 @@ groups:
 **Check:**
 ```bash
 # Is server running?
-systemctl status stx
+systemctl status zyncBase
 
 # Is port open?
 netstat -tlnp | grep 3000
@@ -561,7 +561,7 @@ iftop
 echo $JWT_SECRET
 
 # Check logs
-journalctl -u stx -f
+journalctl -u zyncBase -f
 
 # Test JWT
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/health
@@ -584,13 +584,13 @@ Enable debug logging:
 
 ```bash
 # CPU profiling
-./stx-server --profile-cpu
+./zyncBase-server --profile-cpu
 
 # Memory profiling
-./stx-server --profile-memory
+./zyncBase-server --profile-memory
 
 # Generate flamegraph
-./stx-server --flamegraph
+./zyncBase-server --flamegraph
 ```
 
 ---
@@ -599,7 +599,7 @@ Enable debug logging:
 
 ### Vertical Scaling
 
-STX is designed for vertical scaling (single server, all CPU cores).
+zyncBase is designed for vertical scaling (single server, all CPU cores).
 
 **Recommended specs:**
 
@@ -614,8 +614,8 @@ STX is designed for vertical scaling (single server, all CPU cores).
 **1. Increase file descriptors:**
 ```bash
 # /etc/security/limits.conf
-stx soft nofile 100000
-stx hard nofile 100000
+zyncBase soft nofile 100000
+zyncBase hard nofile 100000
 ```
 
 **2. Tune kernel parameters:**
@@ -642,41 +642,41 @@ net.ipv4.ip_local_port_range = 1024 65535
 
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="/backups"
-DATA_DIR="/opt/stx/data"
+DATA_DIR="/opt/zyncBase/data"
 
 # Stop writes (optional)
-# systemctl stop stx
+# systemctl stop zyncBase
 
 # Backup SQLite database
-sqlite3 $DATA_DIR/stx.db ".backup $BACKUP_DIR/stx-$DATE.db"
+sqlite3 $DATA_DIR/zyncBase.db ".backup $BACKUP_DIR/zyncBase-$DATE.db"
 
 # Backup config
-tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/stx/*.json
+tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/zyncBase/*.json
 
 # Resume writes
-# systemctl start stx
+# systemctl start zyncBase
 
 # Upload to S3 (optional)
-aws s3 cp $BACKUP_DIR/stx-$DATE.db s3://my-backups/
+aws s3 cp $BACKUP_DIR/zyncBase-$DATE.db s3://my-backups/
 
 # Cleanup old backups
-find $BACKUP_DIR -name "stx-*.db" -mtime +7 -delete
+find $BACKUP_DIR -name "zyncBase-*.db" -mtime +7 -delete
 ```
 
 ### Recovery
 
 ```bash
 # Stop server
-systemctl stop stx
+systemctl stop zyncBase
 
 # Restore database
-cp /backups/stx-20260309.db /opt/stx/data/stx.db
+cp /backups/zyncBase-20260309.db /opt/zyncBase/data/zyncBase.db
 
 # Restore config
-tar -xzf /backups/config-20260309.tar.gz -C /opt/stx
+tar -xzf /backups/config-20260309.tar.gz -C /opt/zyncBase
 
 # Start server
-systemctl start stx
+systemctl start zyncBase
 ```
 
 ---
@@ -685,4 +685,4 @@ systemctl start stx
 
 - [Configuration](./CONFIGURATION.md) - Configure your server
 - [API Reference](./API_REFERENCE.md) - Learn the client SDK
-- [Monitoring Dashboard](https://stx.dev/grafana) - Import Grafana dashboard
+- [Monitoring Dashboard](https://zyncBase.dev/grafana) - Import Grafana dashboard

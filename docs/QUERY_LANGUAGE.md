@@ -1,8 +1,8 @@
-# STX Query Language Reference
+# zyncBase Query Language Reference
 
 **Last Updated**: 2026-03-09
 
-Complete reference for STX's Prisma-inspired query language used in `client.query()` and `client.subscribe()`.
+Complete reference for zyncBase's Prisma-inspired query language used in `client.query()` and `client.subscribe()`.
 
 ---
 
@@ -19,7 +19,7 @@ Complete reference for STX's Prisma-inspired query language used in `client.quer
 
 ## Design Philosophy
 
-STX's query language is inspired by Prisma with improvements:
+zyncBase's query language is inspired by Prisma with improvements:
 
 - **Prisma-inspired syntax** - TypeScript-first, clean, no prefixes
 - **Implicit AND** - All root-level conditions combined with AND (most common case)
