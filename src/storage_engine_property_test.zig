@@ -9,7 +9,7 @@ test "Property 16: Database initialization errors" {
     // Test 1: Invalid directory path (read-only filesystem simulation)
     // We can't easily simulate a read-only filesystem in a portable way,
     // so we test with an invalid path that should fail
-    const invalid_dir = "/proc/invalid_test_dir_that_should_not_exist_12345";
+    const invalid_dir = "";
     const result1 = StorageEngine.init(allocator, invalid_dir);
     if (result1) |_| {
         try testing.expect(false); // Should have failed
