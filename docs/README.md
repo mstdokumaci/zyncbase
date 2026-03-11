@@ -121,7 +121,7 @@ That's it! You now have real-time collaboration with presence awareness.
 
 ### Internal Specifications
 - **[Wire Protocol](./WIRE_PROTOCOL.md)** - Complete client-server MessagePack protocol
-- **[Authorization Format](./AUTH_SPEC.md)** - Declarative rule syntax and Sidecar IPC
+- **[Authorization Format](./AUTH_SPEC.md)** - Declarative rule syntax and Hook Server IPC
 
 ### Technical Documentation
 - **[Architecture](./architecture/README.md)** - Deep dive into ZyncBase internals

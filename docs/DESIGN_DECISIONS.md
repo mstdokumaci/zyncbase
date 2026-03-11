@@ -437,30 +437,30 @@ The following items were previously listed as "Open Questions" and have now been
 
 ---
 
-### ADR-014: Bun Auth Sidecar (Separating Core from Business Logic)
+### ADR-014: Bun Hook Server (Separating Core from Business Logic)
 
 **Date**: 2026-03-09  
 **Status**: Accepted
 
 **Context**: How should ZyncBase handle complex relational authorization (e.g., checking workspace membership) without sacrificing the performance of the Zig core or creating a Turing-complete JSON DSL?
 
-**Decision**: ZyncBase provides an out-of-the-box Bun-based sidecar for all authorization logic that requires database lookups. 
+**Decision**: ZyncBase provides an out-of-the-box Bun-based Hook Server for all authorization logic that requires database lookups. 
 - `auth.json` is strictly for stateless, JWT-driven checks.
-- Complex rules are delegated to the sidecar over a persistent WebSocket connection using MessagePack.
-- The sidecar uses a privileged ZyncBase Admin Client for high-performance, internal data access.
+- Complex rules are delegated to the Hook Server over a persistent WebSocket connection using MessagePack.
+- The Hook Server uses a privileged ZyncBase Admin Client for high-performance, internal data access.
 
 **Rationale**:
 - **Decoupling**: Keeps the Zig core focused on high-frequency state sync and stateless auth.
 - **Developer Experience (DX)**: Developers can use full TypeScript, the privileged ZyncBase SDK, and normal programming patterns for auth logic instead of a restrictive JSON DSL.
 - **Performance**: WebSocket + MessagePack minimizes the latency overhead of delegating to a separate process.
-- **Unified API**: The sidecar uses the same SDK API as the frontend, creating a seamless mental model.
+- **Unified API**: The Hook Server uses the same SDK API as the frontend, creating a seamless mental model.
 
 **Consequences**:
 - ✅ Unlimited flexibility for complex authorization rules.
 - ✅ Unified developer experience (TypeScript everywhere).
 - ✅ Protects the Zig core from business logic complexity.
-- ⚠️ Adds a sidecar process requirement for apps with complex auth.
-- ⚠️ Small latency penalty (~1-2ms) for sidecar-delegated rules.
+- ⚠️ Adds a Hook Server process requirement for apps with complex auth.
+- ⚠️ Small latency penalty (~1-2ms) for Hook Server-delegated rules.
 
 ---
 
@@ -508,7 +508,7 @@ The following items were previously listed as "Open Questions" and have now been
 **Consequences**:
 - ✅ Extremely predictable runtime overhead for the real-time matching engine.
 - ✅ Zero need to embed regex libraries or FTS5 extensions in the core binary.
-- ⚠️ Developers must rely on computed properties or sidecars for complex full-text search requirements.
+- ⚠️ Developers must rely on computed properties or Hook Servers for complex full-text search requirements.
 
 ---
 

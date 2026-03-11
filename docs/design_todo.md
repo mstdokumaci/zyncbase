@@ -7,8 +7,8 @@ Items requiring dedicated design work before implementation. Each item should re
 ## High Priority (Impacts API surface)
 
 ### 1. Error Taxonomy
-**Why**: Only six error codes exist in API_REFERENCE. No formal error handling strategy.
-**Decision needed**: Complete error taxonomy (connection, auth, validation, rate-limit, server errors), retry semantics, error propagation to client.
+**Status**: Done. See `ERROR_TAXONOMY.md`.
+**Decision**: Established a comprehensive error handling strategy including 7 categories, retry semantics (auto-retry for connections/server, configurable for rates), and standardized SDK error objects. Renamed "sidecar" to "Hook Server".
 
 ### 2. Batch Operations API
 **Why**: Referenced in QUERY_ENGINE.md best practices but not documented in API_REFERENCE.
@@ -54,7 +54,7 @@ Items requiring dedicated design work before implementation. Each item should re
 | # | Item | Status | Decision Document |
 |---|------|--------|-------------------|
 md#adr-015-conflict-resolution-strategy) |
-| 1 | Error Taxonomy | ❌ Not started | — |
+| 1 | Error Taxonomy | ✅ Done | `ERROR_TAXONOMY.md` |
 | 2 | Batch Operations API | ❌ Not started | — |
 | 3 | Subscription Invalidation | ❌ Not started | — |
 | 4 | Connection Status API | ❌ Not started | — |

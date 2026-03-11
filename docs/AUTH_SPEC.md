@@ -7,7 +7,7 @@
 
 1. **Deny by Default**: All access is denied unless explicitly allowed by a rule.
 2. **Variables Context**: Rules are evaluated against a context containing:
-   - `$session`: The resolved session context (enriched from JWT and/or sidecar).
+   - `$session`: The resolved session context (enriched from JWT and/or Hook Server).
    - `$namespace`: The current namespace string.
    - `$path`: Array or string of the specific data path being accessed (for `store`).
    - `$doc`: (Future) The existing document in the database, enabling attribute-based access control (ABAC).
@@ -90,12 +90,12 @@ Therefore, presence authorization is defined directly at the `namespace` level a
 
 Because presence is ephemeral, there is no `$doc` equivalent and no path-level routing. 
 
-**Bun Sidecar Support:**
-Presence rules fully support Sidecar Delegation (see **Section 7: The Bun Auth Sidecar** for details). If you need relational lookups before letting a user join a presence channel (e.g., "is this user a paid subscriber?"), you can delegate it exactly like a path rule:
+**Hook Server Support:**
+Presence rules fully support Hook Server Delegation (see **Section 7: The Bun Hook Server** for details). If you need relational lookups before letting a user join a presence channel (e.g., "is this user a paid subscriber?"), you can delegate it exactly like a path rule:
 
 ```json
 "presence": {
-  "read": { "sidecar": "checkPresenceAccess" },
+  "read": { "hook": "checkPresenceAccess" },
   "write": { "$session.role": { "in": ["admin", "paid"] } }
 }
 ```
@@ -123,13 +123,13 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
 
 
 
-## 7. The Bun Auth Sidecar (Managing Complexity)
+## 7. The Bun Hook Server (Managing Complexity)
 
 The core tension in authorization is between **stateless performance** and **complex relational permissions** (e.g., "does this user belong to the workspace that owns the folder containing this document?").
 
 To solve this, ZyncBase draws a hard line:
 1. **`auth.json` is strictly for stateless checks.** (e.g., `$namespace.tenant == $session.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
-2. **Any rule requiring a database lookup (`$doc` or external tables) is delegated to the Bun Auth Sidecar.**
+2. **Any rule requiring a database lookup (`$doc` or external tables) is delegated to the Bun Hook Server.**
 
 We do *not* attempt to build a Turing-complete database lookup engine into `auth.json`. Instead, ZyncBase provides an out-of-the-box Bun WebSocket server. Developers simply write a TypeScript function to handle complex auth logic.
 
@@ -140,22 +140,22 @@ We do *not* attempt to build a Turing-complete database lookup engine into `auth
   "paths": [
     {
       "path": "documents.*",
-      "write": { "sidecar": "checkDocumentAccess" } 
+      "write": { "hook": "checkDocumentAccess" } 
     }
   ]
 }
 ```
 
 **How it works (The MessagePack Contract):**
-1. ZyncBase maintains a persistent, high-speed `ws://` connection to the local Bun sidecar.
-2. When a write matches the `"sidecar"` rule, ZyncBase streams a MessagePack payload containing the `$session`, `$namespace`, `$path`, the incoming `value`, and the requested function name (`"checkDocumentAccess"`).
-3. The Bun sidecar executes the developer's TypeScript function, which has full access to the database (via Prisma, Drizzle, raw SQL, or fetch calls).
-4. The sidecar responds immediately with a `true` (allow) or `false` (deny) MessagePack payload.
+1. ZyncBase maintains a persistent, high-speed `ws://` connection to the local Bun Hook Server.
+2. When a write matches the `"hook"` rule, ZyncBase streams a MessagePack payload containing the `$session`, `$namespace`, `$path`, the incoming `value`, and the requested function name (`"checkDocumentAccess"`).
+3. The Bun Hook Server executes the developer's TypeScript function, which has full access to the database (via Prisma, Drizzle, raw SQL, or fetch calls).
+4. The Hook Server responds immediately with a `true` (allow) or `false` (deny) MessagePack payload.
 
 **The Developer Experience:**
-The developer writes authorization logic in a designated file (e.g., `zyncbase.auth.ts`). The CLI spins up the Bun sidecar automatically. 
+The developer writes authorization logic in a designated file (e.g., `zyncbase.auth.ts`). The CLI spins up the Bun Hook Server automatically. 
 
-Crucially, **the sidecar is provided a privileged ZyncBase client**. The developer queries ZyncBase using the exact same `client.store` API they use in the frontend, but running as an admin that bypasses `auth.json`. This eliminates the need to configure Prisma, Drizzle, or raw SQL just for authorization.
+Crucially, **the Hook Server is provided a privileged ZyncBase client**. The developer queries ZyncBase using the exact same `client.store` API they use in the frontend, but running as an admin that bypasses `auth.json`. This eliminates the need to configure Prisma, Drizzle, or raw SQL just for authorization.
 
 ```typescript
 // zyncbase.auth.ts
@@ -164,7 +164,7 @@ import { createAdminClient } from '@zyncbase/server';
 // Automatically configured to talk to the local Zig core over IPC/WebSocket
 const client = createAdminClient();
 
-// The function name matches the `"sidecar"` rule in auth.json
+// The function name matches the `"hook"` rule in auth.json
 export async function checkDocumentAccess({ session, namespace, path, value }) {
   const workspaceId = namespace.split(':')[1];
   

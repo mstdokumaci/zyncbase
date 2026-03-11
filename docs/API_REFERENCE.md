@@ -820,13 +820,15 @@ client.store.get('invalid.path')
 
 ## Error Handling
 
+ZyncBase uses a centralized error handling strategy. Errors are surfaced via `try/catch` on async methods or via global event listeners on the client.
+
 ```typescript
 try {
   await client.connect()
-} catch (error) {
+} catch (error: ZyncBaseError) {
   if (error.code === 'AUTH_FAILED') {
     // Handle authentication error
-  } else if (error.code === 'NAMESPACE_NOT_FOUND') {
+  } else if (error.code === 'NAMESPACE_UNAUTHORIZED') {
     // Handle namespace error
   } else {
     // Handle other errors
@@ -834,13 +836,36 @@ try {
 }
 ```
 
-**Error Codes:**
-- `AUTH_FAILED` - Authentication failed
-- `NAMESPACE_UNAUTHORIZED` - Not authorized to access namespace
-- `PERMISSION_DENIED` - Not authorized for operation
-- `SCHEMA_VALIDATION_FAILED` - Data doesn't match schema
-- `CONNECTION_FAILED` - Network error
-- `TIMEOUT` - Operation timed out
+### The `ZyncBaseError` Object
+
+All errors adhere to the following interface:
+
+```typescript
+interface ZyncBaseError extends Error {
+  code: string;           // Machine-readable code (e.g., 'RATE_LIMITED')
+  category: string;       // Functional category for grouping
+  retryable: boolean;     // Whether the SDK can/will auto-retry
+  path?: string[];        // Affected data path
+  details?: object;       // Field-level validation detail
+}
+```
+
+**Common Error Codes:**
+
+| Code | Description |
+|------|-------------|
+| `AUTH_FAILED` | Authentication failed (invalid ticket or JWT) |
+| `TOKEN_EXPIRED` | Auth token has expired; requires re-authentication |
+| `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace |
+| `PERMISSION_DENIED` | Rule blocked the operation (via `auth.json` or Hook Server) |
+| `SCHEMA_VALIDATION_FAILED` | Data does not match the schema |
+| `RATE_LIMITED` | Message frequency limits exceeded |
+| `CONNECTION_FAILED` | Network failure; SDK already attempting reconnect |
+| `TIMEOUT` | Operation timed out before server response |
+| `INTERNAL_ERROR` | Unexpected server-side failure |
+| `HOOK_SERVER_UNAVAILABLE` | Zig cannot reach your Hook Server process |
+
+For the complete catalog and automatic retry behaviors, see the [Error Taxonomy Specification](./ERROR_TAXONOMY.md).
 
 ---
 

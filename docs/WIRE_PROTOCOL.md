@@ -17,7 +17,7 @@
 7. [Connection Lifecycle](#connection-lifecycle)
 8. [Error Format](#error-format)
 9. [Extensibility](#extensibility)
-10. [Internal Messages (Zig ↔ Sidecar)](#internal-messages-zig--sidecar)
+10. [Internal Messages (Zig ↔ Hook Server)](#internal-messages-zig--hook-server)
 11. [Message Type Summary](#message-type-summary)
 
 ---
@@ -613,30 +613,34 @@ All errors follow a consistent envelope:
 
 ```
 {
-  "type":    "error",
-  "id":      2,                          // Echoed request ID (if responding to a request)
-  "code":    "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
-  "message": "Field 'priority' must be an integer, got string."   // Human-readable description
+  "type":       "error",
+  "id":         2,                          // Echoed request ID (if responding to a request)
+  "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
+  "category":   "validation",               // Functional category (see ERROR_TAXONOMY.md)
+  "message":    "Field 'priority' must be an integer, got string.",
+  "retryAfter": 5000,                       // (Optional) ms to wait before retry
+  "details":    { "priority": ["must be integer"] } // (Optional) field-level error context
 }
 ```
 
 ### Error codes
 
-| Code | Description | Typical trigger |
-|------|-------------|-----------------|
-| `AUTH_FAILED` | Authentication failed | Invalid ticket during handshake |
-| `NAMESPACE_UNAUTHORIZED` | Not authorized to access namespace | `SetStoreNamespace` to a restricted namespace |
-| `PERMISSION_DENIED` | Not authorized for this operation | `StoreSet` on a read-only path |
-| `SCHEMA_VALIDATION_FAILED` | Data doesn't match schema | `StoreSet` with invalid field types |
-| `PATH_NOT_FOUND` | Path does not exist | `StoreGet` on nonexistent path (optional; alternatively return `null`) |
-| `SUBSCRIPTION_NOT_FOUND` | Subscription ID not recognized | `StoreUnsubscribe` with stale `subId` |
-| `RATE_LIMITED` | Too many messages per second | Exceeding `security.rateLimit.messagesPerSecond` |
-| `MESSAGE_TOO_LARGE` | Payload exceeds size limit | Exceeding `security.rateLimit.maxMessageSize` |
-| `INVALID_MESSAGE` | Failed to parse or validate message | Malformed MessagePack, missing `type` field |
-| `CONNECTION_FAILED` | Network error | Transport-level failure |
-| `TIMEOUT` | Operation timed out | Server-side processing exceeded timeout |
-| `INTERNAL_ERROR` | Unexpected server error | Bug or unhandled exception |
-| `TOKEN_EXPIRED` | Auth token has expired | Server-initiated disconnect |
+| Code | Category | Description |
+|------|----------|-------------|
+| `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
+| `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
+| `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
+| `PERMISSION_DENIED` | authorization | `auth.json` or Hook Server rejected the operation |
+| `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
+| `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
+| `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
+| `MESSAGE_TOO_LARGE` | rate-limit | Payload exceeds `maxMessageSize` |
+| `CONNECTION_FAILED` | connection | Transport-level failure (WebSocket closed) |
+| `TIMEOUT` | connection | Server-side processing exceeded timeout |
+| `INTERNAL_ERROR` | server | Unexpected server failure (crash/bug) |
+| `HOOK_SERVER_UNAVAILABLE` | hook-server | Zig cannot reach the Bun Hook Server process |
+| `HOOK_DENIED` | hook-server | Developer's TypeScript hook explicitly returned an error |
+| `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
 
 ---
 
@@ -656,18 +660,18 @@ The `Connected` message may include a `protocolVersion` field in future versions
 
 ---
 
-## Internal Messages (Zig ↔ Sidecar)
+## Internal Messages (Zig ↔ Hook Server)
 
-These messages travel over the internal IPC/WebSocket channel between the Zig core and the Bun Sidecar.
+These messages travel over the internal IPC/WebSocket channel between the Zig core and the Bun Hook Server.
 
-### `SidecarOnConnect`
+### `HookServerOnConnect`
 
 Sent when a ticket is requested or a session is refreshed.
 
 **Request**:
 ```json
 {
-  "type":      "SidecarOnConnect",
+  "type":      "HookServerOnConnect",
   "jwt":       { ...claims... },  // Already verified by Zig
   "namespace": "tenant:acme"      // Initial namespace context
 }
@@ -681,14 +685,14 @@ Sent when a ticket is requested or a session is refreshed.
 }
 ```
 
-### `SidecarAuthCheck`
+### `HookServerAuthCheck`
 
-Sent when `auth.json` delegates a rule to the sidecar.
+Sent when `auth.json` delegates a rule to the hook server.
 
 **Request**:
 ```json
 {
-  "type":      "SidecarAuthCheck",
+  "type":      "HookServerAuthCheck",
   "function":  "checkDocumentAccess",
   "session":   { ... },
   "namespace": "tenant:acme",
@@ -729,5 +733,5 @@ Sent when `auth.json` delegates a rule to the sidecar.
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |
-| Z↔S | `SidecarOnConnect` | — | Request/Response |
-| Z↔S | `SidecarAuthCheck` | — | Request/Response |
+| Z↔H | `HookServerOnConnect` | — | Request/Response |
+| Z↔H | `HookServerAuthCheck` | — | Request/Response |
