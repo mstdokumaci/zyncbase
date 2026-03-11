@@ -226,6 +226,9 @@ test "lock-free cache: memory ordering with updates" {
 
         fn readerThread(ctx: @This()) void {
             while (!ctx.stop.load(.acquire)) {
+                // Prevent aggressive LLVM dead-code loop hoisting and give CPU a hint
+                std.atomic.spinLoopHint();
+
                 const handle = ctx.cache.get(ctx.namespace) catch continue;
                 handle.release();
             }
@@ -562,6 +565,9 @@ test "lock-free cache: readers see consistent state during updates" {
 
         fn run(ctx: @This()) void {
             while (!ctx.stop.load(.acquire)) {
+                // Prevent aggressive LLVM dead-code loop hoisting and give CPU a hint
+                std.atomic.spinLoopHint();
+
                 const handle = ctx.cache.get(ctx.namespace) catch continue;
                 defer handle.release();
 
