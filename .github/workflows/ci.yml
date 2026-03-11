@@ -54,8 +54,6 @@ jobs:
 
       - name: Run tests with GPA leak detection
         run: zig build test --summary all
-        env:
-          # GPA in debug mode automatically detects leaks
 
   build:
     name: Build
