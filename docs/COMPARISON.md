@@ -364,7 +364,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 4. **Multiplayer Game** (browser-based, turn-based or real-time)
 
 #### Tier 2 (Should Support Well)
-5. **Offline-first Mobile App** (with sync when online)
+5. **Offline-first Mobile App** (Roadmap: post-v1)
 6. **Chat Application** (messages, presence, typing indicators)
 7. **Project Management Tool** (tasks, comments, real-time updates)
 

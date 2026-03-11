@@ -358,10 +358,11 @@ To focus on a rock-solid core, the following features are explicitly deferred:
 
 - **Frameworks**: Vue and Svelte integrations (Roadmap: post-v1)
 - **Tooling**: Admin UI & detailed Firebase/Supabase migration guides (Roadmap: post-v1)
-- **Features**: Offline support, Full-text search (FTS5), and Aggregation queries (Roadmap: post-v1)
+- **Features**: Full-text search (FTS5), and Aggregation queries (Roadmap: post-v1)
 - **Advanced Queries**: Multi-field sorting (Roadmap: post-v1)
 - **DevOps**: Kubernetes official deployment guide (Roadmap: post-v1)
 - **DX**: Hot reload for server configuration (v1: server restart is minimum)
+- **Strategic**: **Offline Support** (Local storage strategy, sync queue, client-side conflict resolution)
 
 
 ---

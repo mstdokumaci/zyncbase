@@ -25,7 +25,7 @@ ZyncBase isn't trying to be everything to everyone. It's laser-focused on being 
 | **Complex SQL queries** | Supabase | PostgreSQL is better for complex joins |
 | **Serverless functions** | Firebase | Managed cloud, auto-scaling |
 | **Simple CRUD API** | PocketBase | Simpler if you don't need real-time |
-| **Mobile offline-first** | **ZyncBase** | Optimistic updates, path-level conflict resolution |
+| **Mobile offline-first** | **Roadmap** | Local storage sync & conflict resolution in post-v1 |
 | **Multi-tenant SaaS** | **ZyncBase** | Namespace isolation built-in |
 
 **ZyncBase's Unfair Advantages:**
@@ -145,7 +145,7 @@ ZyncBase is for when you need:
 - **Real-time collaboration** - Multiple users editing the same data simultaneously
 - **Presence awareness** - See who's online, where their cursor is, what they're selecting
 - **Multi-tenant SaaS** - Isolated state per customer with efficient resource sharing
-- **Offline-first apps** - Automatic conflict resolution when reconnecting
+- **Offline-first apps** (Roadmap) - Automatic conflict resolution when reconnecting
 
 ### When to Use ZyncBase
 
@@ -153,7 +153,7 @@ ZyncBase is for when you need:
 - ✅ Real-time collaboration (multiple users editing same data)
 - ✅ Presence awareness (see who's online, where they are)
 - ✅ Multi-tenant isolation (SaaS with per-customer state)
-- ✅ Offline-first with sync (mobile apps, unreliable networks)
+- ⏳ **Roadmap**: Offline-first with sync (mobile apps, unreliable networks)
 - ✅ Conflict resolution (predictable Last-Write-Wins path-level edits)
 
 **Don't use ZyncBase when:**
