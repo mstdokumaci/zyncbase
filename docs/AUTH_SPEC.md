@@ -1,17 +1,17 @@
 # ZyncBase Authorization Format (`auth.json`) - Draft Spec
 
-**Status**: � Done
+**Status**:  Done
 **Context**: Replaces complex row-level security (RLS) with a high-performance, JSON-declarative model executed natively by the ZyncBase Zig core. Evaluated on every incoming MessagePack frame.
 
 ## 1. Core Principles
 
 1. **Deny by Default**: All access is denied unless explicitly allowed by a rule.
 2. **Variables Context**: Rules are evaluated against a context containing:
-   - `$jwt`: Claims from the authenticated user's JWT.
+   - `$session`: The resolved session context (enriched from JWT and/or sidecar).
    - `$namespace`: The current namespace string.
    - `$path`: Array or string of the specific data path being accessed (for `store`).
    - `$doc`: (Future) The existing document in the database, enabling attribute-based access control (ABAC).
-3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$jwt.role": { "eq": "admin" } }`), ensuring easy parsing and safe evaluation without `eval()`.
+3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$session.role": { "eq": "admin" } }`), ensuring easy parsing and safe evaluation without `eval()`.
 4. **Separation of Concerns**: Namespaces handle coarse-grained isolation (e.g., tenant separation), while path rules handle fine-grained access (e.g., table/document level).
 
 ## 2. Rule Format Structure
@@ -28,7 +28,7 @@ The file is organized by **Namespaces**, followed by **Paths** within those name
     },
     {
       "namespace": "tenant:${tenant_id}:*",
-      "condition": { "$jwt.tenantId": { "eq": "$namespace.tenant_id" } },
+      "condition": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
       
       "presence": {
         "read": true,
@@ -39,12 +39,12 @@ The file is organized by **Namespaces**, followed by **Paths** within those name
         {
           "path": "*",
           "read": true,
-          "write": { "$jwt.role": { "in": ["admin", "editor"] } }
+          "write": { "$session.role": { "in": ["admin", "editor"] } }
         },
         {
           "path": "users.${user_id}",
           "read": true,
-          "write": { "$jwt.sub": { "eq": "$path.user_id" } }
+          "write": { "$session.sub": { "eq": "$path.user_id" } }
         }
       ]
     }
@@ -59,26 +59,26 @@ The file is organized by **Namespaces**, followed by **Paths** within those name
 - **Early Exit**: As soon as a rule explicitly grants access (`true` or matching condition), evaluation stops and access is permitted. 
 - **Namespace-First**: The frame's namespace is checked first. If no namespace rule matches or the namespace `condition` fails, the frame is rejected immediately, bypassing path evaluation.
 
-## 4. Namespace Wildcard Behavior & JWT Expectations
+## 4. Namespace Wildcard Behavior & Session Expectations
 
 Namespaces use a colon-separated segment model. Wildcards (`*`) can be used to match segments and extract variables into the `$namespace` context.
 
 **Crucial understanding: ZyncBase is stateless for authorization.**
-Because ZyncBase relies on the `$jwt` for user identity and doesn't inherently know about your application's business logic (like "who belongs to which workspace"), any hierarchical namespace authorization requires that data to be present in the JWT.
+Any hierarchical namespace authorization requires that data to be present in the `$session`.
 
 **Example 1: Tenant Isolation (Common)**
-- JWT contains: `{ "tenant_id": "acme" }`
+- Session contains: `{ "tenant_id": "acme" }`
 - Namespace: `tenant:${tenant_id}`
-- Rule: `{ "$namespace.tenant_id": { "eq": "$jwt.tenant_id" } }`
-- *How it works*: User connects to namespace `tenant:acme`. ZyncBase extracts `acme` as `$namespace.tenant_id`. It compares it to `$jwt.tenant_id`. If they match, access is granted.
+- Rule: `{ "$namespace.tenant_id": { "eq": "$session.tenant_id" } }`
+- *How it works*: User connects to namespace `tenant:acme`. ZyncBase extracts `acme` as `$namespace.tenant_id`. It compares it to `$session.tenant_id`. If they match, access is granted.
 
 **Example 2: Workspace Isolation (Complex)**
 - If you use a namespace like `tenant:acme:workspace:123`, how does ZyncBase know the user is allowed in `workspace:123`?
-- **Option A (JWT arrays)**: The JWT must contain an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
-  - Rule: `{ "$namespace.workspace": { "in": "$jwt.workspaces" } }`
-- **Option B (Document-level check)**: If the JWT only has the user's ID, ZyncBase would need to check the database (`$doc`) to see if the user is a member of the workspace. (See Open Questions).
+- **Option A (Injected arrays)**: The `$session` (via `onConnect`) contains an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
+  - Rule: `{ "$namespace.workspace": { "in": "$session.workspaces" } }`
+- **Option B (Document-level check)**: If the `$session` only has the user me ID, ZyncBase would need to check the database (`$doc`) to see if the user is a member of the workspace. (See Open Questions).
 
-To keep the initial implementation focused and performant, we should prioritize **Namespace matching against scalar or array claims in the JWT**, keeping the hierarchy shallow (e.g., just `tenant:*` or `room:*`) until we decide on the necessity of `$doc` evaluation.
+To keep the initial implementation focused and performant, we should prioritize **Namespace matching against the resolved `$session`**, keeping the hierarchy shallow until we decide on the necessity of `$doc` evaluation.
 
 ## 5. Presence API Authorization
 
@@ -96,7 +96,7 @@ Presence rules fully support Sidecar Delegation (see **Section 7: The Bun Auth S
 ```json
 "presence": {
   "read": { "sidecar": "checkPresenceAccess" },
-  "write": { "$jwt.role": { "in": ["admin", "paid"] } }
+  "write": { "$session.role": { "in": ["admin", "paid"] } }
 }
 ```
 
@@ -112,10 +112,10 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
 ```json
 "write": {
   "or": [
-    { "$jwt.role": { "eq": "admin" } },
+    { "$session.role": { "eq": "admin" } },
     { 
-      "$jwt.role": { "eq": "editor" },
-      "$jwt.sub": { "eq": "$path.user_id" }
+      "$session.role": { "eq": "editor" },
+      "$session.sub": { "eq": "$path.user_id" }
     }
   ]
 }
@@ -128,7 +128,7 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
 The core tension in authorization is between **stateless performance** and **complex relational permissions** (e.g., "does this user belong to the workspace that owns the folder containing this document?").
 
 To solve this, ZyncBase draws a hard line:
-1. **`auth.json` is strictly for stateless, JWT-driven checks.** (e.g., `$namespace.tenant == $jwt.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
+1. **`auth.json` is strictly for stateless checks.** (e.g., `$namespace.tenant == $session.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
 2. **Any rule requiring a database lookup (`$doc` or external tables) is delegated to the Bun Auth Sidecar.**
 
 We do *not* attempt to build a Turing-complete database lookup engine into `auth.json`. Instead, ZyncBase provides an out-of-the-box Bun WebSocket server. Developers simply write a TypeScript function to handle complex auth logic.
@@ -148,7 +148,7 @@ We do *not* attempt to build a Turing-complete database lookup engine into `auth
 
 **How it works (The MessagePack Contract):**
 1. ZyncBase maintains a persistent, high-speed `ws://` connection to the local Bun sidecar.
-2. When a write matches the `"sidecar"` rule, ZyncBase streams a MessagePack payload containing the `$jwt`, `$namespace`, `$path`, the incoming `value`, and the requested function name (`"checkDocumentAccess"`).
+2. When a write matches the `"sidecar"` rule, ZyncBase streams a MessagePack payload containing the `$session`, `$namespace`, `$path`, the incoming `value`, and the requested function name (`"checkDocumentAccess"`).
 3. The Bun sidecar executes the developer's TypeScript function, which has full access to the database (via Prisma, Drizzle, raw SQL, or fetch calls).
 4. The sidecar responds immediately with a `true` (allow) or `false` (deny) MessagePack payload.
 
@@ -165,13 +165,13 @@ import { createAdminClient } from '@zyncbase/server';
 const client = createAdminClient();
 
 // The function name matches the `"sidecar"` rule in auth.json
-export async function checkDocumentAccess({ jwt, namespace, path, value }) {
+export async function checkDocumentAccess({ session, namespace, path, value }) {
   const workspaceId = namespace.split(':')[1];
   
   // Use the exact same Query API you use on the frontend
   const memberships = await client.store.query('workspace_members', {
     where: { 
-      userId: { eq: jwt.sub },
+      userId: { eq: session.sub },
       workspaceId: { eq: workspaceId }
     }
   });

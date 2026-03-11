@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09  
 **Status**: Draft — Pending Review  
-**ADR**: Wire Protocol Spec (design_todo #1)
+**ADR**: Wire Protocol Spec (design_todo #209)
 
 ---
 
@@ -13,9 +13,12 @@
 3. [Message Envelope](#message-envelope)
 4. [Client→Server Messages](#clientserver-messages)
 5. [Server→Client Messages](#serverclient-messages)
-6. [Connection Lifecycle](#connection-lifecycle)
-7. [Error Format](#error-format)
-8. [Extensibility](#extensibility)
+6. [Ticket Endpoints (HTTP)](#ticket-endpoints-http)
+7. [Connection Lifecycle](#connection-lifecycle)
+8. [Error Format](#error-format)
+9. [Extensibility](#extensibility)
+10. [Internal Messages (Zig ↔ Sidecar)](#internal-messages-zig--sidecar)
+11. [Message Type Summary](#message-type-summary)
 
 ---
 
@@ -371,6 +374,30 @@ Remove the local user's presence data (also done automatically on disconnect).
 
 ---
 
+#### `AuthRefresh`
+
+Update the connection's session context with a new external JWT.
+
+```
+{
+  "type":  "AuthRefresh",
+  "id":    11,
+  "token": "<new_external_jwt>"
+}
+```
+
+**Response** (`type: "ok"`):
+
+```
+{
+  "type":    "ok",
+  "id":      11,
+  "session": { ... } // The newly resolved $session context
+}
+```
+
+---
+
 ### Namespace operations
 
 #### `StoreSetNamespace`
@@ -511,14 +538,35 @@ Server-initiated graceful disconnection (e.g., server shutdown, token expiry).
 
 ---
 
-## Connection Lifecycle
+## Ticket Endpoints (HTTP)
 
-### 1. WebSocket upgrade
+### 1. Ticket Exchange (HTTP)
 
-Client opens a WebSocket connection to the server:
+Before opening a WebSocket, the client obtains a single-use ticket.
 
 ```
-GET /ws?ticket=<short-lived-ticket> HTTP/1.1
+POST /auth/ticket
+Authorization: Bearer <external_jwt>
+```
+
+**Response** (`HTTP 200 OK`):
+```json
+{
+  "ticket":    "zyc_tk_abc123...",
+  "expiresAt": 1741551234
+}
+```
+
+---
+
+## Connection Lifecycle
+
+### 2. WebSocket Upgrade
+
+Client opens a WebSocket connection using the ticket:
+
+```
+GET /ws?ticket=zyc_tk_abc123... HTTP/1.1
 Upgrade: websocket
 Connection: Upgrade
 Origin: https://app.example.com
@@ -526,7 +574,7 @@ Origin: https://app.example.com
 
 The server validates:
 1. Origin header (CSWSH prevention)
-2. Ticket validity (ticket-based auth, per NETWORKING.md)
+2. Ticket signature and expiry (contains baked-in `$session`)
 
 On success: HTTP 101 Switching Protocols. On failure: HTTP 401 or 403.
 
@@ -537,9 +585,10 @@ After the WebSocket is established, the server sends a `Connected` push:
 ```
 {
   "type":               "Connected",
-  "userId":             "user-123",       // Authenticated user ID
-  "storeNamespace":     "tenant:acme",    // Active store namespace
-  "presenceNamespace":  "tenant:acme"     // Active presence namespace
+  "userId":             "user-123",       // Authenticated user ID (from sub claim)
+  "session":            { ... },          // The full resolved $session context
+  "storeNamespace":     "tenant:acme",    
+  "presenceNamespace":  "tenant:acme"     
 }
 ```
 
@@ -607,6 +656,57 @@ The `Connected` message may include a `protocolVersion` field in future versions
 
 ---
 
+## Internal Messages (Zig ↔ Sidecar)
+
+These messages travel over the internal IPC/WebSocket channel between the Zig core and the Bun Sidecar.
+
+### `SidecarOnConnect`
+
+Sent when a ticket is requested or a session is refreshed.
+
+**Request**:
+```json
+{
+  "type":      "SidecarOnConnect",
+  "jwt":       { ...claims... },  // Already verified by Zig
+  "namespace": "tenant:acme"      // Initial namespace context
+}
+```
+
+**Response** (`type: "ok"`):
+```json
+{
+  "type":    "ok",
+  "session": { "role": "admin", "tenant_id": "acme" } // Becomes the $session
+}
+```
+
+### `SidecarAuthCheck`
+
+Sent when `auth.json` delegates a rule to the sidecar.
+
+**Request**:
+```json
+{
+  "type":      "SidecarAuthCheck",
+  "function":  "checkDocumentAccess",
+  "session":   { ... },
+  "namespace": "tenant:acme",
+  "path":      ["docs", "123"],
+  "value":     { ... } // The data being written (if applicable)
+}
+```
+
+**Response** (`type: "ok"`):
+```json
+{
+  "type":    "ok",
+  "allowed": true
+}
+```
+
+---
+
 ## Message Type Summary
 
 | Direction | Type | SDK method | Response? |
@@ -624,7 +724,10 @@ The `Connected` message may include a `protocolVersion` field in future versions
 | C→S | `PresenceRemove` | `presence.remove()` | `ok` |
 | C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` |
 | C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` |
+| C→S | `AuthRefresh` | `client.reauthenticate(token)` | `ok` with `session` |
 | S→C | `Connected` | — | Push (no `id`) |
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |
+| Z↔S | `SidecarOnConnect` | — | Request/Response |
+| Z↔S | `SidecarAuthCheck` | — | Request/Response |
