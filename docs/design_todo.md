@@ -82,8 +82,8 @@ Items requiring dedicated design work before implementation. Each item should re
 
 | # | Item | Status | Decision Document |
 |---|------|--------|-------------------|
-| 1 | Wire Protocol Spec | 🟡 In review | [WIRE_PROTOCOL.md](./WIRE_PROTOCOL.md) |
-| 2 | Authorization Format | ❌ Not started | — |
+| 1 | Wire Protocol Spec | 🟢 Done | [WIRE_PROTOCOL.md](./WIRE_PROTOCOL.md) |
+| 2 | Authorization Format | 🟢 Done | [AUTH_SPEC.md](./AUTH_SPEC.md) |
 | 3 | Auth Token Exchange | ❌ Not started | — |
 | 4 | Conflict Resolution | ❌ Not started | — |
 | 5 | Error Taxonomy | ❌ Not started | — |

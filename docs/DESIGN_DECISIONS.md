@@ -436,6 +436,33 @@ The following items were previously listed as "Open Questions" and have now been
 - ❌ Slightly more verbose (`client.store.set` instead of `client.set`).
 
 ---
+439: 
+440: ### ADR-014: Bun Auth Sidecar (Separating Core from Business Logic)
+441: 
+442: **Date**: 2026-03-09  
+443: **Status**: Accepted
+444: 
+445: **Context**: How should ZyncBase handle complex relational authorization (e.g., checking workspace membership) without sacrificing the performance of the Zig core or creating a Turing-complete JSON DSL?
+446: 
+447: **Decision**: ZyncBase provides an out-of-the-box Bun-based sidecar for all authorization logic that requires database lookups. 
+448: - `auth.json` is strictly for stateless, JWT-driven checks.
+449: - Complex rules are delegated to the sidecar over a persistent WebSocket connection using MessagePack.
+450: - The sidecar uses a privileged ZyncBase Admin Client for high-performance, internal data access.
+451: 
+452: **Rationale**:
+453: - **Decoupling**: Keeps the Zig core focused on high-frequency state sync and stateless auth.
+454: - **Developer Experience (DX)**: Developers can use full TypeScript, the privileged ZyncBase SDK, and normal programming patterns for auth logic instead of a restrictive JSON DSL.
+455: - **Performance**: WebSocket + MessagePack minimizes the latency overhead of delegating to a separate process.
+456: - **Unified API**: The sidecar uses the same SDK API as the frontend, creating a seamless mental model.
+457: 
+458: **Consequences**:
+459: - ✅ Unlimited flexibility for complex authorization rules.
+460: - ✅ Unified developer experience (TypeScript everywhere).
+461: - ✅ Protects the Zig core from business logic complexity.
+462: - ⚠️ Adds a sidecar process requirement for apps with complex auth.
+463: - ⚠️ Small latency penalty (~1-2ms) for sidecar-delegated rules.
+464: 
+465: ---
 
 ## Open Design Work
 
