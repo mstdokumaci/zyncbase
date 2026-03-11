@@ -20,13 +20,13 @@ This document explains the architectural and design decisions behind ZyncBase.
 
 ### Core Principles
 
-1. **Real-time First**: This is NOT a general-purpose state manager. It's for real-time collaboration.
+1. **Real-time First**: ZyncBase is a real-time collaborative database, not a general-purpose state manager or sync layer.
 2. **Collaboration is Built-in**: Presence, conflict resolution, and sync are core features, not plugins.
 3. **Self-Hosting First**: Designed to be self-hosted from day one. No vendor lock-in.
 4. **Predictable Costs**: No per-operation pricing. You control the infrastructure, you control the costs.
 5. **TypeScript-First**: Types are not an afterthought. The API should be impossible to misuse.
 6. **Framework-Agnostic Core**: Works everywhere, integrates beautifully with React/Vue/Svelte.
-7. **Logic in Code**: All authorization, validation, and business logic in version-controlled TypeScript.
+7. **Declarative Security**: All authorization and validation rules are defined in version-controlled JSON (`auth.json`), ensuring high-performance, consistent enforcement by the Zig core.
 8. **Predictable Performance**: No hidden O(n²) algorithms, clear performance characteristics.
 9. **Secure by Default**: No prototype pollution, input validation built-in, safe defaults.
 

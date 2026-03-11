@@ -9,7 +9,7 @@
 
 ## Overview
 
-ZyncBase is a self-hosted, real-time collaborative state manager built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
+ZyncBase is a self-hosted, real-time collaborative database built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
 
 ### Target Performance
 

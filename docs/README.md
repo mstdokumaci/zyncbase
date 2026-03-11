@@ -1,4 +1,4 @@
-# ZyncBase - Real-Time Collaborative State Manager
+# ZyncBase - Real-Time Collaborative Database
 
 **Status**: Draft  
 **Last Updated**: 2026-03-09
@@ -7,7 +7,7 @@
 
 ## 🎯 What is zyncBase?
 
-**zyncBase is a self-hosted, real-time collaborative state manager with built-in network sync, presence awareness, and multi-tenant isolation.**
+**zyncBase is a self-hosted, real-time collaborative database with built-in network sync, presence awareness, and multi-tenant isolation.**
 
 **The Problem**: Firebase costs explode with success and locks you in. Supabase is slow at scale. Building real-time features from scratch is complex.
 
@@ -135,7 +135,7 @@ That's it! You now have real-time collaboration with presence awareness.
 
 ## Why Developers Choose zyncBase
 
-### Not Another State Manager
+### Not Another Real-Time Database
 
 zyncBase is **NOT** a replacement for Zustand, Redux, or Jotai. Those are great for local state.
 

@@ -125,7 +125,7 @@ Create `/etc/systemd/system/zyncBase.service`:
 
 ```ini
 [Unit]
-Description=zyncBase Real-time State Manager
+Description=ZyncBase Real-time Collaborative Database
 After=network.target
 
 [Service]

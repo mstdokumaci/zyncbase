@@ -292,7 +292,7 @@ Based on 2024-2026 developer feedback, the top complaints are:
 
 **zyncBase Solution**:
 - Deploy close to your users (self-hosted)
-- Optimized for real-time state sync (not general database)
+- Embedded SQLite WAL database optimized for real-time state sync
 - Efficient binary protocol (MessagePack)
 - Subscription-based (not polling)
 
@@ -300,8 +300,8 @@ Based on 2024-2026 developer feedback, the top complaints are:
 **Problem**: NoSQL limitations, zig-zag joins
 
 **zyncBase Solution**:
-- Not a database - use any DB for persistence
-- zyncBase handles state sync
+- Embedded SQLite WAL handles persistence — zero external dependencies
+- ZyncBase handles both persistence and real-time sync in one binary
 - Query API for filtering and sorting
 
 ### 5. Logic Outside Codebase (Firebase)

@@ -1,6 +1,6 @@
-# **Technical Analysis and Architectural Verification of the ZyncBase Real-Time State Management Framework**
+# **Technical Analysis and Architectural Verification of the ZyncBase Real-Time Collaborative Database Framework**
 
-The architectural evolution of modern backend-as-a-service (BaaS) platforms has reached a critical juncture where the trade-off between developer ergonomics and raw system performance is being re-evaluated through the lens of systems programming languages like Zig. ZyncBase represents a sophisticated attempt to synthesize the high-level utility of platforms such as Firebase and Supabase with the low-level efficiency associated with the Bun runtime and the uWebSockets networking engine.1 By leveraging the Write-Ahead Logging (WAL) capabilities of SQLite, the project seeks to provide a self-hosted, real-time collaborative state manager that circumvents the resource overhead typical of garbage-collected environments. This report provides a comprehensive analysis of the proposed ZyncBase architecture, verifies the validity of its core technical assumptions, and investigates the nuanced interdependencies between its networking, storage, and logic layers.
+The architectural evolution of modern backend-as-a-service (BaaS) platforms has reached a critical juncture where the trade-off between developer ergonomics and raw system performance is being re-evaluated through the lens of systems programming languages like Zig. ZyncBase represents a sophisticated attempt to synthesize the high-level utility of platforms such as Firebase and Supabase with the low-level efficiency associated with the Bun runtime and the uWebSockets networking engine.1 By leveraging the Write-Ahead Logging (WAL) capabilities of SQLite, the project seeks to provide a self-hosted, real-time collaborative database that circumvents the resource overhead typical of garbage-collected environments. This report provides a comprehensive analysis of the proposed ZyncBase architecture, verifies the validity of its core technical assumptions, and investigates the nuanced interdependencies between its networking, storage, and logic layers.
 
 ## **The Networking Paradigm: uWebSockets and the Event-Driven Architecture**
 
@@ -129,7 +129,7 @@ A systematic review of the user's ARCHITECTURE.md and API\_DESIGN.md confirms th
 4. **Assumption: Single binary under 15MB is feasible.**  
    * *Verification:* Confirmed. PocketBase achieves a similar goal (\~12MB) despite being written in Go, which typically results in larger binaries than Zig.11  
 5. **Assumption: MessagePack reduces payload overhead.**  
-   * *Verification:* Confirmed. Binary serialization is significantly more efficient than JSON for the high-frequency, small-payload updates typical of real-time state managers.10
+   * *Verification:* Confirmed. Binary serialization is significantly more efficient than JSON for the high-frequency, small-payload updates typical of real-time collaborative databases.10
 
 ## **Comparative Analysis of ZyncBase vs. Competitors**
 
@@ -170,7 +170,7 @@ This transition is facilitated by the maturing Zig ecosystem. Projects like zqli
 ## **Synthesis of Future Outlook and Operational Feasibility**
 
 The future outlook for ZyncBase depends on its ability to maintain its "Impossible to Misuse" promise while handling the complexities of production-scale real-time data.1 The current trajectory of the project suggests a strong focus on the "Small/MVP" and "Indie" markets, where the simplicity of a single-binary deployment on a $5 VPS is a significant competitive advantage over complex cloud-native architectures.29  
-To achieve long-term viability, the project must navigate the transition from a single-process state manager to a potentially distributed system. While current vertical scaling is sufficient for most use cases, the integration of tools like LiteFS or Marmot could eventually allow ZyncBase to scale horizontally, though this would introduce significant challenges for real-time state consistency across nodes.20
+To achieve long-term viability, the project must navigate the transition from a single-process collaborative database to a potentially distributed system. While current vertical scaling is sufficient for most use cases, the integration of tools like LiteFS or Marmot could eventually allow ZyncBase to scale horizontally, though this would introduce significant challenges for real-time state consistency across nodes.20
 
 ## **Conclusion of Technical Analysis**
 
@@ -216,7 +216,7 @@ Regarding write throughput, the 3,600 writes per second limit is often bound by 
 
 ### **Section Expansion: Presence Awareness and Delta Synchronization**
 
-The "Collaborative State" feature of ZyncBase likely utilizes Delta Synchronization to minimize network traffic.1 In this model, instead of sending the entire state object, the server only transmits the changes (deltas).32 Research into the SQLite Session Extension reveals a memory-efficient way to track these changes by creating small binary blobs of "changesets".32 By integrating this concept with Conflict-free Replicated Data Types (CRDTs), ZyncBase could offer true multi-user synchronization that resolves conflicts automatically even in offline-first scenarios.1  
+The "Collaborative State" feature of ZyncBase utilizes Delta Synchronization to minimize network traffic.1 In this model, instead of sending the entire state object, the server only transmits the changes (deltas).32 Research into the SQLite Session Extension reveals a memory-efficient way to track these changes by creating small binary blobs of "changesets".32 By integrating this concept with server-authoritative conflict resolution strategies, ZyncBase offers true multi-user synchronization. Instead of masterless CRDTs, the server acts as the single source of truth, reconciling concurrent mutations using strategies like Last-Write-Wins (LWW), field-level merging, or optional collision rejection based on auth.json rules.1  
 Presence awareness in ZyncBase is further refined by separating "global presence" (who is online) from "contextual presence" (who is in a specific room).1 Contextual presence is the most demanding, as it involves the highest frequency of updates. By utilizing the "lock-free cache" for this purpose, ZyncBase can broadcast cursor positions using a "fire-and-forget" approach, where individual updates are not persisted to disk but are broadcast to all clients in the same namespace.1 This ensures that the system remains responsive even when thousands of users are interacting simultaneously in a shared workspace.1
 
 ### **Section Expansion: Systematic Verification of Security Protocols**

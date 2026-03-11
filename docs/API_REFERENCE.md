@@ -742,7 +742,7 @@ const others = presence()
 
 ## TypeScript Support
 
-zyncBase is written in TypeScript and provides full type safety.
+The ZyncBase SDK is written in TypeScript and provides full type safety for your application code.
 
 ### Type-safe Schema
 
