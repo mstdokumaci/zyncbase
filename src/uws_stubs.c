@@ -1,5 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <sys/types.h>
 
 /**
  * Bun-specific function stubs for uWebSockets integration
@@ -7,23 +9,28 @@
  * Bun's fork of uWebSockets includes calls to Bun-specific functions that don't exist
  * in the standard uWebSockets library. These stubs allow us to link successfully while
  * providing minimal implementations.
- * 
- * TODO: Implement these properly as ZyncBase features are developed:
- * - DNS resolution (Bun__addrinfo_*)
- * - UTF-8 validation (currently stubbed in WebSocketProtocol.h)
- * - Event loop integration (Bun__JSC_onBeforeWait, etc.)
  */
+
+// =============================================================================
+// Mutex and Lock Stubs
+// =============================================================================
+// Bun uses custom mutexes for thread safety in uWebSockets.
+// We define a dummy type and size to satisfy Bun's runtime checks.
+
+typedef struct { char dummy[64]; } zig_mutex_t;
+const size_t Bun__lock__size = sizeof(zig_mutex_t);
+
+void Bun__lock(zig_mutex_t *mutex) { (void)mutex; }
+void Bun__unlock(zig_mutex_t *mutex) { (void)mutex; }
 
 // =============================================================================
 // DNS Resolution Stubs
 // =============================================================================
-// Bun uses custom async DNS resolution integrated with their event loop.
-// For now, we return errors. A real implementation would use getaddrinfo()
-// or integrate with ZyncBase's DNS resolver.
+// Bun uses custom async DNS resolution. For now, we return errors.
 
 int Bun__addrinfo_get(void* loop, const char* host, uint16_t port, void** ptr) {
     (void)loop; (void)host; (void)port; (void)ptr;
-    return -1; // Fail - DNS resolution not implemented
+    return -1;
 }
 
 int Bun__addrinfo_set(void* ptr, void* socket) {
@@ -41,77 +48,46 @@ void* Bun__addrinfo_getRequestResult(void* addrinfo_req) {
 }
 
 // =============================================================================
-// Bun Runtime Hooks
+// Event Loop and Runtime Hooks
 // =============================================================================
-
-int bun_is_exiting() {
-    // Bun checks this to avoid operations during shutdown
-    return 0; // Never exiting in our case
-}
-
-void* us_get_default_ca_store() {
-    // Bun's default CA certificate store
-    // TODO: Provide system CA store or custom certificates
-    return NULL;
-}
-
-int us_internal_raw_root_certs(void** out) {
-    // Bun's embedded root certificates
-    (void)out;
-    return 0; // No embedded certs
-}
-
-// =============================================================================
-// Configuration Constants
-// =============================================================================
-
-// Maximum HTTP header size (16KB default)
-int BUN_DEFAULT_MAX_HTTP_HEADER_SIZE = 16 * 1024;
-
-// =============================================================================
-// Mutex Stubs
-// =============================================================================
-// Bun uses custom mutexes for thread safety in uSockets.
-// Since we're single-threaded for now, these are no-ops.
-// TODO: Implement proper mutexes when adding multi-threading
-
-void Bun__lock(void* mutex) { (void)mutex; }
-void Bun__unlock(void* mutex) { (void)mutex; }
-
-// =============================================================================
-// Event Loop Integration Stubs
-// =============================================================================
-// Bun integrates uSockets with JavaScriptCore's event loop.
-// We don't need these for our Zig-based server.
 
 void Bun__JSC_onBeforeWait(void* loop) { (void)loop; }
 
-void Bun__internal_dispatch_ready_poll(void* p, int error, int eof, int events) {
-    (void)p; (void)error; (void)eof; (void)events;
+// Fixed signature: matches epoll_kqueue.c expectation
+void Bun__internal_dispatch_ready_poll(void* loop, void* poll) {
+    (void)loop; (void)poll;
 }
 
-void Bun__internal_ensureDateHeaderTimerIsEnabled(void* loop) { (void)loop; }
+void Bun__internal_ensureDateHeaderTimerIsEnabled(void* loop) { 
+    (void)loop; 
+}
+
+void __attribute__((__noreturn__)) Bun__panic(const char* message, size_t length) {
+    (void)message; (void)length;
+    abort();
+}
+
+int bun_is_exiting() { return 0; }
+
+bool Bun__Node__UseSystemCA = true;
 
 // =============================================================================
-// Platform Detection
+// Networking and Platform Stubs
 // =============================================================================
 
 int Bun__doesMacOSVersionSupportSendRecvMsgX() {
 #ifdef __APPLE__
-    return 1; // Assume modern macOS
+    return 1;
 #else
     return 0;
 #endif
 }
 
-// Bun's epoll_kqueue.c expects these on Linux
-#include <sys/types.h>
 #ifdef __linux__
 #include <sys/epoll.h>
 #include <signal.h>
 #include <time.h>
 #else
-// Define skeleton types for non-Linux platforms to allow compilation of stubs
 struct epoll_event;
 #ifndef _SIGSET_T
 #define _SIGSET_T
@@ -120,33 +96,33 @@ typedef struct { unsigned long sig[2]; } sigset_t;
 #endif
 
 int Bun__isEpollPwait2SupportedOnLinuxKernel() {
-    return 0; // Return 0 to indicate not supported, which triggers fallthrough to epoll_pwait
+    return 0; // Return 0 to trigger fallback to standard epoll_pwait
 }
 
 ssize_t sys_epoll_pwait2(int epfd, struct epoll_event* events, int maxevents, const struct timespec* timeout, const sigset_t* sigmask) {
     (void)epfd; (void)events; (void)maxevents; (void)timeout; (void)sigmask;
-    return -1; // Should not be called if Bun__isEpollPwait2SupportedOnLinuxKernel returns 0
+    return -1;
 }
 
 // =============================================================================
-// HTTP Method Parsing
+// Other Bun Utilities
 // =============================================================================
+
+void* us_get_default_ca_store() { return NULL; }
+
+int us_internal_raw_root_certs(void** out) {
+    (void)out;
+    return 0;
+}
+
+int BUN_DEFAULT_MAX_HTTP_HEADER_SIZE = 16 * 1024;
 
 int Bun__HTTPMethod__from(void* str, size_t len) {
-    // Bun's HTTP method enum parser
-    // TODO: Implement if we need HTTP method detection
     (void)str; (void)len;
-    return 0; // Unknown/None
+    return 0;
 }
 
-// =============================================================================
-// C-Ares Compatibility
-// =============================================================================
-// Bun's uSockets uses c-ares for DNS, which has this helper function.
-// We provide a simple wrapper around standard inet_ntop.
-
 #include <arpa/inet.h>
-
 const char *ares_inet_ntop(int af, const void *src, char *dst, size_t size) {
     return inet_ntop(af, src, dst, (socklen_t)size);
 }

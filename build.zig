@@ -158,8 +158,12 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     });
 
     // Add stubs for Bun-specific functions
+    const stubs_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+        "-std=c11",
+    } }) catch unreachable;
+
     step.addCSourceFile(.{
         .file = b.path("src/uws_stubs.c"),
-        .flags = &.{"-std=c11"},
+        .flags = stubs_flags,
     });
 }
