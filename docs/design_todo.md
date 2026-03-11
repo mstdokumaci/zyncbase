@@ -53,7 +53,7 @@ Items requiring dedicated design work before implementation. Each item should re
 ### 10. Query API MVP Scope
 **Why**: We need to limit the scope of the v1 query engine to the most critical operators to ship faster.
 **Decision needed**: Formally drop complex operators (e.g., regex, full-text, complex joins) and define the exact boolean logic (AND/OR) boundaries for v1.
-**Status**: Limit to `eq`, `in`, `gt`/`lt`, and `startsWith`.
+**Status**: Keep exact operators in `QUERY_LANGUAGE.md`. Drop Regex, Full-Text, deeply nested ORs.
 
 ---
 
@@ -91,7 +91,7 @@ Items requiring dedicated design work before implementation. Each item should re
 | 7 | Subscription Invalidation | ❌ Not started | — |
 | 8 | Connection Status API | ❌ Not started | — |
 | 9 | Cursor-based Pagination | ❌ Not started | — |
-| 10 | Query API MVP Scope | ❌ Not started | — |
+| 10 | Query API MVP Scope | 🟢 Done | [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md#adr-016-query-api-mvp-scope) |
 | 11 | Config Extensibility | ❌ Not started | — |
 | 12 | Offline Support | 🔒 Scoped out of v1 | — |
 | 13 | Data Structure & Primary Key Conventions | ❌ Not started | — |

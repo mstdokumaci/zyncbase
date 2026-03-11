@@ -490,6 +490,28 @@ The following items were previously listed as "Open Questions" and have now been
 
 ---
 
+### ADR-016: Query API MVP Scope
+
+**Date**: 2026-03-09  
+**Status**: Accepted
+
+**Context**: We need to formally define the boundaries of the v1 query engine to ensure the Zig core and SQLite remain blazingly fast during real-time matching.
+
+**Decision**: The v1 MVP Query API will formally support exactly the operators documented in `QUERY_LANGUAGE.md` (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `startsWith`, `endsWith`, `in`, `notIn`, `isNull`, `isNotNull`) alongside implicit ANDs and a single, root-level explicit `or`.
+- **Explicitly Dropped from v1**: Regex (`match`), Full-Text Search, Geospatial queries, Table Joins, Aggregations (`count`, `sum`), Multi-field sorting, and deeply nested boolean structures (recursive ORs).
+
+**Rationale**:
+- **In-Memory Matching**: Comparing `ne` or `contains` in Zig's RAM for real-time `store.subscribe()` matching is just a few trivial lines of code (`std.mem.indexOf`) with low O(1) or O(N) overhead.
+- **Security**: Regex introduces ReDoS limits. Dropping it guarantees predictable performance for the single-threaded SQLite writer loop.
+- **Simplicity**: Preventing deep recursive AST boolean resolution allows the query parsing engine to remain flat and predictable.
+
+**Consequences**:
+- ✅ Extremely predictable runtime overhead for the real-time matching engine.
+- ✅ Zero need to embed regex libraries or FTS5 extensions in the core binary.
+- ⚠️ Developers must rely on computed properties or sidecars for complex full-text search requirements.
+
+---
+
 ## Open Design Work
 
 For items still requiring dedicated design work, see [design_todo.md](./design_todo.md).
