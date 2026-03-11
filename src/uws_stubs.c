@@ -104,6 +104,30 @@ int Bun__doesMacOSVersionSupportSendRecvMsgX() {
 #endif
 }
 
+// Bun's epoll_kqueue.c expects these on Linux
+#include <sys/types.h>
+#ifdef __linux__
+#include <sys/epoll.h>
+#include <signal.h>
+#include <time.h>
+#else
+// Define skeleton types for non-Linux platforms to allow compilation of stubs
+struct epoll_event;
+#ifndef _SIGSET_T
+#define _SIGSET_T
+typedef struct { unsigned long sig[2]; } sigset_t;
+#endif
+#endif
+
+int Bun__isEpollPwait2SupportedOnLinuxKernel() {
+    return 0; // Return 0 to indicate not supported, which triggers fallthrough to epoll_pwait
+}
+
+ssize_t sys_epoll_pwait2(int epfd, struct epoll_event* events, int maxevents, const struct timespec* timeout, const sigset_t* sigmask) {
+    (void)epfd; (void)events; (void)maxevents; (void)timeout; (void)sigmask;
+    return -1; // Should not be called if Bun__isEpollPwait2SupportedOnLinuxKernel returns 0
+}
+
 // =============================================================================
 // HTTP Method Parsing
 // =============================================================================
