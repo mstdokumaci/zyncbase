@@ -71,10 +71,13 @@ pub const MessagePackParser = struct {
         };
     };
 
-    /// Parse state for iterative parsing
-    const ParseState = struct {
-        type: enum { map, array },
+    /// Stack state for iterative parsing
+    const StackState = struct {
+        value_ptr: *Value,
+        container_type: enum { array, map_key, map_value },
         remaining: usize,
+        index: usize,
+        map_entries: ?[]Value.MapEntry = null,
     };
 
     /// Parse MessagePack data iteratively (not recursively) to prevent stack overflow
@@ -91,49 +94,135 @@ pub const MessagePackParser = struct {
         }
 
         var pos: usize = 0;
-        var depth: usize = 0;
-        // Stack is not actually used in current implementation but kept for future iterative parsing
-
-        // INVARIANT: depth <= max_depth throughout parsing
-        // INVARIANT: pos <= data.len throughout parsing
-
-        return try self.parseValue(data, &pos, &depth);
-    }
-
-    /// Parse a single MessagePack value
-    fn parseValue(
-        self: *MessagePackParser,
-        data: []const u8,
-        pos: *usize,
-        depth: *usize,
-    ) ParseError!Value {
-        if (pos.* >= data.len) {
-            return error.UnexpectedEOF;
+        var stack = std.ArrayListUnmanaged(StackState){};
+        defer {
+            for (stack.items) |state| {
+                if (state.map_entries) |entries| {
+                    // This is only called if we error out midway
+                    for (entries) |entry| {
+                        self.freeValue(entry.key);
+                        self.freeValue(entry.value);
+                    }
+                    self.allocator.free(entries);
+                }
+            }
+            stack.deinit(self.allocator);
         }
 
+        // Initial root value
+        var root_value: Value = .nil;
+        var current_value_ptr: *Value = &root_value;
+
+        // Iterative parsing loop
+        while (true) {
+            // Check depth limit
+            if (stack.items.len > self.max_depth) {
+                self.freeValue(root_value);
+                return error.MaxDepthExceeded;
+            }
+
+            // Parse the next primitive or container header
+            const next_value = self.parseNextValue(data, &pos) catch |err| {
+                self.freeValue(root_value);
+                return err;
+            };
+
+            // Assign value to current pointer
+            current_value_ptr.* = next_value;
+
+            // Handle containers (Array/Map) by pushing to stack
+            switch (next_value) {
+                .array => |arr| {
+                    if (arr.len > 0) {
+                        stack.append(self.allocator, .{
+                            .value_ptr = current_value_ptr,
+                            .container_type = .array,
+                            .remaining = arr.len,
+                            .index = 0,
+                        }) catch |err| {
+                            self.freeValue(root_value);
+                            return err;
+                        };
+                        current_value_ptr = &arr[0];
+                        continue;
+                    }
+                },
+                .map => |entries| {
+                    if (entries.len > 0) {
+                        stack.append(self.allocator, .{
+                            .value_ptr = current_value_ptr,
+                            .container_type = .map_key,
+                            .remaining = entries.len,
+                            .index = 0,
+                        }) catch |err| {
+                            self.freeValue(root_value);
+                            return err;
+                        };
+                        current_value_ptr = &entries[0].key;
+                        continue;
+                    }
+                },
+                else => {},
+            }
+
+            // After a non-container or empty container, pop from stack or move to next element
+            while (stack.items.len > 0) {
+                var top = &stack.items[stack.items.len - 1];
+                switch (top.container_type) {
+                    .array => {
+                        top.index += 1;
+                        if (top.index < top.remaining) {
+                            current_value_ptr = &top.value_ptr.array[top.index];
+                            break; // Continue parsing next element in array
+                        }
+                    },
+                    .map_key => {
+                        // Just finished a key, now parse the value
+                        top.container_type = .map_value;
+                        current_value_ptr = &top.value_ptr.map[top.index].value;
+                        break; // Continue parsing value for this key
+                    },
+                    .map_value => {
+                        // Finished both key and value
+                        top.index += 1;
+                        if (top.index < top.remaining) {
+                            top.container_type = .map_key;
+                            current_value_ptr = &top.value_ptr.map[top.index].key;
+                            break; // Continue parsing next key in map
+                        }
+                    },
+                }
+                _ = stack.pop();
+            } else {
+                // Stack empty, parsing finished
+                break;
+            }
+        }
+
+        return root_value;
+    }
+
+    fn parseNextValue(self: *MessagePackParser, data: []const u8, pos: *usize) ParseError!Value {
+        if (pos.* >= data.len) return error.UnexpectedEOF;
         const byte = data[pos.*];
         pos.* += 1;
 
         // Positive fixint (0x00 - 0x7f)
-        if (byte <= 0x7f) {
-            return Value{ .unsigned = byte };
-        }
+        if (byte <= 0x7f) return Value{ .unsigned = byte };
 
         // Negative fixint (0xe0 - 0xff)
-        if (byte >= 0xe0) {
-            return Value{ .integer = @as(i8, @bitCast(byte)) };
-        }
+        if (byte >= 0xe0) return Value{ .integer = @as(i8, @bitCast(byte)) };
 
         // fixmap (0x80 - 0x8f)
         if (byte >= 0x80 and byte <= 0x8f) {
             const size = byte & 0x0f;
-            return try self.parseMap(data, pos, depth, size);
+            return try self.initMap(size);
         }
 
         // fixarray (0x90 - 0x9f)
         if (byte >= 0x90 and byte <= 0x9f) {
             const size = byte & 0x0f;
-            return try self.parseArray(data, pos, depth, size);
+            return try self.initArray(size);
         }
 
         // fixstr (0xa0 - 0xbf)
@@ -142,7 +231,6 @@ pub const MessagePackParser = struct {
             return try self.parseString(data, pos, length);
         }
 
-        // Other types
         return switch (byte) {
             0xc0 => Value.nil,
             0xc2 => Value{ .boolean = false },
@@ -193,25 +281,42 @@ pub const MessagePackParser = struct {
             // Arrays
             0xdc => blk: {
                 const size = try self.readU16(data, pos);
-                break :blk try self.parseArray(data, pos, depth, size);
+                break :blk try self.initArray(size);
             },
             0xdd => blk: {
                 const size = try self.readU32(data, pos);
-                break :blk try self.parseArray(data, pos, depth, @intCast(size));
+                break :blk try self.initArray(@intCast(size));
             },
 
             // Maps
             0xde => blk: {
                 const size = try self.readU16(data, pos);
-                break :blk try self.parseMap(data, pos, depth, size);
+                break :blk try self.initMap(size);
             },
             0xdf => blk: {
                 const size = try self.readU32(data, pos);
-                break :blk try self.parseMap(data, pos, depth, @intCast(size));
+                break :blk try self.initMap(@intCast(size));
             },
 
             else => error.InvalidFormat,
         };
+    }
+
+    fn initArray(self: *MessagePackParser, size: usize) ParseError!Value {
+        if (size > self.max_array_length) return error.MaxArrayLengthExceeded;
+        const array = try self.allocator.alloc(Value, size);
+        @memset(array, .nil);
+        return Value{ .array = array };
+    }
+
+    fn initMap(self: *MessagePackParser, size: usize) ParseError!Value {
+        if (size > self.max_map_size) return error.MaxMapSizeExceeded;
+        const map = try self.allocator.alloc(Value.MapEntry, size);
+        for (map) |*entry| {
+            entry.key = .nil;
+            entry.value = .nil;
+        }
+        return Value{ .map = map };
     }
 
     // Helper functions for reading primitive types
@@ -319,86 +424,6 @@ pub const MessagePackParser = struct {
         const bin = data[pos.* .. pos.* + length];
         pos.* += length;
         return Value{ .binary = bin };
-    }
-
-    fn parseArray(
-        self: *MessagePackParser,
-        data: []const u8,
-        pos: *usize,
-        depth: *usize,
-        size: usize,
-    ) ParseError!Value {
-        // Check depth limit before descending
-        if (depth.* >= self.max_depth) {
-            return error.MaxDepthExceeded;
-        }
-
-        // Check array length limit
-        if (size > self.max_array_length) {
-            return error.MaxArrayLengthExceeded;
-        }
-
-        depth.* += 1;
-        defer depth.* -= 1;
-
-        var array = try self.allocator.alloc(Value, size);
-        var initialized: usize = 0;
-        errdefer {
-            // Free any already-parsed elements on error
-            for (array[0..initialized]) |item| {
-                self.freeValue(item);
-            }
-            self.allocator.free(array);
-        }
-
-        for (0..size) |i| {
-            array[i] = try self.parseValue(data, pos, depth);
-            initialized = i + 1;
-        }
-
-        return Value{ .array = array };
-    }
-
-    fn parseMap(
-        self: *MessagePackParser,
-        data: []const u8,
-        pos: *usize,
-        depth: *usize,
-        size: usize,
-    ) ParseError!Value {
-        // Check depth limit before descending
-        if (depth.* >= self.max_depth) {
-            return error.MaxDepthExceeded;
-        }
-
-        // Check map size limit
-        if (size > self.max_map_size) {
-            return error.MaxMapSizeExceeded;
-        }
-
-        depth.* += 1;
-        defer depth.* -= 1;
-
-        var map = try self.allocator.alloc(Value.MapEntry, size);
-        var initialized: usize = 0;
-        errdefer {
-            // Free any already-parsed entries on error
-            for (map[0..initialized]) |entry| {
-                self.freeValue(entry.key);
-                self.freeValue(entry.value);
-            }
-            self.allocator.free(map);
-        }
-
-        for (0..size) |i| {
-            const key = try self.parseValue(data, pos, depth);
-            errdefer self.freeValue(key);
-            const value = try self.parseValue(data, pos, depth);
-            map[i] = Value.MapEntry{ .key = key, .value = value };
-            initialized = i + 1;
-        }
-
-        return Value{ .map = map };
     }
 
     /// Free memory allocated for a parsed value

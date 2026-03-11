@@ -176,7 +176,6 @@ pub const SubscriptionManager = struct {
     }
 
     /// Find all subscriptions that match a row change
-    /// Find all subscriptions that match a row change
     pub fn findMatchingSubscriptions(
         self: *SubscriptionManager,
         change: RowChange,
