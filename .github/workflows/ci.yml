@@ -13,11 +13,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22.0'
+
+      - name: Apply patches
+        run: ./scripts/apply-patches.sh
+
+      - name: Build BoringSSL
+        run: ./scripts/build-boringssl.sh
 
       - name: Run tests
         run: zig build test --summary all
@@ -28,11 +41,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22.0'
+
+      - name: Apply patches
+        run: ./scripts/apply-patches.sh
+
+      - name: Build BoringSSL
+        run: ./scripts/build-boringssl.sh
 
       - name: Run tests with ThreadSanitizer
         run: zig build test -Dsanitize=thread --summary all
@@ -46,11 +72,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22.0'
+
+      - name: Apply patches
+        run: ./scripts/apply-patches.sh
+
+      - name: Build BoringSSL
+        run: ./scripts/build-boringssl.sh
 
       - name: Run tests with GPA leak detection
         run: zig build test --summary all
@@ -61,11 +100,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22.0'
+
+      - name: Apply patches
+        run: ./scripts/apply-patches.sh
+
+      - name: Build BoringSSL
+        run: ./scripts/build-boringssl.sh
 
       - name: Build
         run: zig build
