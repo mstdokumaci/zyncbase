@@ -158,6 +158,39 @@ Remove a value at a path.
   "type": "ok",
   "id":   3
 }
+
+---
+
+#### `StoreBatch`
+
+Perform multiple write operations atomically. See the [Batch Operations Specification](./BATCH_OPERATIONS.md) for wire format details and execution logic.
+
+```
+{
+  "type": "StoreBatch",
+  "id":   4,
+  "ops": [
+    ["s", ["tasks", "123"], { "status": "assigned" }],
+    ["s", ["users", "bob", "taskCount"], 5],
+    ["r", ["temporary_locks", "123"]]
+  ]
+}
+```
+
+**Operation codes:**
+- `"s"`: Set (requires `path` and `value`)
+- `"r"`: Remove (requires `path`)
+
+**Response** (`type: "ok"`):
+
+```
+{
+  "type": "ok",
+  "id":   4
+}
+```
+
+On failure, the `details` object in the error response will include `batchIndex` pointing to the first operation that caused the failure.
 ```
 
 ---
@@ -718,6 +751,7 @@ Sent when `auth.json` delegates a rule to the hook server.
 | C→S | `StoreGet` | `store.get(path)` | `ok` with `value` |
 | C→S | `StoreSet` | `store.set(path, value)` | `ok` |
 | C→S | `StoreRemove` | `store.remove(path)` | `ok` |
+| C→S | `StoreBatch` | `store.batch(ops)` | `ok` |
 | C→S | `StoreSubscribe` | `store.subscribe(path, cb)` | `ok` with `subId` + `value` |
 | C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
 | C→S | `StoreQuery` | `store.query(path, opts)` | `ok` with `value` |

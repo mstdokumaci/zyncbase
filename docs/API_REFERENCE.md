@@ -205,6 +205,35 @@ unsubscribe()
 
 ---
 
+#### `store.batch(operations)`
+
+Perform multiple write operations atomically. See the [Batch Operations Specification](./BATCH_OPERATIONS.md) for full details on atomicity and limits.
+
+```typescript
+// Atomic transfer of responsibility
+await client.store.batch([
+  { op: 'set', path: 'tasks.123', value: { status: 'assigned', user: 'bob' } },
+  { op: 'set', path: 'users.bob.taskCount', value: 5 },
+  { op: 'set', path: 'users.alice.taskCount', value: 3 }
+])
+
+// Mixing set and remove
+await client.store.batch([
+  { op: 'set', path: 'elements.rect-1', value: { x: 10, y: 20 } },
+  { op: 'remove', path: 'elements.rect-2' }
+])
+```
+
+**Parameters:**
+- `operations` (Array) - List of operations to perform:
+  - `op` ('set' | 'remove') - Type of operation
+  - `path` (string | string[]) - Destination path
+  - `value` (any) - Value for 'set' operations
+
+**Returns:** `Promise<void>`
+
+---
+
 ### Path Syntax (Strings vs Arrays)
 
 To avoid tedious string concatenation when using variables (like IDs), all SDK methods accept both dot-notation strings and Arrays of strings.

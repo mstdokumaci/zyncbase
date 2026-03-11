@@ -120,8 +120,9 @@ That's it! You now have real-time collaboration with presence awareness.
 - **[Design Decisions](./DESIGN_DECISIONS.md)** - High-level architecture decisions
 
 ### Internal Specifications
-- **[Wire Protocol](./WIRE_PROTOCOL.md)** - Complete client-server MessagePack protocol
-- **[Authorization Format](./AUTH_SPEC.md)** - Declarative rule syntax and Hook Server IPC
+- [Wire Protocol](./WIRE_PROTOCOL.md) - Complete client-server MessagePack protocol
+- [Authorization Format](./AUTH_SPEC.md) - Declarative rule syntax and Hook Server IPC
+- **[Batch Operations](./BATCH_OPERATIONS.md)** - Atomic write batches and transactions specification
 
 ### Technical Documentation
 - **[Architecture](./architecture/README.md)** - Deep dive into ZyncBase internals

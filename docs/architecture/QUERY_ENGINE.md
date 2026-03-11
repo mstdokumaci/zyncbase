@@ -715,20 +715,20 @@ client.store.subscribe('tasks', {
 
 ### 5. Batch Updates
 
-Batch multiple updates into a single transaction:
+Batch multiple updates into a single transaction (all-or-nothing). See the [Batch Operations Specification](../BATCH_OPERATIONS.md) for full details.
 
 ```typescript
 // Good - single transaction
-await client.batch([
+await client.store.batch([
   { op: 'set', path: 'tasks.1', value: task1 },
   { op: 'set', path: 'tasks.2', value: task2 },
   { op: 'set', path: 'tasks.3', value: task3 },
 ])
 
 // Bad - multiple transactions
-await client.set('tasks.1', task1)
-await client.set('tasks.2', task2)
-await client.set('tasks.3', task3)
+await client.store.set('tasks.1', task1)
+await client.store.set('tasks.2', task2)
+await client.store.set('tasks.3', task3)
 ```
 
 ---

@@ -11,8 +11,8 @@ Items requiring dedicated design work before implementation. Each item should re
 **Decision**: Established a comprehensive error handling strategy including 7 categories, retry semantics (auto-retry for connections/server, configurable for rates), and standardized SDK error objects. Renamed "sidecar" to "Hook Server".
 
 ### 2. Batch Operations API
-**Why**: Referenced in QUERY_ENGINE.md best practices but not documented in API_REFERENCE.
-**Decision needed**: API surface (`store.batch()`), transaction semantics, error handling for partial failures.
+**Status**: Done. See `BATCH_OPERATIONS.md`.
+**Decision**: Minimum 500 operations per batch, strict atomicity (all-or-nothing), optimized wire format `[op, path, value]`.
 
 ### 3. Real-time Subscription Invalidation Strategy
 **Why**: QUERY_ENGINE.md describes two approaches (table-grained vs fine-grained) but doesn't commit.
@@ -55,7 +55,7 @@ Items requiring dedicated design work before implementation. Each item should re
 |---|------|--------|-------------------|
 md#adr-015-conflict-resolution-strategy) |
 | 1 | Error Taxonomy | ✅ Done | `ERROR_TAXONOMY.md` |
-| 2 | Batch Operations API | ❌ Not started | — |
+| 2 | Batch Operations API | ✅ Done | `BATCH_OPERATIONS.md` |
 | 3 | Subscription Invalidation | ❌ Not started | — |
 | 4 | Connection Status API | ❌ Not started | — |
 | 5 | Cursor-based Pagination | ❌ Not started | — |
