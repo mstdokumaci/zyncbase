@@ -28,7 +28,7 @@ jobs:
 
   test-sanitized:
     name: Test with ThreadSanitizer
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,7 +40,6 @@ jobs:
 
       - name: Run tests with ThreadSanitizer
         run: zig build test -Dsanitize=thread --summary all
-        continue-on-error: true
         env:
           TSAN_OPTIONS: second_deadlock_stack=1:history_size=7
 
