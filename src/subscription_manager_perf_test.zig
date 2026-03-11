@@ -128,7 +128,7 @@ test "performance: subscription matching < 1ms for 10k subscriptions" {
 
     // Verify performance requirement: < 10ms for 10k subscriptions
     // Relax for TSan
-    const target_ms: f64 = if (@import("builtin").sanitize_thread) 50.0 else 10.0;
+    const target_ms: f64 = if (@import("builtin").sanitize_thread) 100.0 else 10.0;
     try testing.expect(duration_ms < target_ms);
 
     // Verify we found the expected matches

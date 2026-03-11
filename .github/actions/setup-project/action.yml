@@ -1,0 +1,27 @@
+name: 'Setup ZyncBase Project'
+description: 'Standard setup steps for ZyncBase project including Zig, Go, and BoringSSL'
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.15.2
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '>=1.22.0'
+
+    - name: Apply patches
+      shell: bash
+      run: ./scripts/apply-patches.sh
+
+    - name: Build BoringSSL
+      shell: bash
+      run: ./scripts/build-boringssl.sh
