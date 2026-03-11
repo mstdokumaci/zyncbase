@@ -564,7 +564,10 @@ const client = createClient({
   storeNamespace: 'tenant:acme',
   presenceNamespace: 'tenant:acme:document:doc-123',
   reconnect: true,
-  reconnectDelay: 1000
+  reconnectDelay: 1000,
+  maxReconnectDelay: 30000,
+  maxReconnectAttempts: Infinity,
+  reconnectJitter: true
 })
 ```
 
@@ -579,9 +582,15 @@ const client = createClient({
 - `presenceNamespace` (string, optional) - Namespace for presence
   - Default: Same as `storeNamespace`
   - Controls which users you see
-  - Usually more specific: `'tenant:acme:document:doc-123'`
+  - Usually more specific: `'tenant:acme:workspace:ws-1:document:doc-123'`
 - `reconnect` (boolean, default: true) - Auto-reconnect on disconnect
-- `reconnectDelay` (number, default: 1000) - Delay between reconnect attempts (ms)
+- `reconnectDelay` (number, default: 1000) - Base delay between reconnect attempts (ms)
+- `maxReconnectDelay` (number, default: 30000) - Maximum delay cap for exponential backoff (ms)
+- `maxReconnectAttempts` (number, default: Infinity) - Max retry attempts before giving up
+- `reconnectJitter` (boolean, default: true) - Add ±25% randomness to retry timing
+
+**Reconnection Strategy:**
+ZyncBase uses an exponential backoff strategy with optional jitter. For specifics on the formula and client implementation expectations, see the [Wire Protocol](WIRE_PROTOCOL.md) documentation.
 
 **Namespace examples:**
 
@@ -711,9 +720,22 @@ client.on('error', (error) => {
 
 **Events:**
 - `connected` - Successfully connected
-- `disconnected` - Connection closed
+- `disconnected` - Connection closed (manually or after max retries)
 - `reconnecting` - Attempting to reconnect
 - `error` - Connection error occurred
+- `statusChange` - Fired on any state transition
+
+**`statusChange` Detail:**
+
+```typescript
+client.on('statusChange', (status, detail) => {
+  // status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  // detail.previousStatus: previous state
+  // detail.retryCount: current attempt number
+  // detail.retryIn: ms until next attempt (null if not reconnecting)
+  // detail.error: last error if any
+})
+```
 
 ---
 
@@ -747,10 +769,55 @@ function Canvas() {
 }
 ```
 
+**Connection Status UI Example:**
+
+```tsx
+import { useConnectionStatus } from '@zyncbase/react'
+
+function ConnectionBanner() {
+  const { status, error, retryCount, retryIn } = useConnectionStatus()
+
+  if (status === 'connected') return null
+  if (status === 'connecting') return <Banner>Connecting...</Banner>
+  
+  if (status === 'reconnecting') {
+    return (
+      <Banner>
+        Reconnecting (attempt {retryCount})...
+        {retryIn && ` Retrying in ${Math.ceil(retryIn / 1000)}s`}
+      </Banner>
+    )
+  }
+  
+  if (status === 'disconnected' && error) {
+    return (
+      <Banner variant="error">
+        Disconnected: {error.message}
+        <button onClick={() => client.connect()}>Retry</button>
+      </Banner>
+    )
+  }
+  
+  return null
+}
+```
+
 **Hooks:**
 - `useStore(path)` - Subscribe to store path
 - `useQuery(path, options)` - Subscribe to query results
 - `usePresence()` - Subscribe to presence updates
+- `useConnectionStatus()` - Reactive connection state
+
+**`useConnectionStatus()` return value:**
+
+```typescript
+{
+  status: ConnectionStatus,
+  error: Error | null,
+  retryCount: number,
+  retryIn: number | null
+}
+```
 
 **Return value:**
 ```typescript

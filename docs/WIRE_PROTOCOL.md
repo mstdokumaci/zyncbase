@@ -638,6 +638,12 @@ No application-level heartbeat messages are needed — WebSocket ping/pong is su
 - **Client-initiated:** Client sends a WebSocket close frame. Server cleans up subscriptions and presence.
 - **Server-initiated:** Server sends a `ServerDisconnect` message, then closes the WebSocket.
 
+### 5. Reconnection Strategy
+
+When a connection is lost unexpectedly, clients should implement an exponential backoff strategy with optional jitter to prevent thundering herd scenarios upon server restart.
+The recommended formula for delay before the next attempt is:
+`min(reconnectDelay * 2^attempt + jitter, maxReconnectDelay)`
+
 ---
 
 ## Error Format
