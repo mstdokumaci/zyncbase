@@ -34,7 +34,7 @@ mkdir -p "$BUILD_DIR"
 
 # Configure and build only the libraries (not tests)
 cd "$BUILD_DIR"
-cmake -DBUILD_SHARED_LIBS=OFF ..
+cmake -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release ..
 cmake --build . --target crypto --parallel
 cmake --build . --target ssl --parallel
 cmake --build . --target decrepit --parallel

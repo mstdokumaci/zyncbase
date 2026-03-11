@@ -83,10 +83,15 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
 
     // Link BoringSSL (built separately with CMake)
     // We use addObjectFile directly to avoid pulling in system OpenSSL headers
-    // Note: Link order matters - decrepit depends on crypto
-    step.addObjectFile(b.path("vendor/boringssl/build/libssl.a"));
+    // Note: Link order matters for resolution - decrepit depends on ssl which depends on crypto
     step.addObjectFile(b.path("vendor/boringssl/build/libdecrepit.a"));
+    step.addObjectFile(b.path("vendor/boringssl/build/libssl.a"));
     step.addObjectFile(b.path("vendor/boringssl/build/libcrypto.a"));
+
+    // BoringSSL's crypto library requires libdl on Linux for dynamic loading
+    if (step.root_module.resolved_target.?.result.os.tag == .linux) {
+        step.linkSystemLibrary("dl");
+    }
 
     // Add Bun's C wrapper (libuwsockets.cpp) with C++20 compilation flags
     step.addCSourceFile(.{
