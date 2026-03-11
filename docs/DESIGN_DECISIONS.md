@@ -1,4 +1,4 @@
-# zyncBase Design Decisions
+# ZyncBase Design Decisions
 
 **Last Updated**: 2026-03-09
 
@@ -45,7 +45,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ### Our improvements over Prisma
 
-| Aspect | Prisma | zyncBase | Why |
+| Aspect | Prisma | ZyncBase | Why |
 |--------|--------|-----|-----|
 | AND operator | `AND: [...]` | Implicit at root | Simpler for common case |
 | OR operator | `OR: [...]` | `or: [...]` | Consistent lowercase |
@@ -65,7 +65,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 // Prisma style
 { AND: [{ age: { gte: 18 } }, { status: { equals: 'active' } }] }
 
-// zyncBase style (implicit AND)
+// ZyncBase style (implicit AND)
 { age: { gte: 18 }, status: { eq: 'active' } }
 ```
 
@@ -155,7 +155,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 **Context**: Should v2.0 support horizontal scaling?
 
-**Decision**: No. zyncBase is designed exclusively for vertical scaling (single server, all CPU cores).
+**Decision**: No. ZyncBase is designed exclusively for vertical scaling (single server, all CPU cores).
 
 **Rationale**:
 - Horizontal scaling adds significant complexity
@@ -296,7 +296,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - [ ] Vue integration
 - [ ] Svelte integration
 
-**Deliverable**: npm package @zyncBase/client
+**Deliverable**: npm package @ZyncBase/client
 
 ---
 

@@ -258,7 +258,7 @@ fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_i
 
 ## Presence Awareness
 
-zyncBase's presence system tracks ephemeral user state (cursors, typing indicators, online status) in real-time with sub-100ms latency. All presence data is stored in-memory only—never persisted to SQLite.
+ZyncBase's presence system tracks ephemeral user state (cursors, typing indicators, online status) in real-time with sub-100ms latency. All presence data is stored in-memory only—never persisted to SQLite.
 
 ### Presence Data Structure
 
@@ -687,7 +687,7 @@ Avoid joins by denormalizing data:
     "id": "task-1",
     "title": "Fix bug",
     "project_id": "proj-1",
-    "project_name": "zyncBase" // Denormalized
+    "project_name": "ZyncBase" // Denormalized
   }
 }
 ```

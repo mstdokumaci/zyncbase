@@ -6,7 +6,7 @@
 
 ## Overview
 
-zyncBase uses SQLite in Write-Ahead Logging (WAL) mode as its storage layer. This provides zero-config deployment, ACID transactions, and parallel reads—all critical for vertical scaling.
+ZyncBase uses SQLite in Write-Ahead Logging (WAL) mode as its storage layer. This provides zero-config deployment, ACID transactions, and parallel reads—all critical for vertical scaling.
 
 **Key Innovation**: SQLite WAL mode + connection pool = parallel reads across all CPU cores
 
@@ -144,7 +144,7 @@ PRAGMA wal_autocheckpoint = 1000; -- Checkpoint every 1000 pages
 
 ## Connection Pool
 
-zyncBase uses a connection pool to enable parallel reads:
+ZyncBase uses a connection pool to enable parallel reads:
 
 ```zig
 const StorageLayer = struct {
@@ -157,14 +157,14 @@ const StorageLayer = struct {
         
         const self = try allocator.create(StorageLayer);
         self.* = .{
-            .write_conn = try sqlite.open("zyncBase.db"),
+            .write_conn = try sqlite.open("ZyncBase.db"),
             .read_pool = try allocator.alloc(sqlite.Connection, num_readers),
             .write_queue = RingBuffer(WriteOp).init(allocator),
         };
         
         // Open one reader connection per CPU core
         for (self.read_pool) |*conn| {
-            conn.* = try sqlite.open("zyncBase.db");
+            conn.* = try sqlite.open("ZyncBase.db");
         }
         
         // Configure WAL mode
@@ -202,7 +202,7 @@ pub fn getReader(self: *StorageLayer) *sqlite.Connection {
 
 ## Schema Design
 
-zyncBase generates SQLite tables from `schema.json` using a store-based format. Frontend developers work with the store; zyncBase handles the relational mapping underneath.
+ZyncBase generates SQLite tables from `schema.json` using a store-based format. Frontend developers work with the store; ZyncBase handles the relational mapping underneath.
 
 ### Schema Format
 
@@ -233,7 +233,7 @@ zyncBase generates SQLite tables from `schema.json` using a store-based format. 
 
 ### Generated Tables
 
-From the schema above, zyncBase generates:
+From the schema above, ZyncBase generates:
 
 ```sql
 -- Projects table (from 'projects' in store)
@@ -429,7 +429,7 @@ CREATE VIRTUAL TABLE tasks_fts USING fts5(
 
 ## Schema-to-DDL Generation
 
-zyncBase automatically generates SQLite tables from `schema.json`, mapping paths to tables with proper types and indexes.
+ZyncBase automatically generates SQLite tables from `schema.json`, mapping paths to tables with proper types and indexes.
 
 ### Path-to-Table Mapping
 
@@ -737,7 +737,7 @@ const DDLGenerator = struct {
 
 ## Auto-Migration Implementation
 
-zyncBase detects schema changes and auto-migrates when safe.
+ZyncBase detects schema changes and auto-migrates when safe.
 
 ### Migration Detection
 
@@ -1028,7 +1028,7 @@ WAL files must be periodically checkpointed (merged back to main DB). Without pr
 - Read performance degrades
 - "Checkpoint starvation" under heavy read load
 
-### zyncBase's Solution
+### ZyncBase's Solution
 
 **1. Passive checkpoints** during low-traffic periods
 ```zig
@@ -1106,10 +1106,10 @@ WHERE namespace_id = ? AND status = 'active';
 
 ```bash
 # Stop writes (or use PRAGMA wal_checkpoint)
-sqlite3 zyncBase.db ".backup zyncBase-backup.db"
+sqlite3 ZyncBase.db ".backup ZyncBase-backup.db"
 
 # Or just copy the file
-cp zyncBase.db zyncBase-backup.db
+cp ZyncBase.db ZyncBase-backup.db
 ```
 
 ### Online Backup (No Downtime)
@@ -1121,7 +1121,7 @@ pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
     
     // Copy database file
     try std.fs.copyFileAbsolute(
-        "zyncBase.db",
+        "ZyncBase.db",
         dest_path,
         .{}
     );

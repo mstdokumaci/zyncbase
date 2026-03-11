@@ -5,30 +5,30 @@
 
 ---
 
-## 🎯 What is zyncBase?
+## 🎯 What is ZyncBase?
 
-**zyncBase is a self-hosted, real-time collaborative database with built-in network sync, presence awareness, and multi-tenant isolation.**
+**ZyncBase is a self-hosted, real-time collaborative database with built-in network sync, presence awareness, and multi-tenant isolation.**
 
 **The Problem**: Firebase costs explode with success and locks you in. Supabase is slow at scale. Building real-time features from scratch is complex.
 
-**The Solution**: zyncBase gives you Firebase's real-time features with predictable costs, no vendor lock-in, and full control over your infrastructure.
+**The Solution**: ZyncBase gives you Firebase's real-time features with predictable costs, no vendor lock-in, and full control over your infrastructure.
 
 ---
 
 ## The "Better Than" Strategy
 
-zyncBase isn't trying to be everything to everyone. It's laser-focused on being the **best choice for real-time collaborative applications**.
+ZyncBase isn't trying to be everything to everyone. It's laser-focused on being the **best choice for real-time collaborative applications**.
 
 | What You Need | Best Choice | Why |
 |---------------|-------------|-----|
-| **Real-time collaboration** | **zyncBase** | Built for this, 200k+ req/sec, presence included |
+| **Real-time collaboration** | **ZyncBase** | Built for this, 200k+ req/sec, presence included |
 | **Complex SQL queries** | Supabase | PostgreSQL is better for complex joins |
 | **Serverless functions** | Firebase | Managed cloud, auto-scaling |
 | **Simple CRUD API** | PocketBase | Simpler if you don't need real-time |
-| **Mobile offline-first** | **zyncBase** | Optimistic updates, conflict resolution |
-| **Multi-tenant SaaS** | **zyncBase** | Namespace isolation built-in |
+| **Mobile offline-first** | **ZyncBase** | Optimistic updates, conflict resolution |
+| **Multi-tenant SaaS** | **ZyncBase** | Namespace isolation built-in |
 
-**zyncBase's Unfair Advantages:**
+**ZyncBase's Unfair Advantages:**
 
 1. **Performance** - 20x faster than Supabase real-time, 2x faster than PocketBase
 2. **Presence** - Built-in, not an afterthought or extra cost
@@ -45,11 +45,11 @@ zyncBase isn't trying to be everything to everyone. It's laser-focused on being 
 
 ```bash
 # Download binary
-curl -L https://zyncBase.dev/download/latest -o zyncBase-server
-chmod +x zyncBase-server
+curl -L https://zyncbase.dev/download/latest -o zyncbase-server
+chmod +x zyncbase-server
 
 # Run with default config
-./zyncBase-server
+./zyncbase-server
 ```
 
 ### 2. Define Your Schema
@@ -82,7 +82,7 @@ Create `schema.json`:
 ### 3. Connect from Client
 
 ```typescript
-import { createClient } from '@zyncBase/client'
+import { createClient } from '@zyncbase/client'
 
 const client = createClient({
   url: 'ws://localhost:3000',
@@ -123,7 +123,7 @@ That's it! You now have real-time collaboration with presence awareness.
 - **[Design Decisions](./DESIGN_DECISIONS.md)** - High-level architecture decisions
 
 ### Technical Documentation
-- **[Architecture](./architecture/README.md)** - Deep dive into zyncBase internals
+- **[Architecture](./architecture/README.md)** - Deep dive into ZyncBase internals
   - [Core Principles](./architecture/CORE_PRINCIPLES.md) - Design philosophy and technology choices
   - [Threading Model](./architecture/THREADING.md) - Multi-threaded architecture
   - [Storage Layer](./architecture/STORAGE.md) - SQLite optimization
@@ -133,28 +133,28 @@ That's it! You now have real-time collaboration with presence awareness.
 
 ---
 
-## Why Developers Choose zyncBase
+## Why Developers Choose ZyncBase
 
 ### Not Another Real-Time Database
 
-zyncBase is **NOT** a replacement for Zustand, Redux, or Jotai. Those are great for local state.
+ZyncBase is **NOT** a replacement for Zustand, Redux, or Jotai. Those are great for local state.
 
-zyncBase is for when you need:
+ZyncBase is for when you need:
 - **Real-time collaboration** - Multiple users editing the same data simultaneously
 - **Presence awareness** - See who's online, where their cursor is, what they're selecting
 - **Multi-tenant SaaS** - Isolated state per customer with efficient resource sharing
 - **Offline-first apps** - Automatic conflict resolution when reconnecting
 
-### When to Use zyncBase
+### When to Use ZyncBase
 
-**Use zyncBase when you need:**
+**Use ZyncBase when you need:**
 - ✅ Real-time collaboration (multiple users editing same data)
 - ✅ Presence awareness (see who's online, where they are)
 - ✅ Multi-tenant isolation (SaaS with per-customer state)
 - ✅ Offline-first with sync (mobile apps, unreliable networks)
 - ✅ Conflict resolution (automatic merging of concurrent edits)
 
-**Don't use zyncBase when:**
+**Don't use ZyncBase when:**
 - ❌ You just need local state management → Use Zustand
 - ❌ You need server state caching → Use TanStack Query
 - ❌ You need complex state machines → Use XState
@@ -164,12 +164,12 @@ zyncBase is for when you need:
 
 ## Zero-Zig Philosophy
 
-**You don't need to know Zig to use zyncBase.** The server is a single binary that you configure with JSON files. Think of it like:
+**You don't need to know Zig to use ZyncBase.** The server is a single binary that you configure with JSON files. Think of it like:
 - **Nginx** - You don't write C, you edit nginx.conf
 - **PostgreSQL** - You don't write C, you write SQL and config files
 - **Redis** - You don't write C, you use redis.conf
 
-**zyncBase is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
+**ZyncBase is the same**: Download the binary, edit config files, connect from your JavaScript/TypeScript app.
 
 **No Zig compilation. No build steps. Just configuration.**
 
@@ -177,10 +177,10 @@ zyncBase is for when you need:
 
 ## Community & Support
 
-- **GitHub**: [github.com/zyncBase/zyncBase](https://github.com/zyncBase/zyncBase)
-- **Discord**: [discord.gg/zyncBase](https://discord.gg/zyncBase)
-- **Documentation**: [zyncBase.dev/docs](https://zyncBase.dev/docs)
-- **Examples**: [github.com/zyncBase/examples](https://github.com/zyncBase/examples)
+- **GitHub**: [github.com/zyncbase/zyncbase](https://github.com/zyncbase/zyncbase)
+- **Discord**: [discord.gg/zyncbase](https://discord.gg/zyncbase)
+- **Documentation**: [zyncbase.dev/docs](https://zyncbase.dev/docs)
+- **Examples**: [github.com/zyncbase/examples](https://github.com/zyncbase/examples)
 
 ---
 

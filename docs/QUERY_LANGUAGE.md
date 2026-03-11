@@ -1,8 +1,8 @@
-# zyncBase Query Language Reference
+# ZyncBase Query Language Reference
 
 **Last Updated**: 2026-03-09
 
-Complete reference for zyncBase's Prisma-inspired query language used in `client.query()` and `client.subscribe()`.
+Complete reference for ZyncBase's Prisma-inspired query language used in `client.query()` and `client.subscribe()`.
 
 ---
 
@@ -19,7 +19,7 @@ Complete reference for zyncBase's Prisma-inspired query language used in `client
 
 ## Design Philosophy
 
-zyncBase's query language is inspired by Prisma with improvements:
+ZyncBase's query language is inspired by Prisma with improvements:
 
 - **Prisma-inspired syntax** - TypeScript-first, clean, no prefixes
 - **Implicit AND** - All root-level conditions combined with AND (most common case)

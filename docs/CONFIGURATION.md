@@ -1,15 +1,15 @@
-# zyncBase Server Configuration
+# ZyncBase Server Configuration
 
 **Last Updated**: 2026-03-09
 
-Complete guide to configuring the zyncBase server with JSON files.
+Complete guide to configuring the ZyncBase server with JSON files.
 
 ---
 
 ## Table of Contents
 
 1. [Configuration-First Approach](#configuration-first-approach)
-2. [zyncBase.config.json](#zyncBaseconfigjson)
+2. [zyncbase-config.json](#zyncbase-configjson)
 3. [schema.json](#schemajson)
 4. [Schema Migrations](#schema-migrations)
 5. [auth.json](#authjson)
@@ -20,13 +20,13 @@ Complete guide to configuring the zyncBase server with JSON files.
 
 ## Configuration-First Approach
 
-zyncBase uses **JSON configuration files** instead of requiring you to write server code. The Zig binary reads these configs and handles everything.
+ZyncBase uses **JSON configuration files** instead of requiring you to write server code. The Zig binary reads these configs and handles everything.
 
 **Directory structure:**
 ```
 my-app/
-├── zyncBase-server          # Downloaded binary (or use Docker)
-├── zyncBase.config.json     # Main server configuration
+├── zyncbase-server          # Downloaded binary (or use Docker)
+├── zyncbase-config.json     # Main server configuration
 ├── schema.json         # Your data schema (JSON Schema format)
 ├── auth.json           # Authentication & authorization rules
 └── client/
@@ -35,7 +35,7 @@ my-app/
 
 ---
 
-## zyncBase.config.json
+## zyncbase-config.json
 
 Main server configuration file.
 
@@ -73,7 +73,7 @@ Main server configuration file.
       "secret": "${JWT_SECRET}",
       "algorithm": "HS256",
       "issuer": "your-app",
-      "audience": "zyncBase-server"
+      "audience": "zyncbase-server"
     },
     "webhook": {
       "url": "http://localhost:4000/auth",
@@ -194,7 +194,7 @@ Authentication and authorization configuration.
       "secret": "${JWT_SECRET}",     // JWT signing secret
       "algorithm": "HS256",           // Algorithm (HS256, RS256, etc.)
       "issuer": "your-app",           // Expected issuer
-      "audience": "zyncBase-server"        // Expected audience
+      "audience": "zyncbase-server"        // Expected audience
     },
     "webhook": {
       "url": "http://localhost:4000/auth",  // Custom auth webhook
@@ -285,7 +285,7 @@ Performance tuning.
 
 ## schema.json
 
-Define your data structure using zyncBase's store-based schema format.
+Define your data structure using ZyncBase store-based schema format.
 
 ### Example: Collaborative Canvas
 
@@ -368,7 +368,7 @@ Define your data structure using zyncBase's store-based schema format.
 }
 ```
 
-**What zyncBase generates (you don't need to know this):**
+**What ZyncBase generates (you don't need to know this):**
 ```sql
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
@@ -386,7 +386,7 @@ CREATE TABLE users (
 
 ### Schema Structure
 
-zyncBase uses a **store-based** schema format. Define your data store structure:
+ZyncBase uses a **store-based** schema format. Define your data store structure:
 
 ```json
 {
@@ -405,7 +405,7 @@ zyncBase uses a **store-based** schema format. Define your data store structure:
 
 ### Nested Fields (Automatic Flattening)
 
-zyncBase automatically flattens nested objects for efficient querying:
+ZyncBase automatically flattens nested objects for efficient querying:
 
 ```json
 {
@@ -430,7 +430,7 @@ zyncBase automatically flattens nested objects for efficient querying:
 **Client API (nested objects work naturally):**
 ```typescript
 // Set nested field
-await zyncBase.set('users.user-1', {
+await zyncbase.set(users.user-1', {
   name: 'Alice',
   address: {
     street: '123 Main St',
@@ -440,7 +440,7 @@ await zyncBase.set('users.user-1', {
 })
 
 // Query nested field
-const users = await zyncBase.query('users', {
+const users = await zyncbase.query(users', {
   where: { 'address.city': 'San Francisco' }
 })
 ```
@@ -457,7 +457,7 @@ const users = await zyncBase.query('users', {
 
 ### Arrays
 
-zyncBase supports arrays with specific constraints:
+ZyncBase supports arrays with specific constraints:
 
 **✅ Simple arrays (primitives):**
 ```json
@@ -477,7 +477,7 @@ zyncBase supports arrays with specific constraints:
 
 **Client API:**
 ```typescript
-await zyncBase.set('tasks.task-1', {
+await zyncbase.set(tasks.task-1', {
   tags: ["urgent", "backend"]
 })
 ```
@@ -530,24 +530,24 @@ await zyncBase.set('tasks.task-1', {
 **Client API:**
 ```typescript
 // Create project
-await zyncBase.set('projects.proj-1', { name: 'My Project' })
+await zyncbase.set(projects.proj-1', { name: 'My Project' })
 
 // Add members
-await zyncBase.set('project_members.member-1', {
+await zyncbase.set(project_members.member-1', {
   projectId: 'proj-1',
   userId: 'user-1',
   role: 'admin'
 })
 
 // Query members
-const members = await zyncBase.query('project_members', {
+const members = await zyncbase.query(project_members', {
   where: { projectId: 'proj-1' }
 })
 ```
 
 ### References (Relations Between Paths)
 
-zyncBase supports references between paths for relational data:
+ZyncBase supports references between paths for relational data:
 
 ```json
 {
@@ -574,16 +574,16 @@ zyncBase supports references between paths for relational data:
 **Client API:**
 ```typescript
 // Create project
-await zyncBase.set('projects.proj-1', { name: 'My Project' })
+await zyncbase.set(projects.proj-1', { name: 'My Project' })
 
 // Create task that references project
-await zyncBase.set('tasks.task-1', {
+await zyncbase.set(tasks.task-1', {
   title: 'Build feature',
   projectId: 'proj-1'
 })
 
 // Delete project (cascades to tasks)
-await zyncBase.remove('projects.proj-1')
+await zyncbase.remove(projects.proj-1')
 // task-1 is automatically deleted
 ```
 
@@ -597,7 +597,7 @@ await zyncBase.remove('projects.proj-1')
 - Data integrity enforced automatically
 - Cascading deletes work as expected
 - Efficient queries across related paths
-- Frontend just uses IDs - zyncBase handles the rest
+- Frontend just uses IDs - ZyncBase handles the rest
 
 ### JSON Schema Tips
 
@@ -642,7 +642,7 @@ await zyncBase.remove('projects.proj-1')
 
 ## Schema Migrations
 
-zyncBase automatically generates SQLite tables from your schema.json and handles migrations intelligently based on your environment.
+ZyncBase automatically generates SQLite tables from your schema.json and handles migrations intelligently based on your environment.
 
 ### How It Works
 
@@ -676,7 +676,7 @@ From this schema:
 }
 ```
 
-zyncBase generates:
+ZyncBase generates:
 ```sql
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
@@ -725,7 +725,7 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 
 **What happens:**
 ```bash
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Schema change detected
 ✓ Adding column 'tasks.assignee'
 ✓ Creating index on 'tasks.assignee'
@@ -739,7 +739,7 @@ $ zyncBase-server start
 **Development Mode (Fast Iteration):**
 
 ```json
-// zyncBase.config.json
+// zyncbase-config.json
 {
   "environment": "development",
   "schema": {
@@ -755,7 +755,7 @@ Behavior:
 # Change field type
 $ vim schema.json  # priority: integer → string
 
-$ zyncBase-server start
+$ zyncbase-server start
 ⚠ Destructive schema change detected
 ⚠ Field 'tasks.priority' type changed: integer → string
 ⚠ This will DROP and recreate the table (data loss!)
@@ -772,7 +772,7 @@ Continue? [y/N]: y
 **Production Mode (Safety First):**
 
 ```json
-// zyncBase.config.json
+// zyncbase-config.json
 {
   "environment": "production",
   "schema": {
@@ -786,7 +786,7 @@ Continue? [y/N]: y
 Behavior:
 ```bash
 # Same change in production
-$ zyncBase-server start
+$ zyncbase-server start
 ✗ Cannot start: destructive schema change detected
 ✗ Field 'tasks.priority' type changed: integer → string
 
@@ -794,10 +794,10 @@ This requires a manual migration.
 
 Options:
 1. Revert schema.json to previous version
-2. Create migration: zyncBase migrate create change_priority_type
-3. Force (data loss): zyncBase-server start --force-schema
+2. Create migration: zyncbase migrate create change_priority_type
+3. Force (data loss): zyncbase-server start --force-schema
 
-See: https://zyncBase.dev/docs/MIGRATIONS.md
+See: https://zyncbase.dev/docs/MIGRATIONS.md
 ```
 
 ### Schema Versioning
@@ -820,21 +820,21 @@ See: https://zyncBase.dev/docs/MIGRATIONS.md
 
 ```bash
 # Patch/Minor - auto-migrates
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Schema version: 1.2.0 → 1.3.0 (minor)
 ✓ Auto-migrating additive changes
 ✓ Server started
 
 # Major - requires explicit migration
-$ zyncBase-server start
+$ zyncbase-server start
 ✗ Schema version: 1.3.0 → 2.0.0 (major)
 ✗ Breaking changes require migration
 
 Create migration:
-  zyncBase migrate create v2_breaking_changes
+  zyncbase migrate create v2_breaking_changes
 
 Or force in development:
-  zyncBase-server start --force-schema
+  zyncbase-server start --force-schema
 ```
 
 ### What Auto-Migrates
@@ -855,19 +855,19 @@ Or force in development:
 
 ```bash
 # Check migration status
-zyncBase migrate status
+zyncbase migrate status
 
 # Create new migration
-zyncBase migrate create add_assignee_field
+zyncbase migrate create add_assignee_field
 
 # Apply migrations
-zyncBase migrate up
+zyncbase migrate up
 
 # Rollback last migration
-zyncBase migrate down
+zyncbase migrate down
 
 # Dry run (see what would happen)
-zyncBase migrate up --dry-run
+zyncbase migrate up --dry-run
 ```
 
 ### Environment-Specific Behavior
@@ -888,7 +888,7 @@ zyncBase migrate up --dry-run
 $ vim schema.json  # Add 'assignee' field
 
 # 2. Start server
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Auto-migrated: added column 'tasks.assignee'
 ```
 
@@ -898,7 +898,7 @@ $ zyncBase-server start
 $ vim schema.json  # priority: integer → string
 
 # 2. Start server
-$ zyncBase-server start --dev
+$ zyncbase-server start --dev
 ⚠ Destructive change: field type changed
 ⚠ Data in 'tasks' will be lost
 Continue? [y/N]: y
@@ -914,16 +914,16 @@ $ node scripts/seed-dev-data.js
 $ vim schema.json  # version: "1.3.0" → "2.0.0"
 
 # 2. Create migration
-$ zyncBase migrate create v2_change_priority_type
+$ zyncbase migrate create v2_change_priority_type
 
 # 3. Write migration
 $ vim migrations/003_v2_change_priority_type.sql
 
 # 4. Apply migration
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # 5. Deploy
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Migrations applied
 ✓ Server started
 ```
@@ -1028,7 +1028,7 @@ Define reusable functions that execute SQL queries:
 
 ## Environment Variables
 
-zyncBase supports environment variable substitution using `${VAR_NAME}` syntax.
+ZyncBase supports environment variable substitution using `${VAR_NAME}` syntax.
 
 ### .env file
 
@@ -1074,7 +1074,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 1: Collaborative Whiteboard
 
-**zyncBase.config.json:**
+**zyncbase-config.json:**
 ```json
 {
   "server": { "port": 3000 },
@@ -1132,7 +1132,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 2: Multi-tenant SaaS
 
-**zyncBase.config.json:**
+**zyncbase-config.json:**
 ```json
 {
   "server": { "port": 3000 },
@@ -1168,7 +1168,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 If JSON rules aren't enough, use a webhook for custom logic:
 
-**zyncBase.config.json:**
+**zyncbase-config.json:**
 ```json
 {
   "auth": {
@@ -1206,18 +1206,18 @@ This way, you can write custom auth logic in **any language** (Node.js, Python, 
 
 ## Hot Reload
 
-zyncBase watches config files and reloads automatically when they change:
+ZyncBase watches config files and reloads automatically when they change:
 
 ```bash
 # Edit config
-vim zyncBase.config.json
+vim zyncbase-config.json
 
 # Server automatically reloads
 # No restart needed!
 ```
 
 **What triggers reload:**
-- `zyncBase.config.json` changes
+- `zyncbase-config.json` changes
 - `schema.json` changes
 - `auth.json` changes
 
@@ -1229,13 +1229,13 @@ vim zyncBase.config.json
 
 ## Validation
 
-zyncBase validates all config files on startup and provides clear error messages:
+ZyncBase evaluates all config files on startup and provides clear error messages:
 
 ```bash
-$ ./zyncBase-server
+$ ./zyncbase-server
 
 Error: Invalid configuration
-  File: zyncBase.config.json
+  File: zyncbase-config.json
   Line: 12
   Issue: Missing required field "schema"
   
@@ -1248,4 +1248,4 @@ Fix: Add "schema": "./schema.json" to your config
 
 - [API Reference](./API_REFERENCE.md) - Learn the client SDK
 - [Deployment](./DEPLOYMENT.md) - Deploy to production
-- [Examples](https://github.com/zyncBase/examples) - See complete examples
+- [Examples](https://github.com/zyncbase/examples) - See complete examples

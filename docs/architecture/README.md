@@ -99,7 +99,7 @@ Technical analysis validating all architectural assumptions with citations.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     zyncBase Server (Zig + uWebSockets)          │
+│                    1. **zyncbase-config.json** - Server settings, auth, namespaceskets)          │
 │                                                             │
 │  ┌───────────────────────────────────────────────────────┐ │
 │  │         uWebSockets (C++) - Network Layer             │ │
@@ -116,7 +116,7 @@ Technical analysis validating all architectural assumptions with citations.
 │  └───────────────────────────┬───────────────────────────┘ │
 │                              │                             │
 │  ┌───────────────────────────▼───────────────────────────┐ │
-│  │       zyncBase Core Engine (Zig) - MULTI-THREADED         │ │
+│  │       ZyncBase Core Engine (Zig) - MULTI-THREADED         │ │
 │  │                                                       │ │
 │  │  ┌──────────────────────────────────────────────┐   │ │
 │  │  │  Lock-Free Cache (Parallel Reads)            │   │ │
@@ -183,7 +183,7 @@ Key: ═══ Parallel execution paths (scales with CPU cores)
 
 ## Storage Architecture
 
-zyncBase uses different storage strategies for different data types:
+ZyncBase uses different storage strategies for different data types:
 
 ### Store Data → SQLite
 - **Persistent** - Survives server restarts
@@ -211,11 +211,11 @@ zyncBase uses different storage strategies for different data types:
 
 | Solution | Req/Sec | Connections | Architecture | Notes |
 |----------|---------|-------------|--------------|-------|
-| **zyncBase (Zig + uWebSockets)** | 200k+ | 100k+ | Multi-threaded core | Our target (17x vs single-threaded) |
+| **ZyncBase (Zig + uWebSockets)** | 200k+ | 100k+ | Multi-threaded core | Our target (17x vs single-threaded) |
 | **Bun (Zig + uWebSockets)** | 200k+ | Millions | Multi-threaded | Same stack as us |
 | **PocketBase (Go)** | 10k | 100k+ | Single-threaded | Proven baseline |
 | **Firebase** | Unknown | Millions | Distributed | Proprietary |
-| **Supabase** | ~5k | 10k+ | Postgres-based | Postgres bottleneck |
+| **Zig (ZyncBase)** | Manual / Explicit | Native Threads | None | Zero-cost ABI | ~15MB | **Supabase** | ~5k | 10k+ | Postgres-based | Postgres bottleneck |
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## Overview
 
-zyncBase uses a **multi-threaded architecture with read/write separation** to maximize vertical scaling. This design allows the system to utilize all CPU cores for read operations while maintaining correctness through serialized writes.
+ZyncBase uses a **multi-threaded architecture with read/write separation** to maximize vertical scaling. This design allows the system to utilize all CPU cores for read operations while maintaining correctness through serialized writes.
 
 **Key Innovation**: Lock-free cache for reads + mutex for writes = 17x performance improvement
 
@@ -262,14 +262,14 @@ const StorageLayer = struct {
         
         const self = try allocator.create(StorageLayer);
         self.* = .{
-            .write_conn = try sqlite.open("zyncBase.db"),
+            .write_conn = try sqlite.open("ZyncBase.db"),
             .read_pool = try allocator.alloc(sqlite.Connection, num_readers),
             .write_queue = RingBuffer(WriteOp).init(allocator),
         };
         
         // Open one reader connection per CPU core
         for (self.read_pool) |*conn| {
-            conn.* = try sqlite.open("zyncBase.db");
+            conn.* = try sqlite.open("ZyncBase.db");
         }
         
         // Configure WAL mode
@@ -323,7 +323,7 @@ const StorageLayer = struct {
 
 ### Allocation Strategy
 
-zyncBase uses specialized allocators for different memory lifetimes:
+ZyncBase uses specialized allocators for different memory lifetimes:
 
 ```zig
 const Server = struct {

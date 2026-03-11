@@ -1,8 +1,8 @@
-# zyncBase Deployment Guide
+# ZyncBase Deployment Guide
 
 **Last Updated**: 2026-03-09
 
-Complete guide to deploying zyncBase in production.
+Complete guide to deploying ZyncBase in production.
 
 ---
 
@@ -20,7 +20,7 @@ Complete guide to deploying zyncBase in production.
 
 ## Deployment Options
 
-zyncBase can be deployed in multiple ways:
+ZyncBase can be deployed in multiple ways:
 
 1. **Docker** - Recommended for most use cases
 2. **Binary** - Direct binary deployment on VPS
@@ -34,25 +34,25 @@ zyncBase can be deployed in multiple ways:
 ### Basic Dockerfile
 
 ```dockerfile
-FROM zyncBase/server:latest
+FROM zyncbase/server:latest
 
-COPY zyncBase.config.json /config/
+COPY zyncbase-config.json /config/
 COPY schema.json /config/
 COPY auth.json /config/
 
 EXPOSE 3000
 
-CMD ["zyncBase-server", "--config", "/config/zyncBase.config.json"]
+CMD ["zyncbase-server", "--config", "/config/zyncbase-config.json"]
 ```
 
 ### Build and Run
 
 ```bash
 # Build
-docker build -t my-zyncBase-server .
+docker build -t my-zyncbase-server .
 
 # Run
-docker run -p 3000:3000 -v $(pwd)/data:/data my-zyncBase-server
+docker run -p 3000:3000 -v $(pwd)/data:/data my-zyncbase-server
 ```
 
 ### Docker Compose
@@ -61,8 +61,8 @@ docker run -p 3000:3000 -v $(pwd)/data:/data my-zyncBase-server
 version: '3.8'
 
 services:
-  zyncBase:
-    image: zyncBase/server:latest
+  zyncbase:
+    image: zyncbase/server:latest
     ports:
       - "3000:3000"
     volumes:
@@ -71,7 +71,7 @@ services:
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-    command: ["zyncBase-server", "--config", "/config/zyncBase.config.json"]
+    command: ["zyncbase-server", "--config", "/config/zyncbase-config.json"]
     restart: unless-stopped
     
   # Optional: Nginx reverse proxy
@@ -84,7 +84,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf
       - ./ssl:/etc/nginx/ssl
     depends_on:
-      - zyncBase
+      - zyncbase
     restart: unless-stopped
 ```
 
@@ -102,26 +102,26 @@ docker-compose up -d
 
 ```bash
 # Linux
-curl -L https://zyncBase.dev/download/latest/linux-x64 -o zyncBase-server
-chmod +x zyncBase-server
+curl -L https://zyncbase.dev/download/latest/linux-x64 -o zyncbase-server
+chmod +x zyncbase-server
 
 # macOS
-curl -L https://zyncBase.dev/download/latest/darwin-x64 -o zyncBase-server
-chmod +x zyncBase-server
+curl -L https://zyncbase.dev/download/latest/darwin-x64 -o zyncbase-server
+chmod +x zyncbase-server
 
 # Windows
-curl -L https://zyncBase.dev/download/latest/windows-x64.exe -o zyncBase-server.exe
+curl -L https://zyncbase.dev/download/latest/windows-x64.exe -o zyncbase-server.exe
 ```
 
 ### Run Directly
 
 ```bash
-./zyncBase-server --config zyncBase.config.json
+./zyncbase-server --config zyncbase-config.json
 ```
 
 ### Systemd Service
 
-Create `/etc/systemd/system/zyncBase.service`:
+Create `/etc/systemd/system/zyncbase.service`:
 
 ```ini
 [Unit]
@@ -130,9 +130,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=zyncBase
-WorkingDirectory=/opt/zyncBase
-ExecStart=/opt/zyncBase/zyncBase-server --config /opt/zyncBase/zyncBase.config.json
+User=zyncbase
+WorkingDirectory=/opt/zyncbase
+ExecStart=/opt/zyncbase/zyncbase-server --config /opt/zyncbase/zyncbase-config.json
 Restart=always
 RestartSec=10
 
@@ -141,7 +141,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/zyncBase/data
+ReadWritePaths=/opt/zyncbase/data
 
 [Install]
 WantedBy=multi-user.target
@@ -151,22 +151,22 @@ WantedBy=multi-user.target
 
 ```bash
 # Copy files
-sudo mkdir -p /opt/zyncBase
-sudo cp zyncBase-server /opt/zyncBase/
-sudo cp zyncBase.config.json /opt/zyncBase/
-sudo cp schema.json /opt/zyncBase/
-sudo cp auth.json /opt/zyncBase/
+sudo mkdir -p /opt/zyncbase/
+sudo cp zyncbase-server /opt/zyncbase/
+sudo cp zyncbase-config.json /opt/zyncbase/
+sudo cp schema.json /opt/zyncbase/
+sudo cp auth.json /opt/zyncbase/
 
 # Create user
-sudo useradd -r -s /bin/false zyncBase
-sudo chown -R zyncBase:zyncBase /opt/zyncBase
+sudo useradd -r -s /bin/false zyncbase
+sudo chown -R zyncbase:zyncbase /opt/zyncbase
 
 # Enable service
-sudo systemctl enable zyncBase
-sudo systemctl start zyncBase
+sudo systemctl enable zyncbase
+sudo systemctl start zyncbase
 
 # Check status
-sudo systemctl status zyncBase
+sudo systemctl status zyncbase
 ```
 
 ---
@@ -190,7 +190,6 @@ WEBHOOK_SECRET=webhook-auth-token
       "secret": "${JWT_SECRET}"
     }
   }
-}
 ```
 
 ### 2. Enable HTTPS
@@ -199,7 +198,7 @@ Use a reverse proxy (Nginx, Caddy) for TLS termination:
 
 **nginx.conf:**
 ```nginx
-upstream zyncBase {
+upstream ZyncBase {
     server localhost:3000;
 }
 
@@ -211,7 +210,7 @@ server {
     ssl_certificate_key /etc/nginx/ssl/key.pem;
 
     location / {
-        proxy_pass http://zyncBase;
+        proxy_pass http://ZyncBase;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -242,7 +241,7 @@ server {
 **Docker:**
 ```yaml
 services:
-  zyncBase:
+  zyncbase:
     deploy:
       resources:
         limits:
@@ -277,10 +276,10 @@ CPUQuota=400%
 # Backup script
 #!/bin/bash
 DATE=$(date +%Y%m%d_%H%M%S)
-tar -czf /backups/zyncBase-$DATE.tar.gz /opt/zyncBase/data
+tar -czf /backups/zyncbase-$DATE.tar.gz /opt/ZyncBase/data
 
 # Keep only last 7 days
-find /backups -name "zyncBase-*.tar.gz" -mtime +7 -delete
+find /backups -name "zyncbase-*.tar.gz" -mtime +7 -delete
 ```
 
 ### 7. Monitor Performance
@@ -349,11 +348,11 @@ Protect against brute force attacks:
 
 ```ini
 # /etc/fail2ban/jail.local
-[zyncBase]
+[zyncbase]
 enabled = true
 port = 443
-filter = zyncBase
-logpath = /var/log/zyncBase/access.log
+filter = ZyncBase
+logpath = /var/log/zyncbase/access.log
 maxretry = 5
 bantime = 3600
 ```
@@ -367,9 +366,9 @@ Use encrypted volumes:
 ```bash
 # Linux (LUKS)
 sudo cryptsetup luksFormat /dev/sdb
-sudo cryptsetup open /dev/sdb zyncBase-data
-sudo mkfs.ext4 /dev/mapper/zyncBase-data
-sudo mount /dev/mapper/zyncBase-data /opt/zyncBase/data
+sudo cryptsetup open /dev/sdb zyncbase-data
+sudo mkfs.ext4 /dev/mapper/zyncbase-data
+sudo mount /dev/mapper/zyncbase-data /opt/ZyncBase/data
 ```
 
 #### Encrypt Data in Transit
@@ -404,26 +403,26 @@ Response:
 
 ### Prometheus Metrics
 
-zyncBase exposes Prometheus metrics at `/metrics`:
+ZyncBase exposes Prometheus metrics at `/metrics`:
 
 ```bash
 curl http://localhost:3000/metrics
 ```
 
 **Key metrics:**
-- `zyncBase_connections_total` - Total active connections
-- `zyncBase_messages_total` - Total messages processed
-- `zyncBase_message_latency_seconds` - Message processing latency
-- `zyncBase_memory_bytes` - Memory usage
-- `zyncBase_cpu_usage_percent` - CPU usage
+- `zyncbase_connections_total` - Total active connections
+- `zyncbase_messages_total` - Total messages processed
+- `zyncbase_message_latency_seconds` - Message processing latency
+- `zyncbase_memory_bytes` - Memory usage
+- `zyncbase_cpu_usage_percent` - CPU usage
 
 ### Grafana Dashboard
 
-Import the zyncBase dashboard:
+Import the ZyncBase dashboard:
 
 ```bash
 # Download dashboard
-curl -L https://zyncBase.dev/grafana/dashboard.json -o zyncBase-dashboard.json
+curl -L https://ZyncBase.dev/grafana/dashboard.json -o zyncbase-dashboard.json
 
 # Import to Grafana
 # Dashboards > Import > Upload JSON file
@@ -468,22 +467,22 @@ services:
 
 ```yaml
 groups:
-  - name: zyncBase
+  - name: zyncbase
     rules:
       - alert: HighConnectionCount
-        expr: zyncBase_connections_total > 90000
+        expr: zyncbase_connections_total > 90000
         for: 5m
         annotations:
           summary: "High connection count"
           
       - alert: HighMemoryUsage
-        expr: zyncBase_memory_bytes > 3500000000
+        expr: zyncbase_memory_bytes > 3500000000
         for: 5m
         annotations:
           summary: "High memory usage"
           
       - alert: HighLatency
-        expr: zyncBase_message_latency_seconds > 0.1
+        expr: zyncbase_message_latency_seconds > 0.1
         for: 5m
         annotations:
           summary: "High message latency"
@@ -502,7 +501,7 @@ groups:
 **Check:**
 ```bash
 # Is server running?
-systemctl status zyncBase
+systemctl status zyncbase
 
 # Is port open?
 netstat -tlnp | grep 3000
@@ -561,7 +560,7 @@ iftop
 echo $JWT_SECRET
 
 # Check logs
-journalctl -u zyncBase -f
+journalctl -u zyncbase -f
 
 # Test JWT
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/health
@@ -584,13 +583,13 @@ Enable debug logging:
 
 ```bash
 # CPU profiling
-./zyncBase-server --profile-cpu
+./ZyncBase-server --profile-cpu
 
 # Memory profiling
-./zyncBase-server --profile-memory
+./ZyncBase-server --profile-memory
 
 # Generate flamegraph
-./zyncBase-server --flamegraph
+./ZyncBase-server --flamegraph
 ```
 
 ---
@@ -599,7 +598,7 @@ Enable debug logging:
 
 ### Vertical Scaling
 
-zyncBase is designed for vertical scaling (single server, all CPU cores).
+ZyncBase is designed for vertical scaling (single server, all CPU cores).
 
 **Recommended specs:**
 
@@ -614,8 +613,8 @@ zyncBase is designed for vertical scaling (single server, all CPU cores).
 **1. Increase file descriptors:**
 ```bash
 # /etc/security/limits.conf
-zyncBase soft nofile 100000
-zyncBase hard nofile 100000
+ZyncBase soft nofile 100000
+ZyncBase hard nofile 100000
 ```
 
 **2. Tune kernel parameters:**
@@ -642,41 +641,41 @@ net.ipv4.ip_local_port_range = 1024 65535
 
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_DIR="/backups"
-DATA_DIR="/opt/zyncBase/data"
+DATA_DIR="/opt/zyncbase/data"
 
 # Stop writes (optional)
-# systemctl stop zyncBase
+# systemctl stop zyncbase
 
 # Backup SQLite database
-sqlite3 $DATA_DIR/zyncBase.db ".backup $BACKUP_DIR/zyncBase-$DATE.db"
+sqlite3 $DATA_DIR/zyncbase.db ".backup $BACKUP_DIR/zyncbase-$DATE.db"
 
 # Backup config
-tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/zyncBase/*.json
+tar -czf $BACKUP_DIR/config-$DATE.tar.gz /opt/zyncbase/*.json
 
 # Resume writes
-# systemctl start zyncBase
+# systemctl start zyncbase
 
 # Upload to S3 (optional)
-aws s3 cp $BACKUP_DIR/zyncBase-$DATE.db s3://my-backups/
+aws s3 cp $BACKUP_DIR/zyncbase-$DATE.db s3://my-backups/
 
 # Cleanup old backups
-find $BACKUP_DIR -name "zyncBase-*.db" -mtime +7 -delete
+find $BACKUP_DIR -name "zyncbase-*.db" -mtime +7 -delete
 ```
 
 ### Recovery
 
 ```bash
 # Stop server
-systemctl stop zyncBase
+systemctl stop zyncbase
 
 # Restore database
-cp /backups/zyncBase-20260309.db /opt/zyncBase/data/zyncBase.db
+cp /backups/zyncbase-20260309.db /opt/zyncbase/data/zyncbase.db
 
 # Restore config
-tar -xzf /backups/config-20260309.tar.gz -C /opt/zyncBase
+tar -xzf /backups/config-20260309.tar.gz -C /opt/zyncbase
 
 # Start server
-systemctl start zyncBase
+systemctl start zyncbase
 ```
 
 ---
@@ -685,4 +684,4 @@ systemctl start zyncBase
 
 - [Configuration](./CONFIGURATION.md) - Configure your server
 - [API Reference](./API_REFERENCE.md) - Learn the client SDK
-- [Monitoring Dashboard](https://zyncBase.dev/grafana) - Import Grafana dashboard
+- [Monitoring Dashboard](https://ZyncBase.dev/grafana) - Import Grafana dashboard

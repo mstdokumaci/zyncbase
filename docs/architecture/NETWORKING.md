@@ -6,7 +6,7 @@
 
 ## Overview
 
-zyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig for maximum performance. This is the same engine that powers Bun, providing 200,000+ requests/second with microsecond latency.
+ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig for maximum performance. This is the same engine that powers Bun, providing 200,000+ requests/second with microsecond latency.
 
 **Key Innovation**: Direct Zig + uWebSockets integration = Bun-level performance without JavaScript overhead
 
@@ -74,7 +74,7 @@ zyncBase uses uWebSockets (C++) as its networking foundation, integrated directl
 // build.zig - Link uWebSockets
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
-        .name = "zyncBase-server",
+        .name = "ZyncBase-server",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
@@ -346,7 +346,7 @@ const Connection = struct {
 
 **Ticket-based authentication** (recommended):
 
-*Note: The zyncBase SDK abstracts this process. Developers simply provide `createClient({ token: 'jwt' })`, and the SDK automatically performs this exchange under the hood to ensure the token never touches the `ws://` URL.*
+*Note: The ZyncBase SDK abstracts this process. Developers simply provide `createClient({ token: 'jwt' })`, and the SDK automatically performs this exchange under the hood to ensure the token never touches the `ws://` URL.*
 
 ```
 1. Client requests ticket from HTTP endpoint

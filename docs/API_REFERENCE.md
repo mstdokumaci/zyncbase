@@ -1,8 +1,8 @@
-# zyncBase Client SDK API Reference
+# ZyncBase Client SDK API Reference
 
 **Last Updated**: 2026-03-09
 
-Complete reference for the zyncBase TypeScript/JavaScript client SDK.
+Complete reference for the ZyncBase TypeScript/JavaScript client SDK.
 
 ---
 
@@ -19,7 +19,7 @@ Complete reference for the zyncBase TypeScript/JavaScript client SDK.
 
 ## Core Concepts
 
-zyncBase provides three complementary APIs for different use cases:
+ZyncBase provides three complementary APIs for different use cases:
 
 1. **Store API** - Direct path-based access to state tree (80% of use cases)
 2. **Query API** - Filter and search data at a path (15% of use cases)
@@ -29,7 +29,7 @@ All data lives in a hierarchical store organized by paths (e.g., `users`, `tasks
 
 ### Namespaces
 
-zyncBase uses **namespaces** to isolate data and presence:
+ZyncBase uses **namespaces** to isolate data and presence:
 
 - **Store namespace** - Controls which data you can access
 - **Presence namespace** - Controls which users you see
@@ -185,7 +185,7 @@ The Query API is for filtering, sorting, and searching through data at a path.
 
 ### Query Language
 
-zyncBase uses a Prisma-inspired query language with implicit AND, explicit OR, and short operator names.
+ZyncBase uses a Prisma-inspired query language with implicit AND, explicit OR, and short operator names.
 
 For complete query language documentation, see [Query Language Reference](./QUERY_LANGUAGE.md).
 
@@ -476,7 +476,7 @@ client.presence.clear()
 ### Creating a Client
 
 ```typescript
-import { createClient } from '@zyncBase/client'
+import { createClient } from '@zyncbase/client'
 
 const client = createClient({
   url: 'ws://localhost:3000',
@@ -642,7 +642,7 @@ client.on('error', (error) => {
 ### React
 
 ```typescript
-import { useStore, useQuery, usePresence } from '@zyncBase/react'
+import { useStore, useQuery, usePresence } from '@zyncbase/react'
 
 function Canvas() {
   // Store subscription (auto cleanup on unmount)
@@ -686,7 +686,7 @@ function Canvas() {
 ### Vue
 
 ```typescript
-import { useStore, useQuery, usePresence } from '@zyncBase/vue'
+import { useStore, useQuery, usePresence } from '@zyncbase/vue'
 
 export default {
   setup() {
@@ -708,7 +708,7 @@ export default {
 ### Svelte
 
 ```typescript
-import { store, query, presence } from '@zyncBase/svelte'
+import { store, query, presence } from '@zyncbase/svelte'
 
 // Svelte stores - automatic subscription
 const elements = store('elements')
@@ -722,7 +722,7 @@ const others = presence()
 
 ```svelte
 <script>
-  import { store, presence } from '@zyncBase/svelte'
+  import { store, presence } from '@zyncbase/svelte'
   
   const elements = store('elements')
   const others = presence()
@@ -747,7 +747,7 @@ The ZyncBase SDK is written in TypeScript and provides full type safety for your
 ### Type-safe Schema
 
 ```typescript
-import { createClient } from '@zyncBase/client'
+import { createClient } from '@zyncbase/client'
 import type { Schema } from './schema'
 
 const client = createClient<Schema>({
@@ -868,7 +868,7 @@ client.presence.set({
 
 ## Examples
 
-See [github.com/zyncBase/examples](https://github.com/zyncBase/examples) for complete examples:
+See [github.com/zyncbase/examples](https://github.com/zyncbase/examples) for complete examples:
 
 - Collaborative whiteboard
 - Real-time chat

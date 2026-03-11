@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09
 
-Complete guide to managing schema changes and data migrations in zyncBase.
+Complete guide to managing schema changes and data migrations in ZyncBase.
 
 ---
 
@@ -23,7 +23,7 @@ Complete guide to managing schema changes and data migrations in zyncBase.
 
 ## Overview
 
-zyncBase automatically generates SQLite tables from your `schema.json` and intelligently handles schema changes based on your environment.
+ZyncBase automatically generates SQLite tables from your `schema.json` and intelligently handles schema changes based on your environment.
 
 ### Key Concepts
 
@@ -163,11 +163,11 @@ These changes require explicit migrations in production:
 
 ### Fast Iteration Mode
 
-In development, zyncBase allows destructive changes for rapid iteration.
+In development, ZyncBase allows destructive changes for rapid iteration.
 
 **Configuration:**
 ```json
-// zyncBase.config.json
+// zyncbase-config.json
 {
   "environment": "development",
   "schema": {
@@ -186,7 +186,7 @@ $ vim schema.json
 # Change: priority: integer → string
 
 # 2. Start server
-$ zyncBase-server start --dev
+$ zyncbase-server start --dev
 
 ⚠ Destructive schema change detected
 ⚠ Field 'tasks.priority' type changed: integer → string
@@ -210,7 +210,7 @@ $ node scripts/seed-dev-data.js
 For automated workflows:
 
 ```bash
-$ zyncBase-server start --dev --force-schema
+$ zyncbase-server start --dev --force-schema
 ✓ Table recreated (no confirmation)
 ```
 
@@ -227,11 +227,11 @@ $ zyncBase-server start --dev --force-schema
 
 ### Safety First
 
-In production, zyncBase blocks destructive changes and requires explicit migrations.
+In production, ZyncBase blocks destructive changes and requires explicit migrations.
 
 **Configuration:**
 ```json
-// zyncBase.config.json
+// zyncbase-config.json
 {
   "environment": "production",
   "schema": {
@@ -264,7 +264,7 @@ $ vim schema.json
 
 ```bash
 # 2. Create migration
-$ zyncBase migrate create v2_change_priority_type
+$ zyncbase migrate create v2_change_priority_type
 
 Created: migrations/003_v2_change_priority_type.sql
 
@@ -311,19 +311,19 @@ COMMIT;
 
 ```bash
 # 4. Test migration (dry run)
-$ zyncBase migrate up --dry-run
+$ zyncbase migrate up --dry-run
 
 Would apply:
   003_v2_change_priority_type.sql
 
 # 5. Apply migration
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 ✓ Applied: 003_v2_change_priority_type.sql
 ✓ Schema version: 1.3.0 → 2.0.0
 
 # 6. Deploy
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Migrations applied
 ✓ Server started
 ```
@@ -335,7 +335,7 @@ $ zyncBase-server start
 ### Check Status
 
 ```bash
-$ zyncBase migrate status
+$ zyncbase migrate status
 
 Current schema version: 1.3.0
 Database version: 1.3.0
@@ -349,12 +349,12 @@ Applied migrations: 2
 ### Create Migration
 
 ```bash
-$ zyncBase migrate create <name>
+$ zyncbase migrate create <name>
 
 # Examples
-$ zyncBase migrate create add_assignee_field
-$ zyncBase migrate create v2_change_priority_type
-$ zyncBase migrate create remove_deprecated_fields
+$ zyncbase migrate create add_assignee_field
+$ zyncbase migrate create v2_change_priority_type
+$ zyncbase migrate create remove_deprecated_fields
 ```
 
 Creates: `migrations/<timestamp>_<name>.sql`
@@ -363,33 +363,33 @@ Creates: `migrations/<timestamp>_<name>.sql`
 
 ```bash
 # Apply all pending migrations
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # Apply specific number of migrations
-$ zyncBase migrate up --steps 1
+$ zyncbase migrate up --steps 1
 
 # Dry run (see what would happen)
-$ zyncBase migrate up --dry-run
+$ zyncbase migrate up --dry-run
 ```
 
 ### Rollback Migrations
 
 ```bash
 # Rollback last migration
-$ zyncBase migrate down
+$ zyncbase migrate down
 
 # Rollback specific number of migrations
-$ zyncBase migrate down --steps 2
+$ zyncbase migrate down --steps 2
 
 # Dry run
-$ zyncBase migrate down --dry-run
+$ zyncbase migrate down --dry-run
 ```
 
 ### Reset Database
 
 ```bash
 # Drop all tables and reapply migrations
-$ zyncBase migrate reset
+$ zyncbase migrate reset
 
 ⚠ This will delete all data!
 Continue? [y/N]: y
@@ -525,18 +525,18 @@ COMMIT;
 
 ## Complex Migrations
 
-For complex data transformations, use zyncBase's Admin API with external scripts.
+For complex data transformations, use ZyncBase Admin API with external scripts.
 
 ### Admin API
 
-zyncBase provides HTTP endpoints for data export/import:
+ZyncBase provides HTTP endpoints for data export/import:
 
 ```bash
 # Enable admin API
 ```
 
 ```json
-// zyncBase.config.json
+// zyncbase-config.json
 {
   "admin": {
     "enabled": true,
@@ -578,9 +578,9 @@ COMMIT;
 **Step 2: External Script (data transformation)**
 ```typescript
 // scripts/migrate_priority.ts
-import { zyncBaseAdmin } from '@zyncBase/admin'
+import { ZyncBaseAdmin } from '@zyncbase/admin'
 
-const admin = new zyncBaseAdmin('http://localhost:3000', {
+const admin = new ZyncBaseAdmin('http://localhost:3000', {
   token: process.env.ADMIN_TOKEN
 })
 
@@ -651,7 +651,7 @@ COMMIT;
 **Step 4: Run Migration**
 ```bash
 # Apply first migration (schema change)
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # Run transformation script
 $ node scripts/migrate_priority.ts
@@ -659,10 +659,10 @@ $ node scripts/migrate_priority.ts
 ✓ Migration complete
 
 # Apply final migration (cleanup)
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # Verify
-$ zyncBase migrate status
+$ zyncbase migrate status
 ✓ All migrations applied
 ```
 
@@ -672,17 +672,17 @@ $ zyncBase migrate status
 
 ### Automatic Rollback
 
-zyncBase tracks applied migrations and can rollback:
+ZyncBase tracks applied migrations and can rollback:
 
 ```bash
 # Rollback last migration
-$ zyncBase migrate down
+$ zyncbase migrate down
 
 Rolling back: 003_v2_change_priority_type.sql
 ✓ Rolled back
 
 # Rollback multiple migrations
-$ zyncBase migrate down --steps 2
+$ zyncbase migrate down --steps 2
 ```
 
 ### Manual Rollback
@@ -711,13 +711,13 @@ COMMIT;
 
 ```bash
 # Backup database
-$ sqlite3 data/zyncBase.db ".backup data/zyncBase-backup-$(date +%Y%m%d).db"
+$ sqlite3 data/zyncbase.db ".backup data/zyncbase-backup-$(date +%Y%m%d).db"
 
 # Apply migration
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # If something goes wrong, restore
-$ cp data/zyncBase-backup-20260309.db data/zyncBase.db
+$ cp data/zyncbase-backup-20260309.db data/zyncbase.db
 ```
 
 ### Point-in-Time Recovery
@@ -725,11 +725,11 @@ $ cp data/zyncBase-backup-20260309.db data/zyncBase.db
 For production, use continuous backup:
 
 ```bash
-# Enable WAL mode (already default in zyncBase)
+# Enable WAL mode (already default in ZyncBase)
 PRAGMA journal_mode = WAL;
 
 # Backup WAL file periodically
-$ cp data/zyncBase.db-wal data/backups/zyncBase-wal-$(date +%Y%m%d-%H%M%S)
+$ cp data/zyncbase.db-wal data/backups/zyncBase-wal-$(date +%Y%m%d-%H%M%S)
 ```
 
 ---
@@ -740,12 +740,12 @@ $ cp data/zyncBase.db-wal data/backups/zyncBase-wal-$(date +%Y%m%d-%H%M%S)
 
 ```bash
 # Test in development first
-$ zyncBase migrate up --dry-run
-$ zyncBase migrate up
+$ zyncbase migrate up --dry-run
+$ zyncbase migrate up
 
 # Test rollback
-$ zyncBase migrate down
-$ zyncBase migrate up
+$ zyncbase migrate down
+$ zyncbase migrate up
 
 # Then apply to staging
 # Then apply to production
@@ -768,11 +768,11 @@ $ zyncBase migrate up
 
 ```bash
 # Good - one change per migration
-$ zyncBase migrate create add_assignee_field
-$ zyncBase migrate create add_priority_field
+$ zyncbase migrate create add_assignee_field
+$ zyncbase migrate create add_priority_field
 
 # Bad - multiple unrelated changes
-$ zyncBase migrate create add_many_fields
+$ zyncbase migrate create add_many_fields
 ```
 
 ### 4. Document Complex Migrations
@@ -796,10 +796,10 @@ COMMIT;
 
 ```bash
 # Always backup first
-$ sqlite3 data/zyncBase.db ".backup data/zyncBase-backup.db"
+$ sqlite3 data/zyncbase.db ".backup data/zyncbase-backup.db"
 
 # Then migrate
-$ zyncBase migrate up
+$ zyncbase migrate up
 ```
 
 ### 6. Use Transactions
@@ -819,13 +819,13 @@ If anything fails, the entire migration rolls back.
 
 ```bash
 # Apply migration
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 # Test rollback
-$ zyncBase migrate down
+$ zyncbase migrate down
 
 # Reapply
-$ zyncBase migrate up
+$ zyncbase migrate up
 ```
 
 ---
@@ -835,7 +835,7 @@ $ zyncBase migrate up
 ### Migration Failed
 
 ```bash
-$ zyncBase migrate up
+$ zyncbase migrate up
 
 Error: Migration failed
   File: migrations/003_change_priority.sql
@@ -846,34 +846,34 @@ Error: Migration failed
 **Solution:**
 1. Check migration SQL syntax
 2. Verify table/column names
-3. Run `zyncBase migrate down` to rollback
+3. Run `zyncbase migrate down` to rollback
 4. Fix migration file
-5. Run `zyncBase migrate up` again
+5. Run `zyncbase migrate up` again
 
 ### Schema Out of Sync
 
 ```bash
-$ zyncBase-server start
+$ zyncbase-server start
 
 Error: Schema version mismatch
   schema.json: 2.0.0
   database: 1.3.0
   
-Apply migrations: zyncBase migrate up
+Apply migrations: zyncbase migrate up
 ```
 
 **Solution:**
 ```bash
-$ zyncBase migrate up
+$ zyncbase migrate up
 ✓ Migrations applied
-$ zyncBase-server start
+$ zyncbase-server start
 ✓ Server started
 ```
 
 ### Destructive Change in Production
 
 ```bash
-$ zyncBase-server start
+$ zyncbase-server start
 
 Error: Destructive schema change detected
   Field 'tasks.priority' type changed
@@ -883,9 +883,9 @@ This requires a migration.
 
 **Solution:**
 1. Revert schema.json to previous version, OR
-2. Create migration: `zyncBase migrate create change_priority_type`
+2. Create migration: `zyncbase migrate create change_priority_type`
 3. Write migration SQL
-4. Apply migration: `zyncBase migrate up`
+4. Apply migration: `zyncbase migrate up`
 
 ### Data Loss After Migration
 
@@ -898,16 +898,16 @@ This requires a migration.
 **Recovery:**
 ```bash
 # Restore from backup
-$ cp data/zyncBase-backup.db data/zyncBase.db
+$ cp data/zyncbase-backup.db data/zyncbase.db
 
 # Rollback migration
-$ zyncBase migrate down
+$ zyncbase migrate down
 
 # Fix migration
 $ vim migrations/003_change_priority.sql
 
 # Reapply
-$ zyncBase migrate up
+$ zyncbase migrate up
 ```
 
 ---

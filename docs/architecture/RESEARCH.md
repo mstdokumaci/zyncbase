@@ -12,7 +12,7 @@ The technical superiority of uWebSockets is corroborated by its performance in c
 | Peak Throughput (Req/s) | 200,000+ 1 | \~13,254 3 | \~22,286 3 |
 | Handshake Latency | Microsecond 4 | Millisecond 7 | Millisecond 7 |
 | Concurrency Model | Multi-threaded Event Loop 4 | Single-threaded Event Loop 3 | Event Loop / Workers 8 |
-| Binary Size | \~15MB (zyncBase) 1 | \>100MB 1 | \>100MB 1 |
+| Binary Size | \~15MB (zyncbase) 1 | \>100MB 1 | \>100MB 1 |
 
 The uWebSockets architecture achieves this performance by utilizing µSockets, a foundation library that abstracts eventing, networking, and cryptography across three distinct layers.4 For ZyncBase, this implies that the network layer can utilize native kernel features such as epoll on Linux or kqueue on BSD/macOS, providing a zero-abstraction penalty when interacting with the operating system’s I/O subsystems.4 The "one app per thread" model utilized by uWebSockets allows ZyncBase to spawn as many instances as there are CPU cores, sharing the listening port and maximizing vertical scaling capabilities.4  
 The verification of the networking assumptions indicates that the primary performance bottleneck in such systems often shifts from the I/O loop to the overhead of moving data across the language boundary. In Bun, the cost of transitioning data between Zig native structures and the JavaScriptCore (JSC) engine is a known factor.2 By operating as a standalone binary without a persistent JavaScript runtime, ZyncBase circumvents this specific bottleneck, although it must still optimize the serialization and deserialization of MessagePack payloads used for client-server communication.1
@@ -59,7 +59,7 @@ While Go is praised for its ease of use and efficient goroutine scheduler, profi
 
 | Language | Memory Model | Concurrency Primitive | GC Overhead | C Interop |
 | :---- | :---- | :---- | :---- | :---- |
-| Zig (zyncBase) | Manual / Explicit | Native Threads | None 8 | Zero-cost ABI 26 |
+| Zig (zyncbase) | Manual / Explicit | Native Threads | None 8 | Zero-cost ABI 26 |
 | Go (PocketBase) | GC / Implicit | Goroutines (CSP) | Periodic Pauses 2 | CGO Penalty 27 |
 | Rust (Deno) | Ownership / Borrow | Async / Await | None | Safe FFI Wrapper |
 | JS (Node.js) | GC / Implicit | Event Loop | Significant 3 | N-API / Addons |
@@ -160,7 +160,7 @@ ZyncBase utilizes a "lock-free cache" for reads, which is essential for maximizi
 
 ### **3\. Namespace and Tenant Resource Exhaustion**
 
-In a multi-tenant environment, a single "noisy neighbor" (one tenant with extreme activity) could theoretically consume all available CPU or disk I/O, impacting other tenants on the same server.35 ZyncBase should implement rate limiting and throttling per namespace—using the configuration specified in zyncBase.config.json—to ensure fair resource distribution.5
+In a multi-tenant environment, a single "noisy neighbor" (one tenant with extreme activity) could theoretically consume all available CPU or disk I/O, impacting other tenants on the same server.35 ZyncBase should implement rate limiting and throttling per namespace—using the configuration specified in zyncbase-config.json—to ensure fair resource distribution.5
 
 ## **In-Depth Insight: The Convergence of BaaS and Systems Programming**
 

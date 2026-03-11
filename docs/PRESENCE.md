@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09
 
-Complete guide to zyncBase's real-time presence system for user awareness and collaboration.
+Complete guide to ZyncBase's real-time presence system for user awareness and collaboration.
 
 ---
 
@@ -22,7 +22,7 @@ Complete guide to zyncBase's real-time presence system for user awareness and co
 
 ## Overview
 
-zyncBase's presence system tracks ephemeral user state in real-time:
+ZyncBase's presence system tracks ephemeral user state in real-time:
 
 - **Cursor positions** - Where users are pointing
 - **Selections** - What users have selected
@@ -815,4 +815,4 @@ client.presence.subscribe((users) => {
 
 - [API Reference](./API_REFERENCE.md) - Complete API documentation
 - [Configuration](./CONFIGURATION.md) - Schema and auth setup
-- [Examples](https://github.com/zyncBase/examples) - Complete working examples
+- [Examples](https://github.com/ZyncBase/examples) - Complete working examples
