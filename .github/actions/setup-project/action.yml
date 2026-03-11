@@ -3,11 +3,6 @@ description: 'Standard setup steps for ZyncBase project including Zig, Go, and B
 runs:
   using: "composite"
   steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
     - name: Setup Zig
       uses: goto-bus-stop/setup-zig@v2
       with:

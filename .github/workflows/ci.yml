@@ -11,6 +11,11 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Setup project
         uses: ./.github/actions/setup-project
 
@@ -21,6 +26,11 @@ jobs:
     name: Test with ThreadSanitizer
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Setup project
         uses: ./.github/actions/setup-project
 
@@ -34,6 +44,11 @@ jobs:
     name: Memory Leak Detection
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Setup project
         uses: ./.github/actions/setup-project
 
@@ -44,6 +59,11 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Setup project
         uses: ./.github/actions/setup-project
 
