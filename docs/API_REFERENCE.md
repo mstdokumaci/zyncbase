@@ -117,6 +117,8 @@ Write a value to the state tree. **Optimistic by default**: the update is applie
 
 Errors are handled via the global `client.on('error', ...)` event listener.
 
+**Conflict Resolution**: ZyncBase uses **Server-Time Last-Write-Wins (LWW) at the Path level**. If concurrent edits target the exact same path, the last operation processed by the server wins. To avoid accidental data loss during concurrent edits, target the deepest possible path (e.g., `client.store.set('user.stats.score', 100)`) instead of replacing parent objects (e.g., `client.store.set('user.stats', {score: 100, level: 5})`).
+
 ```typescript
 // Example: Global error handling
 client.on('error', (err) => {

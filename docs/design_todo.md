@@ -85,7 +85,7 @@ Items requiring dedicated design work before implementation. Each item should re
 | 1 | Wire Protocol Spec | 🟢 Done | [WIRE_PROTOCOL.md](./WIRE_PROTOCOL.md) |
 | 2 | Authorization Format | 🟢 Done | [AUTH_SPEC.md](./AUTH_SPEC.md) |
 | 3 | Auth Token Exchange | 🟢 Done | [AUTH_EXCHANGE.md](./AUTH_EXCHANGE.md) |
-| 4 | Conflict Resolution | ❌ Not started | — |
+| 4 | Conflict Resolution | 🟢 Done | [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md#adr-015-conflict-resolution-strategy) |
 | 5 | Error Taxonomy | ❌ Not started | — |
 | 6 | Batch Operations API | ❌ Not started | — |
 | 7 | Subscription Invalidation | ❌ Not started | — |
