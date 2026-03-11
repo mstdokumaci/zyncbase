@@ -8,8 +8,12 @@ on:
 
 jobs:
   test:
-    name: Test
+    name: Test (${{ matrix.optimize }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,9 +24,9 @@ jobs:
         uses: ./.github/actions/setup-project
 
       - name: Run tests
-        run: zig build test --summary all
+        run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
 
-  test-with-thread-sanitizer:
+  test-sanitized:
     name: Test with ThreadSanitizer
     runs-on: ubuntu-latest
     steps:
@@ -40,24 +44,12 @@ jobs:
         env:
           TSAN_OPTIONS: second_deadlock_stack=1:history_size=7
 
-  memory-leak-check:
-    name: Memory Leak Detection
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup project
-        uses: ./.github/actions/setup-project
-
-      - name: Run tests with GPA leak detection
-        run: zig build test --summary all
-
   build:
-    name: Build
+    name: Build (${{ matrix.optimize }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        optimize: [ReleaseSafe, ReleaseFast]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -68,7 +60,4 @@ jobs:
         uses: ./.github/actions/setup-project
 
       - name: Build
-        run: zig build
-
-      - name: Build with optimizations
-        run: zig build -Doptimize=ReleaseFast
+        run: zig build -Doptimize=${{ matrix.optimize }}
