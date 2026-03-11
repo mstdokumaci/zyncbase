@@ -1,4 +1,4 @@
-# zyncBase v2.0 - Real-Time Collaborative State Manager
+# ZyncBase - Real-Time Collaborative State Manager
 
 **Status**: Draft  
 **Last Updated**: 2026-03-09

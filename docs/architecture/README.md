@@ -1,4 +1,4 @@
-# zyncBase v2.0 - Architecture Documentation
+# ZyncBase - Architecture Documentation
 
 **Status**: Draft  
 **Last Updated**: 2026-03-09  
@@ -9,7 +9,7 @@
 
 ## Overview
 
-zyncBase v2.0 is a self-hosted, real-time collaborative state manager built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
+ZyncBase is a self-hosted, real-time collaborative state manager built in Zig for maximum performance and efficiency. It competes with Firebase/Supabase by providing similar developer experience with better performance, predictable costs, and no vendor lock-in.
 
 ### Target Performance
 
@@ -17,7 +17,7 @@ zyncBase v2.0 is a self-hosted, real-time collaborative state manager built in Z
 - **200,000+ requests/second** (powered by uWebSockets, same as Bun)
 - **Sub-millisecond latency** for real-time updates
 - **Single binary** < 15MB
-- **Memory usage** < 100MB for 10k connections
+- **Memory usage** < 100MB for 100k connections
 
 ---
 

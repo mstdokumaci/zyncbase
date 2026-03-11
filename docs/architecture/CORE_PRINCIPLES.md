@@ -6,7 +6,7 @@
 
 ## Design Philosophy
 
-zyncBase v2.0 is built on four core principles that guide every architectural decision:
+ZyncBase is built on four core principles that guide every architectural decision:
 
 ### 1. Performance First
 - Zero-copy where possible
@@ -260,7 +260,7 @@ But 95% of use cases need only JSON configuration.
 
 ## Performance Targets
 
-zyncBase v2.0 targets the following performance characteristics:
+ZyncBase targets the following performance characteristics:
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|

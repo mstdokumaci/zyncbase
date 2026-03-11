@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09
 
-This document explains the architectural and design decisions behind zyncBase v2.0.
+This document explains the architectural and design decisions behind ZyncBase.
 
 ---
 

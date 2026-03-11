@@ -346,6 +346,8 @@ const Connection = struct {
 
 **Ticket-based authentication** (recommended):
 
+*Note: The zyncBase SDK abstracts this process. Developers simply provide `createClient({ token: 'jwt' })`, and the SDK automatically performs this exchange under the hood to ensure the token never touches the `ws://` URL.*
+
 ```
 1. Client requests ticket from HTTP endpoint
    POST /auth/ticket
