@@ -359,17 +359,6 @@ test "lock-free cache: eviction on non-existent namespace fails" {
     try testing.expectError(error.NotFound, result);
 }
 
-// Test release on non-existent namespace (should not crash)
-test "lock-free cache: release on non-existent namespace is safe" {
-    const allocator = testing.allocator;
-
-    var cache = try LockFreeCache.init(allocator);
-    defer cache.deinit();
-
-    // This should not crash
-    cache.release("non-existent");
-}
-
 // Test version increments on update
 test "lock-free cache: version increments on update" {
     const allocator = testing.allocator;
@@ -501,4 +490,135 @@ test "lock-free cache: StateTree node creation and cleanup" {
     // Verify child exists
     const retrieved_child = state.root.children.get("child");
     try testing.expect(retrieved_child != null);
+}
+
+// Test that deferred resources are properly cleaned up
+test "lock-free cache: deferred cleanup after concurrent updates" {
+    const allocator = testing.allocator;
+
+    var cache = try LockFreeCache.init(allocator);
+    defer cache.deinit();
+
+    const namespace = "test";
+    try cache.create(namespace);
+
+    const num_threads = 4;
+    const updates_per_thread = 50;
+
+    const UpdateContext = struct {
+        cache: *LockFreeCache,
+        namespace: []const u8,
+        updates: usize,
+
+        fn run(ctx: @This()) void {
+            var i: usize = 0;
+            while (i < ctx.updates) : (i += 1) {
+                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable;
+                ctx.cache.update(ctx.namespace, state) catch unreachable;
+            }
+        }
+    };
+
+    var threads: [num_threads]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, UpdateContext.run, .{UpdateContext{
+            .cache = cache,
+            .namespace = namespace,
+            .updates = updates_per_thread,
+        }});
+    }
+
+    for (threads) |t| t.join();
+
+    // Verify final version is correct
+    const final_entries = cache.entries.load(.acquire);
+    const final_entry = final_entries.get(namespace).?;
+    const final_version = final_entry.version.load(.acquire);
+    try testing.expectEqual(@as(u64, num_threads * updates_per_thread), final_version);
+
+    // Verify defer stack has accumulated old resources
+    const defer_node = cache.defer_stack.load(.acquire);
+    try testing.expect(defer_node != null);
+}
+
+// Test that readers see consistent state during concurrent updates
+test "lock-free cache: readers see consistent state during updates" {
+    const allocator = testing.allocator;
+
+    var cache = try LockFreeCache.init(allocator);
+    defer cache.deinit();
+
+    const namespace = "test";
+    try cache.create(namespace);
+
+    var stop = std.atomic.Value(bool).init(false);
+    var inconsistencies = std.atomic.Value(usize).init(0);
+
+    const ReaderContext = struct {
+        cache: *LockFreeCache,
+        namespace: []const u8,
+        stop: *std.atomic.Value(bool),
+        inconsistencies: *std.atomic.Value(usize),
+
+        fn run(ctx: @This()) void {
+            while (!ctx.stop.load(.acquire)) {
+                const handle = ctx.cache.get(ctx.namespace) catch continue;
+                defer handle.release();
+
+                const version = handle.entry.version.load(.acquire);
+                const timestamp = handle.entry.timestamp.load(.acquire);
+
+                // Verify state tree is valid
+                if (handle.state().root.key.len == 0) {
+                    _ = ctx.inconsistencies.fetchAdd(1, .monotonic);
+                }
+
+                // Verify version and timestamp are reasonable
+                if (version > 1000 or timestamp == 0) {
+                    _ = ctx.inconsistencies.fetchAdd(1, .monotonic);
+                }
+            }
+        }
+    };
+
+    const WriterContext = struct {
+        cache: *LockFreeCache,
+        namespace: []const u8,
+        updates: usize,
+
+        fn run(ctx: @This()) void {
+            var i: usize = 0;
+            while (i < ctx.updates) : (i += 1) {
+                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable;
+                ctx.cache.update(ctx.namespace, state) catch unreachable;
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+            }
+        }
+    };
+
+    // Spawn readers
+    var reader_threads: [4]std.Thread = undefined;
+    for (&reader_threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, ReaderContext.run, .{ReaderContext{
+            .cache = cache,
+            .namespace = namespace,
+            .stop = &stop,
+            .inconsistencies = &inconsistencies,
+        }});
+    }
+
+    // Spawn writer
+    const writer = try std.Thread.spawn(.{}, WriterContext.run, .{WriterContext{
+        .cache = cache,
+        .namespace = namespace,
+        .updates = 100,
+    }});
+
+    writer.join();
+    stop.store(true, .release);
+
+    for (reader_threads) |t| t.join();
+
+    // No inconsistencies should be detected
+    try testing.expectEqual(@as(usize, 0), inconsistencies.load(.monotonic));
 }

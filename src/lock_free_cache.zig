@@ -186,14 +186,6 @@ pub const LockFreeCache = struct {
         std.debug.assert(old_count > 0);
     }
 
-    /// DEPRECATED: Use releaseHandle
-    pub fn release(self: *LockFreeCache, namespace: []const u8) void {
-        const entries = self.entries.load(.acquire);
-        const entry = entries.get(namespace) orelse return;
-        const old_count = entry.ref_count.fetchSub(1, .acq_rel);
-        std.debug.assert(old_count > 0);
-    }
-
     /// Helper to clone the current entries map
     fn cloneEntries(self: *LockFreeCache, old_entries: *std.StringHashMap(*CacheEntry)) Error!*std.StringHashMap(*CacheEntry) {
         const new_entries = try self.allocator.create(std.StringHashMap(*CacheEntry));
