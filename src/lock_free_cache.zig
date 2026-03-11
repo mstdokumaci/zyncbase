@@ -6,8 +6,16 @@ const Allocator = std.mem.Allocator;
 pub const LockFreeCache = struct {
     entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
     allocator: Allocator,
-    write_mutex: std.Thread.Mutex,
-    old_maps: std.ArrayListUnmanaged(*std.StringHashMap(*CacheEntry)),
+    defer_stack: std.atomic.Value(?*DeferNode),
+
+    const DeferNode = struct {
+        next: ?*DeferNode,
+        resource: union(enum) {
+            map: *std.StringHashMap(*CacheEntry),
+            entry: *CacheEntry,
+            key: []const u8,
+        },
+    };
 
     /// Individual cache entry with atomic fields for concurrent access
     pub const CacheEntry = struct {
@@ -19,7 +27,7 @@ pub const LockFreeCache = struct {
         pub fn init(allocator: Allocator) !*CacheEntry {
             const entry = try allocator.create(CacheEntry);
             entry.* = .{
-                .state = try StateTree.init(allocator),
+                .state = undefined,
                 .version = std.atomic.Value(u64).init(0),
                 .ref_count = std.atomic.Value(u32).init(0),
                 .timestamp = std.atomic.Value(i64).init(std.time.timestamp()),
@@ -85,8 +93,7 @@ pub const LockFreeCache = struct {
         cache.* = .{
             .entries = std.atomic.Value(*std.StringHashMap(*CacheEntry)).init(entries),
             .allocator = allocator,
-            .write_mutex = .{},
-            .old_maps = .{},
+            .defer_stack = std.atomic.Value(?*DeferNode).init(null),
         };
         return cache;
     }
@@ -103,12 +110,25 @@ pub const LockFreeCache = struct {
         entries.deinit();
         self.allocator.destroy(entries);
 
-        // Free all old maps tracked for COW
-        for (self.old_maps.items) |old_map| {
-            old_map.deinit();
-            self.allocator.destroy(old_map);
+        // Free all deferred resources
+        var node_ptr = self.defer_stack.load(.acquire);
+        while (node_ptr) |node| {
+            switch (node.resource) {
+                .map => |m| {
+                    m.deinit();
+                    self.allocator.destroy(m);
+                },
+                .entry => |e| {
+                    e.deinit(self.allocator);
+                },
+                .key => |k| {
+                    self.allocator.free(k);
+                },
+            }
+            const next = node.next;
+            self.allocator.destroy(node);
+            node_ptr = next;
         }
-        self.old_maps.deinit(self.allocator);
 
         self.allocator.destroy(self);
     }
@@ -119,10 +139,23 @@ pub const LockFreeCache = struct {
         OutOfMemory,
     };
 
+    /// Handle for a cached state tree, ensures proper ref counting
+    pub const Handle = struct {
+        cache: *LockFreeCache,
+        namespace: []const u8,
+        entry: *CacheEntry,
+
+        pub fn state(self: Handle) *StateTree {
+            return &self.entry.state;
+        }
+
+        pub fn release(self: Handle) void {
+            self.cache.releaseHandle(self);
+        }
+    };
+
     /// Lock-free read operation with atomic ref_count increment
-    /// PRECONDITION: namespace is valid UTF-8 string
-    /// POSTCONDITION: Returns valid StateTree pointer with incremented ref_count
-    pub fn get(self: *LockFreeCache, namespace: []const u8) Error!*StateTree {
+    pub fn get(self: *LockFreeCache, namespace: []const u8) Error!Handle {
         // Load entries map atomically (Acquire ordering)
         const entries = self.entries.load(.acquire);
 
@@ -130,7 +163,6 @@ pub const LockFreeCache = struct {
         const entry = entries.get(namespace) orelse return error.NotFound;
 
         // Atomically increment reference count (AcqRel ordering)
-        // INVARIANT: ref_count >= 0 at all times
         const old_count = entry.ref_count.fetchAdd(1, .acq_rel);
 
         // Verify we didn't overflow (safety check)
@@ -139,30 +171,30 @@ pub const LockFreeCache = struct {
             return error.RefCountOverflow;
         }
 
-        // Return pointer to state tree
-        // POSTCONDITION: Caller must call release() when done
-        return &entry.state;
+        return Handle{
+            .cache = self,
+            .namespace = namespace,
+            .entry = entry,
+        };
     }
 
-    /// Release operation with atomic ref_count decrement
-    /// PRECONDITION: get() was previously called for this namespace
-    /// POSTCONDITION: ref_count decremented, entry may be reclaimed
+    /// Release operation using a handle
+    pub fn releaseHandle(self: *LockFreeCache, handle: Handle) void {
+        _ = self;
+        // Atomically decrement reference count
+        const old_count = handle.entry.ref_count.fetchSub(1, .acq_rel);
+        std.debug.assert(old_count > 0);
+    }
+
+    /// DEPRECATED: Use releaseHandle
     pub fn release(self: *LockFreeCache, namespace: []const u8) void {
         const entries = self.entries.load(.acquire);
         const entry = entries.get(namespace) orelse return;
-
-        // Atomically decrement reference count
         const old_count = entry.ref_count.fetchSub(1, .acq_rel);
-
-        // INVARIANT: ref_count was > 0 before decrement
         std.debug.assert(old_count > 0);
-
-        // If ref_count reached 0, entry can be reclaimed
-        // (Actual reclamation happens in separate GC phase)
     }
 
     /// Helper to clone the current entries map
-    /// Caller must hold write_mutex
     fn cloneEntries(self: *LockFreeCache, old_entries: *std.StringHashMap(*CacheEntry)) Error!*std.StringHashMap(*CacheEntry) {
         const new_entries = try self.allocator.create(std.StringHashMap(*CacheEntry));
         new_entries.* = std.StringHashMap(*CacheEntry).init(self.allocator);
@@ -177,103 +209,145 @@ pub const LockFreeCache = struct {
         }
         return new_entries;
     }
+    fn deferFree(self: *LockFreeCache, resource: anytype) void {
+        const T = @TypeOf(resource);
+        const node = self.allocator.create(DeferNode) catch return;
+
+        if (T == *std.StringHashMap(*CacheEntry)) {
+            node.resource = .{ .map = resource };
+        } else if (T == *CacheEntry) {
+            node.resource = .{ .entry = resource };
+        } else if (T == []const u8) {
+            node.resource = .{ .key = resource };
+        } else unreachable;
+
+        var current_head = self.defer_stack.load(.acquire);
+        while (true) {
+            node.next = current_head;
+            if (self.defer_stack.cmpxchgWeak(current_head, node, .acq_rel, .acquire)) |actual| {
+                current_head = actual;
+            } else break;
+        }
+    }
 
     /// Update operation for single-writer cache updates
     /// PRECONDITION: namespace exists in cache
     /// POSTCONDITION: Cache entry updated with new state via COW
     pub fn update(self: *LockFreeCache, namespace: []const u8, new_state: StateTree) Error!void {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
+        // Pre-allocate new entry outside the loop
+        const new_entry = try CacheEntry.init(self.allocator);
+        // ownership has not been transferred yet, just destroy the entry shell on error
+        errdefer self.allocator.destroy(new_entry);
+        new_entry.state = new_state;
 
-        const old_entries = self.entries.load(.acquire);
+        while (true) {
+            const old_entries = self.entries.load(.acquire);
+            const old_entry = old_entries.get(namespace) orelse return error.NotFound;
 
-        // Find the entry we want to update
-        if (!old_entries.contains(namespace)) return error.NotFound;
+            // COW: Clone map
+            const new_entries = try self.cloneEntries(old_entries);
+            errdefer {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+            }
 
-        // COW: Clone the entries map
-        const new_entries = try self.cloneEntries(old_entries);
-        errdefer {
-            self.allocator.destroy(new_entries);
+            // Prepare new entry state from current old_entry
+            new_entry.version.store(old_entry.version.load(.acquire) + 1, .release);
+            new_entry.timestamp.store(std.time.timestamp(), .release);
+
+            // Replace in new map (it's a pointer to our pre-allocated entry)
+            try new_entries.put(namespace, new_entry);
+
+            // Atomically swap the map
+            if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                // FAIL
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+                continue;
+            }
+
+            // SUCCESS
+            self.deferFree(old_entries);
+            self.deferFree(old_entry);
+            return;
         }
-
-        const entry = new_entries.get(namespace).?;
-
-        // Update state in the new view
-        entry.state.deinit();
-        entry.state = new_state;
-        _ = entry.version.fetchAdd(1, .acq_rel);
-        entry.timestamp.store(std.time.timestamp(), .release);
-
-        // Atomically swap the map
-        self.entries.store(new_entries, .release);
-
-        // Track the old map for cleanup
-        self.old_maps.append(self.allocator, old_entries) catch {
-            // If we can't track it, we have to leak it or deinit now (risky)
-            // For tests, we'll favor tracking
-        };
     }
 
     /// Evict operation for cache entry removal
     /// PRECONDITION: ref_count is zero
     /// POSTCONDITION: Entry removed from cache via COW
     pub fn evict(self: *LockFreeCache, namespace: []const u8) Error!void {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
+        while (true) {
+            const old_entries = self.entries.load(.acquire);
+            const entry = old_entries.get(namespace) orelse return error.NotFound;
 
-        const old_entries = self.entries.load(.acquire);
-        const entry = old_entries.get(namespace) orelse return error.NotFound;
+            if (entry.ref_count.load(.acquire) != 0) {
+                return error.RefCountOverflow;
+            }
 
-        // Check ref_count is zero before eviction
-        if (entry.ref_count.load(.acquire) != 0) {
-            return error.RefCountOverflow;
+            const new_entries = try self.cloneEntries(old_entries);
+            errdefer {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+            }
+
+            const kv = new_entries.fetchRemove(namespace).?;
+
+            if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+                continue;
+            }
+
+            // Defer free map, key, and entry
+            self.deferFree(old_entries);
+            self.deferFree(kv.key);
+            self.deferFree(kv.value);
+            return;
         }
-
-        // COW: Clone
-        const new_entries = try self.cloneEntries(old_entries);
-        errdefer {
-            self.allocator.destroy(new_entries);
-        }
-
-        const kv = new_entries.fetchRemove(namespace).?;
-        self.allocator.free(kv.key);
-        kv.value.deinit(self.allocator);
-
-        // Swap
-        self.entries.store(new_entries, .release);
-        try self.old_maps.append(self.allocator, old_entries);
     }
 
     /// Create a new cache entry for a namespace
     pub fn create(self: *LockFreeCache, namespace: []const u8) Error!void {
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
-
-        const old_entries = self.entries.load(.acquire);
-
-        // COW: Clone
-        const new_entries = try self.cloneEntries(old_entries);
-        errdefer {
-            self.allocator.destroy(new_entries);
-        }
-
-        // Remove old if exists
-        if (new_entries.fetchRemove(namespace)) |kv| {
-            self.allocator.free(kv.key);
-            kv.value.deinit(self.allocator);
-        }
-
-        // Create new entry
-        const entry = try CacheEntry.init(self.allocator);
-        errdefer entry.deinit(self.allocator);
+        // Pre-allocate resources outside the loop
+        const new_entry = try CacheEntry.init(self.allocator);
+        errdefer self.allocator.destroy(new_entry); // Don't deinit state, it hasn't been set yet
+        new_entry.state = try StateTree.init(self.allocator);
+        errdefer new_entry.state.deinit();
 
         const namespace_copy = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(namespace_copy);
 
-        try new_entries.put(namespace_copy, entry);
+        while (true) {
+            const old_entries = self.entries.load(.acquire);
 
-        // Swap
-        self.entries.store(new_entries, .release);
-        try self.old_maps.append(self.allocator, old_entries);
+            const new_entries = try self.cloneEntries(old_entries);
+            errdefer {
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+            }
+
+            var old_entry_item: ?*CacheEntry = null;
+            var old_key_item: ?[]const u8 = null;
+            if (new_entries.fetchRemove(namespace)) |kv| {
+                old_key_item = kv.key;
+                old_entry_item = kv.value;
+            }
+
+            try new_entries.put(namespace_copy, new_entry);
+
+            if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
+                // FAIL
+                new_entries.deinit();
+                self.allocator.destroy(new_entries);
+                continue;
+            }
+
+            // SUCCESS
+            self.deferFree(old_entries);
+            if (old_key_item) |k| self.deferFree(k);
+            if (old_entry_item) |e| self.deferFree(e);
+            return;
+        }
     }
 };

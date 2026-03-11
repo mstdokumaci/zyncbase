@@ -108,32 +108,31 @@ pub fn Pool(comptime T: type) type {
             data: T,
         };
 
-        /// Tagged pointer to handle ABA problem
-        const TaggedPtr = packed struct {
+        /// Combined state for atomic head and count
+        const CombinedState = packed struct {
             ptr: ?*Node,
-            gen: usize,
+            gen: u32,
+            count: u32,
         };
 
         allocator: Allocator,
-        head: std.atomic.Value(u128) align(16),
+        state: std.atomic.Value(u128) align(16),
         capacity: usize,
-        count: std.atomic.Value(usize),
 
         /// Initialize a pool with the given capacity
         pub fn init(allocator: Allocator, capacity: usize) !Self {
-            const initial_tagged = TaggedPtr{ .ptr = null, .gen = 0 };
+            const initial_state = CombinedState{ .ptr = null, .gen = 0, .count = 0 };
             return Self{
                 .allocator = allocator,
-                .head = std.atomic.Value(u128).init(@bitCast(initial_tagged)),
+                .state = std.atomic.Value(u128).init(@bitCast(initial_state)),
                 .capacity = capacity,
-                .count = std.atomic.Value(usize).init(0),
             };
         }
 
         /// Deinitialize the pool and free all objects
         pub fn deinit(self: *Self) void {
-            // Swap out the head to prevent any concurrent access during deinit
-            var ptr = @as(TaggedPtr, @bitCast(self.head.swap(0, .acquire))).ptr;
+            // Swap out the state to prevent any concurrent access during deinit
+            var ptr = @as(CombinedState, @bitCast(self.state.swap(0, .acquire))).ptr;
             while (ptr) |node| {
                 const next = node.next.load(.monotonic);
                 self.allocator.destroy(node);
@@ -143,16 +142,19 @@ pub fn Pool(comptime T: type) type {
 
         /// Acquire an object from the pool, or allocate a new one if pool is empty
         pub fn acquire(self: *Self) !*T {
-            var current_raw = self.head.load(.acquire);
+            var current_raw = self.state.load(.acquire);
             while (true) {
-                const current: TaggedPtr = @bitCast(current_raw);
+                const current: CombinedState = @bitCast(current_raw);
                 const node = current.ptr orelse break;
                 const next_node = node.next.load(.acquire);
-                const next_tagged = TaggedPtr{ .ptr = next_node, .gen = current.gen + 1 };
-                if (self.head.cmpxchgStrong(current_raw, @bitCast(next_tagged), .acq_rel, .acquire)) |actual| {
+                const next_state = CombinedState{
+                    .ptr = next_node,
+                    .gen = current.gen +% 1,
+                    .count = current.count - 1,
+                };
+                if (self.state.cmpxchgStrong(current_raw, @bitCast(next_state), .acq_rel, .acquire)) |actual| {
                     current_raw = actual;
                 } else {
-                    _ = self.count.fetchSub(1, .release);
                     return &node.data;
                 }
             }
@@ -176,22 +178,25 @@ pub fn Pool(comptime T: type) type {
             // Recover Node pointer from data pointer
             const node: *Node = @alignCast(@fieldParentPtr("data", item_ptr));
 
-            if (self.count.load(.acquire) < self.capacity) {
-                var current_raw = self.head.load(.acquire);
-                while (true) {
-                    const current: TaggedPtr = @bitCast(current_raw);
-                    node.next.store(current.ptr, .release);
-                    const next_tagged = TaggedPtr{ .ptr = node, .gen = current.gen + 1 };
-                    if (self.head.cmpxchgStrong(current_raw, @bitCast(next_tagged), .acq_rel, .acquire)) |actual| {
-                        current_raw = actual;
-                    } else {
-                        _ = self.count.fetchAdd(1, .release);
-                        return;
-                    }
+            var current_raw = self.state.load(.acquire);
+            while (true) {
+                const current: CombinedState = @bitCast(current_raw);
+                if (current.count >= self.capacity) break;
+
+                node.next.store(current.ptr, .release);
+                const next_state = CombinedState{
+                    .ptr = node,
+                    .gen = current.gen +% 1,
+                    .count = current.count + 1,
+                };
+                if (self.state.cmpxchgStrong(current_raw, @bitCast(next_state), .acq_rel, .acquire)) |actual| {
+                    current_raw = actual;
+                } else {
+                    return;
                 }
-            } else {
-                self.allocator.destroy(node);
             }
+
+            self.allocator.destroy(node);
         }
     };
 }

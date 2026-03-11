@@ -34,16 +34,16 @@ test "lock-free cache: concurrent reads never block" {
             var i: usize = 0;
             while (i < ctx.reads) : (i += 1) {
                 // Perform lock-free read
-                const state = ctx.cache.get(ctx.namespace) catch |err| {
+                const handle = ctx.cache.get(ctx.namespace) catch |err| {
                     std.debug.print("Read failed: {}\n", .{err});
                     continue;
                 };
 
                 // Verify we got a valid state tree
-                testing.expect(state.root.key.len > 0) catch unreachable;
+                testing.expect(handle.state().root.key.len > 0) catch unreachable;
 
                 // Release the reference
-                ctx.cache.release(ctx.namespace);
+                handle.release();
 
                 // Increment successful read counter
                 _ = ctx.counter.fetchAdd(1, .monotonic);
@@ -92,8 +92,7 @@ test "lock-free cache: ref_count never negative" {
     // Perform get/release cycles
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        const state = try cache.get(namespace);
-        _ = state;
+        const handle = try cache.get(namespace);
 
         // Check ref_count is positive
         const entries = cache.entries.load(.acquire);
@@ -101,7 +100,7 @@ test "lock-free cache: ref_count never negative" {
         const ref_count = entry.ref_count.load(.acquire);
         try testing.expect(ref_count > 0);
 
-        cache.release(namespace);
+        handle.release();
 
         // Check ref_count is back to zero
         const final_ref_count = entry.ref_count.load(.acquire);
@@ -171,11 +170,10 @@ test "lock-free cache: concurrent reads with multiple namespaces" {
                 const ns = ctx.namespaces[ns_idx];
 
                 // Perform read
-                const state = ctx.cache.get(ns) catch continue;
-                _ = state;
+                const handle = ctx.cache.get(ns) catch continue;
 
                 // Release
-                ctx.cache.release(ns);
+                handle.release();
             }
         }
     };
@@ -228,9 +226,8 @@ test "lock-free cache: memory ordering with updates" {
 
         fn readerThread(ctx: @This()) void {
             while (!ctx.stop.load(.acquire)) {
-                const state = ctx.cache.get(ctx.namespace) catch continue;
-                _ = state;
-                ctx.cache.release(ctx.namespace);
+                const handle = ctx.cache.get(ctx.namespace) catch continue;
+                handle.release();
             }
         }
     };
@@ -319,15 +316,14 @@ test "lock-free cache: eviction fails with non-zero ref_count" {
     try cache.create(namespace);
 
     // Get the entry (increments ref_count)
-    const state = try cache.get(namespace);
-    _ = state;
+    const handle = try cache.get(namespace);
 
     // Try to evict while ref_count > 0
     const result = cache.evict(namespace);
     try testing.expectError(error.RefCountOverflow, result);
 
     // Release and try again
-    cache.release(namespace);
+    handle.release();
     try cache.evict(namespace);
 
     // Verify entry is gone
@@ -399,7 +395,9 @@ test "lock-free cache: version increments on update" {
     }
 
     // Verify version incremented
-    const final_version = entry.version.load(.acquire);
+    const final_entries = cache.entries.load(.acquire);
+    const final_entry = final_entries.get(namespace).?;
+    const final_version = final_entry.version.load(.acquire);
     try testing.expectEqual(@as(u64, num_updates), final_version);
 }
 
@@ -426,7 +424,9 @@ test "lock-free cache: timestamp updates on update" {
     try cache.update(namespace, new_state);
 
     // Verify timestamp changed
-    const final_timestamp = entry.timestamp.load(.acquire);
+    const final_entries = cache.entries.load(.acquire);
+    const final_entry = final_entries.get(namespace).?;
+    const final_timestamp = final_entry.timestamp.load(.acquire);
     try testing.expect(final_timestamp >= initial_timestamp);
 }
 
@@ -444,9 +444,8 @@ test "lock-free cache: multiple creates of same namespace" {
     try cache.create(namespace);
 
     // Should still be accessible
-    const state = try cache.get(namespace);
-    _ = state;
-    cache.release(namespace);
+    const handle = try cache.get(namespace);
+    handle.release();
 }
 
 // Test empty namespace string
@@ -460,9 +459,8 @@ test "lock-free cache: empty namespace string" {
     try cache.create(namespace);
 
     // Should be able to get it
-    const state = try cache.get(namespace);
-    _ = state;
-    cache.release(namespace);
+    const handle = try cache.get(namespace);
+    handle.release();
 }
 
 // Test very long namespace string
@@ -477,9 +475,8 @@ test "lock-free cache: very long namespace string" {
     try cache.create(long_namespace);
 
     // Should be able to get it
-    const state = try cache.get(long_namespace);
-    _ = state;
-    cache.release(long_namespace);
+    const handle = try cache.get(long_namespace);
+    handle.release();
 }
 
 // Test StateTree node operations
