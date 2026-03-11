@@ -416,6 +416,27 @@ The following items were previously listed as "Open Questions" and have now been
 
 ---
 
+### ADR-013: Strict Client API Namespaces (`store` vs `presence`)
+
+**Date**: 2026-03-09  
+**Status**: Accepted
+
+**Context**: How should the Client SDK organize methods for data synchronization vs user awareness?
+
+**Decision**: The SDK explicitly separates data methods into `client.store.*` (persistent database state, including queries) and `client.presence.*` (ephemeral, in-memory user awareness). There are no top-level methods for data access.
+
+**Rationale**:
+- Persistent state requires schema validation, disk I/O, offline queuing (planned), and complex queries.
+- Presence state is ephemeral, memory-only, never hits the disk, and is wiped on disconnect.
+- Forcing the user to type `.store` or `.presence` creates a hard mental boundary, preventing them from treating user awareness data as durable state.
+
+**Consequences**:
+- ✅ Extremely clear mental model for developers.
+- ✅ Prevents accidental misuse of presence for durable data.
+- ❌ Slightly more verbose (`client.store.set` instead of `client.set`).
+
+---
+
 ## Open Design Work
 
 For items still requiring dedicated design work, see [design_todo.md](./design_todo.md).

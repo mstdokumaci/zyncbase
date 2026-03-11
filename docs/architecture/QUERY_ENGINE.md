@@ -671,7 +671,7 @@ Always create indexes for frequently queried fields:
 Always use `limit` to prevent large result sets:
 
 ```typescript
-client.query('users', {
+client.store.query('users', {
   where: { status: { eq: 'active' } },
   limit: 100 // Always limit!
 })
@@ -698,7 +698,7 @@ Subscribe to specific data, not broad queries:
 
 ```typescript
 // Good - specific
-client.subscribe('tasks', {
+client.store.subscribe('tasks', {
   where: {
     project_id: { eq: currentProject },
     status: { eq: 'active' }
@@ -706,7 +706,7 @@ client.subscribe('tasks', {
 })
 
 // Bad - too broad
-client.subscribe('tasks', {
+client.store.subscribe('tasks', {
   where: {
     status: { ne: 'archived' }
   }

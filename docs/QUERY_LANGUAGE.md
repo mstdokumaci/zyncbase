@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-03-09
 
-Complete reference for ZyncBase's Prisma-inspired query language used in `client.query()` and `client.subscribe()`.
+Complete reference for ZyncBase's Prisma-inspired query language used in `client.store.query()` and `client.store.subscribe()`.
 
 ---
 
@@ -295,14 +295,14 @@ You can have multiple conditions with OR groups:
 
 ```typescript
 // Load first batch
-const items = await client.query('items', {
+const items = await client.store.query('items', {
   orderBy: { created_at: 'desc' },
   limit: 20,
   offset: 0
 })
 
 // Load next batch
-const moreItems = await client.query('items', {
+const moreItems = await client.store.query('items', {
   orderBy: { created_at: 'desc' },
   limit: 20,
   offset: 20
@@ -318,7 +318,7 @@ const moreItems = await client.query('items', {
 Check if a username is already taken:
 
 ```typescript
-const existing = await client.query('users', {
+const existing = await client.store.query('users', {
   where: { username: { eq: 'alice' } }
 })
 
@@ -332,7 +332,7 @@ const isAvailable = existing.length === 0
 Get events within a date range:
 
 ```typescript
-const events = await client.query('events', {
+const events = await client.store.query('events', {
   where: {
     created_at: { gte: startDate, lte: endDate },
     status: { eq: 'active' }
@@ -349,7 +349,7 @@ const events = await client.query('events', {
 Get tasks that are either active or pending:
 
 ```typescript
-const tasks = await client.query('tasks', {
+const tasks = await client.store.query('tasks', {
   where: {
     or: [
       { status: { eq: 'active' } },
@@ -367,7 +367,7 @@ const tasks = await client.query('tasks', {
 Get users with admin or editor roles who are active:
 
 ```typescript
-const users = await client.query('users', {
+const users = await client.store.query('users', {
   where: {
     status: { eq: 'active' },
     or: [
@@ -385,7 +385,7 @@ const users = await client.query('users', {
 Find users whose email contains a domain:
 
 ```typescript
-const users = await client.query('users', {
+const users = await client.store.query('users', {
   where: {
     email: { contains: '@example.com' }
   }
@@ -399,7 +399,7 @@ const users = await client.query('users', {
 Get all items that haven't been soft-deleted:
 
 ```typescript
-const items = await client.query('items', {
+const items = await client.store.query('items', {
   where: {
     deleted_at: { isNull: true }
   }
@@ -413,7 +413,7 @@ const items = await client.query('items', {
 Get high-priority tasks assigned to admins or editors that are not completed:
 
 ```typescript
-const tasks = await client.query('tasks', {
+const tasks = await client.store.query('tasks', {
   where: {
     priority: { eq: 'high' },
     status: { ne: 'completed' },
@@ -568,7 +568,7 @@ For real-time subscriptions, keep queries focused:
 
 ```typescript
 // Good - specific subscription
-client.subscribe('tasks', {
+client.store.subscribe('tasks', {
   where: {
     project_id: { eq: currentProject },
     status: { eq: 'active' }
@@ -576,7 +576,7 @@ client.subscribe('tasks', {
 }, callback)
 
 // Avoid - too broad, updates frequently
-client.subscribe('tasks', {
+client.store.subscribe('tasks', {
   where: {
     status: { ne: 'archived' }
   }

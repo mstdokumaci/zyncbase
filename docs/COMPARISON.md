@@ -236,14 +236,14 @@ const records = await pb.collection('events').getList(1, 50, {
 **ZyncBase:**
 ```typescript
 // One-off query (for SSR, validation, exports)
-const events = await client.query('events', {
+const events = await client.store.query('events', {
   where: { created_at: { gte: startDate, lte: endDate } },
   orderBy: { created_at: 'desc' },
   limit: 50
 })
 
 // Real-time subscription (most common)
-const unsubscribe = client.subscribe('events', {
+const unsubscribe = client.store.subscribe('events', {
   where: { status: { eq: 'active' } }
 }, (events) => {
   updateDashboard(events)

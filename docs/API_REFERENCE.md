@@ -19,13 +19,12 @@ Complete reference for the ZyncBase TypeScript/JavaScript client SDK.
 
 ## Core Concepts
 
-ZyncBase provides three complementary APIs for different use cases:
+ZyncBase's client API is strictly divided into two distinct namespaces to separate persistent state from ephemeral state.
 
-1. **Store API** - Direct path-based access to state tree (80% of use cases)
-2. **Query API** - Filter and search data at a path (15% of use cases)
-3. **Presence API** - Real-time user presence (5% of use cases)
+1. **Store API (`client.store.*`)** - For durable, synchronized data. Everything here is validated against your schema, persisted to SQLite, and syncs across clients. It includes both direct path access (`store.get`, `store.set`) and filtered access (`store.query`, `store.subscribe`).
+2. **Presence API (`client.presence.*`)** - For ephemeral, transient user awareness (cursors, typing indicators). Data here is kept only in memory, is not queried via complex operators, and is automatically wiped when a user disconnects.
 
-All data lives in a hierarchical store organized by paths (e.g., `users`, `tasks.task-1`). The Store API accesses specific paths directly, while the Query API filters items at a path.
+By strictly separating `store` and `presence`, developers cannot accidentally rely on ephemeral data for persistent logic, keeping the mental model extremely clear.
 
 ### Namespaces
 
@@ -219,7 +218,7 @@ For complete query language documentation, see [Query Language Reference](./QUER
 **Quick example:**
 
 ```typescript
-const users = await client.query('users', {
+const users = await client.store.query('users', {
   where: {
     age: { gte: 18 },              // Implicit AND
     status: { eq: 'active' },
@@ -234,13 +233,13 @@ const users = await client.query('users', {
 
 ### Methods
 
-#### `client.query(path, options)`
+#### `client.store.query(path, options)`
 
 Execute a one-off query (non-real-time).
 
 ```typescript
 // Simple query on a path
-const users = await client.query('users', {
+const users = await client.store.query('users', {
   where: {
     age: { gte: 18 },
     status: { eq: 'active' }
@@ -248,7 +247,7 @@ const users = await client.query('users', {
 })
 
 // With sorting and pagination
-const events = await client.query('events', {
+const events = await client.store.query('events', {
   where: {
     created_at: { gte: startDate, lte: endDate },
     status: { eq: 'active' }
@@ -259,7 +258,7 @@ const events = await client.query('events', {
 })
 
 // Check if username exists (validation)
-const existing = await client.query('users', {
+const existing = await client.store.query('users', {
   where: { username: { eq: 'alice' } }
 })
 const isAvailable = existing.length === 0
@@ -277,13 +276,13 @@ const isAvailable = existing.length === 0
 
 ---
 
-#### `client.subscribe(path, options, callback)`
+#### `client.store.subscribe(path, options, callback)`
 
 Subscribe to filtered query results (real-time).
 
 ```typescript
 // Subscribe to filtered results
-const unsubscribe = client.subscribe('tasks', {
+const unsubscribe = client.store.subscribe('tasks', {
   where: { 
     project_id: { eq: currentProject },
     status: { eq: 'active' }
