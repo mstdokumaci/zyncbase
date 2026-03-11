@@ -82,37 +82,53 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     step.addIncludePath(b.path("src")); // For uws_wrapper.h
 
     // Link BoringSSL (built separately with CMake)
-    // We use addObjectFile directly to avoid pulling in system OpenSSL headers
-    // Note: Link order matters for resolution - decrepit depends on ssl which depends on crypto
     step.addObjectFile(b.path("vendor/boringssl/build/libdecrepit.a"));
     step.addObjectFile(b.path("vendor/boringssl/build/libssl.a"));
     step.addObjectFile(b.path("vendor/boringssl/build/libcrypto.a"));
 
+    const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
+
     // BoringSSL's crypto library requires libdl on Linux for dynamic loading
-    if (step.root_module.resolved_target.?.result.os.tag == .linux) {
+    if (is_linux) {
         step.linkSystemLibrary("dl");
     }
 
+    const linux_flags: []const []const u8 = if (is_linux) &.{
+        "-D_GNU_SOURCE",
+        "-D_POSIX_C_SOURCE=200809L",
+    } else &.{};
+
     // Add Bun's C wrapper (libuwsockets.cpp) with C++20 compilation flags
+    const uws_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+        "-std=c++20",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-DUWS_NO_ZLIB",
+        "-DUWS_USE_LIBDEFLATE=0",
+        "-DLIBUS_USE_OPENSSL=1",
+        "-DLIBUS_USE_BORINGSSL=1",
+        "-DWITH_BORINGSSL=1",
+        "-Wno-nullability-completeness",
+        "-I",
+        "vendor/bun/packages",
+    } }) catch unreachable;
+
     step.addCSourceFile(.{
         .file = b.path("vendor/bun/src/deps/libuwsockets.cpp"),
-        .flags = &.{
-            "-std=c++20",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-DUWS_NO_ZLIB",
-            "-DUWS_USE_LIBDEFLATE=0",
-            "-DLIBUS_USE_OPENSSL=1",
-            "-DLIBUS_USE_BORINGSSL=1",
-            "-DWITH_BORINGSSL=1",
-            "-Wno-nullability-completeness",
-            "-I",
-            "vendor/bun/packages",
-        },
+        .flags = uws_flags,
     });
 
     // Add uSockets implementation files from Bun
-    // Use the same defines as Bun does
+    const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+        "-std=c11",
+        "-DUWS_NO_ZLIB",
+        "-DUWS_USE_LIBDEFLATE=0",
+        "-DLIBUS_USE_OPENSSL=1",
+        "-DLIBUS_USE_BORINGSSL=1",
+        "-DWITH_BORINGSSL=1",
+        "-Wno-nullability-completeness",
+    } }) catch unreachable;
+
     step.addCSourceFiles(.{
         .files = &.{
             "vendor/bun/packages/bun-usockets/src/eventing/epoll_kqueue.c",
@@ -123,28 +139,22 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
             "vendor/bun/packages/bun-usockets/src/bsd.c",
             "vendor/bun/packages/bun-usockets/src/udp.c",
         },
-        .flags = &.{
-            "-std=c11",
-            "-DUWS_NO_ZLIB",
-            "-DUWS_USE_LIBDEFLATE=0",
-            "-DLIBUS_USE_OPENSSL=1",
-            "-DLIBUS_USE_BORINGSSL=1",
-            "-DWITH_BORINGSSL=1",
-            "-Wno-nullability-completeness",
-        },
+        .flags = usockets_flags,
     });
 
     // Add SNI tree implementation
+    const sni_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+        "-std=c++20",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-DLIBUS_USE_OPENSSL=1",
+        "-DLIBUS_USE_BORINGSSL=1",
+        "-DWITH_BORINGSSL=1",
+    } }) catch unreachable;
+
     step.addCSourceFile(.{
         .file = b.path("vendor/bun/packages/bun-usockets/src/crypto/sni_tree.cpp"),
-        .flags = &.{
-            "-std=c++20",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-DLIBUS_USE_OPENSSL=1",
-            "-DLIBUS_USE_BORINGSSL=1",
-            "-DWITH_BORINGSSL=1",
-        },
+        .flags = sni_flags,
     });
 
     // Add stubs for Bun-specific functions
