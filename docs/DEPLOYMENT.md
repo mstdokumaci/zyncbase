@@ -319,6 +319,566 @@ METRICS_PORT=9090
 
 ---
 
+## Bundled Hook Server
+
+ZyncBase includes a bundled Hook Server that runs alongside the main server, providing authorization and custom hook functionality without requiring separate deployment or management.
+
+### Overview
+
+The Hook Server is a Bun-based TypeScript runtime that:
+- **Automatically starts** when ZyncBase starts (no separate deployment needed)
+- **Hot-reloads** hook files when you add or modify them
+- **Communicates** with ZyncBase via localhost WebSocket connection
+- **Runs custom logic** for authorization, validation, and event hooks
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│         ZyncBase Container              │
+│                                         │
+│  ┌──────────────┐    ┌──────────────┐  │
+│  │  ZyncBase    │◄──►│ Hook Server  │  │
+│  │  Core        │    │ (Bun)        │  │
+│  │  (Port 3000) │    │ (Port 3001)  │  │
+│  └──────────────┘    └──────────────┘  │
+│         │                    │          │
+│         │                    │          │
+│         ▼                    ▼          │
+│  ┌──────────────┐    ┌──────────────┐  │
+│  │   SQLite     │    │  /hooks/*.ts │  │
+│  │   Database   │    │  TypeScript  │  │
+│  └──────────────┘    └──────────────┘  │
+└─────────────────────────────────────────┘
+```
+
+### Quick Start
+
+**1. Create a hooks directory:**
+
+```bash
+mkdir -p ./hooks
+```
+
+**2. Add a hook file:**
+
+Create `./hooks/auth.ts`:
+
+```typescript
+// Authorization hook - called before every write operation
+export async function authorize(request: AuthRequest): Promise<AuthResponse> {
+  const { userId, namespace, operation, resource } = request;
+  
+  // Example: Only allow users to write to their own namespace
+  if (namespace !== `user:${userId}`) {
+    return {
+      allowed: false,
+      reason: "Cannot write to other users' namespaces",
+      cacheTtlSec: 60
+    };
+  }
+  
+  // Allow the operation
+  return {
+    allowed: true,
+    cacheTtlSec: 300 // Cache this decision for 5 minutes
+  };
+}
+
+// Types
+interface AuthRequest {
+  userId: string;
+  namespace: string;
+  operation: 'read' | 'write' | 'delete' | 'subscribe';
+  resource: string;
+}
+
+interface AuthResponse {
+  allowed: boolean;
+  reason?: string;
+  cacheTtlSec: number;
+}
+```
+
+**3. Start ZyncBase:**
+
+```bash
+docker-compose up -d
+```
+
+That's it! The Hook Server automatically:
+- Discovers your `auth.ts` file
+- Loads and compiles it
+- Makes it available for authorization requests
+- Hot-reloads when you modify the file
+
+### Hook File Locations
+
+Place your TypeScript hook files in the configured hooks directory:
+
+**Docker:**
+```yaml
+services:
+  zyncbase:
+    volumes:
+      - ./hooks:/hooks  # Mount your hooks directory
+    environment:
+      - HOOKS_DIR=/hooks
+```
+
+**Binary:**
+```bash
+./zyncbase-server --hooks-dir ./hooks
+```
+
+**Systemd:**
+```ini
+[Service]
+Environment="HOOKS_DIR=/opt/zyncbase/hooks"
+```
+
+### Hook Types
+
+#### 1. Authorization Hooks
+
+Control access to read/write operations:
+
+```typescript
+// hooks/auth.ts
+export async function authorize(request: AuthRequest): Promise<AuthResponse> {
+  // Check user permissions in your database
+  const hasPermission = await checkPermission(
+    request.userId,
+    request.namespace,
+    request.operation
+  );
+  
+  return {
+    allowed: hasPermission,
+    reason: hasPermission ? undefined : "Insufficient permissions",
+    cacheTtlSec: 60
+  };
+}
+```
+
+#### 2. Validation Hooks
+
+Validate data before writes:
+
+```typescript
+// hooks/validate.ts
+export async function beforeWrite(request: WriteRequest): Promise<ValidationResult> {
+  const { path, value } = request;
+  
+  // Example: Validate task title length
+  if (path.startsWith('tasks.') && path.endsWith('.title')) {
+    if (typeof value !== 'string' || value.length < 3) {
+      return {
+        valid: false,
+        error: "Task title must be at least 3 characters"
+      };
+    }
+  }
+  
+  return { valid: true };
+}
+```
+
+#### 3. Event Hooks
+
+React to data changes:
+
+```typescript
+// hooks/events.ts
+export async function afterWrite(event: WriteEvent): Promise<void> {
+  const { namespace, path, oldValue, newValue } = event;
+  
+  // Example: Send notification when task is completed
+  if (path.endsWith('.status') && newValue === 'completed') {
+    await sendNotification({
+      userId: event.userId,
+      message: `Task completed: ${path}`
+    });
+  }
+}
+```
+
+### Hook Server Configuration
+
+Configure the Hook Server via environment variables:
+
+```yaml
+services:
+  zyncbase:
+    environment:
+      # Hook Server Connection
+      - HOOK_SERVER_URL=ws://localhost:3001/hooks
+      - HOOK_SERVER_TIMEOUT_MS=5000
+      - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5
+      - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60
+      
+      # Hook Files
+      - HOOKS_DIR=/hooks
+      - HOT_RELOAD=true
+      
+      # TLS (optional)
+      - HOOK_SERVER_TLS_ENABLED=false
+```
+
+### Hot Reload
+
+The Hook Server automatically detects changes to hook files and reloads them without restarting:
+
+```bash
+# Edit your hook file
+vim ./hooks/auth.ts
+
+# Save the file - Hook Server automatically reloads
+# No restart needed!
+```
+
+**Hot reload behavior:**
+- Watches all `.ts` files in the hooks directory
+- Recompiles and reloads on file changes
+- Validates TypeScript syntax before loading
+- Falls back to previous version if new version has errors
+- Logs reload events for debugging
+
+### Example Hook Templates
+
+#### Role-Based Access Control (RBAC)
+
+```typescript
+// hooks/rbac.ts
+interface User {
+  id: string;
+  roles: string[];
+}
+
+const rolePermissions: Record<string, string[]> = {
+  admin: ['read', 'write', 'delete'],
+  editor: ['read', 'write'],
+  viewer: ['read']
+};
+
+export async function authorize(request: AuthRequest): Promise<AuthResponse> {
+  // Fetch user from your database
+  const user = await getUser(request.userId);
+  
+  // Check if any of the user's roles allow this operation
+  const allowed = user.roles.some(role => {
+    const permissions = rolePermissions[role] || [];
+    return permissions.includes(request.operation);
+  });
+  
+  return {
+    allowed,
+    reason: allowed ? undefined : `Role ${user.roles.join(', ')} cannot ${request.operation}`,
+    cacheTtlSec: 300
+  };
+}
+```
+
+#### Namespace Ownership
+
+```typescript
+// hooks/ownership.ts
+export async function authorize(request: AuthRequest): Promise<AuthResponse> {
+  const { userId, namespace, operation } = request;
+  
+  // Parse namespace format: "workspace:abc-123"
+  const [type, id] = namespace.split(':');
+  
+  if (type === 'workspace') {
+    // Check if user owns or is member of workspace
+    const isMember = await isWorkspaceMember(userId, id);
+    
+    if (!isMember) {
+      return {
+        allowed: false,
+        reason: "Not a member of this workspace",
+        cacheTtlSec: 60
+      };
+    }
+  }
+  
+  return {
+    allowed: true,
+    cacheTtlSec: 300
+  };
+}
+```
+
+#### Rate Limiting
+
+```typescript
+// hooks/rate-limit.ts
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
+
+export async function authorize(request: AuthRequest): Promise<AuthResponse> {
+  const key = `${request.userId}:${request.operation}`;
+  const now = Date.now();
+  const limit = 100; // 100 operations per minute
+  const window = 60 * 1000; // 1 minute
+  
+  let bucket = rateLimits.get(key);
+  
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + window };
+    rateLimits.set(key, bucket);
+  }
+  
+  bucket.count++;
+  
+  if (bucket.count > limit) {
+    return {
+      allowed: false,
+      reason: "Rate limit exceeded",
+      cacheTtlSec: 0 // Don't cache rate limit denials
+    };
+  }
+  
+  return {
+    allowed: true,
+    cacheTtlSec: 1 // Short cache for rate-limited operations
+  };
+}
+```
+
+#### Audit Logging
+
+```typescript
+// hooks/audit.ts
+export async function afterWrite(event: WriteEvent): Promise<void> {
+  // Log all write operations to audit trail
+  await logAuditEvent({
+    timestamp: new Date().toISOString(),
+    userId: event.userId,
+    namespace: event.namespace,
+    operation: 'write',
+    path: event.path,
+    oldValue: event.oldValue,
+    newValue: event.newValue,
+    ip: event.clientIp
+  });
+}
+
+export async function afterDelete(event: DeleteEvent): Promise<void> {
+  // Log deletions
+  await logAuditEvent({
+    timestamp: new Date().toISOString(),
+    userId: event.userId,
+    namespace: event.namespace,
+    operation: 'delete',
+    path: event.path,
+    oldValue: event.oldValue,
+    ip: event.clientIp
+  });
+}
+```
+
+### Debugging Hooks
+
+#### Enable Debug Logging
+
+```yaml
+services:
+  zyncbase:
+    environment:
+      - LOG_LEVEL=debug
+```
+
+#### View Hook Server Logs
+
+```bash
+# Docker
+docker-compose logs -f zyncbase | grep "hook-server"
+
+# Systemd
+journalctl -u zyncbase -f | grep "hook-server"
+```
+
+#### Test Hooks Locally
+
+```bash
+# Run Hook Server standalone for testing
+cd hooks
+bun run --watch auth.ts
+
+# Or use the test harness
+bun test auth.test.ts
+```
+
+### Hook Server Health
+
+The Hook Server health is included in the main health check:
+
+```bash
+curl http://localhost:3000/health
+```
+
+```json
+{
+  "status": "healthy",
+  "hook_server": {
+    "status": "connected",
+    "circuit_breaker": "closed",
+    "latency_ms": 2.5,
+    "hooks_loaded": ["auth.ts", "validate.ts", "events.ts"]
+  }
+}
+```
+
+### Circuit Breaker
+
+ZyncBase includes a circuit breaker to handle Hook Server failures gracefully:
+
+**States:**
+- **Closed** (normal): All requests go to Hook Server
+- **Open** (failing): Requests fail fast without contacting Hook Server
+- **Half-Open** (testing): Single request tests if Hook Server recovered
+
+**Configuration:**
+```yaml
+environment:
+  - HOOK_SERVER_CIRCUIT_BREAKER_THRESHOLD=5  # Open after 5 failures
+  - HOOK_SERVER_CIRCUIT_BREAKER_TIMEOUT_SEC=60  # Test recovery after 60s
+```
+
+**Behavior when circuit is open:**
+- Authorization requests are **denied by default** (fail secure)
+- Cached authorization results are still used
+- Circuit automatically tests recovery after timeout
+
+### Performance Considerations
+
+**Authorization Caching:**
+- Hook Server returns `cacheTtlSec` with each response
+- ZyncBase caches authorization decisions for the specified TTL
+- Reduces Hook Server load for repeated operations
+- Balance security (short TTL) vs performance (long TTL)
+
+**Timeout Configuration:**
+```yaml
+environment:
+  - HOOK_SERVER_TIMEOUT_MS=5000  # 5 second timeout
+```
+
+**Best Practices:**
+- Keep hook logic fast (< 100ms)
+- Use caching for expensive operations
+- Implement proper error handling
+- Monitor Hook Server latency metrics
+
+### Security
+
+**Localhost-Only Communication:**
+- Hook Server binds to `localhost:3001` by default
+- Not exposed to external network
+- Communication stays within the container/host
+
+**TLS for Production:**
+```yaml
+environment:
+  - HOOK_SERVER_TLS_ENABLED=true
+  - HOOK_SERVER_CERT_PATH=/config/ssl/hook-server-cert.pem
+  - HOOK_SERVER_KEY_PATH=/config/ssl/hook-server-key.pem
+```
+
+**Fail Secure:**
+- When Hook Server is unavailable, authorization is **denied**
+- Circuit breaker prevents cascading failures
+- Cached permissions continue to work during outages
+
+### Troubleshooting
+
+#### Hook Server Not Starting
+
+**Check logs:**
+```bash
+docker-compose logs zyncbase | grep "hook-server"
+```
+
+**Common issues:**
+- TypeScript syntax errors in hook files
+- Missing dependencies in hook files
+- Port 3001 already in use
+- Hooks directory not mounted correctly
+
+#### Authorization Always Denied
+
+**Check:**
+1. Hook Server is running: `curl http://localhost:3000/health`
+2. Circuit breaker state: Should be "closed"
+3. Hook file exports `authorize` function
+4. Hook function returns correct response format
+
+#### Hot Reload Not Working
+
+**Check:**
+1. `HOT_RELOAD=true` is set
+2. File changes are being saved
+3. No TypeScript compilation errors
+4. File watcher has permissions
+
+### Migration from Separate Hook Server
+
+If you previously ran Hook Server separately, migration is simple:
+
+**Before (separate deployment):**
+```yaml
+services:
+  zyncbase:
+    image: zyncbase/server:latest
+    environment:
+      - HOOK_SERVER_URL=ws://hook-server:3001/hooks
+  
+  hook-server:
+    image: my-custom-hook-server:latest
+    ports:
+      - "3001:3001"
+```
+
+**After (bundled):**
+```yaml
+services:
+  zyncbase:
+    image: zyncbase/server:latest
+    volumes:
+      - ./hooks:/hooks  # Just mount your hooks directory
+    environment:
+      - HOOKS_DIR=/hooks
+      - HOT_RELOAD=true
+```
+
+**Steps:**
+1. Copy your hook logic to TypeScript files in `./hooks/`
+2. Remove separate Hook Server service from docker-compose
+3. Mount hooks directory to ZyncBase container
+4. Restart ZyncBase
+
+### No Separate Deployment Needed
+
+**Key Points:**
+- ✅ Hook Server is **bundled** with ZyncBase
+- ✅ Starts **automatically** when ZyncBase starts
+- ✅ No separate container or process to manage
+- ✅ No additional ports to expose (uses localhost)
+- ✅ No separate configuration files needed
+- ✅ Hot-reload works out of the box
+- ✅ Included in ZyncBase health checks
+- ✅ Monitored via same metrics endpoint
+
+**You only need to:**
+1. Create a `./hooks/` directory
+2. Add TypeScript hook files
+3. Mount the directory to ZyncBase
+4. Start ZyncBase
+
+That's it! The Hook Server handles everything else automatically.
+
+---
+
 ## Binary Deployment
 
 ### Download Binary
