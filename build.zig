@@ -28,6 +28,7 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    linkUWS(b, exe);
     b.installArtifact(exe);
 
     // Create test step
@@ -39,6 +40,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    linkUWS(b, tests);
+
     // Apply sanitizer to tests if specified
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
@@ -49,4 +52,85 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+}
+
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
+    // Link C++ standard library for uWebSockets
+    step.linkLibCpp();
+
+    // Link system libraries
+    step.linkSystemLibrary("pthread");
+
+    // Add include paths - BoringSSL must come first to override system OpenSSL
+    step.addIncludePath(b.path("vendor/boringssl/include"));
+    step.addIncludePath(b.path("vendor/bun/packages/bun-uws/src"));
+    step.addIncludePath(b.path("vendor/bun/packages/bun-usockets/src"));
+    step.addIncludePath(b.path("vendor/bun/src/deps"));
+
+    // Link BoringSSL (built separately with CMake)
+    // We use addObjectFile directly to avoid pulling in system OpenSSL headers
+    // Note: Link order matters - decrepit depends on crypto
+    step.addObjectFile(b.path("vendor/boringssl/build/libssl.a"));
+    step.addObjectFile(b.path("vendor/boringssl/build/libdecrepit.a"));
+    step.addObjectFile(b.path("vendor/boringssl/build/libcrypto.a"));
+
+    // Add Bun's C wrapper (libuwsockets.cpp) with C++20 compilation flags
+    step.addCSourceFile(.{
+        .file = b.path("vendor/bun/src/deps/libuwsockets.cpp"),
+        .flags = &.{
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-DUWS_NO_ZLIB",
+            "-DUWS_USE_LIBDEFLATE=0",
+            "-DLIBUS_USE_OPENSSL=1",
+            "-DLIBUS_USE_BORINGSSL=1",
+            "-DWITH_BORINGSSL=1",
+            "-Wno-nullability-completeness",
+            "-I",
+            "vendor/bun/packages",
+        },
+    });
+
+    // Add uSockets implementation files from Bun
+    // Use the same defines as Bun does
+    step.addCSourceFiles(.{
+        .files = &.{
+            "vendor/bun/packages/bun-usockets/src/eventing/epoll_kqueue.c",
+            "vendor/bun/packages/bun-usockets/src/crypto/openssl.c",
+            "vendor/bun/packages/bun-usockets/src/context.c",
+            "vendor/bun/packages/bun-usockets/src/loop.c",
+            "vendor/bun/packages/bun-usockets/src/socket.c",
+            "vendor/bun/packages/bun-usockets/src/bsd.c",
+            "vendor/bun/packages/bun-usockets/src/udp.c",
+        },
+        .flags = &.{
+            "-std=c11",
+            "-DUWS_NO_ZLIB",
+            "-DUWS_USE_LIBDEFLATE=0",
+            "-DLIBUS_USE_OPENSSL=1",
+            "-DLIBUS_USE_BORINGSSL=1",
+            "-DWITH_BORINGSSL=1",
+            "-Wno-nullability-completeness",
+        },
+    });
+
+    // Add SNI tree implementation
+    step.addCSourceFile(.{
+        .file = b.path("vendor/bun/packages/bun-usockets/src/crypto/sni_tree.cpp"),
+        .flags = &.{
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-DLIBUS_USE_OPENSSL=1",
+            "-DLIBUS_USE_BORINGSSL=1",
+            "-DWITH_BORINGSSL=1",
+        },
+    });
+
+    // Add stubs for Bun-specific functions
+    step.addCSourceFile(.{
+        .file = b.path("src/uws_stubs.c"),
+        .flags = &.{ "-std=c11" },
+    });
 }

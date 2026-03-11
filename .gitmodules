@@ -1,0 +1,6 @@
+[submodule "vendor/bun"]
+	path = vendor/bun
+	url = https://github.com/oven-sh/bun.git
+[submodule "vendor/boringssl"]
+	path = vendor/boringssl
+	url = https://github.com/oven-sh/boringssl.git

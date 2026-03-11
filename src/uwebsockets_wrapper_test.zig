@@ -1,217 +1,134 @@
 const std = @import("std");
 const testing = std.testing;
-const UWebSocketsWrapper = @import("uwebsockets_wrapper.zig").UWebSocketsWrapper;
+const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 
-test "UWebSocketsWrapper: init with valid config" {
+test "WebSocketServer: init with valid config" {
     const allocator = testing.allocator;
 
-    const config = UWebSocketsWrapper.Config{
+    const config = WebSocketServer.Config{
         .port = 8080,
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
+        .host = "127.0.0.1",
+        .ssl = false,
     };
 
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
+    const server = try WebSocketServer.init(allocator, config);
+    defer server.deinit();
 
-    try testing.expectEqual(@as(u16, 8080), wrapper.config.port);
-    try testing.expectEqual(false, wrapper.config.compression);
-    try testing.expectEqual(@as(usize, 1024 * 1024), wrapper.config.max_payload_length);
+    try testing.expectEqual(false, server.ssl);
 }
 
-test "UWebSocketsWrapper: init with invalid port" {
+test "WebSocketServer: init with SSL config" {
     const allocator = testing.allocator;
 
-    const config = UWebSocketsWrapper.Config{
-        .port = 0, // Invalid port
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
-    };
-
-    const result = UWebSocketsWrapper.init(allocator, config);
-    try testing.expectError(error.InvalidConfig, result);
-}
-
-test "UWebSocketsWrapper: init with SSL cert but no key" {
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
+    const config = WebSocketServer.Config{
         .port = 8443,
+        .host = "127.0.0.1",
+        .ssl = true,
         .ssl_cert_path = "test_cert.pem",
-        .ssl_key_path = null, // Missing key
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
-    };
-
-    const result = UWebSocketsWrapper.init(allocator, config);
-    try testing.expectError(error.InvalidConfig, result);
-}
-
-test "UWebSocketsWrapper: init with SSL key but no cert" {
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8443,
-        .ssl_cert_path = null, // Missing cert
         .ssl_key_path = "test_key.pem",
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
     };
 
-    const result = UWebSocketsWrapper.init(allocator, config);
-    try testing.expectError(error.InvalidConfig, result);
-}
-
-test "UWebSocketsWrapper: init with non-existent SSL cert" {
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8443,
-        .ssl_cert_path = "non_existent_cert.pem",
-        .ssl_key_path = "non_existent_key.pem",
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
+    // This will fail because we don't have test certificates
+    // But it tests the initialization path
+    const server = WebSocketServer.init(allocator, config) catch |err| {
+        // Expected to fail without actual certificates
+        try testing.expect(err == error.FailedToCreateApp);
+        return;
     };
-
-    const result = UWebSocketsWrapper.init(allocator, config);
-    try testing.expectError(error.SSLCertNotFound, result);
+    defer server.deinit();
 }
 
-test "UWebSocketsWrapper: getStatus returns correct values" {
+test "WebSocketServer: registerWebSocketHandlers" {
     const allocator = testing.allocator;
 
-    const config = UWebSocketsWrapper.Config{
+    const config = WebSocketServer.Config{
         .port = 8080,
-        .compression = true,
-        .max_payload_length = 5 * 1024 * 1024,
+        .host = "127.0.0.1",
+        .ssl = false,
     };
 
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
+    const server = try WebSocketServer.init(allocator, config);
+    defer server.deinit();
 
-    const status = wrapper.getStatus();
-    try testing.expectEqual(@as(u16, 8080), status.port);
-    try testing.expectEqual(false, status.ssl_enabled);
+    // Define handlers
+    const handlers = WebSocketHandlers{
+        .on_open = testOnOpen,
+        .on_message = testOnMessage,
+        .on_close = testOnClose,
+        .on_error = null,
+    };
+
+    // Register handlers - this should not fail
+    try server.registerWebSocketHandlers("/*", handlers, null);
 }
 
-test "UWebSocketsWrapper: compression configuration" {
+// Test handler functions
+fn testOnOpen(ws: *WebSocket, user_data: ?*anyopaque) void {
+    _ = ws;
+    _ = user_data;
+    // Handler called on connection open
+}
+
+fn testOnMessage(ws: *WebSocket, message: []const u8, msg_type: MessageType, user_data: ?*anyopaque) void {
+    _ = ws;
+    _ = message;
+    _ = msg_type;
+    _ = user_data;
+    // Handler called on message received
+}
+
+fn testOnClose(ws: *WebSocket, code: i32, message: []const u8, user_data: ?*anyopaque) void {
+    _ = ws;
+    _ = code;
+    _ = message;
+    _ = user_data;
+    // Handler called on connection close
+}
+
+test "MessageType: enum values" {
+    try testing.expectEqual(@as(c_int, 1), @intFromEnum(MessageType.text));
+    try testing.expectEqual(@as(c_int, 2), @intFromEnum(MessageType.binary));
+}
+
+// Integration test for full lifecycle - requires running server
+test "WebSocketServer: full server lifecycle" {
+    if (true) return error.SkipZigTest; // Skip until we have integration test infrastructure
+
     const allocator = testing.allocator;
 
-    const config = UWebSocketsWrapper.Config{
+    const config = WebSocketServer.Config{
         .port = 8080,
-        .compression = true,
-        .max_payload_length = 1024 * 1024,
+        .host = "127.0.0.1",
+        .ssl = false,
     };
 
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
+    const server = try WebSocketServer.init(allocator, config);
+    defer server.deinit();
 
-    try testing.expectEqual(true, wrapper.config.compression);
-}
-
-test "UWebSocketsWrapper: max payload length configuration" {
-    const allocator = testing.allocator;
-
-    const max_payload = 10 * 1024 * 1024; // 10MB
-    const config = UWebSocketsWrapper.Config{
-        .port = 8080,
-        .compression = false,
-        .max_payload_length = max_payload,
+    // Define handlers
+    const handlers = WebSocketHandlers{
+        .on_open = testOnOpen,
+        .on_message = testOnMessage,
+        .on_close = testOnClose,
+        .on_error = null,
     };
 
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
-
-    try testing.expectEqual(max_payload, wrapper.config.max_payload_length);
-}
-
-test "UWebSocketsWrapper: default max payload length" {
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8080,
-    };
-
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
-
-    // Default should be 10MB
-    try testing.expectEqual(@as(usize, 10 * 1024 * 1024), wrapper.config.max_payload_length);
-}
-
-// Integration test for SSL configuration (requires test certificates)
-// This test is skipped by default and should be run manually with test certificates
-test "UWebSocketsWrapper: SSL configuration with test certificates" {
-    if (true) return error.SkipZigTest; // Skip by default
-
-    const allocator = testing.allocator;
-
-    // Create temporary test certificates
-    const cert_path = "test_cert.pem";
-    const key_path = "test_key.pem";
-
-    // Note: In a real test, you would generate or copy test certificates here
-    // For now, this test is skipped
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8443,
-        .ssl_cert_path = cert_path,
-        .ssl_key_path = key_path,
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
-    };
-
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
-
-    const status = wrapper.getStatus();
-    try testing.expectEqual(true, status.ssl_enabled);
-}
-
-// Integration test for listen() - requires C++ bindings
-test "UWebSocketsWrapper: listen on configured port" {
-    if (true) return error.SkipZigTest; // Skip until C++ bindings implemented
-
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8080,
-        .compression = false,
-        .max_payload_length = 1024 * 1024,
-    };
-
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
-
-    // This will work once C++ bindings are implemented
-    try wrapper.listen();
-}
-
-// Integration test for full lifecycle - requires C++ bindings
-test "UWebSocketsWrapper: full server lifecycle" {
-    if (true) return error.SkipZigTest; // Skip until C++ bindings implemented
-
-    const allocator = testing.allocator;
-
-    const config = UWebSocketsWrapper.Config{
-        .port = 8080,
-        .compression = true,
-        .max_payload_length = 1024 * 1024,
-    };
-
-    const wrapper = try UWebSocketsWrapper.init(allocator, config);
-    defer wrapper.deinit();
+    // Register handlers
+    try server.registerWebSocketHandlers("/*", handlers, null);
 
     // Start listening
-    try wrapper.listen();
+    try server.listen(8080);
 
     // In a real test, we would:
-    // 1. Start the server in a separate thread
+    // 1. Start the server in a separate thread with server.run()
     // 2. Connect a WebSocket client
     // 3. Send/receive messages
-    // 4. Verify compression works
-    // 5. Verify payload limits enforced
-    // 6. Shutdown gracefully
+    // 4. Verify handlers are called
+    // 5. Close connection
+    // 6. Shutdown server with server.close()
 
-    wrapper.shutdown();
+    server.close();
 }

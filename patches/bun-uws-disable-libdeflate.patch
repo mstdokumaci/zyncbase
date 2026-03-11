@@ -1,0 +1,28 @@
+diff --git a/packages/bun-uws/src/PerMessageDeflate.h b/packages/bun-uws/src/PerMessageDeflate.h
+index e4ebaf0ac5..f02f9367c7 100644
+--- a/packages/bun-uws/src/PerMessageDeflate.h
++++ b/packages/bun-uws/src/PerMessageDeflate.h
+@@ -20,7 +20,9 @@
+ #ifndef UWS_PERMESSAGEDEFLATE_H
+ #define UWS_PERMESSAGEDEFLATE_H
+ 
+-#define UWS_USE_LIBDEFLATE 1
++//#if !defined(UWS_USE_LIBDEFLATE)
++//#define UWS_USE_LIBDEFLATE 1
++//#endif
+ 
+ #include <cstdint>
+ #include <cstring>
+@@ -71,10 +73,12 @@ namespace uWS {
+ #include <string>
+ #include <optional>
+ 
++#if 0
+ #ifdef UWS_USE_LIBDEFLATE
+ #include "libdeflate.h"
+ #include <cstring>
+ #endif
++#endif
+ 
+ namespace uWS {
+ 
