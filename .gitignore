@@ -2,3 +2,4 @@
 .env
 .kiro
 .zig-cache
+.serena
