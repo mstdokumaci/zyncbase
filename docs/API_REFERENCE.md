@@ -304,9 +304,19 @@ const events = await client.store.query('events', {
     status: { eq: 'active' }
   },
   orderBy: { created_at: 'desc' },
-  limit: 50,
-  offset: 0
+  limit: 50
 })
+
+// It's a normal array!
+console.log(events.length) 
+
+// Load next page using the attached cursor
+if (events.nextCursor) {
+  const nextPage = await client.store.query('events', {
+    after: events.nextCursor,
+    limit: 50
+  })
+}
 
 // Check if username exists (validation)
 const existing = await client.store.query('users', {
@@ -320,10 +330,10 @@ const isAvailable = existing.length === 0
 - `options` (object) - Query options
   - `where` (object) - Filter conditions
   - `orderBy` (object) - Sort order
-  - `limit` (number) - Max results
-  - `offset` (number) - Skip results
+  - `limit` (number) - Max results to return
+  - `after` (string) - Opaque token for the next page (cursor)
 
-**Returns:** `Promise<Array>` - Array of matching items
+**Returns:** `Promise<Array & { nextCursor: string | null }>` - A standard JavaScript Array with an additional `nextCursor` property attached.
 
 ---
 
@@ -333,15 +343,19 @@ Subscribe to filtered query results (real-time).
 
 ```typescript
 // Subscribe to filtered results
-const unsubscribe = client.store.subscribe('tasks', {
+const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
   where: { 
     project_id: { eq: currentProject },
     status: { eq: 'active' }
   },
-  orderBy: { created_at: 'desc' }
+  orderBy: { created_at: 'desc' },
+  limit: 50
 }, (tasks) => {
   renderTaskList(tasks)
 })
+
+// Load older history into the live view
+if (hasMore) await loadMore()
 
 // Cleanup
 unsubscribe()
@@ -373,7 +387,7 @@ For detailed documentation on query operators, combining conditions, sorting, an
 
 **Sorting and pagination:**
 - `orderBy: { field: 'asc' | 'desc' }`
-- `limit` and `offset` for pagination
+- `limit` and `after` for pagination
 
 ---
 
@@ -802,9 +816,29 @@ function ConnectionBanner() {
 }
 ```
 
+**Infinite Scroll Feed Example:**
+
+```tsx
+import { useQuery } from '@zyncbase/react'
+
+function ActivityFeed() {
+  const { data, hasMore, loadMore, loadingMore } = useQuery('activities', {
+    orderBy: { created_at: 'desc' },
+    limit: 20
+  })
+
+  return (
+    <ScrollArea onBottomReached={() => hasMore && loadMore()}>
+      {data.map(item => <ActivityItem key={item.id} {...item} />)}
+      {loadingMore && <LoadingSpinner />}
+    </ScrollArea>
+  )
+}
+```
+
 **Hooks:**
 - `useStore(path)` - Subscribe to store path
-- `useQuery(path, options)` - Subscribe to query results
+- `useQuery(path, options)` - Subscribe to query results. Returns `{ data, loading, error, hasMore, loadMore, loadingMore }`. Note: `data` here is the `Page<T>` array.
 - `usePresence()` - Subscribe to presence updates
 - `useConnectionStatus()` - Reactive connection state
 

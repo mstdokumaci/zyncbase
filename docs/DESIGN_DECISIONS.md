@@ -52,7 +52,7 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 | OR operator | `OR: [...]` | `or: [...]` | Consistent lowercase |
 | Equality | `equals: value` | `eq: value` | Shorter, clearer |
 | Not equal | `not: value` | `ne: value` | Explicit operator |
-| Pagination | `take`/`skip` | `limit`/`offset` | Standard SQL terms |
+| Pagination | `take`/`skip` | `limit`/`after` | Standard SQL terms + Cursor |
 
 ### Comparison with alternatives
 
@@ -546,7 +546,7 @@ ZyncBase supports real-time subscriptions (`store.subscribe()`, `store.query()`)
 1. **Fine-Grained Observation**: ZyncBase will exclusively use a fine-grained change detection strategy. We explicitly reject "Table-Grained" reactivity (re-running all queries on any change) due to its O(N) scaling issues with many subscribers.
 2. **In-Memory AST Evaluation**: Subscription invalidation happens entirely in RAM. The Writer thread emits a delta containing the updated row. The `SubscriptionManager` evaluates this row against the AST filters of every active subscription for that table.
 3. **Optimistic Delta Pushes**: If a row change causes a query's result set to change (a row enters, leaves, or is updated within the set), the server pushes only the delta to the client, entirely bypassing SQLite for the update cycle.
-4. **Subscription Dirtying**: If a change *might* affect a complex sort order or offset, the subscription is marked "dirty" and a re-execution may be scheduled, but the primary path is in-memory filter matching.
+4. **Subscription Dirtying**: If a change *might* affect a complex sort order or the active window, the subscription is marked "dirty" and a re-execution may be scheduled, but the primary path is in-memory filter matching.
 
 **Rationale**:
 - **Scaling**: ZyncBase is designed for high-concurrency real-time apps. Re-running 10,000 SQL queries for every write is not viable.

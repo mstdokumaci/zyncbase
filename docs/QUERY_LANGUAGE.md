@@ -26,7 +26,8 @@ ZyncBase's query language is inspired by Prisma with improvements:
 - **Explicit `or`** - Use `or` key for OR conditions
 - **Short operator names** - `eq`, `gte` (not `equals`, `greaterThanOrEqual`)
 - **Consistent lowercase** - All operators and keywords in lowercase
-- **Standard SQL terms** - `limit`/`offset` (not `take`/`skip`)
+- **Standard SQL terms** - `limit` (not `take`)
+- **Cursor-based pagination** - Use `after` for stable real-time navigation
 
 ---
 
@@ -254,59 +255,54 @@ You can have multiple conditions with OR groups:
 
 ## Pagination
 
+ZyncBase uses **cursor-based pagination** to ensure data consistency in real-time environments. Offset-based pagination is not supported as it causes skipped or duplicated items when data is inserted while a user is scrolling.
+
 ### Basic Pagination
 
 ```typescript
 {
   limit: 50,      // Max results to return
-  offset: 0       // Skip first N results
+  after: '...'    // Opaque token from previous nextCursor
 }
+```
+
+### Flow
+
+1. Execute initial query with `limit`.
+2. Save the `nextCursor` value from the result.
+3. Pass that `nextCursor` as the `after` parameter for the next page.
+
+```typescript
+// Page 1
+const items = await client.store.query('items', { 
+  limit: 20 
+})
+
+// Page 2
+const page2 = await client.store.query('items', {
+  limit: 20,
+  after: items.nextCursor 
+})
 ```
 
 ---
 
-### Page-based Pagination
+### Infinite Scroll Subscriptions
+
+When subscribing to a query, ZyncBase manages a live window. You can load older data into this window without breaking the real-time sync.
 
 ```typescript
-// Page 1 (first 20 items)
-{
-  limit: 20,
-  offset: 0
-}
-
-// Page 2 (items 21-40)
-{
-  limit: 20,
-  offset: 20
-}
-
-// Page 3 (items 41-60)
-{
-  limit: 20,
-  offset: 40
-}
-```
-
-**Formula:** `offset = (page - 1) * limit`
-
----
-
-### Infinite Scroll
-
-```typescript
-// Load first batch
-const items = await client.store.query('items', {
+const sub = client.store.subscribe('items', {
   orderBy: { created_at: 'desc' },
-  limit: 20,
-  offset: 0
+  limit: 20
+}, (items) => {
+  render(items)
 })
 
-// Load next batch
-const moreItems = await client.store.query('items', {
-  orderBy: { created_at: 'desc' },
-  limit: 20,
-  offset: 20
-})
+// Load 20 more historical items into the 'items' array
+if (sub.hasMore) {
+  await sub.loadMore()
+}
 ```
 
 ---

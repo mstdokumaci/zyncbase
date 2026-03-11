@@ -260,7 +260,7 @@ Execute a one-off filtered query (non-real-time).
   },
   "orderBy": { "created_at": "desc" },
   "limit":   50,
-  "offset":  0
+  "after":   "eyJpZCI6... "
 }
 ```
 
@@ -268,9 +268,10 @@ Execute a one-off filtered query (non-real-time).
 
 ```
 {
-  "type":  "ok",
-  "id":    6,
-  "value": [ ... ]    // Array of matching items
+  "type":       "ok",
+  "id":         6,
+  "value":      [ ... ],    // Array of matching items
+  "nextCursor": "eyJpZCI6... " // Opaque token for next page, null if end
 }
 ```
 
@@ -286,7 +287,8 @@ Subscribe to a filtered query's results in real-time.
   "id":      7,
   "path":    ["tasks"],
   "where":   { "status": { "eq": "active" } },
-  "orderBy": { "created_at": "desc" }
+  "orderBy": { "created_at": "desc" },
+  "limit":   50
 }
 ```
 
@@ -294,11 +296,29 @@ Subscribe to a filtered query's results in real-time.
 
 ```
 {
-  "type":  "ok",
-  "id":    7,
-  "subId": "sub-def-456",
-  "value": [ ... ]
+  "type":       "ok",
+  "id":         7,
+  "subId":      "sub-def-456",
+  "value":      [ ... ],
+  "hasMore":    true
 }
+```
+
+#### `StoreLoadMore`
+
+Request more historical data for an active subscription.
+
+```
+{
+  "type":  "StoreLoadMore",
+  "id":    8,
+  "subId": "sub-def-456"
+}
+```
+
+**Response** (`type: "ok"`):
+
+The server responds with an `ok` message for the request, and then pushes a `StoreDelta` containing the additional items.
 ```
 
 After subscription, the server pushes `StoreDelta` messages when the query result set changes.
@@ -760,8 +780,9 @@ Sent when `auth.json` delegates a rule to the hook server.
 | C→S | `StoreBatch` | `store.batch(ops)` | `ok` |
 | C→S | `StoreSubscribe` | `store.subscribe(path, cb)` | `ok` with `subId` + `value` |
 | C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
-| C→S | `StoreQuery` | `store.query(path, opts)` | `ok` with `value` |
-| C→S | `StoreQuerySubscribe` | `store.subscribe(path, opts, cb)` | `ok` with `subId` + `value` |
+| C→S | `StoreQuery` | `store.query(path, opts)` | `ok` with `value` + `nextCursor` |
+| C→S | `StoreQuerySubscribe` | `store.subscribe(path, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
+| C→S | `StoreLoadMore` | `subscription.loadMore()` | `ok` followed by `StoreDelta` |
 | C→S | `PresenceSet` | `presence.set(data)` | `ok` |
 | C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId` + `users` |
 | C→S | `PresenceUnsubscribe` | (unsubscribe function) | `ok` |

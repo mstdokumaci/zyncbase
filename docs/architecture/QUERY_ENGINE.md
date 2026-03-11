@@ -22,7 +22,7 @@ const Query = struct {
     filters: []Filter,
     sort: ?Sort,
     limit: ?usize,
-    offset: ?usize,
+    after: ?[]const u8, // Opaque token (base64 encoded cursor)
 };
 
 const Filter = struct {
@@ -85,7 +85,7 @@ const Sort = struct {
 │  4. Apply Filters                               │
 │     - Filter results                            │
 │     - Sort results                              │
-│     - Apply limit/offset                        │
+│     - Apply limit and cursor (after)            │
 └─────────────────────────────────────────────────┘
                     │
                     ▼
@@ -143,8 +143,9 @@ const QueryEngine = struct {
             try std.fmt.format(buf.writer(), " LIMIT {}", .{limit});
         }
         
-        if (query.offset) |offset| {
-            try std.fmt.format(buf.writer(), " OFFSET {}", .{offset});
+        if (query.after) |after| {
+            // Implementation detail: Decode after token and apply WHERE filters
+            try self.appendCursorFilters(&buf, after);
         }
         
         return buf.toOwnedSlice();
