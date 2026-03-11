@@ -66,6 +66,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     step.addIncludePath(b.path("vendor/bun/packages/bun-uws/src"));
     step.addIncludePath(b.path("vendor/bun/packages/bun-usockets/src"));
     step.addIncludePath(b.path("vendor/bun/src/deps"));
+    step.addIncludePath(b.path("src")); // For uws_wrapper.h
 
     // Link BoringSSL (built separately with CMake)
     // We use addObjectFile directly to avoid pulling in system OpenSSL headers
@@ -131,6 +132,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     // Add stubs for Bun-specific functions
     step.addCSourceFile(.{
         .file = b.path("src/uws_stubs.c"),
-        .flags = &.{ "-std=c11" },
+        .flags = &.{"-std=c11"},
     });
 }

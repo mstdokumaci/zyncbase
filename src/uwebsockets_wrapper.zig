@@ -2,19 +2,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // C imports for Bun's uWebSockets wrapper
-// Reference: vendor/bun/src/deps/libuwsockets.cpp and _libusockets.h
+// Using our wrapper header to avoid C++ enum issues
 const c = @cImport({
-    @cInclude("_libusockets.h");
+    @cInclude("uws_wrapper.h");
 });
 
-// External C functions from libuwsockets.cpp
-extern "C" fn uws_create_app(ssl: c_int, options: c.struct_us_bun_socket_context_options_t) ?*c.uws_app_t;
-extern "C" fn uws_app_run(ssl: c_int, app: *c.uws_app_t) void;
-extern "C" fn uws_app_listen(ssl: c_int, app: *c.uws_app_t, port: c_int, handler: c.uws_listen_handler, user_data: ?*anyopaque) void;
-extern "C" fn uws_ws(ssl: c_int, app: *c.uws_app_t, upgrade_context: ?*anyopaque, pattern: [*c]const u8, pattern_length: usize, id: usize, behavior: *const c.uws_socket_behavior_t) void;
-extern "C" fn uws_ws_send(ssl: c_int, ws: *c.uws_websocket_t, message: [*c]const u8, length: usize, opcode: c.uws_opcode_t) c.uws_sendstatus_t;
-extern "C" fn uws_ws_close(ssl: c_int, ws: *c.uws_websocket_t) void;
-extern "C" fn uws_ws_get_user_data(ssl: c_int, ws: *c.uws_websocket_t) ?*anyopaque;
+// Note: We don't need extern declarations since they're in the header
+// The actual implementations are in libuwsockets.cpp which is linked by build.zig
 
 /// WebSocket server wrapper using Bun's uWebSockets C API
 pub const WebSocketServer = struct {
@@ -36,6 +30,7 @@ pub const WebSocketServer = struct {
         FailedToCreateApp,
         ListenFailed,
         InvalidConfig,
+        OutOfMemory,
     };
 
     /// Initialize WebSocket server
@@ -46,8 +41,8 @@ pub const WebSocketServer = struct {
 
         // Create uWebSockets app using Bun's wrapper
         // For now, pass empty SSL options (will be enhanced later for SSL support)
-        const ssl_options = std.mem.zeroes(c.struct_us_bun_socket_context_options_t);
-        const app = uws_create_app(
+        const ssl_options = std.mem.zeroes(c.us_bun_socket_context_options_t);
+        const app = c.uws_create_app(
             if (config.ssl) 1 else 0,
             ssl_options,
         );
@@ -92,7 +87,7 @@ pub const WebSocketServer = struct {
 
         // Create behavior struct with WebSocket configuration
         var behavior = std.mem.zeroes(c.uws_socket_behavior_t);
-        behavior.compression = c.DISABLED;
+        behavior.compression = c.UWS_COMPRESS_DISABLED;
         behavior.maxPayloadLength = 10 * 1024 * 1024; // 10MB
         behavior.idleTimeout = 120; // 2 minutes
         behavior.maxBackpressure = 64 * 1024; // 64KB
@@ -110,7 +105,7 @@ pub const WebSocketServer = struct {
         behavior.pong = null; // Not used for MVP
 
         // Register WebSocket route with uWebSockets
-        uws_ws(
+        c.uws_ws(
             if (self.ssl) 1 else 0,
             self.app,
             self, // Pass server as upgrade context to access handlers
@@ -125,7 +120,7 @@ pub const WebSocketServer = struct {
     /// Requirements: 2.5
     pub fn listen(self: *WebSocketServer, port: u16) !void {
         // Use uws_app_listen to start listening
-        uws_app_listen(
+        c.uws_app_listen(
             if (self.ssl) 1 else 0,
             self.app,
             port,
@@ -137,7 +132,7 @@ pub const WebSocketServer = struct {
     /// Run the event loop (blocks until shutdown)
     /// Requirements: 2.6
     pub fn run(self: *WebSocketServer) void {
-        uws_app_run(if (self.ssl) 1 else 0, self.app);
+        c.uws_app_run(if (self.ssl) 1 else 0, self.app);
     }
 
     /// Close the server gracefully
@@ -157,11 +152,11 @@ pub const WebSocket = struct {
     /// Send a message through the WebSocket
     pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) void {
         const opcode: c.uws_opcode_t = switch (msg_type) {
-            .text => c.TEXT,
-            .binary => c.BINARY,
+            .text => c.UWS_OPCODE_TEXT,
+            .binary => c.UWS_OPCODE_BINARY,
         };
 
-        _ = uws_ws_send(
+        _ = c.uws_ws_send(
             if (self.ssl) 1 else 0,
             self.ws,
             message.ptr,
@@ -172,12 +167,12 @@ pub const WebSocket = struct {
 
     /// Close the WebSocket connection
     pub fn close(self: *WebSocket) void {
-        uws_ws_close(if (self.ssl) 1 else 0, self.ws);
+        c.uws_ws_close(if (self.ssl) 1 else 0, self.ws);
     }
 
     /// Get user data associated with this WebSocket
     pub fn getUserData(self: *WebSocket) ?*anyopaque {
-        return uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws);
+        return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws);
     }
 
     /// Set user data for this WebSocket
@@ -210,7 +205,7 @@ pub const WebSocketHandlers = struct {
 var global_server: ?*WebSocketServer = null;
 
 /// Listen callback - called when server starts listening
-fn listenCallback(listen_socket: ?*anyopaque, user_data: ?*anyopaque) callconv(.C) void {
+fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*anyopaque) callconv(.c) void {
     _ = listen_socket;
     _ = user_data;
     // Server is now listening
@@ -219,7 +214,7 @@ fn listenCallback(listen_socket: ?*anyopaque, user_data: ?*anyopaque) callconv(.
 
 /// C callback wrapper for WebSocket open event
 /// Requirements: 2.9
-fn onOpenCallback(ws: ?*c.uws_websocket_t) callconv(.C) void {
+fn onOpenCallback(ws: ?*c.uws_websocket_t) callconv(.c) void {
     if (ws == null) return;
 
     // Get server context from global (set during registerWebSocketHandlers)
@@ -244,7 +239,7 @@ fn onMessageCallback(
     message: [*c]const u8,
     length: usize,
     opcode: c.uws_opcode_t,
-) callconv(.C) void {
+) callconv(.c) void {
     if (ws == null or message == null) return;
 
     // Get server context
@@ -261,8 +256,8 @@ fn onMessageCallback(
 
     // Determine message type
     const msg_type: MessageType = switch (opcode) {
-        c.TEXT => .text,
-        c.BINARY => .binary,
+        c.UWS_OPCODE_TEXT => .text,
+        c.UWS_OPCODE_BINARY => .binary,
         else => .binary,
     };
 
@@ -279,7 +274,7 @@ fn onCloseCallback(
     code: c_int,
     message: [*c]const u8,
     length: usize,
-) callconv(.C) void {
+) callconv(.c) void {
     if (ws == null) return;
 
     // Get server context
