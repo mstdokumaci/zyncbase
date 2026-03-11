@@ -196,46 +196,36 @@ const SubscriptionManager = struct {
         }
     }
 };
-```
 
 ### Change Detection
 
-**Two strategies:**
+ZyncBase uses a **Fine-Grained Observation** strategy to ensure sub-100ms real-time sync without overloading the SQLite reader pool.
 
-**1. Table-Grained Reactivity** (Simple)
-- Re-run query whenever any data in the path changes
-- Easy to implement
-- Can be inefficient with many subscriptions
-
-**2. Fine-Grained Observation** (Efficient)
-- Track which specific items changed
-- Only re-run queries that might be affected
-- More complex but much more efficient
+**Strategy: Fine-Grained Observation (ADR-018)**
+- The Writer thread emits a change event: `(table, id, operation, old_row, new_row)`.
+- The `SubscriptionManager` evaluates the `new_row` against active subscription filters *in memory*.
+- **No SQLite queries are re-run** during the broadcast phase for standard filter matches.
+- Updates are pushed to clients only if the row specifically matching their query has changed.
 
 ### Fine-Grained Implementation
 
+The notification pipeline operates entirely in RAM:
+
 ```zig
-pub fn notify(self: *SubscriptionManager, namespace: []const u8, changed_ids: []const []const u8) !void {
-    const subs = self.namespace_index.get(namespace) orelse return;
+pub fn notify(self: *SubscriptionManager, table: []const u8, changed_id: []const u8, new_row: json.Value) !void {
+    const subs = self.table_index.get(table) orelse return;
     
     for (subs.items) |sub_id| {
         const sub = self.subscriptions.get(sub_id).?;
         
-        // Check if any changed IDs match this subscription's query
-        if (try self.affectsSubscription(sub, changed_ids)) {
-            // Re-execute query
-            const new_result = try self.query_engine.execute(sub.query);
-            
-            // Check if result actually changed
-            if (!std.mem.eql(u8, new_result, sub.last_result)) {
-                // Send update to client
-                try self.sendUpdate(sub.connection_id, new_result);
-                sub.last_result = new_result;
-            }
+        // Evaluate filters in RAM (no SQLite)
+        if (try self.evaluator.matches(new_row, sub.query.filters)) {
+            // Push individual delta to client
+            try self.sendDelta(sub.connection_id, sub_id, new_row);
         }
     }
 }
-
+```
 fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_ids: []const []const u8) !bool {
     // If subscription has no filters, any change affects it
     if (sub.query.filters.len == 0) {

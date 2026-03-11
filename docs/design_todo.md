@@ -15,8 +15,8 @@ Items requiring dedicated design work before implementation. Each item should re
 **Decision**: Minimum 500 operations per batch, strict atomicity (all-or-nothing), optimized wire format `[op, path, value]`.
 
 ### 3. Real-time Subscription Invalidation Strategy
-**Why**: QUERY_ENGINE.md describes two approaches (table-grained vs fine-grained) but doesn't commit.
-**Decision needed**: Which strategy to implement, performance implications, fallback behavior.
+**Status**: Done. See `ADR-018` in `DESIGN_DECISIONS.md`.
+**Decision**: Fine-Grained Observation. In-memory evaluation of AST filters against write deltas to skip SQLite re-execution.
 
 ### 4. Connection Status API
 **Why**: Developers need observable connection state for UI feedback.
@@ -40,12 +40,8 @@ Items requiring dedicated design work before implementation. Each item should re
 **Status**: Scoped out of v1. Design only when revisited.
 
 ### 8. Data Structure & Primary Key Conventions
-**Why**: The wire protocol needs a canonical format for data access, and the client SDK return types must be completely consistent.
-**Decision needed**: Formalize the Relational-Document Hybrid Model:
-- Canonical path format for wire protocol is `['Table', 'PrimaryKey', 'Column(s)']`.
-- SDK must parse dot-notation strings into this array format before transmission.
-- Return types: Collections as Arrays, Documents as Objects, Properties as Scalars.
-- Presence: Always return Arrays for `getAll` and `subscribe`, injecting `userId` into items.
+**Status**: Done. See `ADR-017` in `DESIGN_DECISIONS.md`.
+**Decision**: Canonical paths are arrays `['table', 'id', ...fields]`, SDK handles dot-notation sugar, return types mapped by depth (Array/Object/Scalar).
 
 ---
 
@@ -53,13 +49,11 @@ Items requiring dedicated design work before implementation. Each item should re
 
 | # | Item | Status | Decision Document |
 |---|------|--------|-------------------|
-md#adr-015-conflict-resolution-strategy) |
 | 1 | Error Taxonomy | ✅ Done | `ERROR_TAXONOMY.md` |
 | 2 | Batch Operations API | ✅ Done | `BATCH_OPERATIONS.md` |
-| 3 | Subscription Invalidation | ❌ Not started | — |
+| 3 | Subscription Invalidation | ✅ Done | [ADR-018](DESIGN_DECISIONS.md#adr-018-fine-grained-subscription-invalidation) |
 | 4 | Connection Status API | ❌ Not started | — |
 | 5 | Cursor-based Pagination | ❌ Not started | — |
-md#adr-016-query-api-mvp-scope) |
-| 6 | Config Extensibility | ❌ Not started | — |
-| 7 | Offline Support | 🔒 Scoped out of v1 | — |
-| 8 | Data Structure & Primary Key Conventions | ❌ Not started | — |
+| 6 | Binary Delta Sync | ❌ Not started | — |
+| 7 | Offline Support | ❌ Scoped out | — |
+| 8 | Data Structure & PK | ✅ Done | [ADR-017](DESIGN_DECISIONS.md#adr-017-relational-document-hybrid-path-conventions) |

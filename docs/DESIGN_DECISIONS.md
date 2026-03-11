@@ -512,6 +512,53 @@ The following items were previously listed as "Open Questions" and have now been
 
 ---
 
+### ADR-017: Relational-Document Hybrid Path Conventions
+
+**Context**:
+ZyncBase stores relational data in SQLite but exposes a document-like API to the client. We need a path format that can unambiguously identify tables, rows (by Primary Key), and deeply nested JSON properties.
+
+**Decision**:
+1. **Canonical Wire Format**: The canonical representation of a path in the wire protocol is an **Array of strings**: `['table', 'id', ...fields]`.
+2. **Infinite Depth**: The format supports arbitrary nesting: `['users', '123', 'profile', 'settings', 'theme']`. The first element is the table name, the second is the string Primary Key, and subsequent elements are keys within the JSON column.
+3. **SDK Convenience**: The client SDK accepts dot-notation strings (e.g., `'users.123.name'`) and automatically splits them into the canonical array format before transmission.
+4. **Return Type Mapping**:
+   - **Depth 1 (Table)**: Returns an `Array` of objects.
+   - **Depth 2 (Row)**: Returns an `Object`.
+   - **Depth 3+ (Property)**: Returns a `Scalar` value or a nested JSON `Object`.
+5. **Presence Injection**: When returned via `getAll()` or `subscribe()`, presence items are always returned as an `Array`, with the `userId` automatically injected into the item object.
+
+**Rationale**:
+- **Ambiguity Prevention**: Dot-notation is ambiguous if an ID or key contains a literal dot. Arrays eliminate the need for complex escaping.
+- **SQLite Performance**: The `[table, id]` prefix maps directly to a `SELECT * FROM table WHERE id = ?` lookup, ensuring O(1) row location.
+- **Developer Experience**: Maintaining "everything is a path" simplicity while keeping the efficiency of a relational backend.
+
+- ✅ High-performance row lookups in Zig.
+
+---
+
+### ADR-018: Fine-Grained Subscription Invalidation
+
+**Context**:
+ZyncBase supports real-time subscriptions (`store.subscribe()`, `store.query()`). When data in a table changes, the server must determine which active subscriptions are affected and push updates to the corresponding clients.
+
+**Decision**:
+1. **Fine-Grained Observation**: ZyncBase will exclusively use a fine-grained change detection strategy. We explicitly reject "Table-Grained" reactivity (re-running all queries on any change) due to its O(N) scaling issues with many subscribers.
+2. **In-Memory AST Evaluation**: Subscription invalidation happens entirely in RAM. The Writer thread emits a delta containing the updated row. The `SubscriptionManager` evaluates this row against the AST filters of every active subscription for that table.
+3. **Optimistic Delta Pushes**: If a row change causes a query's result set to change (a row enters, leaves, or is updated within the set), the server pushes only the delta to the client, entirely bypassing SQLite for the update cycle.
+4. **Subscription Dirtying**: If a change *might* affect a complex sort order or offset, the subscription is marked "dirty" and a re-execution may be scheduled, but the primary path is in-memory filter matching.
+
+**Rationale**:
+- **Scaling**: ZyncBase is designed for high-concurrency real-time apps. Re-running 10,000 SQL queries for every write is not viable.
+- **Predictability**: By restricting the Query API (ADR-016), we guarantee that filter evaluation in RAM is O(1) or O(log N) per subscription.
+- **Latency**: Sub-100ms sync requires avoiding the disk/SQLite read loop during the broadcast phase.
+
+**Consequences**:
+- ✅ Massive throughput for real-time broadcasts.
+- ✅ predictable CPU usage even with 10k+ active subscribers.
+- ⚠️ Higher complexity in the `SubscriptionManager` (requires a robust in-memory filter evaluator in Zig).
+
+---
+
 ## Open Design Work
 
 For items still requiring dedicated design work, see [design_todo.md](./design_todo.md).
