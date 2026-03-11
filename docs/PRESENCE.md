@@ -257,11 +257,11 @@ const unsubscribe = client.presence.subscribe((users) => {
 unsubscribe()
 ```
 
-### Clear Presence
+### Remove Presence
 
 ```typescript
-// Clear your presence (called automatically on disconnect)
-client.presence.clear()
+// Remove your presence (called automatically on disconnect)
+client.presence.remove()
 ```
 
 ---

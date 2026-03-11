@@ -510,12 +510,12 @@ When you join a presence namespace, you receive the last 5 seconds of presence u
 
 ---
 
-#### `presence.clear()`
+#### `presence.remove()`
 
-Clear your presence data (called automatically on disconnect).
+Remove your presence data (called automatically on disconnect).
 
 ```typescript
-client.presence.clear()
+client.presence.remove()
 ```
 
 ---
