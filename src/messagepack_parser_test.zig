@@ -1,4 +1,6 @@
 const std = @import("std");
+
+
 const testing = std.testing;
 const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
 
@@ -118,11 +120,11 @@ test "MessagePack parser: max depth exceeded" {
     const result = parser.parse(&data);
     if (result) |val| {
         parser.freeValue(val);
-        std.debug.print("UNEXPECTED SUCCESS: parsed deep nesting that should have been rejected (depth={d})\n", .{2});
+        std.log.debug("UNEXPECTED SUCCESS: parsed deep nesting that should have been rejected (depth={d})", .{2});
         return error.UnexpectedSuccess;
     } else |err| {
         if (err != error.MaxDepthExceeded) {
-            std.debug.print("UNEXPECTED ERROR: expected MaxDepthExceeded, got {s}\n", .{@errorName(err)});
+            std.log.debug("UNEXPECTED ERROR: expected MaxDepthExceeded, got {s}", .{@errorName(err)});
             return err;
         }
     }

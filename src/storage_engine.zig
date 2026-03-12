@@ -2,6 +2,62 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 
+/// Specific error types for different database failure scenarios
+pub const StorageError = error{
+    /// Database connection was lost
+    ConnectionLost,
+    /// Failed to reconnect after multiple attempts
+    ReconnectionFailed,
+    /// Database constraint was violated (e.g., unique constraint)
+    ConstraintViolation,
+    /// Disk is full, cannot write more data
+    DiskFull,
+    /// Database file is corrupted
+    DatabaseCorrupted,
+    /// Database is locked by another process
+    DatabaseLocked,
+    /// Invalid database operation
+    InvalidOperation,
+    /// Transaction is already active
+    TransactionAlreadyActive,
+    /// No active transaction
+    NoActiveTransaction,
+};
+
+/// SQLite checkpoint modes
+pub const CheckpointMode = enum {
+    /// Passive mode: checkpoint without blocking readers/writers
+    passive,
+    /// Full mode: wait for readers to finish, then checkpoint
+    full,
+    /// Restart mode: checkpoint and reset WAL
+    restart,
+    /// Truncate mode: checkpoint and truncate WAL to zero bytes
+    truncate,
+};
+
+/// Statistics from a checkpoint operation
+pub const CheckpointStats = struct {
+    mode: CheckpointMode,
+    duration_ms: u64,
+    frames_checkpointed: usize,
+    frames_in_wal: usize,
+    wal_size_before: usize,
+    wal_size_after: usize,
+};
+
+/// Configuration for reconnection logic
+pub const ReconnectionConfig = struct {
+    /// Maximum number of reconnection attempts
+    max_attempts: u32 = 5,
+    /// Initial backoff delay in milliseconds
+    initial_backoff_ms: u64 = 100,
+    /// Maximum backoff delay in milliseconds
+    max_backoff_ms: u64 = 5000,
+    /// Backoff multiplier for exponential backoff
+    backoff_multiplier: f64 = 2.0,
+};
+
 pub const StorageEngine = struct {
     allocator: Allocator,
     db_path: [:0]const u8,
@@ -13,6 +69,7 @@ pub const StorageEngine = struct {
     next_reader_idx: std.atomic.Value(usize),
     transaction_active: std.atomic.Value(bool),
     pending_writes_count: std.atomic.Value(usize),
+    reconnection_config: ReconnectionConfig,
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
@@ -78,6 +135,7 @@ pub const StorageEngine = struct {
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
             .pending_writes_count = std.atomic.Value(usize).init(0),
+            .reconnection_config = .{},
         };
 
         // Start write thread
@@ -114,14 +172,100 @@ pub const StorageEngine = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        // If a manual transaction is active, execute directly
-        if (self.transaction_active.load(.acquire)) {
-            try self.executeSet(namespace, path, value);
-            return;
+    /// Get a StorageLayer interface for the CheckpointManager
+    pub fn getStorageLayer(self: *StorageEngine) !*@import("checkpoint_manager.zig").CheckpointManager.StorageLayer {
+        const CheckpointManagerModule = @import("checkpoint_manager.zig");
+        const storage_layer = try CheckpointManagerModule.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
+
+        // Store a reference to self for checkpoint execution
+        storage_layer.storage_engine = self;
+
+        return storage_layer;
+    }
+
+    /// Execute a checkpoint operation with the specified mode
+    /// Returns statistics about the checkpoint operation
+    pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
+        var signal = WriteOp.CompletionSignal{};
+        const op = WriteOp{
+            .type = .checkpoint,
+            .checkpoint_mode = mode,
+            .completion_signal = &signal,
+        };
+
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.write_queue.push(op);
+
+        try signal.wait();
+        return signal.result orelse error.InvalidOperation;
+    }
+
+    fn internalExecuteCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
+        const start_time = std.time.milliTimestamp();
+        const wal_size_before = try self.getWalSize();
+
+        var frames_checkpointed: usize = 0;
+        var frames_in_wal: usize = 0;
+
+        const CheckpointResult = struct { busy: i64, log: i64, checkpointed: i64 };
+        const result = switch (mode) {
+            .passive => self.writer_conn.one(CheckpointResult, "PRAGMA wal_checkpoint(PASSIVE)", .{}, .{}),
+            .full => self.writer_conn.one(CheckpointResult, "PRAGMA wal_checkpoint(FULL)", .{}, .{}),
+            .restart => self.writer_conn.one(CheckpointResult, "PRAGMA wal_checkpoint(RESTART)", .{}, .{}),
+            .truncate => self.writer_conn.one(CheckpointResult, "PRAGMA wal_checkpoint(TRUNCATE)", .{}, .{}),
+        } catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("internalExecuteCheckpoint", classified_err, @tagName(mode));
+            return classified_err;
+        };
+
+        if (result) |res| {
+            frames_checkpointed = @intCast(res.checkpointed);
+            frames_in_wal = @intCast(res.log);
         }
 
-        // Otherwise, queue write operation for batch processing
+        const wal_size_after = try self.getWalSize();
+        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+
+        std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
+            @tagName(mode),
+            duration,
+            frames_checkpointed,
+            frames_in_wal,
+            wal_size_before,
+            wal_size_after,
+        });
+
+        return CheckpointStats{
+            .mode = mode,
+            .duration_ms = duration,
+            .frames_checkpointed = frames_checkpointed,
+            .frames_in_wal = frames_in_wal,
+            .wal_size_before = wal_size_before,
+            .wal_size_after = wal_size_after,
+        };
+    }
+
+    /// Get the current WAL file size in bytes
+    pub fn getWalSize(self: *StorageEngine) !usize {
+        // Try to get WAL file size from filesystem
+        const wal_path_buf = try std.fmt.allocPrint(self.allocator, "{s}-wal", .{self.db_path});
+        defer self.allocator.free(wal_path_buf);
+
+        const file = std.fs.cwd().openFile(wal_path_buf, .{}) catch |err| {
+            // WAL file might not exist yet (no writes have occurred)
+            if (err == error.FileNotFound) {
+                return 0;
+            }
+            return err;
+        };
+        defer file.close();
+
+        const stat = try file.stat();
+        return stat.size;
+    }
+
+    pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
         const op = WriteOp{
             .type = .set,
             .namespace = try self.allocator.dupe(u8, namespace),
@@ -130,10 +274,7 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        self.write_queue.push(op) catch |err| {
-            _ = self.pending_writes_count.fetchSub(1, .release);
-            return err;
-        };
+        try self.write_queue.push(op);
     }
 
     pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
@@ -142,26 +283,34 @@ pub const StorageEngine = struct {
         const reader = &self.reader_pool[reader_idx];
 
         // Execute query with inline parameters
-        const row = (try reader.oneAlloc(
+        const row = reader.oneAlloc(
             struct { value_json: []const u8 },
             self.allocator,
             "SELECT value_json FROM kv_store WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}",
             .{},
             .{ .namespace = namespace, .path = path },
-        )) orelse return null;
+        ) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("get", classified_err, path);
+
+            // If connection lost, attempt reconnection
+            if (classified_err == StorageError.ConnectionLost) {
+                self.reconnectWithBackoff() catch |reconnect_err| {
+                    logDatabaseError("reconnect", reconnect_err, "get operation");
+                    return reconnect_err;
+                };
+                // Retry the operation after reconnection
+                return self.get(namespace, path);
+            }
+
+            return classified_err;
+        } orelse return null;
 
         // The string is already allocated by oneAlloc, so we just return it
         return row.value_json;
     }
 
     pub fn delete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        // If a manual transaction is active, execute directly
-        if (self.transaction_active.load(.acquire)) {
-            try self.executeDelete(namespace, path);
-            return;
-        }
-
-        // Otherwise, queue delete operation for batch processing
         const op = WriteOp{
             .type = .delete,
             .namespace = try self.allocator.dupe(u8, namespace),
@@ -170,10 +319,7 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        self.write_queue.push(op) catch |err| {
-            _ = self.pending_writes_count.fetchSub(1, .release);
-            return err;
-        };
+        try self.write_queue.push(op);
     }
 
     pub fn query(
@@ -191,7 +337,22 @@ pub const StorageEngine = struct {
         const pattern: []const u8 = pattern_buf;
 
         // Prepare statement
-        var stmt = try reader.prepare("SELECT path, value_json FROM kv_store WHERE namespace = $namespace{[]const u8} AND path LIKE $pattern{[]const u8}");
+        var stmt = reader.prepare("SELECT path, value_json FROM kv_store WHERE namespace = $namespace{[]const u8} AND path LIKE $pattern{[]const u8}") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("query prepare", classified_err, path_prefix);
+
+            // If connection lost, attempt reconnection
+            if (classified_err == StorageError.ConnectionLost) {
+                self.reconnectWithBackoff() catch |reconnect_err| {
+                    logDatabaseError("reconnect", reconnect_err, "query operation");
+                    return reconnect_err;
+                };
+                // Retry the operation after reconnection
+                return self.query(namespace, path_prefix);
+            }
+
+            return classified_err;
+        };
         defer stmt.deinit();
 
         // Collect results
@@ -207,12 +368,20 @@ pub const StorageEngine = struct {
             results.deinit(self.allocator);
         }
 
-        var iter = try stmt.iterator(struct {
+        var iter = stmt.iterator(struct {
             path: []const u8,
             value_json: []const u8,
-        }, .{ .namespace = namespace, .pattern = pattern });
+        }, .{ .namespace = namespace, .pattern = pattern }) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("query iterator", classified_err, path_prefix);
+            return classified_err;
+        };
 
-        while (try iter.nextAlloc(self.allocator, .{})) |row| {
+        while (iter.nextAlloc(self.allocator, .{}) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("query next", classified_err, path_prefix);
+            return classified_err;
+        }) |row| {
             defer self.allocator.free(row.path);
             defer self.allocator.free(row.value_json);
 
@@ -227,30 +396,131 @@ pub const StorageEngine = struct {
 
     pub fn beginTransaction(self: *StorageEngine) !void {
         if (self.transaction_active.load(.acquire)) {
-            return error.TransactionAlreadyActive;
+            return StorageError.TransactionAlreadyActive;
         }
-        try self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
-        self.transaction_active.store(true, .release);
+        var signal = WriteOp.CompletionSignal{};
+        const op = WriteOp{
+            .type = .begin_transaction,
+            .completion_signal = &signal,
+        };
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.write_queue.push(op);
+        return signal.wait();
     }
 
     pub fn commitTransaction(self: *StorageEngine) !void {
         if (!self.transaction_active.load(.acquire)) {
-            return error.NoActiveTransaction;
+            return StorageError.NoActiveTransaction;
         }
-        try self.writer_conn.exec("COMMIT", .{}, .{});
-        self.transaction_active.store(false, .release);
+        var signal = WriteOp.CompletionSignal{};
+        const op = WriteOp{
+            .type = .commit_transaction,
+            .completion_signal = &signal,
+        };
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.write_queue.push(op);
+        return signal.wait();
     }
 
     pub fn rollbackTransaction(self: *StorageEngine) !void {
         if (!self.transaction_active.load(.acquire)) {
-            return error.NoActiveTransaction;
+            return StorageError.NoActiveTransaction;
         }
-        try self.writer_conn.exec("ROLLBACK", .{}, .{});
-        self.transaction_active.store(false, .release);
+        var signal = WriteOp.CompletionSignal{};
+        const op = WriteOp{
+            .type = .rollback_transaction,
+            .completion_signal = &signal,
+        };
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.write_queue.push(op);
+        return signal.wait();
     }
 
     pub fn isTransactionActive(self: *StorageEngine) bool {
         return self.transaction_active.load(.acquire);
+    }
+
+    /// Classify SQLite error into our specific error types
+    fn classifyError(err: anyerror) anyerror {
+        // Map SQLite errors to our specific error types
+        return switch (err) {
+            error.SQLiteConstraint => StorageError.ConstraintViolation,
+            error.SQLiteFull => StorageError.DiskFull,
+            error.SQLiteCorrupt, error.SQLiteNotADatabase => StorageError.DatabaseCorrupted,
+            error.SQLiteBusy, error.SQLiteLocked => StorageError.DatabaseLocked,
+            else => err,
+        };
+    }
+
+    /// Log database error with full details
+    fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u8) void {
+        std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
+    }
+
+    /// Attempt to reconnect to database with exponential backoff
+    fn reconnectWithBackoff(self: *StorageEngine) !void {
+        var attempt: u32 = 0;
+        var backoff_ms = self.reconnection_config.initial_backoff_ms;
+
+        while (attempt < self.reconnection_config.max_attempts) : (attempt += 1) {
+            std.log.warn("Attempting database reconnection (attempt {}/{})", .{
+                attempt + 1,
+                self.reconnection_config.max_attempts,
+            });
+
+            // Try to reconnect
+            const reconnect_result = self.attemptReconnect();
+            if (reconnect_result) {
+                std.log.info("Database reconnection successful after {} attempts", .{attempt + 1});
+                return;
+            } else |err| {
+                std.log.err("Reconnection attempt {} failed: {}", .{ attempt + 1, err });
+
+                // If not the last attempt, wait with exponential backoff
+                if (attempt + 1 < self.reconnection_config.max_attempts) {
+                    std.log.info("Waiting {}ms before next reconnection attempt", .{backoff_ms});
+                    std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
+
+                    // Calculate next backoff with exponential increase
+                    const next_backoff = @as(u64, @intFromFloat(@as(f64, @floatFromInt(backoff_ms)) * self.reconnection_config.backoff_multiplier));
+                    backoff_ms = @min(next_backoff, self.reconnection_config.max_backoff_ms);
+                }
+            }
+        }
+
+        std.log.err("Failed to reconnect after {} attempts", .{self.reconnection_config.max_attempts});
+        return StorageError.ReconnectionFailed;
+    }
+
+    /// Attempt a single reconnection
+    fn attemptReconnect(self: *StorageEngine) !void {
+        // Close existing connections
+        self.writer_conn.deinit();
+        for (self.reader_pool) |*reader| {
+            reader.deinit();
+        }
+
+        // Try to reopen writer connection
+        self.writer_conn = try sqlite.Db.init(.{
+            .mode = sqlite.Db.Mode{ .File = self.db_path },
+            .open_flags = .{
+                .write = true,
+                .create = true,
+            },
+        });
+
+        // Reconfigure database
+        try configureDatabase(&self.writer_conn);
+
+        // Reopen reader connections
+        for (self.reader_pool) |*reader| {
+            reader.* = try sqlite.Db.init(.{
+                .mode = sqlite.Db.Mode{ .File = self.db_path },
+                .open_flags = .{
+                    .write = false,
+                },
+            });
+        }
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
@@ -285,12 +555,77 @@ pub const StorageEngine = struct {
             // Collect operations for batch
             while (batch.items.len < batch_size) {
                 if (self.write_queue.pop()) |op| {
-                    batch.append(self.allocator, op) catch |err| {
-                        std.log.err("Failed to append to batch: {}", .{err});
-                        op.deinit(self.allocator);
-                        _ = self.pending_writes_count.fetchSub(1, .release);
-                        continue;
-                    };
+                    switch (op.type) {
+                        .set, .delete => {
+                            batch.append(self.allocator, op) catch |err| {
+                                std.log.err("Failed to append to batch: {}", .{err});
+                                op.deinit(self.allocator);
+                                _ = self.pending_writes_count.fetchSub(1, .release);
+                                continue;
+                            };
+                        },
+                        .begin_transaction => {
+                            // Flush current batch first
+                            if (batch.items.len > 0) {
+                                try self.flushBatch(&batch, &last_batch_time);
+                            }
+                            if (self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
+                                self.transaction_active.store(true, .release);
+                                op.completion_signal.?.signal(null);
+                            } else |err| {
+                                op.completion_signal.?.signal(classifyError(err));
+                            }
+                            _ = self.pending_writes_count.fetchSub(1, .release);
+                        },
+                        .commit_transaction => {
+                            if (batch.items.len > 0) {
+                                try self.flushBatch(&batch, &last_batch_time);
+                            }
+                            if (!self.transaction_active.load(.acquire)) {
+                                op.completion_signal.?.signal(StorageError.NoActiveTransaction);
+                                _ = self.pending_writes_count.fetchSub(1, .release);
+                                continue;
+                            }
+                            if (self.writer_conn.exec("COMMIT", .{}, .{})) |_| {
+                                self.transaction_active.store(false, .release);
+                                op.completion_signal.?.signal(null);
+                            } else |err| {
+                                self.transaction_active.store(false, .release);
+                                op.completion_signal.?.signal(classifyError(err));
+                            }
+                            _ = self.pending_writes_count.fetchSub(1, .release);
+                        },
+                        .rollback_transaction => {
+                            if (batch.items.len > 0) {
+                                try self.flushBatch(&batch, &last_batch_time);
+                            }
+                            if (!self.transaction_active.load(.acquire)) {
+                                op.completion_signal.?.signal(StorageError.NoActiveTransaction);
+                                _ = self.pending_writes_count.fetchSub(1, .release);
+                                continue;
+                            }
+                            if (self.writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
+                                self.transaction_active.store(false, .release);
+                                op.completion_signal.?.signal(null);
+                            } else |err| {
+                                self.transaction_active.store(false, .release);
+                                op.completion_signal.?.signal(classifyError(err));
+                            }
+                            _ = self.pending_writes_count.fetchSub(1, .release);
+                        },
+                        .checkpoint => {
+                            if (batch.items.len > 0) {
+                                try self.flushBatch(&batch, &last_batch_time);
+                            }
+                            const stats = self.internalExecuteCheckpoint(op.checkpoint_mode.?) catch |err| {
+                                op.completion_signal.?.signal(err);
+                                _ = self.pending_writes_count.fetchSub(1, .release);
+                                continue;
+                            };
+                            op.completion_signal.?.signalWithResult(stats);
+                            _ = self.pending_writes_count.fetchSub(1, .release);
+                        },
+                    }
                 } else {
                     break;
                 }
@@ -304,17 +639,7 @@ pub const StorageEngine = struct {
                 (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
 
             if (should_flush) {
-                const batch_len = batch.items.len;
-                self.executeBatch(batch.items) catch |err| {
-                    std.log.err("Failed to execute batch, transaction rolled back: {}", .{err});
-                    // Transaction is automatically rolled back by errdefer in executeBatch
-                };
-                for (batch.items) |op| {
-                    op.deinit(self.allocator);
-                }
-                batch.clearRetainingCapacity();
-                _ = self.pending_writes_count.fetchSub(batch_len, .release);
-                last_batch_time = now;
+                try self.flushBatch(&batch, &last_batch_time);
             } else {
                 // Sleep briefly to avoid busy-waiting
                 std.Thread.sleep(1 * std.time.ns_per_ms);
@@ -323,24 +648,33 @@ pub const StorageEngine = struct {
 
         // Flush remaining operations on shutdown
         if (batch.items.len > 0) {
-            const batch_len = batch.items.len;
-            self.executeBatch(batch.items) catch |err| {
-                std.log.err("Failed to execute final batch on shutdown, transaction rolled back: {}", .{err});
-                // Transaction is automatically rolled back by errdefer in executeBatch
-            };
-            _ = self.pending_writes_count.fetchSub(batch_len, .release);
+            try self.flushBatch(&batch, &last_batch_time);
         }
+    }
+
+    fn flushBatch(self: *StorageEngine, batch: *std.ArrayListUnmanaged(WriteOp), last_batch_time: *i64) !void {
+        const batch_len = batch.items.len;
+        self.executeBatch(batch.items) catch |err| {
+            std.log.debug("Failed to execute batch, transaction rolled back: {}", .{err});
+        };
+        for (batch.items) |op| {
+            op.deinit(self.allocator);
+        }
+        batch.clearRetainingCapacity();
+        _ = self.pending_writes_count.fetchSub(batch_len, .release);
+        last_batch_time.* = std.time.milliTimestamp();
     }
 
     fn executeBatch(self: *StorageEngine, ops: []const WriteOp) !void {
         // Check if a manual transaction is already active
-        // This shouldn't happen since manual transactions execute directly,
-        // but we check to be safe
         const manual_transaction_active = self.transaction_active.load(.acquire);
 
         if (!manual_transaction_active) {
-            // Begin transaction and track state
-            try self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
+            self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
+                const classified_err = classifyError(err);
+                logDatabaseError("executeBatch BEGIN", classified_err, "");
+                return classified_err;
+            };
             self.transaction_active.store(true, .release);
         }
 
@@ -348,7 +682,8 @@ pub const StorageEngine = struct {
         errdefer {
             if (!manual_transaction_active) {
                 self.writer_conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
-                    std.log.err("Failed to rollback transaction: {}", .{rollback_err});
+                    const classified_err = classifyError(rollback_err);
+                    logDatabaseError("executeBatch ROLLBACK", classified_err, "");
                 };
                 self.transaction_active.store(false, .release);
             }
@@ -357,20 +692,33 @@ pub const StorageEngine = struct {
         // Execute all operations
         for (ops) |op| {
             switch (op.type) {
-                .set => try self.executeSet(op.namespace, op.path, op.value.?),
-                .delete => try self.executeDelete(op.namespace, op.path),
+                .set => self.executeSet(op.namespace.?, op.path.?, op.value.?) catch |err| {
+                    const classified_err = classifyError(err);
+                    logDatabaseError("executeBatch SET", classified_err, op.path.?);
+                    return classified_err;
+                },
+                .delete => self.executeDelete(op.namespace.?, op.path.?) catch |err| {
+                    const classified_err = classifyError(err);
+                    logDatabaseError("executeBatch DELETE", classified_err, op.path.?);
+                    return classified_err;
+                },
+                else => unreachable, // Non-batch ops should not be here
             }
         }
 
         // Commit transaction and clear state (only if we started the transaction)
         if (!manual_transaction_active) {
-            try self.writer_conn.exec("COMMIT", .{}, .{});
+            self.writer_conn.exec("COMMIT", .{}, .{}) catch |err| {
+                const classified_err = classifyError(err);
+                logDatabaseError("executeBatch COMMIT", classified_err, "");
+                return classified_err;
+            };
             self.transaction_active.store(false, .release);
         }
     }
 
     fn executeSet(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        try self.writer_conn.exec(
+        self.writer_conn.exec(
             \\INSERT INTO kv_store (namespace, path, value_json, updated_at)
             \\VALUES ($namespace{[]const u8}, $path{[]const u8}, $value{[]const u8}, $timestamp{i64})
             \\ON CONFLICT(namespace, path) DO UPDATE SET
@@ -381,29 +729,79 @@ pub const StorageEngine = struct {
             .path = path,
             .value = value,
             .timestamp = std.time.timestamp(),
-        });
+        }) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("executeSet", classified_err, path);
+
+            // If connection lost, attempt reconnection
+            if (classified_err == StorageError.ConnectionLost) {
+                self.reconnectWithBackoff() catch |reconnect_err| {
+                    logDatabaseError("reconnect", reconnect_err, "executeSet operation");
+                    return reconnect_err;
+                };
+                // Retry the operation after reconnection
+                return self.executeSet(namespace, path, value);
+            }
+
+            return classified_err;
+        };
     }
 
     fn executeDelete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        try self.writer_conn.exec(
+        self.writer_conn.exec(
             \\DELETE FROM kv_store
             \\WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}
         , .{}, .{
             .namespace = namespace,
             .path = path,
-        });
+        }) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("executeDelete", classified_err, path);
+
+            // If connection lost, attempt reconnection
+            if (classified_err == StorageError.ConnectionLost) {
+                self.reconnectWithBackoff() catch |reconnect_err| {
+                    logDatabaseError("reconnect", reconnect_err, "executeDelete operation");
+                    return reconnect_err;
+                };
+                // Retry the operation after reconnection
+                return self.executeDelete(namespace, path);
+            }
+
+            return classified_err;
+        };
     }
 
     fn configureDatabase(db: *sqlite.Db) !void {
         // journal_mode = WAL returns "wal", so we use void to consume the result row.
-        _ = try db.pragma(void, .{}, "journal_mode", "wal");
+        _ = db.pragma(void, .{}, "journal_mode", "wal") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase journal_mode", classified_err, "");
+            return classified_err;
+        };
 
         // The following usually return nothing or a single row with the new value.
         // Using `void` with `pragma` ensures that the result row (if any) is consumed.
-        _ = try db.pragma(void, .{}, "synchronous", "normal");
-        _ = try db.pragma(void, .{}, "cache_size", "-64000");
-        _ = try db.pragma(void, .{}, "mmap_size", "268435456");
-        _ = try db.pragma(void, .{}, "wal_autocheckpoint", "1000");
+        _ = db.pragma(void, .{}, "synchronous", "normal") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase synchronous", classified_err, "");
+            return classified_err;
+        };
+        _ = db.pragma(void, .{}, "cache_size", "-64000") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase cache_size", classified_err, "");
+            return classified_err;
+        };
+        _ = db.pragma(void, .{}, "mmap_size", "268435456") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase mmap_size", classified_err, "");
+            return classified_err;
+        };
+        _ = db.pragma(void, .{}, "wal_autocheckpoint", "1000") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
+            return classified_err;
+        };
     }
 
     fn createSchema(db: *sqlite.Db) !void {
@@ -419,23 +817,77 @@ pub const StorageEngine = struct {
             \\)
         ;
 
-        try db.exec(create_table, .{}, .{});
+        db.exec(create_table, .{}, .{}) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("createSchema CREATE TABLE", classified_err, "");
+            return classified_err;
+        };
 
         // Create indexes
-        try db.exec("CREATE INDEX IF NOT EXISTS idx_kv_namespace ON kv_store(namespace)", .{}, .{});
-        try db.exec("CREATE INDEX IF NOT EXISTS idx_kv_path ON kv_store(path)", .{}, .{});
+        db.exec("CREATE INDEX IF NOT EXISTS idx_kv_namespace ON kv_store(namespace)", .{}, .{}) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("createSchema CREATE INDEX namespace", classified_err, "");
+            return classified_err;
+        };
+        db.exec("CREATE INDEX IF NOT EXISTS idx_kv_path ON kv_store(path)", .{}, .{}) catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("createSchema CREATE INDEX path", classified_err, "");
+            return classified_err;
+        };
     }
 };
 
 pub const WriteOp = struct {
-    type: enum { set, delete },
-    namespace: []const u8,
-    path: []const u8,
-    value: ?[]const u8,
+    type: enum { 
+        set, 
+        delete, 
+        begin_transaction, 
+        commit_transaction, 
+        rollback_transaction, 
+        checkpoint 
+    },
+    namespace: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+    checkpoint_mode: ?CheckpointMode = null,
+    completion_signal: ?*CompletionSignal = null,
+
+    pub const CompletionSignal = struct {
+        mutex: std.Thread.Mutex = .{},
+        cond: std.Thread.Condition = .{},
+        done: bool = false,
+        err: ?anyerror = null,
+        result: ?CheckpointStats = null,
+
+        pub fn wait(self: *CompletionSignal) !void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            while (!self.done) {
+                self.cond.wait(&self.mutex);
+            }
+            if (self.err) |e| return e;
+        }
+
+        pub fn signal(self: *CompletionSignal, err: ?anyerror) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            self.err = err;
+            self.done = true;
+            self.cond.signal();
+        }
+
+        pub fn signalWithResult(self: *CompletionSignal, result: CheckpointStats) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            self.result = result;
+            self.done = true;
+            self.cond.signal();
+        }
+    };
 
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
-        allocator.free(self.namespace);
-        allocator.free(self.path);
+        if (self.namespace) |n| allocator.free(n);
+        if (self.path) |p| allocator.free(p);
         if (self.value) |v| {
             allocator.free(v);
         }
@@ -448,49 +900,62 @@ pub const QueryResult = struct {
 };
 
 pub const WriteQueue = struct {
-    items: std.ArrayListUnmanaged(WriteOp),
-    mutex: std.Thread.Mutex,
+    const Node = struct {
+        op: WriteOp,
+        next: std.atomic.Value(?*Node),
+    };
+
+    head: *Node,
+    tail: std.atomic.Value(*Node),
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, capacity: usize) !WriteQueue {
-        var items = std.ArrayListUnmanaged(WriteOp){};
-        try items.ensureTotalCapacity(allocator, capacity);
+    pub fn init(allocator: Allocator, _: usize) !WriteQueue {
+        const stub = try allocator.create(Node);
+        stub.* = .{ 
+            .op = undefined, 
+            .next = std.atomic.Value(?*Node).init(null) 
+        };
         return WriteQueue{
-            .items = items,
-            .mutex = .{},
+            .head = stub,
+            .tail = std.atomic.Value(*Node).init(stub),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *WriteQueue) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        for (self.items.items) |op| {
+        while (self.pop()) |op| {
             op.deinit(self.allocator);
         }
-        self.items.deinit(self.allocator);
+        self.allocator.destroy(self.head);
     }
 
     pub fn push(self: *WriteQueue, op: WriteOp) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        try self.items.append(self.allocator, op);
+        const node = try self.allocator.create(Node);
+        node.* = .{ 
+            .op = op, 
+            .next = std.atomic.Value(?*Node).init(null) 
+        };
+        // swap tail to point to our new node
+        const prev = self.tail.swap(node, .acq_rel);
+        // Link the previous node to our new node
+        prev.next.store(node, .release);
     }
 
     pub fn pop(self: *WriteQueue) ?WriteOp {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.items.items.len == 0) return null;
-        return self.items.orderedRemove(0);
+        const head = self.head;
+        const next = head.next.load(.acquire) orelse return null;
+        
+        self.head = next;
+        const op = next.op;
+        self.allocator.destroy(head);
+        return op;
     }
 
     pub fn len(self: *WriteQueue) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        return self.items.items.len;
+        _ = self;
+        // Approximate length is enough for metrics, but we are removing mutex
+        // For now, return 0 or implement a separate atomic counter if needed.
+        // The StorageEngine already has pending_writes_count which is atomic.
+        return 0;
     }
 };

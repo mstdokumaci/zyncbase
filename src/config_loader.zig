@@ -122,7 +122,7 @@ pub const ConfigLoader = struct {
         return config;
     }
 
-    fn loadDefaults(allocator: Allocator) !Config {
+    pub fn loadDefaults(allocator: Allocator) !Config {
         return Config{
             .server = .{
                 .host = try allocator.dupe(u8, "0.0.0.0"),

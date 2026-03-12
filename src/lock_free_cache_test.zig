@@ -1,4 +1,6 @@
 const std = @import("std");
+
+
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const testing = std.testing;
 
@@ -35,7 +37,7 @@ test "lock-free cache: concurrent reads never block" {
             while (i < ctx.reads) : (i += 1) {
                 // Perform lock-free read
                 const handle = ctx.cache.get(ctx.namespace) catch |err| {
-                    std.debug.print("Read failed: {}\n", .{err});
+                    std.log.debug("Read failed: {}", .{err});
                     continue;
                 };
 

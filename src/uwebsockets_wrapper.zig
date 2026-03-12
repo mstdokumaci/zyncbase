@@ -65,6 +65,11 @@ pub const WebSocketServer = struct {
     /// Clean up resources
     /// Requirements: 2.7
     pub fn deinit(self: *WebSocketServer) void {
+        // Clear global server if it points to us
+        if (global_server == self) {
+            global_server = null;
+        }
+
         // Note: uws_app_destroy is not exposed in the C API
         // The app will be cleaned up when the process exits
         self.allocator.destroy(self);
@@ -146,11 +151,14 @@ pub const WebSocketServer = struct {
 
 /// WebSocket connection wrapper
 pub const WebSocket = struct {
-    ws: *c.uws_websocket_t,
+    ws: ?*c.uws_websocket_t,
     ssl: bool,
+    user_data: ?*anyopaque = null, // For testing purposes
 
     /// Send a message through the WebSocket
     pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) void {
+        if (self.ws == null) return; // Mock WebSocket, no-op
+
         const opcode: c.uws_opcode_t = switch (msg_type) {
             .text => c.UWS_OPCODE_TEXT,
             .binary => c.UWS_OPCODE_BINARY,
@@ -158,7 +166,7 @@ pub const WebSocket = struct {
 
         _ = c.uws_ws_send(
             if (self.ssl) 1 else 0,
-            self.ws,
+            self.ws.?,
             message.ptr,
             message.len,
             opcode,
@@ -167,22 +175,28 @@ pub const WebSocket = struct {
 
     /// Close the WebSocket connection
     pub fn close(self: *WebSocket) void {
-        c.uws_ws_close(if (self.ssl) 1 else 0, self.ws);
+        if (self.ws == null) return; // Mock WebSocket, no-op
+        c.uws_ws_close(if (self.ssl) 1 else 0, self.ws.?);
     }
 
     /// Get user data associated with this WebSocket
     pub fn getUserData(self: *WebSocket) ?*anyopaque {
-        return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws);
+        // In tests (when ws is null), use the user_data field
+        if (self.ws == null) {
+            return self.user_data;
+        }
+        return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws.?);
     }
 
     /// Set user data for this WebSocket
-    /// Note: User data is set during connection open, not exposed as setter in C API
     pub fn setUserData(self: *WebSocket, user_data: ?*anyopaque) void {
+        // In tests (when ws is null), use the user_data field
+        if (self.ws == null) {
+            self.user_data = user_data;
+            return;
+        }
         // Note: uws_ws_set_user_data is not exposed in the C API
-        // User data is typically managed through getUserData/setUserData pattern
-        // For now, we store it in the WebSocket's internal user data during open
-        _ = self;
-        _ = user_data;
+        // User data is typically managed during connection open
     }
 };
 

@@ -85,7 +85,7 @@ test "property: WebSocket callbacks invoked for all events" {
     };
 
     for (test_cases) |tc| {
-        std.debug.print("\nRunning test case: {s}\n", .{tc.name});
+        std.log.debug("Running test case: {s}\n", .{tc.name});
 
         // Create callback context to track invocations
         var ctx = CallbackContext{
@@ -419,7 +419,7 @@ fn createMockWebSocket() WebSocket {
     // In a real scenario, this would be provided by the uWebSockets library
     // For property testing, we just need a valid struct
     return WebSocket{
-        .ws = undefined, // Not used in property tests
+        .ws = null, // Not used in property tests
         .ssl = false,
     };
 }

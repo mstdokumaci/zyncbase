@@ -1,4 +1,6 @@
 const std = @import("std");
+
+
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
@@ -231,7 +233,7 @@ test "property: subscription invalidation finds all matches without false positi
     };
 
     for (test_cases) |tc| {
-        std.debug.print("\nRunning test case: {s}\n", .{tc.name});
+        std.log.debug("Running test case: {s}", .{tc.name});
 
         var mgr = try SubscriptionManager.init(allocator);
         defer mgr.deinit();

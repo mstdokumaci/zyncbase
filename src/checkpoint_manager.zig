@@ -96,12 +96,14 @@ pub const CheckpointManager = struct {
     pub const StorageLayer = struct {
         allocator: Allocator,
         db_path: []const u8,
+        storage_engine: ?*@import("storage_engine.zig").StorageEngine = null,
 
         pub fn init(allocator: Allocator, db_path: []const u8) !*StorageLayer {
             const storage = try allocator.create(StorageLayer);
             storage.* = .{
                 .allocator = allocator,
                 .db_path = db_path,
+                .storage_engine = null,
             };
             return storage;
         }
@@ -112,15 +114,31 @@ pub const CheckpointManager = struct {
 
         /// Execute a SQL statement (placeholder)
         pub fn exec(self: *StorageLayer, sql: []const u8) !void {
-            _ = self;
-            _ = sql;
-            // Placeholder - actual SQLite integration would go here
+            if (self.storage_engine) |engine| {
+                // Parse the checkpoint mode from the SQL
+                const mode = if (std.mem.indexOf(u8, sql, "PASSIVE") != null)
+                    @import("storage_engine.zig").CheckpointMode.passive
+                else if (std.mem.indexOf(u8, sql, "FULL") != null)
+                    @import("storage_engine.zig").CheckpointMode.full
+                else if (std.mem.indexOf(u8, sql, "RESTART") != null)
+                    @import("storage_engine.zig").CheckpointMode.restart
+                else if (std.mem.indexOf(u8, sql, "TRUNCATE") != null)
+                    @import("storage_engine.zig").CheckpointMode.truncate
+                else
+                    @import("storage_engine.zig").CheckpointMode.passive;
+
+                // Execute checkpoint through storage engine
+                _ = try engine.executeCheckpoint(mode);
+            }
+            // If storage engine not set, this is a no-op (for tests)
         }
 
         /// Query WAL file size (placeholder)
         pub fn queryWalSize(self: *StorageLayer) !usize {
-            _ = self;
-            // Placeholder - would use PRAGMA wal_checkpoint to get size
+            if (self.storage_engine) |engine| {
+                return try engine.getWalSize();
+            }
+            // Fallback for tests
             return 0;
         }
     };
@@ -312,7 +330,7 @@ pub const CheckpointManager = struct {
             // Exponential backoff
             if (retries < max_retries - 1) {
                 std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, retries + 1, max_retries });
-                std.time.sleep(backoff_ms * std.time.ns_per_ms);
+                std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
                 backoff_ms *= 2; // Double the backoff time
             }
         }
@@ -337,7 +355,7 @@ pub const CheckpointManager = struct {
 
         while (true) {
             // Sleep for configured interval
-            std.time.sleep(self.config.check_interval_sec * std.time.ns_per_s);
+            std.Thread.sleep(self.config.check_interval_sec * std.time.ns_per_s);
 
             // Check if checkpoint is needed
             if (self.shouldCheckpoint()) {

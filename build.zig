@@ -44,9 +44,61 @@ pub fn build(b: *std.Build) void {
     // Create test step
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
-    const tests = b.addTest(.{
+    // Top-level "test" step runs all categories
+    const test_step = b.step("test", "Run all tests");
+
+    // Specialized test categories
+    const unit_tests = [_][]const u8{
+        "src/uwebsockets_wrapper_test.zig",
+        "src/subscription_manager_test.zig",
+        "src/hook_server_client_test.zig",
+        "src/storage_engine_test.zig",
+        "src/messagepack_parser_test.zig",
+        "src/lock_free_cache_test.zig",
+        "src/memory_strategy_test.zig",
+        "src/checkpoint_manager_test.zig",
+        "src/config_loader_test.zig",
+        "src/request_handler_test.zig",
+        "src/message_handler_test.zig",
+    };
+
+    const property_tests = [_][]const u8{
+        "src/message_handler_property_test.zig",
+        "src/hook_server_client_property_test.zig",
+        "src/config_loader_property_test.zig",
+        "src/checkpoint_manager_property_test.zig",
+        "src/subscription_manager_property_test.zig",
+        "src/message_buffer_property_test.zig",
+        "src/storage_engine_stability_property_test.zig",
+        "src/connection_state_property_test.zig",
+        "src/storage_engine_property_test.zig",
+        "src/server_init_property_test.zig",
+        "src/store_operations_property_test.zig",
+        "src/uwebsockets_wrapper_property_test.zig",
+        "src/storage_engine_error_property_test.zig",
+        "src/logging_property_test.zig",
+        "src/memory_safety_property_test.zig",
+    };
+
+    const integration_tests = [_][]const u8{
+        "src/integration_wiring_test.zig",
+        "src/message_handler_verification_test.zig",
+    };
+
+    const categories = [_]struct {
+        name: []const u8,
+        desc: []const u8,
+        files: []const []const u8,
+    }{
+        .{ .name = "test-unit", .desc = "Run unit tests", .files = &unit_tests },
+        .{ .name = "test-property", .desc = "Run property tests", .files = &property_tests },
+        .{ .name = "test-integration", .desc = "Run integration tests", .files = &integration_tests },
+    };
+
+    // Unified test execution
+    const t = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/test_all.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -55,22 +107,42 @@ pub fn build(b: *std.Build) void {
         else
             &.{},
     });
-
-    // Add SQLite module to tests
-    tests.root_module.addImport("sqlite", sqlite_module);
-
-    linkUWS(b, tests);
-
-    // Apply sanitizer to tests if specified
+    t.root_module.addImport("sqlite", sqlite_module);
+    linkUWS(b, t);
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
-            tests.root_module.sanitize_thread = true;
+            t.root_module.sanitize_thread = true;
         }
     }
+    const run_t = b.addRunArtifact(t);
+    test_step.dependOn(&run_t.step);
 
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_tests.step);
+    // Keep individual categories for convenience if the user wants to run specific sets
+    for (categories) |cat| {
+        const cat_step = b.step(cat.name, cat.desc);
+        for (cat.files) |file| {
+            const ct = b.addTest(.{
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(file),
+                    .target = target,
+                    .optimize = optimize,
+                }),
+                .filters = if (test_filter) |filter|
+                    b.allocator.dupe([]const u8, &.{filter}) catch unreachable
+                else
+                    &.{},
+            });
+            ct.root_module.addImport("sqlite", sqlite_module);
+            linkUWS(b, ct);
+            if (sanitize) |san| {
+                if (std.mem.eql(u8, san, "thread")) {
+                    ct.root_module.sanitize_thread = true;
+                }
+            }
+            const run_ct = b.addRunArtifact(ct);
+            cat_step.dependOn(&run_ct.step);
+        }
+    }
 }
 
 fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
