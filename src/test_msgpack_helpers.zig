@@ -114,6 +114,13 @@ pub fn writeString(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), s: []c
     try buf.appendSlice(allocator, s);
 }
 
+pub fn encodeString(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    var buf: std.ArrayList(u8) = .{};
+    errdefer buf.deinit(allocator);
+    try writeString(allocator, &buf, s);
+    return buf.toOwnedSlice(allocator);
+}
+
 pub fn createCustomMessage(
     allocator: std.mem.Allocator,
     id: u64,

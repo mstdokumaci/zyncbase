@@ -159,7 +159,11 @@ test "Verification: StoreSet message processing" {
     const stored_value = try storage_engine.get("test_namespace", "/test/key");
     defer if (stored_value) |v| allocator.free(v);
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("test_value", stored_value.?);
+    
+    // Value is stored as MessagePack-serialized
+    const stored_parsed = try parser.parse(stored_value.?);
+    defer parser.freeValue(stored_parsed);
+    try testing.expectEqualStrings("test_value", stored_parsed.string);
 }
 
 // Task 14 Verification: StoreGet message processing
@@ -196,8 +200,10 @@ test "Verification: StoreGet message processing" {
     );
     defer handler.deinit();
 
-    // First, store a value
-    try storage_engine.set("test_namespace", "/test/key", "stored_value");
+    // First, store a value (encoded as MessagePack)
+    const val_encoded = try msgpack_helpers.encodeString(allocator, "stored_value");
+    defer allocator.free(val_encoded);
+    try storage_engine.set("test_namespace", "/test/key", val_encoded);
     std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Create a proper MessagePack StoreGet message
@@ -239,8 +245,10 @@ test "Verification: StoreGet message processing" {
                 try testing.expectEqual(@as(u64, 2), entry.value.unsigned);
                 found_id = true;
             } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                try testing.expectEqualStrings("stored_value", entry.value.string);
-                found_value = true;
+                if (entry.value == .string) {
+                    try testing.expectEqualStrings("stored_value", entry.value.string);
+                    found_value = true;
+                }
             }
         }
     }

@@ -3,7 +3,7 @@ const std = @import("std");
 
 
 const testing = std.testing;
-const ZyncBaseServer = @import("main.zig").ZyncBaseServer;
+const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // **Property 3: Component initialization is idempotent**
 // **Validates: Requirements 3.12**

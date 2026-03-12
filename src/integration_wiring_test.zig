@@ -2,7 +2,7 @@ const std = @import("std");
 
 
 const testing = std.testing;
-const ZyncBaseServer = @import("main.zig").ZyncBaseServer;
+const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // Test that verifies all components are properly wired together
 // This test validates Requirements 17.3, 17.4, 17.5 for task 23

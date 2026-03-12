@@ -236,7 +236,11 @@ test "Property 26: StoreSet storage engine call" {
         const stored_value = try storage_engine.get("test", "/key1");
         defer if (stored_value) |v| allocator.free(v);
         try testing.expect(stored_value != null);
-        try testing.expectEqualStrings("value1", stored_value.?);
+        
+        // Value is stored as MessagePack-serialized
+        const stored_parsed = try parser.parse(stored_value.?);
+        defer parser.freeValue(stored_parsed);
+        try testing.expectEqualStrings("value1", stored_parsed.string);
     }
 
     // Test 2: Multiple StoreSet calls should all persist
@@ -271,7 +275,10 @@ test "Property 26: StoreSet storage engine call" {
             const stored_value = try storage_engine.get(td.namespace, td.path);
             defer if (stored_value) |v| allocator.free(v);
             try testing.expect(stored_value != null);
-            try testing.expectEqualStrings(td.value, stored_value.?);
+            
+            const stored_parsed = try parser.parse(stored_value.?);
+            defer parser.freeValue(stored_parsed);
+            try testing.expectEqualStrings(td.value, stored_parsed.string);
         }
     }
 
@@ -308,7 +315,10 @@ test "Property 26: StoreSet storage engine call" {
         const stored_value = try storage_engine.get(namespace, path);
         defer if (stored_value) |v| allocator.free(v);
         try testing.expect(stored_value != null);
-        try testing.expectEqualStrings("updated", stored_value.?);
+        
+        const stored_parsed = try parser.parse(stored_value.?);
+        defer parser.freeValue(stored_parsed);
+        try testing.expectEqualStrings("updated", stored_parsed.string);
     }
 }
 
@@ -608,7 +618,9 @@ test "Property 29: StoreGet storage engine call" {
     // Test 1: StoreGet should call storage engine get
     {
         // First store a value
-        try storage_engine.set("test", "/key1", "value1");
+        const val_encoded = try msgpack_helpers.encodeString(allocator, "value1");
+        defer allocator.free(val_encoded);
+        try storage_engine.set("test", "/key1", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Now get it via message handler
@@ -628,7 +640,9 @@ test "Property 29: StoreGet storage engine call" {
         var val: ?[]const u8 = null;
         for (resp_parsed.map) |entry| {
             if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                val = entry.value.string;
+                if (entry.value == .string) {
+                    val = entry.value.string;
+                }
             }
         }
         try testing.expect(val != null);
@@ -649,7 +663,9 @@ test "Property 29: StoreGet storage engine call" {
         };
 
         for (test_data) |td| {
-            try storage_engine.set(td.namespace, td.path, td.value);
+            const encoded = try msgpack_helpers.encodeString(allocator, td.value);
+            defer allocator.free(encoded);
+            try storage_engine.set(td.namespace, td.path, encoded);
         }
         std.Thread.sleep(200 * std.time.ns_per_ms);
 
@@ -672,7 +688,9 @@ test "Property 29: StoreGet storage engine call" {
             var val: ?[]const u8 = null;
             for (resp_parsed.map) |entry| {
                 if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                    val = entry.value.string;
+                    if (entry.value == .string) {
+                        val = entry.value.string;
+                    }
                 }
             }
             try testing.expect(val != null);
@@ -747,7 +765,9 @@ test "Property 30: StoreGet value response" {
     // Test 1: StoreGet should return value in response
     {
         // Store a value
-        try storage_engine.set("test", "/key1", "test_value_123");
+        const val_encoded = try msgpack_helpers.encodeString(allocator, "test_value_123");
+        defer allocator.free(val_encoded);
+        try storage_engine.set("test", "/key1", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Get it
@@ -776,7 +796,9 @@ test "Property 30: StoreGet value response" {
                     try testing.expectEqual(@as(u64, 1), entry.value.unsigned);
                     found_id = true;
                 } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                    val = entry.value.string;
+                    if (entry.value == .string) {
+                        val = entry.value.string;
+                    }
                 }
             }
         }
@@ -799,7 +821,9 @@ test "Property 30: StoreGet value response" {
         };
 
         for (test_data) |td| {
-            try storage_engine.set(td.namespace, td.path, td.value);
+            const encoded = try msgpack_helpers.encodeString(allocator, td.value);
+            defer allocator.free(encoded);
+            try storage_engine.set(td.namespace, td.path, encoded);
         }
         std.Thread.sleep(200 * std.time.ns_per_ms);
 
@@ -822,7 +846,9 @@ test "Property 30: StoreGet value response" {
             var val: ?[]const u8 = null;
             for (resp_parsed.map) |entry| {
                 if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                    val = entry.value.string;
+                    if (entry.value == .string) {
+                        val = entry.value.string;
+                    }
                 }
             }
             try testing.expect(val != null);
@@ -857,7 +883,9 @@ test "Property 30: StoreGet value response" {
     // Test 4: Response format should be consistent
     {
         // Store a value
-        try storage_engine.set("format_test", "/key", "format_value");
+        const val_encoded = try msgpack_helpers.encodeString(allocator, "format_value");
+        defer allocator.free(val_encoded);
+        try storage_engine.set("format_test", "/key", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 777, "format_test", "/key");
