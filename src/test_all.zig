@@ -29,7 +29,7 @@ test {
     _ = @import("request_handler_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("subscription_manager_perf_test.zig");
-    _ = @import("test_storage_crud.zig");
+    _ = @import("storage_crud_test.zig");
     
     // Property tests
     _ = @import("message_handler_property_test.zig");

@@ -12,7 +12,7 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_helpers = @import("test_msgpack_helpers.zig");
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {

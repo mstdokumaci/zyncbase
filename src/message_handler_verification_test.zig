@@ -9,7 +9,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_helpers = @import("test_msgpack_helpers.zig");
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {

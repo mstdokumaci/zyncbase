@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
     const integration_tests = [_][]const u8{
         "src/integration_wiring_test.zig",
         "src/message_handler_verification_test.zig",
-        "test_storage_crud.zig",
+        "src/storage_crud_test.zig",
     };
     for (integration_tests) |file| {
         const t = setupTest(b, target, optimize, sqlite_module, file, sanitize, test_filter);

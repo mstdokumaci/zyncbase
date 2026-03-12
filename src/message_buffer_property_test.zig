@@ -9,7 +9,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const msgpack_helpers = @import("test_msgpack_helpers.zig");
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
 
 test "Property 32: Message buffer deallocation" {
     // **Property 32: Message buffer deallocation**
