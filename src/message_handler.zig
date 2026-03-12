@@ -93,6 +93,7 @@ pub const MessageHandler = struct {
         }
 
         // Parse MessagePack message
+        std.log.debug("Incoming message ({}): {x}", .{message.len, message});
         const parsed = self.parser.parse(message) catch |err| {
             std.log.debug("Failed to parse message from connection {}: {}", .{ conn_id, err });
             try self.sendError(ws, "INVALID_MESSAGE", "Failed to parse MessagePack");
@@ -116,6 +117,7 @@ pub const MessageHandler = struct {
         defer self.allocator.free(response);
 
         // Send response
+        std.log.debug("Outgoing response ({}): {x}", .{response.len, response});
         ws.send(response, .binary);
     }
 
@@ -269,7 +271,7 @@ pub const MessageHandler = struct {
         // Extract namespace, path, and value from message
         var namespace: ?[]const u8 = null;
         var path: ?[]const u8 = null;
-        var value: ?[]const u8 = null;
+        var value: ?MessagePackParser.Value = null;
 
         for (parsed.map) |entry| {
             if (entry.key == .string) {
@@ -282,9 +284,7 @@ pub const MessageHandler = struct {
                         path = entry.value.string;
                     }
                 } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                    if (entry.value == .string) {
-                        value = entry.value.string;
-                    }
+                    value = entry.value;
                 }
             }
         }
@@ -294,7 +294,14 @@ pub const MessageHandler = struct {
         }
 
         // Store in database
-        try self.storage_engine.set(namespace.?, path.?, value.?);
+        // NOTE: We need to serialize the Value to bytes for storage
+        var serializer = MessagePackSerializer.init(self.allocator);
+        defer serializer.deinit();
+        try self.serializeValue(&serializer, value.?);
+        const serialized_value = try serializer.toOwnedSlice();
+        defer self.allocator.free(serialized_value);
+
+        try self.storage_engine.set(namespace.?, path.?, serialized_value);
 
         // Build success response
         return try self.buildSuccessResponse(msg_id);
@@ -333,11 +340,11 @@ pub const MessageHandler = struct {
         }
 
         // Get from database
-        const value = try self.storage_engine.get(namespace.?, path.?);
-        defer if (value) |v| self.allocator.free(v);
+        const value_bytes = try self.storage_engine.get(namespace.?, path.?);
+        defer if (value_bytes) |v| self.allocator.free(v);
 
         // Build response with value
-        return try self.buildValueResponse(msg_id, value);
+        return try self.buildValueResponse(msg_id, value_bytes);
     }
 
     /// Build success response for StoreSet
@@ -357,18 +364,20 @@ pub const MessageHandler = struct {
 
     /// Build value response for StoreGet
     /// Requirements: 16.8, 16.9
-    fn buildValueResponse(self: *MessageHandler, msg_id: u64, value: ?[]const u8) ![]const u8 {
+    fn buildValueResponse(self: *MessageHandler, msg_id: u64, value_bytes: ?[]const u8) ![]const u8 {
         var serializer = MessagePackSerializer.init(self.allocator);
         defer serializer.deinit();
 
-        if (value) |v| {
+        if (value_bytes) |v| {
             try serializer.writeMapHeader(3);
             try serializer.writeString("type");
             try serializer.writeString("ok");
             try serializer.writeString("id");
             try serializer.writeUint(msg_id);
             try serializer.writeString("value");
-            try serializer.writeString(v);
+            
+            // Append raw MessagePack bytes directly
+            try serializer.buf.appendSlice(self.allocator, v);
         } else {
             try serializer.writeMapHeader(3);
             try serializer.writeString("type");
@@ -400,6 +409,32 @@ pub const MessageHandler = struct {
         defer self.allocator.free(error_msg);
 
         ws.send(error_msg, .binary);
+    }
+
+    /// Serialize a MessagePack Value back to bytes
+    fn serializeValue(self: *MessageHandler, serializer: *MessagePackSerializer, value: MessagePackParser.Value) !void {
+        switch (value) {
+            .nil => try serializer.writeNil(),
+            .boolean => |b| try serializer.writeBool(b),
+            .integer => |i| try serializer.writeInt(i),
+            .unsigned => |u| try serializer.writeUint(u),
+            .float => |f| try serializer.writeFloat(f),
+            .string => |s| try serializer.writeString(s),
+            .binary => |b| try serializer.writeBinary(b),
+            .array => |arr| {
+                try serializer.writeArrayHeader(arr.len);
+                for (arr) |val| {
+                    try self.serializeValue(serializer, val);
+                }
+            },
+            .map => |m| {
+                try serializer.writeMapHeader(m.len);
+                for (m) |entry| {
+                    try self.serializeValue(serializer, entry.key);
+                    try self.serializeValue(serializer, entry.value);
+                }
+            },
+        }
     }
 
     /// Message information extracted from parsed MessagePack

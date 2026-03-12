@@ -33,7 +33,19 @@ pub const MessagePackSerializer = struct {
         if (value >= -32 and value <= 127) {
             try self.buf.append(self.allocator, @bitCast(@as(i8, @intCast(value))));
         } else if (value >= 0) {
-            try self.writeUint(@intCast(value));
+            if (value <= 255) {
+                try self.buf.append(self.allocator, 0xcc);
+                try self.buf.append(self.allocator, @intCast(value));
+            } else if (value <= 65535) {
+                try self.buf.append(self.allocator, 0xcd);
+                try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u16, @intCast(value))));
+            } else if (value <= 4294967295) {
+                try self.buf.append(self.allocator, 0xce);
+                try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u32, @intCast(value))));
+            } else {
+                try self.buf.append(self.allocator, 0xcf);
+                try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u64, @intCast(value))));
+            }
         } else if (value >= -128) {
             try self.buf.append(self.allocator, 0xd0);
             try self.buf.append(self.allocator, @bitCast(@as(i8, @intCast(value))));
@@ -92,6 +104,38 @@ pub const MessagePackSerializer = struct {
             try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u16, @intCast(size))));
         } else {
             try self.buf.append(self.allocator, 0xdf);
+            try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u32, @intCast(size))));
+        }
+    }
+
+    pub fn writeFloat(self: *MessagePackSerializer, value: f64) !void {
+        try self.buf.append(self.allocator, 0xcb);
+        try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u64, @bitCast(value))));
+    }
+
+    pub fn writeBinary(self: *MessagePackSerializer, value: []const u8) !void {
+        const len = value.len;
+        if (len <= 255) {
+            try self.buf.append(self.allocator, 0xc4);
+            try self.buf.append(self.allocator, @intCast(len));
+        } else if (len <= 65535) {
+            try self.buf.append(self.allocator, 0xc5);
+            try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u16, @intCast(len))));
+        } else {
+            try self.buf.append(self.allocator, 0xc6);
+            try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u32, @intCast(len))));
+        }
+        try self.buf.appendSlice(self.allocator, value);
+    }
+
+    pub fn writeArrayHeader(self: *MessagePackSerializer, size: usize) !void {
+        if (size <= 15) {
+            try self.buf.append(self.allocator, @intCast(0x90 | size));
+        } else if (size <= 65535) {
+            try self.buf.append(self.allocator, 0xdc);
+            try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u16, @intCast(size))));
+        } else {
+            try self.buf.append(self.allocator, 0xdd);
             try self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToBig(u32, @intCast(size))));
         }
     }
