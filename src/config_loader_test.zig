@@ -39,7 +39,7 @@ test "ConfigLoader parses valid JSON config" {
         \\}
     ;
 
-    const temp_file = "test-config.json";
+    const temp_file = "test-artifact/test-config.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -69,7 +69,7 @@ test "ConfigLoader validates port range" {
         \\}
     ;
 
-    const temp_file = "test-config-invalid-port.json";
+    const temp_file = "test-artifact/test-config-invalid-port.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -88,7 +88,7 @@ test "ConfigLoader validates numeric ranges" {
         \\}
     ;
 
-    const temp_file = "test-config-invalid-buffer.json";
+    const temp_file = "test-artifact/test-config-invalid-buffer.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -112,7 +112,7 @@ test "ConfigLoader parses auth config" {
         \\}
     ;
 
-    const temp_file = "test-config-auth.json";
+    const temp_file = "test-artifact/test-config-auth.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -144,7 +144,7 @@ test "ConfigLoader parses security config" {
         \\}
     ;
 
-    const temp_file = "test-config-security.json";
+    const temp_file = "test-artifact/test-config-security.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 

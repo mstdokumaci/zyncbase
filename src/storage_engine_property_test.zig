@@ -30,7 +30,7 @@ test "Property 16: Database initialization errors" {
     try testing.expectError(error.NotDir, result2);
 
     // Test 3: Valid initialization should succeed
-    const test_dir = "test-data/storage_engine/test_data_init_valid";
+    const test_dir = "test-artifact/storage_engine/test_data_init_valid";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -48,7 +48,7 @@ test "Property 16: Database initialization errors" {
 test "Property 17: Thread-safe storage access" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_thread_safe";
+    const test_dir = "test-artifact/storage_engine/test_data_thread_safe";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -133,7 +133,7 @@ test "Property 17: Thread-safe storage access" {
 test "Property 18: Connection release" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_conn_release";
+    const test_dir = "test-artifact/storage_engine/test_data_conn_release";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -162,7 +162,7 @@ test "Property 18: Connection release" {
 test "Property 19: Data persistence round-trip" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_roundtrip";
+    const test_dir = "test-artifact/storage_engine/test_data_roundtrip";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -204,7 +204,7 @@ test "Property 19: Data persistence round-trip" {
 test "Property 20: Insert/delete inverse operation" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_inverse";
+    const test_dir = "test-artifact/storage_engine/test_data_inverse";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -245,7 +245,7 @@ test "Property 20: Insert/delete inverse operation" {
 test "Property 21: Transaction isolation" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_transaction_isolation";
+    const test_dir = "test-artifact/storage_engine/test_data_transaction_isolation";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -330,7 +330,7 @@ test "Property 21: Transaction isolation" {
 test "Property 22: Automatic transaction rollback" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/storage_engine/test_data_auto_rollback";
+    const test_dir = "test-artifact/storage_engine/test_data_auto_rollback";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);

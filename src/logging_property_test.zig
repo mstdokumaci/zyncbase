@@ -5,13 +5,14 @@ pub var global_capture: ?*LogCapture = null;
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const msgpack = @import("msgpack");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 
 // Custom log handler to capture log messages for testing
@@ -106,8 +107,8 @@ test "Property 33: Connection logging" {
     var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
-    var parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
@@ -128,7 +129,7 @@ test "Property 33: Connection logging" {
 
     var handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -282,8 +283,8 @@ test "Property 34: Error logging" {
     var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
-    var parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
@@ -304,7 +305,7 @@ test "Property 34: Error logging" {
 
     var handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -412,8 +413,8 @@ test "Property 35: Log level filtering" {
         var memory_strategy = try MemoryStrategy.init();
         defer memory_strategy.deinit();
 
-        var parser = try MessagePackParser.init(allocator, .{});
-        defer parser.deinit();
+        var tracker = ViolationTracker.init(allocator, 10);
+        defer tracker.deinit();
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
@@ -434,7 +435,7 @@ test "Property 35: Log level filtering" {
 
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -490,8 +491,8 @@ test "Property 36: Log message formatting" {
         var memory_strategy = try MemoryStrategy.init();
         defer memory_strategy.deinit();
 
-        var parser = try MessagePackParser.init(allocator, .{});
-        defer parser.deinit();
+        var tracker = ViolationTracker.init(allocator, 10);
+        defer tracker.deinit();
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
@@ -512,7 +513,7 @@ test "Property 36: Log message formatting" {
 
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -553,8 +554,8 @@ test "Property 36: Log message formatting" {
         var memory_strategy = try MemoryStrategy.init();
         defer memory_strategy.deinit();
 
-        var parser = try MessagePackParser.init(allocator, .{});
-        defer parser.deinit();
+        var tracker = ViolationTracker.init(allocator, 10);
+        defer tracker.deinit();
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
@@ -575,7 +576,7 @@ test "Property 36: Log message formatting" {
 
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,

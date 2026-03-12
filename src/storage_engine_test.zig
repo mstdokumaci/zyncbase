@@ -6,7 +6,7 @@ test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
 
     // Create temporary directory for test
-    const test_dir = "test-data/unit/storage_engine/test_data_init";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_init";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -23,7 +23,7 @@ test "StorageEngine: init and deinit" {
 test "StorageEngine: set and get" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_set_get";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_set_get";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -46,7 +46,7 @@ test "StorageEngine: set and get" {
 test "StorageEngine: get non-existent key" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_get_nonexistent";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_get_nonexistent";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -59,7 +59,7 @@ test "StorageEngine: get non-existent key" {
 test "StorageEngine: update existing key" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_update";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_update";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -84,7 +84,7 @@ test "StorageEngine: update existing key" {
 test "StorageEngine: delete key" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_delete";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_delete";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -111,7 +111,7 @@ test "StorageEngine: delete key" {
 test "StorageEngine: query with prefix" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_query";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_query";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -139,7 +139,7 @@ test "StorageEngine: query with prefix" {
 test "StorageEngine: multiple namespaces" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_namespaces";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_namespaces";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -165,7 +165,7 @@ test "StorageEngine: multiple namespaces" {
 test "StorageEngine: transaction support" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_transaction";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_transaction";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -201,7 +201,7 @@ test "StorageEngine: transaction support" {
 test "StorageEngine: automatic rollback in batch operations" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_auto_rollback";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_auto_rollback";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);
@@ -232,7 +232,7 @@ test "StorageEngine: automatic rollback in batch operations" {
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
 
-    const test_dir = "test-data/unit/storage_engine/test_data_concurrent";
+    const test_dir = "test-artifact/unit/storage_engine/test_data_concurrent";
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     const engine = try StorageEngine.init(allocator, test_dir);

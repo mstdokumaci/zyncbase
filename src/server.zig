@@ -6,7 +6,6 @@ pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
@@ -14,6 +13,7 @@ const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 
 // Global server reference for signal handlers
 var global_server: ?*ZyncBaseServer = null;
@@ -24,7 +24,7 @@ pub const ZyncBaseServer = struct {
     config: Config,
     memory_strategy: *MemoryStrategy,
     cache: *LockFreeCache,
-    parser: *MessagePackParser,
+    violation_tracker: *ViolationTracker,
     subscription_manager: *SubscriptionManager,
     checkpoint_manager: *CheckpointManager,
     storage_layer: *CheckpointManager.StorageLayer,
@@ -76,13 +76,15 @@ pub const ZyncBaseServer = struct {
         );
         errdefer cache.deinit();
 
-        // Initialize MessagePack parser
-        std.log.debug("Initializing MessagePack parser", .{});
-        const parser = try MessagePackParser.init(
+        // Initialize violation tracker
+        std.log.debug("Initializing violation tracker", .{});
+        const violation_tracker = try allocator.create(ViolationTracker);
+        errdefer allocator.destroy(violation_tracker);
+        violation_tracker.* = ViolationTracker.init(
             memory_strategy.generalAllocator(),
-            .{}, // Use default config
+            config.security.violation_threshold,
         );
-        errdefer parser.deinit();
+        errdefer violation_tracker.deinit();
 
         // Initialize subscription manager
         std.log.debug("Initializing subscription manager", .{});
@@ -132,7 +134,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Initializing message handler", .{});
         const message_handler = try MessageHandler.init(
             memory_strategy.generalAllocator(),
-            parser,
+            violation_tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -147,7 +149,7 @@ pub const ZyncBaseServer = struct {
             .config = config,
             .memory_strategy = memory_strategy,
             .cache = cache,
-            .parser = parser,
+            .violation_tracker = violation_tracker,
             .subscription_manager = subscription_manager,
             .checkpoint_manager = checkpoint_manager,
             .storage_layer = storage_layer,
@@ -260,8 +262,9 @@ pub const ZyncBaseServer = struct {
         self.storage_engine.deinit();
         std.log.debug("Deinitializing subscription_manager", .{});
         self.subscription_manager.deinit();
-        std.log.debug("Deinitializing parser", .{});
-        self.parser.deinit();
+        std.log.debug("Deinitializing violation_tracker", .{});
+        self.violation_tracker.deinit();
+        self.allocator.destroy(self.violation_tracker);
         std.log.debug("Deinitializing cache", .{});
         self.cache.deinit();
         // Free config - need to use pointer to field

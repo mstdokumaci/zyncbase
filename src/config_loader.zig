@@ -30,6 +30,7 @@ pub const Config = struct {
         allow_localhost: bool = true,
         rate_limit_messages_per_second: u32 = 100,
         rate_limit_connections_per_ip: u32 = 10,
+        violation_threshold: u32 = 10,
         max_message_size: usize = 1024 * 1024, // 1MB
     };
 
@@ -331,6 +332,12 @@ pub const ConfigLoader = struct {
                 if (security_obj.get("maxMessageSize")) |max_size| {
                     if (max_size == .integer) {
                         config.security.max_message_size = @intCast(max_size.integer);
+                    }
+                }
+                
+                if (security_obj.get("violationThreshold")) |threshold| {
+                    if (threshold == .integer) {
+                        config.security.violation_threshold = @intCast(threshold.integer);
                     }
                 }
             }

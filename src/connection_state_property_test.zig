@@ -5,7 +5,6 @@ const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;

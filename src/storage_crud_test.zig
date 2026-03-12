@@ -5,7 +5,7 @@ test "CRUD operations with write thread" {
     const allocator = std.testing.allocator;
 
     // Create test data directory
-    const test_dir = "test-data/test_data_crud";
+    const test_dir = "test-artifact/test_data_crud";
     std.fs.cwd().deleteTree(test_dir) catch {};
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 

@@ -4,3 +4,6 @@
 [submodule "vendor/boringssl"]
 	path = vendor/boringssl
 	url = https://github.com/oven-sh/boringssl.git
+[submodule "vendor/zig_msgpack"]
+	path = vendor/zig_msgpack
+	url = https://github.com/zigcc/zig-msgpack.git

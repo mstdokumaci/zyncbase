@@ -4,6 +4,6 @@
 .zig-cache
 .serena
 zig-out
-test-data/
+test-artifact/
 node_modules/
 data/

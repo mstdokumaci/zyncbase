@@ -40,7 +40,7 @@ test "Property 12: Environment variable substitution" {
         \\}
     ;
 
-    const temp_file = "test-config-env-vars.json";
+    const temp_file = "test-artifact/test-config-env-vars.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -68,7 +68,7 @@ test "Property 12: Environment variable substitution - missing variable keeps or
         \\}
     ;
 
-    const temp_file = "test-config-missing-env-var.json";
+    const temp_file = "test-artifact/test-config-missing-env-var.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -102,7 +102,7 @@ test "Property 12: Environment variable substitution - multiple variables" {
         \\}
     ;
 
-    const temp_file = "test-config-multiple-env-vars.json";
+    const temp_file = "test-artifact/test-config-multiple-env-vars.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -130,7 +130,7 @@ test "Property 13: Configuration validation - invalid port" {
         \\}
     ;
 
-    const temp_file = "test-config-invalid-port.json";
+    const temp_file = "test-artifact/test-config-invalid-port.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -149,7 +149,7 @@ test "Property 13: Configuration validation - port zero" {
         \\}
     ;
 
-    const temp_file = "test-config-port-zero.json";
+    const temp_file = "test-artifact/test-config-port-zero.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -168,7 +168,7 @@ test "Property 13: Configuration validation - invalid buffer size" {
         \\}
     ;
 
-    const temp_file = "test-config-invalid-buffer.json";
+    const temp_file = "test-artifact/test-config-invalid-buffer.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -187,7 +187,7 @@ test "Property 13: Configuration validation - invalid max message size" {
         \\}
     ;
 
-    const temp_file = "test-config-invalid-max-message-size.json";
+    const temp_file = "test-artifact/test-config-invalid-max-message-size.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -207,7 +207,7 @@ test "Property 14: File existence validation - schema file not found" {
         \\}
     ;
 
-    const temp_file = "test-config-missing-schema.json";
+    const temp_file = "test-artifact/test-config-missing-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -224,7 +224,7 @@ test "Property 14: File existence validation - auth rules file not found" {
         \\}
     ;
 
-    const temp_file = "test-config-missing-auth-rules.json";
+    const temp_file = "test-artifact/test-config-missing-auth-rules.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -236,17 +236,17 @@ test "Property 14: File existence validation - valid schema file" {
     const allocator = std.testing.allocator;
 
     // Create a temporary schema file
-    const schema_file = "test-schema.json";
+    const schema_file = "test-artifact/test-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     const config_content =
         \\{
-        \\  "schema": "test-schema.json"
+        \\  "schema": "test-artifact/test-schema.json"
         \\}
     ;
 
-    const temp_file = "test-config-valid-schema.json";
+    const temp_file = "test-artifact/test-config-valid-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -255,24 +255,24 @@ test "Property 14: File existence validation - valid schema file" {
 
     // Verify schema file was loaded
     try std.testing.expect(config.schema_file != null);
-    try std.testing.expectEqualStrings("test-schema.json", config.schema_file.?);
+    try std.testing.expectEqualStrings("test-artifact/test-schema.json", config.schema_file.?);
 }
 
 test "Property 14: File existence validation - valid auth rules file" {
     const allocator = std.testing.allocator;
 
     // Create a temporary auth rules file
-    const auth_rules_file = "test-auth-rules.json";
+    const auth_rules_file = "test-artifact/test-auth-rules.json";
     try std.fs.cwd().writeFile(.{ .sub_path = auth_rules_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(auth_rules_file) catch {};
 
     const config_content =
         \\{
-        \\  "authRules": "test-auth-rules.json"
+        \\  "authRules": "test-artifact/test-auth-rules.json"
         \\}
     ;
 
-    const temp_file = "test-config-valid-auth-rules.json";
+    const temp_file = "test-artifact/test-config-valid-auth-rules.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -281,7 +281,7 @@ test "Property 14: File existence validation - valid auth rules file" {
 
     // Verify auth rules file was loaded
     try std.testing.expect(config.auth_rules_file != null);
-    try std.testing.expectEqualStrings("test-auth-rules.json", config.auth_rules_file.?);
+    try std.testing.expectEqualStrings("test-artifact/test-auth-rules.json", config.auth_rules_file.?);
 }
 
 // **Validates: Requirements 8.10**
@@ -300,7 +300,7 @@ test "Property 15: Configuration round-trip - server config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-server.json";
+    const temp_file = "test-artifact/test-config-roundtrip-server.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -329,7 +329,7 @@ test "Property 15: Configuration round-trip - auth config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-auth.json";
+    const temp_file = "test-artifact/test-config-roundtrip-auth.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -361,7 +361,7 @@ test "Property 15: Configuration round-trip - security config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-security.json";
+    const temp_file = "test-artifact/test-config-roundtrip-security.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -390,7 +390,7 @@ test "Property 15: Configuration round-trip - logging config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-logging.json";
+    const temp_file = "test-artifact/test-config-roundtrip-logging.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -415,7 +415,7 @@ test "Property 15: Configuration round-trip - performance config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-performance.json";
+    const temp_file = "test-artifact/test-config-roundtrip-performance.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
@@ -466,7 +466,7 @@ test "Property 15: Configuration round-trip - complete config" {
         \\}
     ;
 
-    const temp_file = "test-config-roundtrip-complete.json";
+    const temp_file = "test-artifact/test-config-roundtrip-complete.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
 
