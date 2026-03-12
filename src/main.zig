@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub const std_options = struct {
-    pub const log_level = .info;
+pub const std_options: std.Options = .{
+    .log_level = .info,
 };
 
 pub const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
@@ -21,7 +21,6 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 
 // Global server reference for signal handlers
 var global_server: ?*ZyncBaseServer = null;
-
 
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
