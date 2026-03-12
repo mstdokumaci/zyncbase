@@ -64,7 +64,7 @@ test "Property 12: Environment variable substitution - missing variable keeps or
     // Create config with non-existent environment variable
     const config_content =
         \\{
-        \\  "dataDir": "${NONEXISTENT_VAR}"
+        \\  "dataDir": "test-artifact/${NONEXISTENT_VAR}"
         \\}
     ;
 
@@ -76,7 +76,7 @@ test "Property 12: Environment variable substitution - missing variable keeps or
     defer config.deinit();
 
     // Verify original pattern is kept when variable doesn't exist
-    try std.testing.expectEqualStrings("${NONEXISTENT_VAR}", config.data_dir);
+    try std.testing.expectEqualStrings("test-artifact/${NONEXISTENT_VAR}", config.data_dir);
 }
 
 test "Property 12: Environment variable substitution - multiple variables" {
