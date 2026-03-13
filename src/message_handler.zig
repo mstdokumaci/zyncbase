@@ -1,12 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const msgpack_lib = @import("msgpack");
-const msgpack_utils = @import("msgpack_utils.zig");
-const msgpack = struct {
-    pub const Payload = msgpack_lib.Payload;
-    pub const decode = msgpack_utils.decodePayload;
-    pub const encode = msgpack_utils.encodePayload;
-};
+const msgpack = @import("msgpack_utils.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;

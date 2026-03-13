@@ -2,19 +2,13 @@ const std = @import("std");
 
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const msgpack_lib = @import("msgpack");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_utils = @import("msgpack_utils.zig");
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const msgpack = struct {
-    pub const Payload = msgpack_lib.Payload;
-    pub const decode = msgpack_utils.decodePayload;
-};
+const msgpack = @import("msgpack_test_helpers.zig");
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -123,7 +117,7 @@ test "Verification: StoreSet message processing" {
     defer handler.deinit();
 
     // Create a proper MessagePack StoreSet message
-    const message = try msgpack_helpers.createStoreSetMessage(
+    const message = try msgpack.createStoreSetMessage(
         allocator,
         1,
         "test_namespace",
@@ -225,13 +219,13 @@ test "Verification: StoreGet message processing" {
     defer handler.deinit();
 
     // First, store a value (encoded as MessagePack)
-    const val_encoded = try msgpack_helpers.encodeString(allocator, "stored_value");
+    const val_encoded = try msgpack.encodeString(allocator, "stored_value");
     defer allocator.free(val_encoded);
     try storage_engine.set("test_namespace", "/test/key", val_encoded);
     std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Create a proper MessagePack StoreGet message
-    const message = try msgpack_helpers.createStoreGetMessage(
+    const message = try msgpack.createStoreGetMessage(
         allocator,
         2,
         "test_namespace",
@@ -473,7 +467,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     };
 
     for (test_data, 0..) |td, i| {
-        const set_message = try msgpack_helpers.createStoreSetMessage(
+        const set_message = try msgpack.createStoreSetMessage(
             allocator,
             i + 1,
             td.namespace,
@@ -513,7 +507,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     // Retrieve all values
     for (test_data, 0..) |td, i| {
-        const get_message = try msgpack_helpers.createStoreGetMessage(
+        const get_message = try msgpack.createStoreGetMessage(
             allocator,
             i + 100,
             td.namespace,

@@ -8,13 +8,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const msgpack_lib = @import("msgpack");
-const msgpack_utils = @import("msgpack_utils.zig");
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const msgpack = struct {
-    pub const Payload = msgpack_lib.Payload;
-    pub const decode = msgpack_utils.decodePayload;
-};
+const msgpack = @import("msgpack_test_helpers.zig");
 
 test "Property 32: Message buffer deallocation" {
     // **Property 32: Message buffer deallocation**
@@ -269,7 +263,7 @@ fn createTestMessage(
     value: []const u8,
 ) ![]const u8 {
     _ = msg_type;
-    return try msgpack_helpers.createStoreSetMessage(allocator, msg_id, namespace, path, value);
+    return try msgpack.createStoreSetMessage(allocator, msg_id, namespace, path, value);
 }
 
 fn createGetMessage(
@@ -280,7 +274,7 @@ fn createGetMessage(
     path: []const u8,
 ) ![]const u8 {
     _ = _msg_type;
-    return try msgpack_helpers.createStoreGetMessage(allocator, msg_id, namespace, path);
+    return try msgpack.createStoreGetMessage(allocator, msg_id, namespace, path);
 }
 
 fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
@@ -288,10 +282,10 @@ fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
     var buf: std.ArrayList(u8) = .{};
     defer buf.deinit(allocator);
     try buf.append(allocator, 0x82); // fixmap(2)
-    try msgpack_helpers.writeString(allocator, &buf, "type");
-    try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-    try msgpack_helpers.writeString(allocator, &buf, "namespace");
-    try msgpack_helpers.writeString(allocator, &buf, "test");
+    try msgpack.writeString(allocator, &buf, "type");
+    try msgpack.writeString(allocator, &buf, "StoreSet");
+    try msgpack.writeString(allocator, &buf, "namespace");
+    try msgpack.writeString(allocator, &buf, "test");
     return buf.toOwnedSlice(allocator);
 }
 

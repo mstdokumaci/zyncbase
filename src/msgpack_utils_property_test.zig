@@ -50,7 +50,7 @@ test "Property: MsgPack round-trip encoding/decoding" {
         // Encode using the project's standard Allocating writer
         var aw: std.Io.Writer.Allocating = .init(allocator);
         defer aw.deinit();
-        try msgpack_utils.encodePayload(payload, &aw.writer);
+        try msgpack_utils.encode(payload, &aw.writer);
 
         // Get the encoded bytes
         const encoded = try aw.toOwnedSlice();
@@ -58,7 +58,7 @@ test "Property: MsgPack round-trip encoding/decoding" {
 
         // Decode using the project's standard fixed reader
         var reader = std.Io.Reader.fixed(encoded);
-        const decoded = try msgpack_utils.decodePayload(allocator, &reader);
+        const decoded = try msgpack_utils.decode(allocator, &reader);
         defer decoded.free(allocator);
 
         // Verify equality

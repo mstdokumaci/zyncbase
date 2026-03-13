@@ -7,13 +7,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_lib = @import("msgpack");
-const msgpack_utils = @import("msgpack_utils.zig");
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const msgpack = struct {
-    pub const Payload = msgpack_lib.Payload;
-    pub const decode = msgpack_utils.decodePayload;
-};
+const msgpack = @import("msgpack_test_helpers.zig");
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -64,7 +58,7 @@ test "Property 25: StoreSet field extraction" {
 
     // Test 1: Basic StoreSet message field extraction
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test_ns", "/test/path", "test_value");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", "/test/path", "test_value");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -94,7 +88,7 @@ test "Property 25: StoreSet field extraction" {
         };
 
         for (test_cases, 0..) |tc, i| {
-            const message = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i), tc.namespace, tc.path, tc.value);
+            const message = try msgpack.createStoreSetMessage(allocator, @intCast(i), tc.namespace, tc.path, tc.value);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -116,14 +110,14 @@ test "Property 25: StoreSet field extraction" {
         defer buf.deinit(allocator);
         // fixmap(4) - type, id, path, value (missing namespace)
         try buf.append(allocator, 0x84);
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreSet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "path");
-        try msgpack_helpers.writeString(allocator, &buf, "/test");
-        try msgpack_helpers.writeString(allocator, &buf, "value");
-        try msgpack_helpers.writeString(allocator, &buf, "val");
+        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeString(allocator, &buf, "/test");
+        try msgpack.writeString(allocator, &buf, "value");
+        try msgpack.writeString(allocator, &buf, "val");
 
         const message = buf.items;
         var reader: std.Io.Reader = .fixed(message);
@@ -138,7 +132,7 @@ test "Property 25: StoreSet field extraction" {
 
     // Test 4: StoreSet missing path should fail
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/path", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/path", "val");
         defer allocator.free(message);
         // Corrupt it manually by removing a field or using a shorter map
         message[0] = 0x83; // Change fixmap(4) to fixmap(3) - effectively "missing" one field during parse if we only read 3
@@ -148,12 +142,12 @@ test "Property 25: StoreSet field extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreSet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
         // Missing "path" and "value"
 
         const msg_buf = buf.items;
@@ -172,12 +166,12 @@ test "Property 25: StoreSet field extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreSet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
 
         const msg_buf = buf.items;
         var reader: std.Io.Reader = .fixed(msg_buf);
@@ -231,7 +225,7 @@ test "Property 26: StoreSet storage engine call" {
 
     // Test 1: StoreSet should call storage engine and persist data
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -269,7 +263,7 @@ test "Property 26: StoreSet storage engine call" {
         };
 
         for (test_data, 0..) |td, i| {
-            const message = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i + 10), td.namespace, td.path, td.value);
+            const message = try msgpack.createStoreSetMessage(allocator, @intCast(i + 10), td.namespace, td.path, td.value);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -302,7 +296,7 @@ test "Property 26: StoreSet storage engine call" {
         const namespace = "update_test";
         const path = "/update_key";
         // Set initial value
-        const message1 = try msgpack_helpers.createStoreSetMessage(allocator, 1, namespace, path, "initial");
+        const message1 = try msgpack.createStoreSetMessage(allocator, 1, namespace, path, "initial");
         defer allocator.free(message1);
 
         var reader1: std.Io.Reader = .fixed(message1);
@@ -315,7 +309,7 @@ test "Property 26: StoreSet storage engine call" {
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Update value
-        const message2 = try msgpack_helpers.createStoreSetMessage(allocator, 2, namespace, path, "updated");
+        const message2 = try msgpack.createStoreSetMessage(allocator, 2, namespace, path, "updated");
         defer allocator.free(message2);
 
         var reader2: std.Io.Reader = .fixed(message2);
@@ -378,7 +372,7 @@ test "Property 27: StoreSet success response" {
 
     // Test 1: Successful StoreSet should return success response
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key", "val");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -416,7 +410,7 @@ test "Property 27: StoreSet success response" {
             const val_str = try std.fmt.allocPrint(allocator, "val{}", .{i});
             defer allocator.free(val_str);
 
-            const msg = try msgpack_helpers.createStoreSetMessage(allocator, i, "test", path_str, val_str);
+            const msg = try msgpack.createStoreSetMessage(allocator, i, "test", path_str, val_str);
             defer allocator.free(msg);
 
             var reader: std.Io.Reader = .fixed(msg);
@@ -446,7 +440,7 @@ test "Property 27: StoreSet success response" {
 
     // Test 3: Success response format should be consistent
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 999, "ns", "/p", "v");
+        const message = try msgpack.createStoreSetMessage(allocator, 999, "ns", "/p", "v");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -512,7 +506,7 @@ test "Property 28: StoreGet field extraction" {
 
     // Test 1: Basic StoreGet message field extraction
     {
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test_ns", "/test/path");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test_ns", "/test/path");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -541,7 +535,7 @@ test "Property 28: StoreGet field extraction" {
         };
 
         for (test_cases, 0..) |tc, i| {
-            const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i), tc.namespace, tc.path);
+            const message = try msgpack.createStoreGetMessage(allocator, @intCast(i), tc.namespace, tc.path);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -561,12 +555,12 @@ test "Property 28: StoreGet field extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreGet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreGet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "path");
-        try msgpack_helpers.writeString(allocator, &buf, "/test");
+        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeString(allocator, &buf, "/test");
 
         const message = buf.items;
         var reader: std.Io.Reader = .fixed(message);
@@ -584,12 +578,12 @@ test "Property 28: StoreGet field extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreGet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreGet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
 
         const message = buf.items;
         var reader: std.Io.Reader = .fixed(message);
@@ -644,13 +638,13 @@ test "Property 29: StoreGet storage engine call" {
     // Test 1: StoreGet should call storage engine get
     {
         // First store a value
-        const val_encoded = try msgpack_helpers.encodeString(allocator, "value1");
+        const val_encoded = try msgpack.encodeString(allocator, "value1");
         defer allocator.free(val_encoded);
         try storage_engine.set("test", "/key1", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Now get it via message handler
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/key1");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/key1");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -690,7 +684,7 @@ test "Property 29: StoreGet storage engine call" {
         };
 
         for (test_data) |td| {
-            const encoded = try msgpack_helpers.encodeString(allocator, td.value);
+            const encoded = try msgpack.encodeString(allocator, td.value);
             defer allocator.free(encoded);
             try storage_engine.set(td.namespace, td.path, encoded);
         }
@@ -698,7 +692,7 @@ test "Property 29: StoreGet storage engine call" {
 
         // Get each value via message handler
         for (test_data, 0..) |td, i| {
-            const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i + 10), td.namespace, td.path);
+            const message = try msgpack.createStoreGetMessage(allocator, @intCast(i + 10), td.namespace, td.path);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -728,7 +722,7 @@ test "Property 29: StoreGet storage engine call" {
 
     // Test 3: StoreGet for nonexistent key should call storage engine
     {
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/nonexistent");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/nonexistent");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -796,13 +790,13 @@ test "Property 30: StoreGet value response" {
     // Test 1: StoreGet should return value in response
     {
         // Store a value
-        const val_encoded = try msgpack_helpers.encodeString(allocator, "test_value_123");
+        const val_encoded = try msgpack.encodeString(allocator, "test_value_123");
         defer allocator.free(val_encoded);
         try storage_engine.set("test", "/key1", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
         // Get it
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/key1");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/key1");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -851,7 +845,7 @@ test "Property 30: StoreGet value response" {
         };
 
         for (test_data) |td| {
-            const encoded = try msgpack_helpers.encodeString(allocator, td.value);
+            const encoded = try msgpack.encodeString(allocator, td.value);
             defer allocator.free(encoded);
             try storage_engine.set(td.namespace, td.path, encoded);
         }
@@ -859,7 +853,7 @@ test "Property 30: StoreGet value response" {
 
         // Get each value and verify response contains it
         for (test_data, 0..) |td, i| {
-            const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
+            const message = try msgpack.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -889,7 +883,7 @@ test "Property 30: StoreGet value response" {
 
     // Test 3: StoreGet for nonexistent key should return not found response
     {
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 999, "test", "/does_not_exist");
+        const message = try msgpack.createStoreGetMessage(allocator, 999, "test", "/does_not_exist");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -917,12 +911,12 @@ test "Property 30: StoreGet value response" {
     // Test 4: Response format should be consistent
     {
         // Store a value
-        const val_encoded = try msgpack_helpers.encodeString(allocator, "format_value");
+        const val_encoded = try msgpack.encodeString(allocator, "format_value");
         defer allocator.free(val_encoded);
         try storage_engine.set("format_test", "/key", val_encoded);
         std.Thread.sleep(100 * std.time.ns_per_ms);
 
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 777, "format_test", "/key");
+        const message = try msgpack.createStoreGetMessage(allocator, 777, "format_test", "/key");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);

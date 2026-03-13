@@ -7,13 +7,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_lib = @import("msgpack");
-const msgpack_utils = @import("msgpack_utils.zig");
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const msgpack = struct {
-    pub const Payload = msgpack_lib.Payload;
-    pub const decode = msgpack_utils.decodePayload;
-};
+const msgpack = @import("msgpack_test_helpers.zig");
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
@@ -625,7 +619,7 @@ test "Property 7: All messages are parsed" {
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
         // Create a valid MessagePack message
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
         defer allocator.free(message);
 
         // This should not throw a parsing error
@@ -638,7 +632,7 @@ test "Property 7: All messages are parsed" {
         try handler.handleOpen(&ws);
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 2, "test", "/key1");
+        const message = try msgpack.createStoreGetMessage(allocator, 2, "test", "/key1");
         defer allocator.free(message);
 
         handler.handleMessage(&ws, message, .binary) catch {
@@ -652,7 +646,7 @@ test "Property 7: All messages are parsed" {
         try handler.handleOpen(&ws);
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 123, "ns", "/p", "v");
+        const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", "/p", "v");
         defer allocator.free(message);
 
         handler.handleMessage(&ws, message, .binary) catch {
@@ -672,7 +666,7 @@ test "Property 7: All messages are parsed" {
         };
 
         for (messages, 0..) |m, i| {
-            const msg = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i), m.ns, m.p, m.v);
+            const msg = try msgpack.createStoreSetMessage(allocator, @intCast(i), m.ns, m.p, m.v);
             defer allocator.free(msg);
             handler.handleMessage(&ws, msg, .binary) catch {
                 // Error expected
@@ -721,7 +715,7 @@ test "Property 8: Message type extraction" {
 
     // Test 1: StoreSet type should be extractable
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key", "val");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -735,7 +729,7 @@ test "Property 8: Message type extraction" {
 
     // Test 2: StoreGet type should be extractable
     {
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, 42, "test", "/key");
+        const message = try msgpack.createStoreGetMessage(allocator, 42, "test", "/key");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -751,7 +745,7 @@ test "Property 8: Message type extraction" {
     {
         // StoreSet
         {
-            const msg = try msgpack_helpers.createStoreSetMessage(allocator, 1, "a", "/b", "c");
+            const msg = try msgpack.createStoreSetMessage(allocator, 1, "a", "/b", "c");
             defer allocator.free(msg);
 
             var reader: std.Io.Reader = .fixed(msg);
@@ -764,7 +758,7 @@ test "Property 8: Message type extraction" {
         }
         // StoreGet
         {
-            const msg = try msgpack_helpers.createStoreGetMessage(allocator, 999, "x", "/y");
+            const msg = try msgpack.createStoreGetMessage(allocator, 999, "x", "/y");
             defer allocator.free(msg);
 
             var reader: std.Io.Reader = .fixed(msg);
@@ -782,12 +776,12 @@ test "Property 8: Message type extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
-        try msgpack_helpers.writeString(allocator, &buf, "path");
-        try msgpack_helpers.writeString(allocator, &buf, "/key");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeString(allocator, &buf, "/key");
 
         const msg_buf = buf.items;
 
@@ -804,14 +798,14 @@ test "Property 8: Message type extraction" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
-        try msgpack_helpers.writeString(allocator, &buf, "path");
-        try msgpack_helpers.writeString(allocator, &buf, "/key");
-        try msgpack_helpers.writeString(allocator, &buf, "value");
-        try msgpack_helpers.writeString(allocator, &buf, "val");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreSet");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeString(allocator, &buf, "/key");
+        try msgpack.writeString(allocator, &buf, "value");
+        try msgpack.writeString(allocator, &buf, "val");
 
         const msg_buf = buf.items;
 
@@ -864,7 +858,7 @@ test "Property 9: Request routing" {
 
     // Test 1: StoreSet message should route to handleStoreSet
     {
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -884,7 +878,7 @@ test "Property 9: Request routing" {
     // Test 2: StoreGet message should route to handleStoreGet
     {
         // First set a value
-        const set_message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
+        const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -896,7 +890,7 @@ test "Property 9: Request routing" {
         defer allocator.free(set_response);
 
         // Now get the value
-        const get_message = try msgpack_helpers.createStoreGetMessage(allocator, 2, "test", "/key2");
+        const get_message = try msgpack.createStoreGetMessage(allocator, 2, "test", "/key2");
         defer allocator.free(get_message);
 
         var get_reader: std.Io.Reader = .fixed(get_message);
@@ -914,7 +908,7 @@ test "Property 9: Request routing" {
 
     // Test 3: Unknown message type should return error
     {
-        const message = try msgpack_helpers.createCustomMessage(allocator, 3, "UnknownType", "test", "/key");
+        const message = try msgpack.createCustomMessage(allocator, 3, "UnknownType", "test", "/key");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -930,10 +924,10 @@ test "Property 9: Request routing" {
     // Test 4: Multiple different message types should route correctly
     {
         const msgs = [_][]const u8{
-            try msgpack_helpers.createStoreSetMessage(allocator, 10, "ns", "/p1", "v1"),
-            try msgpack_helpers.createStoreGetMessage(allocator, 11, "ns", "/p1"),
-            try msgpack_helpers.createStoreSetMessage(allocator, 12, "ns", "/p2", "v2"),
-            try msgpack_helpers.createCustomMessage(allocator, 13, "InvalidType", "ns", "/p3"),
+            try msgpack.createStoreSetMessage(allocator, 10, "ns", "/p1", "v1"),
+            try msgpack.createStoreGetMessage(allocator, 11, "ns", "/p1"),
+            try msgpack.createStoreSetMessage(allocator, 12, "ns", "/p2", "v2"),
+            try msgpack.createCustomMessage(allocator, 13, "InvalidType", "ns", "/p3"),
         };
         defer {
             for (msgs) |m| allocator.free(m);
@@ -1001,7 +995,7 @@ test "Property 10: Response correlation" {
     // Test 1: StoreSet response should include correlation ID
     {
         const correlation_id: u64 = 12345;
-        const message = try msgpack_helpers.createStoreSetMessage(allocator, correlation_id, "test", "/key", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, correlation_id, "test", "/key", "val");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -1034,7 +1028,7 @@ test "Property 10: Response correlation" {
     // Test 2: StoreGet response should include correlation ID
     {
         // First set a value
-        const set_message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
+        const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -1047,7 +1041,7 @@ test "Property 10: Response correlation" {
 
         // Now get with specific correlation ID
         const correlation_id: u64 = 99999;
-        const get_message = try msgpack_helpers.createStoreGetMessage(allocator, correlation_id, "test", "/key2");
+        const get_message = try msgpack.createStoreGetMessage(allocator, correlation_id, "test", "/key2");
         defer allocator.free(get_message);
 
         var get_reader: std.Io.Reader = .fixed(get_message);
@@ -1082,7 +1076,7 @@ test "Property 10: Response correlation" {
         const correlation_ids = [_]u64{ 1, 100, 999, 12345, 0 };
 
         for (correlation_ids) |corr_id| {
-            const message = try msgpack_helpers.createStoreSetMessage(allocator, corr_id, "test", "/key", "val");
+            const message = try msgpack.createStoreSetMessage(allocator, corr_id, "test", "/key", "val");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -1116,7 +1110,7 @@ test "Property 10: Response correlation" {
     // Test 4: Correlation ID should be preserved even for not found responses
     {
         const correlation_id: u64 = 77777;
-        const message = try msgpack_helpers.createStoreGetMessage(allocator, correlation_id, "test", "/nonexistent");
+        const message = try msgpack.createStoreGetMessage(allocator, correlation_id, "test", "/nonexistent");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -1213,9 +1207,9 @@ test "Property 11: Error responses for invalid messages" {
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x82); // fixmap(2)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "StoreSet");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
 
         const message = buf.items;
@@ -1248,14 +1242,14 @@ test "Property 11: Error responses for invalid messages" {
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "InvalidType");
-        try msgpack_helpers.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "InvalidType");
+        try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
-        try msgpack_helpers.writeString(allocator, &buf, "path");
-        try msgpack_helpers.writeString(allocator, &buf, "/key");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeString(allocator, &buf, "/key");
 
         const message = buf.items;
 
@@ -1286,12 +1280,12 @@ test "Property 11: Error responses for invalid messages" {
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
+        try msgpack.writeString(allocator, &buf, "type");
         try buf.append(allocator, 0x01); // int instead of string
-        try msgpack_helpers.writeString(allocator, &buf, "id");
-        try msgpack_helpers.writeString(allocator, &buf, "not_a_number");
-        try msgpack_helpers.writeString(allocator, &buf, "namespace");
-        try msgpack_helpers.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeString(allocator, &buf, "not_a_number");
+        try msgpack.writeString(allocator, &buf, "namespace");
+        try msgpack.writeString(allocator, &buf, "test");
 
         const message = buf.items;
 
