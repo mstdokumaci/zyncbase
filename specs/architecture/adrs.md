@@ -106,7 +106,6 @@ Exclusively use SQLite in Write-Ahead Logging (WAL) mode.
 **Rationale**:
 - **Parallel Reads**: Multiple readers can operate alongside one writer, which is critical for vertical scaling.
 - **Sequential I/O**: WAL optimizes I/O patterns, improving write performance.
-- **Performance Impact**: Transforms SQLite from 10k ops/sec to 170k+ ops/sec on a 16-core machine (mixed workload).
 
 **Principles Alignment**: 
 - #8 Predictable Performance
@@ -114,8 +113,7 @@ Exclusively use SQLite in Write-Ahead Logging (WAL) mode.
 **Consequences**:
 - ✅ True parallel reads utilizing all CPU cores.
 - ✅ Faster write performance compared to traditional rollback journals.
-- ⚠️ Writes are still serialized, but 10k writes/sec is sufficient for most apps (95% of use cases).
-- ⚠️ Mitigation: Batch writes to increase throughput if needed.
+- ⚠️ Writes are still serialized; batching is used to increase throughput.
 
 ---
 
@@ -238,12 +236,13 @@ No. Validation is enforced strictly on the server. The Client SDK uses TypeScrip
 High barrier to entry if users have to learn Zig to build a backend.
 
 **Decision**: 
-JSON configuration files only (`zyncbase-config.json`, `schema.json`, `authorization.json`). No server code or Zig knowledge required.
+ZyncBase follows a "Zero-Zig" philosophy where all core functionality is managed via JSON configuration files. No Zig knowledge is required to deploy or manage the server.
 
 **Rationale**:
-- Mimics successful infrastructure tools like Nginx, PostgreSQL, and Redis.
-- Familiar, version-control friendly pattern.
+- Mimics successful infrastructure tools like Nginx and PostgreSQL.
 - Lowers barrier to entry for JS/TS developers.
+
+For the full philosophy and its impact on architectural decisions, see the [Zero-Zig Philosophy in Core Principles](./core-principles.md#zero-zig-philosophy).
 
 **Principles Alignment**: 
 - #3 Self-Hosting First

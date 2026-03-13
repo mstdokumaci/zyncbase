@@ -8,7 +8,7 @@
 
 ZyncBase uses SQLite in Write-Ahead Logging (WAL) mode as its storage layer. This provides zero-config deployment, ACID transactions, and parallel reads—all critical for vertical scaling.
 
-**Key Innovation**: SQLite WAL mode + connection pool = parallel reads across all CPU cores
+**Key Innovation**: SQLite WAL mode + connection pool = parallel reads across all CPU cores. For the architectural decision, see [ADR-004](./adrs.md#adr-004-sqlite-wal-mode--concurrency).
 
 ---
 

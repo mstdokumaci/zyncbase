@@ -20,18 +20,14 @@ Complete guide to configuring the ZyncBase server with JSON files.
 
 ## Configuration-First Approach
 
-ZyncBase uses **JSON configuration files** instead of requiring you to write server code. The Zig binary reads these configs and handles everything.
+ZyncBase follows a **"Zero-Zig" philosophy**, meaning you don't write server code. Everything from data validation to security rules is defined in declarative JSON files.
 
-**Directory structure:**
-```
-my-app/
-├── zyncbase-server          # Downloaded binary (or use Docker)
-├── zyncbase-config.json     # Main server configuration
-├── schema.json         # Your data schema (JSON Schema format)
-├── authorization.json     # Authentication & authorization rules
-└── client/
-    └── app.ts          # Your frontend code (TypeScript SDK)
-```
+For more details on the rationale behind this approach, see the [Zero-Zig Philosophy](../architecture/core-principles.md#zero-zig-philosophy).
+
+**Core configuration files:**
+- `zyncbase-config.json`: Main server settings
+- `schema.json`: Data validation
+- `authorization.json`: Security rules
 
 ---
 
@@ -1175,50 +1171,9 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 3: Complex Authorization with Hook Server
 
-If `authorization.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic:
+If `authorization.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic. This allows you to delegate complex authorization to a local Bun-powered TypeScript server.
 
-**zyncbase.auth.ts:**
-```typescript
-import { createAdminClient } from '@zyncbase/server';
-
-const client = createAdminClient();
-
-export async function checkDocumentAccess({ session, namespace, path, value }) {
-  const workspaceId = namespace.split(':')[1];
-  
-  // Query ZyncBase using the same API as your frontend
-  const memberships = await client.store.query('workspace_members', {
-    where: { 
-      userId: { eq: session.sub },
-      workspaceId: { eq: workspaceId }
-    }
-  });
-
-  if (memberships.length === 0) return false;
-  
-  const role = memberships[0].role;
-  return role === 'admin' || role === 'editor';
-}
-```
-
-**authorization.json:**
-```json
-{
-  "rules": [
-    {
-      "namespace": "workspace:*",
-      "paths": [
-        {
-          "path": "documents.*",
-          "write": { "hook": "checkDocumentAccess" }
-        }
-      ]
-    }
-  ]
-}
-```
-
-The Hook Server is automatically managed by the ZyncBase CLI - you just write TypeScript functions and the CLI handles deployment, IPC, and connection management.
+For a complete guide on writing TypeScript hooks, using the Admin Client, and configuring the `authorization.json` delegation, see the [Authorization Implementation Guide](../implementation/auth-system.md#7-the-bun-hook-server-managing-complexity).
 
 ---
 

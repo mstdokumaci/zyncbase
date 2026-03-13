@@ -167,84 +167,9 @@ ws.send(msgpack.encode({
 
 **Hook Server Authorization:**
 
-ZyncBase delegates authorization to the Hook Server, allowing custom access control logic in TypeScript:
+ZyncBase delegates authorization to the Hook Server, allowing custom access control logic in TypeScript. This is the recommended approach for RBAC, ABAC, and relational permissions.
 
-```typescript
-// hooks/authorize.ts
-export async function authorize(request: AuthRequest): Promise<AuthResponse> {
-  const { user_id, namespace, operation, resource } = request;
-  
-  // Example: Check user has access to namespace
-  const hasAccess = await checkUserNamespaceAccess(user_id, namespace);
-  if (!hasAccess) {
-    return { allowed: false, reason: 'No namespace access' };
-  }
-  
-  // Example: Check operation-specific permissions
-  if (operation === 'write') {
-    const canWrite = await checkWritePermission(user_id, resource);
-    if (!canWrite) {
-      return { allowed: false, reason: 'No write permission' };
-    }
-  }
-  
-  // Allow with caching
-  return { 
-    allowed: true, 
-    cache_ttl_sec: 300  // Cache for 5 minutes
-  };
-}
-```
-
-**Authorization Best Practices:**
-
-1. **Fail Secure**: Deny access by default when Hook Server is unavailable
-2. **Principle of Least Privilege**: Grant minimum necessary permissions
-3. **Defense in Depth**: Validate at multiple layers (namespace, collection, document)
-4. **Cache Carefully**: Use short TTLs for cached permissions (5-15 minutes)
-5. **Audit All Decisions**: Log authorization failures for security monitoring
-
-**Common Authorization Patterns:**
-
-```typescript
-// Role-Based Access Control (RBAC)
-export async function authorize(req: AuthRequest): Promise<AuthResponse> {
-  const userRoles = await getUserRoles(req.user_id, req.namespace);
-  const requiredRole = getRequiredRole(req.operation, req.resource);
-  
-  return {
-    allowed: userRoles.includes(requiredRole),
-    cache_ttl_sec: 600
-  };
-}
-
-// Attribute-Based Access Control (ABAC)
-export async function authorize(req: AuthRequest): Promise<AuthResponse> {
-  const user = await getUser(req.user_id);
-  const resource = await getResource(req.resource);
-  
-  // Check attributes: user.department === resource.department
-  const allowed = evaluatePolicy(user, resource, req.operation);
-  
-  return { allowed, cache_ttl_sec: 300 };
-}
-
-// Owner-Based Access Control
-export async function authorize(req: AuthRequest): Promise<AuthResponse> {
-  const resource = await getResource(req.resource);
-  
-  // Only owner can modify
-  if (req.operation === 'write' || req.operation === 'delete') {
-    return {
-      allowed: resource.owner_id === req.user_id,
-      cache_ttl_sec: 300
-    };
-  }
-  
-  // Anyone can read
-  return { allowed: true, cache_ttl_sec: 600 };
-}
-```
+For comprehensive examples and implementation details (including RBAC, ABAC, and owner-based policies), see the [Authorization Implementation Guide](./auth-system.md#7-the-bun-hook-server-managing-complexity).
 
 ### Replay Attack Prevention
 

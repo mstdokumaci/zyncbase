@@ -12,32 +12,18 @@ The technical superiority of uWebSockets is corroborated by its performance in c
 | Peak Throughput (Req/s) | 200,000+ 1 | \~13,254 3 | \~22,286 3 |
 | Handshake Latency | Microsecond 4 | Millisecond 7 | Millisecond 7 |
 | Concurrency Model | Multi-threaded Event Loop 4 | Single-threaded Event Loop 3 | Event Loop / Workers 8 |
-| Binary Size | \~15MB (zyncbase) 1 | \>100MB 1 | \>100MB 1 |
+| Binary Size | ~15MB (zyncbase) 1 | >100MB 1 | >100MB 1 |
 
 The uWebSockets architecture achieves this performance by utilizing µSockets, a foundation library that abstracts eventing, networking, and cryptography across three distinct layers.4 For ZyncBase, this implies that the network layer can utilize native kernel features such as epoll on Linux or kqueue on BSD/macOS, providing a zero-abstraction penalty when interacting with the operating system’s I/O subsystems.4 The "one app per thread" model utilized by uWebSockets allows ZyncBase to spawn as many instances as there are CPU cores, sharing the listening port and maximizing vertical scaling capabilities.4  
 The verification of the networking assumptions indicates that the primary performance bottleneck in such systems often shifts from the I/O loop to the overhead of moving data across the language boundary. In Bun, the cost of transitioning data between Zig native structures and the JavaScriptCore (JSC) engine is a known factor.2 By operating as a standalone binary without a persistent JavaScript runtime, ZyncBase circumvents this specific bottleneck, although it must still optimize the serialization and deserialization of MessagePack payloads used for client-server communication.1
 
 ## **Storage Layer Verification: SQLite Write-Ahead Logging (WAL) and Concurrency**
 
-The storage strategy of ZyncBase relies on SQLite in Write-Ahead Logging (WAL) mode, a configuration that has gained prominence through its successful implementation in PocketBase.1 Historically, SQLite was characterized by its inability to handle concurrent writes due to its file-based locking mechanism, where a single writer would block all readers. The introduction of WAL mode transformed this dynamic by allowing readers to continue accessing the database file while a writer appends changes to a separate \*.wal log file.12
-
-### **Mechanism and Performance of WAL Mode**
-
-In WAL mode, write transactions do not modify the main database file directly. Instead, they append modified pages to the WAL file, which acts as a first-class data store.14 This separation allows multiple readers to coexist with a single writer, dramatically improving read concurrency and reducing write latency by utilizing sequential I/O patterns.14 Sequential I/O is inherently more efficient for modern SSDs compared to the random I/O required by traditional rollback journals, as it minimizes "disk head thrashing" and optimizes the NAND flash controller's write cycles.15
-
-| SQLite Setting | Recommended Value | Technical Implication |
-| :---- | :---- | :---- |
-| journal\_mode | WAL | Separates reads and writes into different files 13 |
-| synchronous | NORMAL | Reduces fsync frequency; trades some durability for speed 14 |
-| busy\_timeout | 5000ms \- 10000ms | Queues competing write transactions to prevent errors 14 |
-| cache\_size | \-262144 (256MB) | Caches hot pages in RAM to minimize disk I/O 14 |
-| mmap\_size | 1073741824 (1GB) | Maps the DB file to memory to reduce syscall overhead 14 |
-
-The verification of SQLite’s performance under high-concurrency web server benchmarks indicates that WAL mode can achieve upwards of 70,000 reads per second and 3,600 writes per second.15 However, these results are contingent upon the use of PRAGMA synchronous \= NORMAL. In WAL mode, NORMAL ensures that the database is still resilient to application crashes, although a power failure could theoretically lead to the loss of the most recent transactions.14 For real-time state management where sub-millisecond latency is prioritized, this trade-off is often considered optimal.16
+The storage strategy of ZyncBase relies on SQLite in Write-Ahead Logging (WAL) mode. This configuration allows multiple readers to operate alongside a single writer, dramatically improving read concurrency and reducing write latency. Technical analysis confirms that WAL mode can achieve upwards of 70,000 reads per second and 3,600 writes per second, provided `PRAGMA synchronous = NORMAL` is used. For real-time state management where sub-millisecond latency is prioritized, this trade-off is considered optimal.
 
 ### **The Single-Writer Constraint and Write Queuing**
 
-A critical assumption in the ZyncBase architecture is the ability to handle high write throughput despite SQLite’s fundamental single-writer policy. Even in WAL mode, SQLite allows only one writer at a time.13 If multiple threads attempt to write concurrently, they encounter a "database is locked" error (SQLITE\_BUSY).17 To address this, the ZyncBase architecture incorporates a Write Mutex to serialize mutations at the core engine level.1  
+A critical assumption in the ZyncBase architecture is the ability to handle high write throughput despite SQLite’s fundamental single-writer policy. Even in WAL mode, SQLite allows only one writer at a time.13 If multiple threads attempt to write concurrently, they encounter a "database is locked" error (SQLITE_BUSY).17 To address this, the ZyncBase architecture incorporates a Write Mutex to serialize mutations at the core engine level.1  
 Technical analysis of this approach confirms that application-level queuing is superior to relying on SQLite’s internal retry logic.18 By using a dedicated writer thread and an in-memory queue, the system can batch multiple updates into a single transaction.14 Wrapping 1,000 inserts in a single BEGIN... COMMIT block can increase throughput by 100x to 1,000x compared to individual transactions, as it consolidates multiple expensive fsync() system calls into a single operation.18  
 However, the "checkpointing" mechanism poses a potential risk to real-time performance. Checkpointing is the process of moving pages from the WAL file back to the main database file.13 While this happens, SQLite acquires locks that can briefly stall new write transactions.14 If the server is under constant read load, "checkpoint starvation" may occur, where the WAL file grows indefinitely because active readers prevent the checkpointer from completing its task.14 ZyncBase must therefore implement proactive checkpoint management, perhaps through manual PRAGMA wal\_checkpoint(PASSIVE) calls during low-traffic intervals or by tuning wal\_autocheckpoint to manage WAL size dynamically.14
 

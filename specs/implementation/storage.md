@@ -33,8 +33,11 @@ PRAGMA wal_autocheckpoint = 1000;
 
 ### Rationale
 
-**journal_mode = WAL:**
-Enables parallel reads and improves write performance. Essential for vertical scaling.
+## SQLite Configuration: WAL Mode
+
+ZyncBase leverages SQLite's Write-Ahead Logging (WAL) for high-performance concurrency. For a detailed explanation of the WAL mechanism and its benefits, see the [Storage Layer Architecture](../architecture/storage-layer.md#wal-mode-the-concurrency-engine).
+
+We enforce these settings on every connection:
 
 **cache_size = -64000:**
 Caches hot pages in RAM to reduce disk I/O. Negative value represents KB (64MB total).
