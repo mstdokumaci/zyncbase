@@ -2,6 +2,11 @@
 
 ZyncBase uses memory sanitizers to detect memory safety issues, memory leaks, and data races during testing.
 
+**Drivers**:
+- [Configuration Spec](../api-design/configuration.md) - Requirements for system reliability and performance validation.
+
+---
+
 ## Available Sanitizers
 
 ### ThreadSanitizer (TSan)

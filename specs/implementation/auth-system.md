@@ -3,6 +3,11 @@
 **Status**:  Done
 **Context**: Replaces complex row-level security (RLS) with a high-performance, JSON-declarative model executed natively by the ZyncBase Zig core. Evaluated on every incoming MessagePack frame.
 
+**Drivers**:
+- [Configuration API Design](../api-design/configuration.md) - Authorization rules and hook management requirements.
+
+---
+
 ## 1. Core Principles
 
 1. **Deny by Default**: All access is denied unless explicitly allowed by a rule.

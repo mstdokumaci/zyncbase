@@ -706,7 +706,7 @@ client.store.subscribe('tasks', {
 
 ### 5. Batch Updates
 
-Batch multiple updates into a single transaction (all-or-nothing). See the [Batch Operations Specification](../BATCH_OPERATIONS.md) for full details.
+Batch multiple updates into a single transaction (all-or-nothing). See the [Store API Specification](../api-design/store-api.md#batch-operations) for full details.
 
 ```typescript
 // Good - single transaction
@@ -726,9 +726,9 @@ await client.store.set('tasks.3', task3)
 
 ## See Also
 
-- [Core Principles](./CORE_PRINCIPLES.md) - Design philosophy
-- [Threading Model](./THREADING.md) - Parallel query execution
-- [Storage Layer](./STORAGE.md) - SQLite optimization
-- [Network Layer](./NETWORKING.md) - WebSocket protocol
-- [Query Language](../QUERY_LANGUAGE.md) - Query syntax reference
-- [Research](./RESEARCH.md) - Performance validation
+- [Core Principles](../architecture/core-principles.md) - Design philosophy
+- [Threading Model](../architecture/threading-model.md) - Parallel query execution
+- [Storage Layer](../architecture/storage-layer.md) - SQLite optimization
+- [Network Layer](./networking.md) - WebSocket protocol
+- [Query Language](../api-design/query-language.md) - Query syntax reference
+- [Research](../architecture/research.md) - Performance validation

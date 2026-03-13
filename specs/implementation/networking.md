@@ -545,8 +545,8 @@ const ConnectionLimiter = struct {
 
 ## See Also
 
-- [Core Principles](./CORE_PRINCIPLES.md) - Why we chose uWebSockets
-- [Threading Model](./THREADING.md) - How multi-threading works
-- [Storage Layer](./STORAGE.md) - SQLite integration
-- [Query Engine](./QUERY_ENGINE.md) - Message processing
-- [Research](./RESEARCH.md) - Performance validation
+- [Core Principles](../architecture/core-principles.md) - Why we chose uWebSockets
+- [Threading Model](../architecture/threading-model.md) - How multi-threading works
+- [Storage Layer](../architecture/storage-layer.md) - SQLite integration
+- [Query Engine](./query-engine.md) - Message processing
+- [Research](../architecture/research.md) - Performance validation

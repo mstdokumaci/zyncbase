@@ -261,5 +261,4 @@ The implementation ensures:
 ## See Also
 
 - [Memory Strategy Documentation](../src/memory_strategy.zig)
-- [Design Document: Memory Management](../docs/architecture/memory_management.md)
 - [Requirements: Memory Management Strategy](../.kiro/specs/architecture-improvements/requirements.md#requirement-7-memory-management-strategy)

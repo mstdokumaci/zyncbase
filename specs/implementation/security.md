@@ -549,7 +549,7 @@ server {
 - Cache authorization results when appropriate
 - Log authorization decisions for audit trails
 
-See [AUTH_SPEC.md](./AUTH_SPEC.md) for details on writing secure Hook Server functions.
+See [auth-system.md](./auth-system.md) for details on writing secure Hook Server functions.
 
 ### Circuit Breaker Protection
 
@@ -1463,10 +1463,10 @@ compliance:
 
 ### Documentation
 
-- [DEPLOYMENT.md](./DEPLOYMENT.md) - Deployment and configuration guide
-- [ERROR_TAXONOMY.md](./ERROR_TAXONOMY.md) - Complete error code reference
-- [PERFORMANCE_TUNING.md](./PERFORMANCE_TUNING.md) - Performance optimization guide
-- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) - Common issues and solutions
+-  - Deployment and configuration guide
+- [error-taxonomy.md](./error-taxonomy.md) - Complete error code reference
+-  - Performance optimization guide (removed - aspirational content)
+-  - Common issues and solutions
 
 ### Security Tools
 
@@ -1519,6 +1519,27 @@ We offer rewards for responsibly disclosed security vulnerabilities:
 - **High**: $500 - $1,000
 - **Medium**: $100 - $500
 - **Low**: Recognition in security acknowledgments
+
+## Validation & Success Criteria
+
+To ensure the security posture of ZyncBase remains robust, the following validations must be performed regularly.
+
+### Success Metrics
+- [ ] **Zero-Trust Validation**: All unauthorized requests must return `401 Unauthorized` or `403 Forbidden`.
+- [ ] **Rate Limit Effectiveness**: Burst traffic exceeding limits must be blocked with `429 Too Many Requests` without crashing the server.
+- [ ] **Memory Safety**: No buffer overflows or memory leaks in the MessagePack parser (verified by AddressSanitizer).
+- [ ] **Hook Isolation**: Errors or infinite loops in the TypeScript Hook Server must not affect the Zig core's stability (Circuit Breaker validation).
+
+### Verification Commands
+```bash
+# Run security property tests
+zig test src/security_property_test.zig
+
+# Verify Hook Server isolation
+zig build test --filter "HookServerIsolation"
+```
+
+---
 
 ## Changelog
 

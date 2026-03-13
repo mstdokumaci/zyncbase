@@ -1,9 +1,15 @@
 # ZyncBase Error Taxonomy & Handling Strategy
 
 **Status**: Finalized  
-**ADR**: Error Taxonomy (design_todo #1)
 
 This document defines the formal error taxonomy for ZyncBase, covering error categories, retry semantics, and SDK-level handling.
+
+---
+
+## Drivers
+
+This implementation follows the decisions established in:
+- [ADR-019: Formal Error Taxonomy](../architecture/adrs.md#adr-019-formal-error-taxonomy-and-handling-strategy)
 
 ---
 

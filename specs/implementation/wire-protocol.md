@@ -2,7 +2,6 @@
 
 **Last Updated**: 2026-03-09  
 **Status**: Draft — Pending Review  
-**ADR**: Wire Protocol Spec (design_todo #209)
 
 ---
 
@@ -163,7 +162,7 @@ Remove a value at a path.
 
 #### `StoreBatch`
 
-Perform multiple write operations atomically. See the [Batch Operations Specification](./BATCH_OPERATIONS.md) for wire format details and execution logic.
+Perform multiple write operations atomically. See the [Batch Operations Specification](./batch-operations.md) for wire format details and execution logic.
 
 ```
 {
