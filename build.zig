@@ -17,6 +17,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const sqlite_module = sqlite_dep.module("sqlite");
+ 
+    // Use vendored zig-msgpack
+    const msgpack_module = b.createModule(.{
+        .root_source_file = b.path("vendor/zig_msgpack/src/msgpack.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Create the main executable
     const exe = b.addExecutable(.{
@@ -28,6 +35,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("sqlite", sqlite_module);
+    exe.root_module.addImport("msgpack", msgpack_module);
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
             exe.root_module.sanitize_thread = true;
@@ -45,7 +53,7 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_module, "src/test_all.zig", sanitize, test_filter);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
@@ -55,7 +63,7 @@ pub fn build(b: *std.Build) void {
         "src/subscription_manager_test.zig",
         "src/hook_server_client_test.zig",
         "src/storage_engine_test.zig",
-        "src/messagepack_parser_test.zig",
+        "src/violation_tracker_test.zig",
         "src/lock_free_cache_test.zig",
         "src/memory_strategy_test.zig",
         "src/checkpoint_manager_test.zig",
@@ -64,7 +72,7 @@ pub fn build(b: *std.Build) void {
         "src/message_handler_test.zig",
     };
     for (unit_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
         const run_t = b.addRunArtifact(t);
         test_unit_step.dependOn(&run_t.step);
     }
@@ -86,9 +94,10 @@ pub fn build(b: *std.Build) void {
         "src/storage_engine_error_property_test.zig",
         "src/logging_property_test.zig",
         "src/memory_safety_property_test.zig",
+        "src/msgpack_utils_property_test.zig",
     };
     for (property_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
         const run_t = b.addRunArtifact(t);
         test_property_step.dependOn(&run_t.step);
     }
@@ -100,7 +109,7 @@ pub fn build(b: *std.Build) void {
         "src/storage_crud_test.zig",
     };
     for (integration_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
         const run_t = b.addRunArtifact(t);
         test_integration_step.dependOn(&run_t.step);
     }
@@ -111,6 +120,7 @@ fn setupTest(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     sqlite_module: *std.Build.Module,
+    msgpack_module: *std.Build.Module,
     root_file: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
@@ -128,6 +138,7 @@ fn setupTest(
     });
 
     t.root_module.addImport("sqlite", sqlite_module);
+    t.root_module.addImport("msgpack", msgpack_module);
     if (sanitize) |san| {
         if (std.mem.eql(u8, san, "thread")) {
             t.root_module.sanitize_thread = true;

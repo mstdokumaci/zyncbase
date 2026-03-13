@@ -30,7 +30,7 @@ test {
     std.testing.refAllDecls(@import("message_handler_test.zig"));
     std.testing.refAllDecls(@import("subscription_manager_perf_test.zig"));
     std.testing.refAllDecls(@import("storage_crud_test.zig"));
-    
+
     // Property tests
     std.testing.refAllDecls(@import("message_handler_property_test.zig"));
     std.testing.refAllDecls(@import("hook_server_client_property_test.zig"));
@@ -47,6 +47,7 @@ test {
     std.testing.refAllDecls(@import("storage_engine_error_property_test.zig"));
     std.testing.refAllDecls(@import("logging_property_test.zig"));
     std.testing.refAllDecls(@import("memory_safety_property_test.zig"));
+    std.testing.refAllDecls(@import("msgpack_utils_property_test.zig"));
 
     // Integration tests
     std.testing.refAllDecls(@import("integration_wiring_test.zig"));

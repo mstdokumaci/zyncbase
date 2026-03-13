@@ -1,19 +1,25 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const msgpack_lib = @import("msgpack");
+const msgpack_utils = @import("msgpack_utils.zig");
+const msgpack = struct {
+    pub const Payload = msgpack_lib.Payload;
+    pub const decode = msgpack_utils.decodePayload;
+    pub const encode = msgpack_utils.encodePayload;
+};
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
-const MessagePackSerializer = @import("messagepack_serializer.zig").MessagePackSerializer;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
     allocator: Allocator,
-    parser: *MessagePackParser,
+    violation_tracker: *ViolationTracker,
     request_handler: *RequestHandler,
     storage_engine: *StorageEngine,
     subscription_manager: *SubscriptionManager,
@@ -25,7 +31,7 @@ pub const MessageHandler = struct {
     /// Requirements: 5.1, 5.2, 5.3, 6.1
     pub fn init(
         allocator: Allocator,
-        parser: *MessagePackParser,
+        violation_tracker: *ViolationTracker,
         request_handler: *RequestHandler,
         storage_engine: *StorageEngine,
         subscription_manager: *SubscriptionManager,
@@ -36,7 +42,7 @@ pub const MessageHandler = struct {
 
         self.* = .{
             .allocator = allocator,
-            .parser = parser,
+            .violation_tracker = violation_tracker,
             .request_handler = request_handler,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
@@ -94,12 +100,24 @@ pub const MessageHandler = struct {
 
         // Parse MessagePack message
         std.log.debug("Incoming message ({}): {x}", .{message.len, message});
-        const parsed = self.parser.parse(message) catch |err| {
+        
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = msgpack.decode(self.allocator, &reader) catch |err| {
             std.log.debug("Failed to parse message from connection {}: {}", .{ conn_id, err });
+            
+            // Record violation if it was a security/limit error
+            if (isSecurityError(err)) {
+                if (try self.violation_tracker.recordViolation(conn_id)) {
+                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
+                    ws.close();
+                    return;
+                }
+            }
+            
             try self.sendError(ws, "INVALID_MESSAGE", "Failed to parse MessagePack");
             return;
         };
-        defer self.parser.freeValue(parsed);
+        defer parsed.free(self.allocator);
 
         // Extract message type and correlation ID
         const msg_info = self.extractMessageInfo(parsed) catch |err| {
@@ -204,27 +222,30 @@ pub const MessageHandler = struct {
 
     /// Extract message type and correlation ID from parsed MessagePack
     /// Requirements: 6.2, 6.9
-    pub fn extractMessageInfo(self: *MessageHandler, parsed: MessagePackParser.Value) !MessageInfo {
-        _ = self;
-
+    pub fn extractMessageInfo(_: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
+ 
         // Extract type and id from MessagePack map
         if (parsed != .map) {
             std.log.debug("parsed is not map, it is {}", .{parsed});
             return error.InvalidMessageFormat;
         }
-
+ 
         var msg_type: ?[]const u8 = null;
         var msg_id: ?u64 = null;
-
-        for (parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "type")) {
-                    if (entry.value == .string) {
-                        msg_type = entry.value.string;
+ 
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+            if (key == .str) {
+                const key_str = key.str.value();
+                if (std.mem.eql(u8, key_str, "type")) {
+                    if (value == .str) {
+                        msg_type = value.str.value();
                     }
-                } else if (std.mem.eql(u8, entry.key.string, "id")) {
-                    if (entry.value == .unsigned) {
-                        msg_id = entry.value.unsigned;
+                } else if (std.mem.eql(u8, key_str, "id")) {
+                    if (value == .uint) {
+                        msg_id = value.uint;
                     }
                 }
             }
@@ -246,7 +267,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         conn_id: u64,
         msg_info: MessageInfo,
-        parsed: MessagePackParser.Value,
+        parsed: msgpack.Payload,
     ) ![]const u8 {
         // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
@@ -264,27 +285,31 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         conn_id: u64,
         msg_id: u64,
-        parsed: MessagePackParser.Value,
+        parsed: msgpack.Payload,
     ) ![]const u8 {
         _ = conn_id;
 
         // Extract namespace, path, and value from message
         var namespace: ?[]const u8 = null;
         var path: ?[]const u8 = null;
-        var value: ?MessagePackParser.Value = null;
-
-        for (parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "namespace")) {
-                    if (entry.value == .string) {
-                        namespace = entry.value.string;
+        var value: ?msgpack.Payload = null;
+ 
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const key_str = key.str.value();
+                if (std.mem.eql(u8, key_str, "namespace")) {
+                    if (val == .str) {
+                        namespace = val.str.value();
                     }
-                } else if (std.mem.eql(u8, entry.key.string, "path")) {
-                    if (entry.value == .string) {
-                        path = entry.value.string;
+                } else if (std.mem.eql(u8, key_str, "path")) {
+                    if (val == .str) {
+                        path = val.str.value();
                     }
-                } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                    value = entry.value;
+                } else if (std.mem.eql(u8, key_str, "value")) {
+                    value = val;
                 }
             }
         }
@@ -295,10 +320,10 @@ pub const MessageHandler = struct {
 
         // Store in database
         // NOTE: We need to serialize the Value to bytes for storage
-        var serializer = MessagePackSerializer.init(self.allocator);
-        defer serializer.deinit();
-        try self.serializeValue(&serializer, value.?);
-        const serialized_value = try serializer.toOwnedSlice();
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        try msgpack.encode(value.?, &aw.writer);
+        const serialized_value = try aw.toOwnedSlice();
         defer self.allocator.free(serialized_value);
 
         try self.storage_engine.set(namespace.?, path.?, serialized_value);
@@ -313,7 +338,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         conn_id: u64,
         msg_id: u64,
-        parsed: MessagePackParser.Value,
+        parsed: msgpack.Payload,
     ) ![]const u8 {
         _ = conn_id;
 
@@ -321,15 +346,19 @@ pub const MessageHandler = struct {
         var namespace: ?[]const u8 = null;
         var path: ?[]const u8 = null;
 
-        for (parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "namespace")) {
-                    if (entry.value == .string) {
-                        namespace = entry.value.string;
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const key_str = key.str.value();
+                if (std.mem.eql(u8, key_str, "namespace")) {
+                    if (val == .str) {
+                        namespace = val.str.value();
                     }
-                } else if (std.mem.eql(u8, entry.key.string, "path")) {
-                    if (entry.value == .string) {
-                        path = entry.value.string;
+                } else if (std.mem.eql(u8, key_str, "path")) {
+                    if (val == .str) {
+                        path = val.str.value();
                     }
                 }
             }
@@ -350,92 +379,80 @@ pub const MessageHandler = struct {
     /// Build success response for StoreSet
     /// Requirements: 16.4
     fn buildSuccessResponse(self: *MessageHandler, msg_id: u64) ![]const u8 {
-        var serializer = MessagePackSerializer.init(self.allocator);
-        defer serializer.deinit();
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
 
-        try serializer.writeMapHeader(2);
-        try serializer.writeString("type");
-        try serializer.writeString("ok");
-        try serializer.writeString("id");
-        try serializer.writeUint(msg_id);
-
-        return try serializer.toOwnedSlice();
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+        
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+ 
+        try msgpack.encode(payload, &aw.writer);
+        return try aw.toOwnedSlice();
     }
 
     /// Build value response for StoreGet
     /// Requirements: 16.8, 16.9
     fn buildValueResponse(self: *MessageHandler, msg_id: u64, value_bytes: ?[]const u8) ![]const u8 {
-        var serializer = MessagePackSerializer.init(self.allocator);
-        defer serializer.deinit();
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
 
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+ 
         if (value_bytes) |v| {
-            try serializer.writeMapHeader(3);
-            try serializer.writeString("type");
-            try serializer.writeString("ok");
-            try serializer.writeString("id");
-            try serializer.writeUint(msg_id);
-            try serializer.writeString("value");
+            try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+            try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
             
-            // Append raw MessagePack bytes directly
-            try serializer.buf.appendSlice(self.allocator, v);
+            // For the value, we can decode it first or send it as binary
+            // Since it's already MessagePack, decoding it into a Payload is safest
+            var reader: std.Io.Reader = .fixed(v);
+            const val_payload = try msgpack.decode(self.allocator, &reader);
+            try payload.mapPut("value", val_payload);
         } else {
-            try serializer.writeMapHeader(3);
-            try serializer.writeString("type");
-            try serializer.writeString("error");
-            try serializer.writeString("id");
-            try serializer.writeUint(msg_id);
-            try serializer.writeString("code");
-            try serializer.writeString("NOT_FOUND");
+            try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
+            try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+            try payload.mapPut("code", try msgpack.Payload.strToPayload("NOT_FOUND", self.allocator));
         }
-
-        return try serializer.toOwnedSlice();
+ 
+        try msgpack.encode(payload, &aw.writer);
+        return try aw.toOwnedSlice();
     }
 
     /// Send error response to client
     /// Requirements: 6.7, 6.8
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
-        var serializer = MessagePackSerializer.init(self.allocator);
-        defer serializer.deinit();
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
 
-        try serializer.writeMapHeader(3);
-        try serializer.writeString("type");
-        try serializer.writeString("error");
-        try serializer.writeString("code");
-        try serializer.writeString(code);
-        try serializer.writeString("message");
-        try serializer.writeString(message);
-
-        const error_msg = try serializer.toOwnedSlice();
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+ 
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
+        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
+        try payload.mapPut("message", try msgpack.Payload.strToPayload(message, self.allocator));
+ 
+        try msgpack.encode(payload, &aw.writer);
+        const error_msg = try aw.toOwnedSlice();
         defer self.allocator.free(error_msg);
-
+ 
         ws.send(error_msg, .binary);
     }
-
-    /// Serialize a MessagePack Value back to bytes
-    fn serializeValue(self: *MessageHandler, serializer: *MessagePackSerializer, value: MessagePackParser.Value) !void {
-        switch (value) {
-            .nil => try serializer.writeNil(),
-            .boolean => |b| try serializer.writeBool(b),
-            .integer => |i| try serializer.writeInt(i),
-            .unsigned => |u| try serializer.writeUint(u),
-            .float => |f| try serializer.writeFloat(f),
-            .string => |s| try serializer.writeString(s),
-            .binary => |b| try serializer.writeBinary(b),
-            .array => |arr| {
-                try serializer.writeArrayHeader(arr.len);
-                for (arr) |val| {
-                    try self.serializeValue(serializer, val);
-                }
-            },
-            .map => |m| {
-                try serializer.writeMapHeader(m.len);
-                for (m) |entry| {
-                    try self.serializeValue(serializer, entry.key);
-                    try self.serializeValue(serializer, entry.value);
-                }
-            },
-        }
+ 
+    fn isSecurityError(err: anyerror) bool {
+        return switch (err) {
+            error.MaxDepthExceeded,
+            error.ArrayTooLarge,
+            error.MapTooLarge,
+            error.StringTooLong,
+            error.BinDataLengthTooLong,
+            error.ExtDataTooLarge,
+            => true,
+            else => false,
+        };
     }
+
 
     /// Message information extracted from parsed MessagePack
     const MessageInfo = struct {

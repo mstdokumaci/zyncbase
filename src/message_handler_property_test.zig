@@ -1,18 +1,24 @@
 const std = @import("std");
 
-
-
 const testing = std.testing;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const msgpack_lib = @import("msgpack");
+const msgpack_utils = @import("msgpack_utils.zig");
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const msgpack = struct {
+    pub const Payload = msgpack_lib.Payload;
+    pub const decode = msgpack_utils.decodePayload;
+};
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const ArrayList = std.ArrayList;
 
 // **Property 4: Connection open/close is inverse operation**
 // **Validates: Requirements 5.9**
@@ -22,18 +28,18 @@ test "Property 4: Connection open/close is inverse operation" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/message_handler/test_data_property4");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property4");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/message_handler/test_data_property4") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property4") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -45,7 +51,7 @@ test "Property 4: Connection open/close is inverse operation" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -388,18 +394,18 @@ test "Property 5: Unique connection IDs" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/message_handler/test_data_property5");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property5");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/message_handler/test_data_property5") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property5") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -411,7 +417,7 @@ test "Property 5: Unique connection IDs" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -512,7 +518,7 @@ test "Property 5: Unique connection IDs" {
         // Create a second handler instance
         const handler2 = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -576,23 +582,23 @@ fn openConnectionsConcurrently(
 // **Validates: Requirements 6.1**
 //
 // For any valid MessagePack binary message received on a WebSocket connection,
-// the MessagePackParser should successfully parse it without errors.
+// the zig-msgpack library should successfully parse it without errors.
 test "Property 7: All messages are parsed" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/message_handler/test_data_property7");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property7");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/message_handler/test_data_property7") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property7") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -604,7 +610,7 @@ test "Property 7: All messages are parsed" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -623,9 +629,7 @@ test "Property 7: All messages are parsed" {
         defer allocator.free(message);
 
         // This should not throw a parsing error
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        try handler.handleMessage(&ws, message, .binary);
     }
 
     // Test 2: Valid StoreGet message should be parsed successfully
@@ -683,20 +687,20 @@ test "Property 7: All messages are parsed" {
 // For any successfully parsed message, the message type field should be extractable
 // from the MessagePack map.
 test "Property 8: Message type extraction" {
+    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/message_handler/test_data_property8");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property8");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/message_handler/test_data_property8") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property8") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -707,7 +711,7 @@ test "Property 8: Message type extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -719,8 +723,10 @@ test "Property 8: Message type extraction" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key", "val");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqualStrings("StoreSet", msg_info.type);
@@ -731,8 +737,10 @@ test "Property 8: Message type extraction" {
     {
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 42, "test", "/key");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqualStrings("StoreGet", msg_info.type);
@@ -745,8 +753,11 @@ test "Property 8: Message type extraction" {
         {
             const msg = try msgpack_helpers.createStoreSetMessage(allocator, 1, "a", "/b", "c");
             defer allocator.free(msg);
-            const parsed = try parser.parse(msg);
-            defer parser.freeValue(parsed);
+
+            var reader: std.Io.Reader = .fixed(msg);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
+
             const info = try handler.extractMessageInfo(parsed);
             try testing.expectEqualStrings("StoreSet", info.type);
             try testing.expectEqual(@as(u64, 1), info.id);
@@ -755,8 +766,11 @@ test "Property 8: Message type extraction" {
         {
             const msg = try msgpack_helpers.createStoreGetMessage(allocator, 999, "x", "/y");
             defer allocator.free(msg);
-            const parsed = try parser.parse(msg);
-            defer parser.freeValue(parsed);
+
+            var reader: std.Io.Reader = .fixed(msg);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
+
             const info = try handler.extractMessageInfo(parsed);
             try testing.expectEqualStrings("StoreGet", info.type);
             try testing.expectEqual(@as(u64, 999), info.id);
@@ -776,8 +790,10 @@ test "Property 8: Message type extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "/key");
 
         const msg_buf = buf.items;
-        const parsed = try parser.parse(msg_buf);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const result = handler.extractMessageInfo(parsed);
         try testing.expectError(error.MissingRequiredFields, result);
@@ -798,8 +814,10 @@ test "Property 8: Message type extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "val");
 
         const msg_buf = buf.items;
-        const parsed = try parser.parse(msg_buf);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const result = handler.extractMessageInfo(parsed);
         try testing.expectError(error.MissingRequiredFields, result);
@@ -812,10 +830,10 @@ test "Property 8: Message type extraction" {
 // For any message with a recognized type (StoreSet, StoreGet), the message should be
 // routed to the appropriate handler function.
 test "Property 9: Request routing" {
+    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
@@ -836,7 +854,7 @@ test "Property 9: Request routing" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -848,8 +866,10 @@ test "Property 9: Request routing" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
@@ -866,8 +886,11 @@ test "Property 9: Request routing" {
         // First set a value
         const set_message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
         defer allocator.free(set_message);
-        const set_parsed = try parser.parse(set_message);
-        defer parser.freeValue(set_parsed);
+
+        var set_reader: std.Io.Reader = .fixed(set_message);
+        const set_parsed = try msgpack.decode(allocator, &set_reader);
+        defer set_parsed.free(allocator);
+
         const set_info = try handler.extractMessageInfo(set_parsed);
         const set_response = try handler.routeMessage(1, set_info, set_parsed);
         defer allocator.free(set_response);
@@ -875,8 +898,11 @@ test "Property 9: Request routing" {
         // Now get the value
         const get_message = try msgpack_helpers.createStoreGetMessage(allocator, 2, "test", "/key2");
         defer allocator.free(get_message);
-        const get_parsed = try parser.parse(get_message);
-        defer parser.freeValue(get_parsed);
+
+        var get_reader: std.Io.Reader = .fixed(get_message);
+        const get_parsed = try msgpack.decode(allocator, &get_reader);
+        defer get_parsed.free(allocator);
+
         const get_info = try handler.extractMessageInfo(get_parsed);
 
         const response = try handler.routeMessage(1, get_info, get_parsed);
@@ -890,8 +916,10 @@ test "Property 9: Request routing" {
     {
         const message = try msgpack_helpers.createCustomMessage(allocator, 3, "UnknownType", "test", "/key");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
@@ -914,8 +942,9 @@ test "Property 9: Request routing" {
         const should_succeed = [_]bool{ true, true, true, false };
 
         for (msgs, 0..) |m, i| {
-            const parsed = try parser.parse(m);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(m);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
 
@@ -937,20 +966,20 @@ test "Property 9: Request routing" {
 // For any request message with a correlation ID, the response message should include
 // the same correlation ID.
 test "Property 10: Response correlation" {
+    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test_data_property10");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property10");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test_data_property10") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property10") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -961,7 +990,7 @@ test "Property 10: Response correlation" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -975,8 +1004,9 @@ test "Property 10: Response correlation" {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, correlation_id, "test", "/key", "val");
         defer allocator.free(message);
 
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
@@ -985,13 +1015,16 @@ test "Property 10: Response correlation" {
         defer allocator.free(response);
 
         // Response should contain the correlation ID
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
+
         try testing.expect(resp_parsed == .map);
         var found_id = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "id")) {
-                try testing.expectEqual(correlation_id, entry.value.unsigned);
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
                 found_id = true;
             }
         }
@@ -1003,8 +1036,11 @@ test "Property 10: Response correlation" {
         // First set a value
         const set_message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key2", "value2");
         defer allocator.free(set_message);
-        const set_parsed = try parser.parse(set_message);
-        defer parser.freeValue(set_parsed);
+
+        var set_reader: std.Io.Reader = .fixed(set_message);
+        const set_parsed = try msgpack.decode(allocator, &set_reader);
+        defer set_parsed.free(allocator);
+
         const set_info = try handler.extractMessageInfo(set_parsed);
         const set_response = try handler.routeMessage(1, set_info, set_parsed);
         defer allocator.free(set_response);
@@ -1014,8 +1050,10 @@ test "Property 10: Response correlation" {
         const get_message = try msgpack_helpers.createStoreGetMessage(allocator, correlation_id, "test", "/key2");
         defer allocator.free(get_message);
 
-        const get_parsed = try parser.parse(get_message);
-        defer parser.freeValue(get_parsed);
+        var get_reader: std.Io.Reader = .fixed(get_message);
+        const get_parsed = try msgpack.decode(allocator, &get_reader);
+        defer get_parsed.free(allocator);
+
         const get_info = try handler.extractMessageInfo(get_parsed);
         try testing.expectEqual(correlation_id, get_info.id);
 
@@ -1023,13 +1061,16 @@ test "Property 10: Response correlation" {
         defer allocator.free(response);
 
         // Response should contain the correlation ID
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
+
         try testing.expect(resp_parsed == .map);
         var found_id = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "id")) {
-                try testing.expectEqual(correlation_id, entry.value.unsigned);
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
                 found_id = true;
             }
         }
@@ -1044,8 +1085,9 @@ test "Property 10: Response correlation" {
             const message = try msgpack_helpers.createStoreSetMessage(allocator, corr_id, "test", "/key", "val");
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             try testing.expectEqual(corr_id, msg_info.id);
@@ -1054,13 +1096,16 @@ test "Property 10: Response correlation" {
             defer allocator.free(response);
 
             // Each response should contain its specific correlation ID
-            const resp_parsed = try parser.parse(response);
-            defer parser.freeValue(resp_parsed);
+            var resp_reader: std.Io.Reader = .fixed(response);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            defer resp_parsed.free(allocator);
+
             try testing.expect(resp_parsed == .map);
             var found_id = false;
-            for (resp_parsed.map) |entry| {
-                if (entry.key == .string and std.mem.eql(u8, entry.key.string, "id")) {
-                    try testing.expectEqual(corr_id, entry.value.unsigned);
+            var it = resp_parsed.map.iterator();
+            while (it.next()) |entry| {
+                if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                    try testing.expectEqual(corr_id, entry.value_ptr.*.uint);
                     found_id = true;
                 }
             }
@@ -1074,8 +1119,9 @@ test "Property 10: Response correlation" {
         const message = try msgpack_helpers.createStoreGetMessage(allocator, correlation_id, "test", "/nonexistent");
         defer allocator.free(message);
 
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
@@ -1084,13 +1130,16 @@ test "Property 10: Response correlation" {
         defer allocator.free(response);
 
         // Response should contain the correlation ID even for not found
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
+
         try testing.expect(resp_parsed == .map);
         var found_id = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "id")) {
-                try testing.expectEqual(correlation_id, entry.value.unsigned);
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
                 found_id = true;
             }
         }
@@ -1106,18 +1155,19 @@ test "Property 10: Response correlation" {
 test "Property 11: Error responses for invalid messages" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    // Initialize all required components for MessageHandler
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test_data_property11");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property11");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test_data_property11") catch {};
+        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property11") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -1128,7 +1178,7 @@ test "Property 11: Error responses for invalid messages" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -1160,7 +1210,7 @@ test "Property 11: Error responses for invalid messages" {
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
         // Create map with 2 elements: type and id
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x82); // fixmap(2)
         try msgpack_helpers.writeString(allocator, &buf, "type");
@@ -1195,7 +1245,7 @@ test "Property 11: Error responses for invalid messages" {
         try handler.handleOpen(&ws);
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x84); // fixmap(4)
         try msgpack_helpers.writeString(allocator, &buf, "type");
@@ -1233,7 +1283,7 @@ test "Property 11: Error responses for invalid messages" {
         try handler.handleOpen(&ws);
         defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
         try msgpack_helpers.writeString(allocator, &buf, "type");

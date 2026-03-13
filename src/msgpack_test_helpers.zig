@@ -1,4 +1,15 @@
 const std = @import("std");
+const msgpack = @import("msgpack");
+const msgpack_utils = @import("msgpack_utils.zig");
+
+/// Wrapper for decodePayload to maintain compatibility with zig-msgpack v0.0.16
+pub const decodePayload = msgpack_utils.decodePayload;
+
+/// Helper to decode payload from a raw buffer
+pub fn decodePayloadFromBuffer(allocator: std.mem.Allocator, buffer: []const u8) !msgpack.Payload {
+    const reader: std.Io.Reader = .fixed(buffer);
+    return decodePayload(allocator, reader);
+}
 
 /// Helper to create a MessagePack map for testing
 /// Creates a simple map with string keys and values

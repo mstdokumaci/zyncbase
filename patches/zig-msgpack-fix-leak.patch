@@ -1,0 +1,12 @@
+diff --git a/src/msgpack.zig b/src/msgpack.zig
+index b3c642a..bdfe85a 100644
+--- a/src/msgpack.zig
++++ b/src/msgpack.zig
+@@ -2847,6 +2847,7 @@
+             else
+                 std.ArrayList(ParseState){};
+             defer if (current_zig.minor == 14) parse_stack.deinit() else parse_stack.deinit(allocator);
++            errdefer cleanupParseStack(&parse_stack, allocator);
+ 
+             // Root payload to return
+             var root: ?Payload = null;

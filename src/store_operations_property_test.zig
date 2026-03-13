@@ -1,13 +1,19 @@
 const std = @import("std");
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const msgpack_lib = @import("msgpack");
+const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const msgpack = struct {
+    pub const Payload = msgpack_lib.Payload;
+    pub const decode = msgpack_utils.decodePayload;
+};
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -26,18 +32,18 @@ fn createMockWebSocket() WebSocket {
 test "Property 25: StoreSet field extraction" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property25");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property25");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property25") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property25") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -48,7 +54,7 @@ test "Property 25: StoreSet field extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -60,8 +66,9 @@ test "Property 25: StoreSet field extraction" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test_ns", "/test/path", "test_value");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
@@ -90,8 +97,9 @@ test "Property 25: StoreSet field extraction" {
             const message = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i), tc.namespace, tc.path, tc.value);
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -118,8 +126,9 @@ test "Property 25: StoreSet field extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "val");
 
         const message = buf.items;
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -148,8 +157,9 @@ test "Property 25: StoreSet field extraction" {
         // Missing "path" and "value"
 
         const msg_buf = buf.items;
-        const parsed = try parser.parse(msg_buf);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -170,8 +180,9 @@ test "Property 25: StoreSet field extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "test");
 
         const msg_buf = buf.items;
-        const parsed = try parser.parse(msg_buf);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -188,18 +199,18 @@ test "Property 25: StoreSet field extraction" {
 test "Property 26: StoreSet storage engine call" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property26");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property26");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property26") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property26") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -210,7 +221,7 @@ test "Property 26: StoreSet storage engine call" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -222,8 +233,9 @@ test "Property 26: StoreSet storage engine call" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
@@ -236,11 +248,12 @@ test "Property 26: StoreSet storage engine call" {
         const stored_value = try storage_engine.get("test", "/key1");
         defer if (stored_value) |v| allocator.free(v);
         try testing.expect(stored_value != null);
-        
+
         // Value is stored as MessagePack-serialized
-        const stored_parsed = try parser.parse(stored_value.?);
-        defer parser.freeValue(stored_parsed);
-        try testing.expectEqualStrings("value1", stored_parsed.string);
+        var stored_reader: std.Io.Reader = .fixed(stored_value.?);
+        const stored_parsed = try msgpack.decode(allocator, &stored_reader);
+        defer stored_parsed.free(allocator);
+        try testing.expectEqualStrings("value1", stored_parsed.str.value());
     }
 
     // Test 2: Multiple StoreSet calls should all persist
@@ -259,8 +272,9 @@ test "Property 26: StoreSet storage engine call" {
             const message = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i + 10), td.namespace, td.path, td.value);
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -275,10 +289,11 @@ test "Property 26: StoreSet storage engine call" {
             const stored_value = try storage_engine.get(td.namespace, td.path);
             defer if (stored_value) |v| allocator.free(v);
             try testing.expect(stored_value != null);
-            
-            const stored_parsed = try parser.parse(stored_value.?);
-            defer parser.freeValue(stored_parsed);
-            try testing.expectEqualStrings(td.value, stored_parsed.string);
+
+            var stored_reader: std.Io.Reader = .fixed(stored_value.?);
+            const stored_parsed = try msgpack.decode(allocator, &stored_reader);
+            defer stored_parsed.free(allocator);
+            try testing.expectEqualStrings(td.value, stored_parsed.str.value());
         }
     }
 
@@ -286,13 +301,13 @@ test "Property 26: StoreSet storage engine call" {
     {
         const namespace = "update_test";
         const path = "/update_key";
-
         // Set initial value
         const message1 = try msgpack_helpers.createStoreSetMessage(allocator, 1, namespace, path, "initial");
         defer allocator.free(message1);
 
-        const parsed1 = try parser.parse(message1);
-        defer parser.freeValue(parsed1);
+        var reader1: std.Io.Reader = .fixed(message1);
+        const parsed1 = try msgpack.decode(allocator, &reader1);
+        defer parsed1.free(allocator);
         const info1 = try handler.extractMessageInfo(parsed1);
         const response1 = try handler.routeMessage(1, info1, parsed1);
         defer allocator.free(response1);
@@ -303,8 +318,9 @@ test "Property 26: StoreSet storage engine call" {
         const message2 = try msgpack_helpers.createStoreSetMessage(allocator, 2, namespace, path, "updated");
         defer allocator.free(message2);
 
-        const parsed2 = try parser.parse(message2);
-        defer parser.freeValue(parsed2);
+        var reader2: std.Io.Reader = .fixed(message2);
+        const parsed2 = try msgpack.decode(allocator, &reader2);
+        defer parsed2.free(allocator);
         const info2 = try handler.extractMessageInfo(parsed2);
         const response2 = try handler.routeMessage(1, info2, parsed2);
         defer allocator.free(response2);
@@ -315,10 +331,11 @@ test "Property 26: StoreSet storage engine call" {
         const stored_value = try storage_engine.get(namespace, path);
         defer if (stored_value) |v| allocator.free(v);
         try testing.expect(stored_value != null);
-        
-        const stored_parsed = try parser.parse(stored_value.?);
-        defer parser.freeValue(stored_parsed);
-        try testing.expectEqualStrings("updated", stored_parsed.string);
+
+        var stored_reader: std.Io.Reader = .fixed(stored_value.?);
+        const stored_parsed = try msgpack.decode(allocator, &stored_reader);
+        defer stored_parsed.free(allocator);
+        try testing.expectEqualStrings("updated", stored_parsed.str.value());
     }
 }
 
@@ -329,18 +346,18 @@ test "Property 26: StoreSet storage engine call" {
 test "Property 27: StoreSet success response" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property27");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property27");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property27") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property27") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -351,7 +368,7 @@ test "Property 27: StoreSet success response" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -363,28 +380,29 @@ test "Property 27: StoreSet success response" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", "/key", "val");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should indicate success
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_ok = false;
         var found_id = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "type")) {
-                    try testing.expectEqualStrings("ok", entry.value.string);
-                    found_ok = true;
-                } else if (std.mem.eql(u8, entry.key.string, "id")) {
-                    try testing.expectEqual(@as(u64, 1), entry.value.unsigned);
-                    found_id = true;
-                }
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
+                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
+                found_ok = true;
+            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                try testing.expectEqual(@as(u64, 1), entry.value_ptr.*.uint);
+                found_id = true;
             }
         }
         try testing.expect(found_ok and found_id);
@@ -401,21 +419,24 @@ test "Property 27: StoreSet success response" {
             const msg = try msgpack_helpers.createStoreSetMessage(allocator, i, "test", path_str, val_str);
             defer allocator.free(msg);
 
-            const parsed = try parser.parse(msg);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(msg);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
             defer allocator.free(response);
 
             // Each should return success
-            const resp_parsed = try parser.parse(response);
-            defer parser.freeValue(resp_parsed);
+            var resp_reader: std.Io.Reader = .fixed(response);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
             var found_ok = false;
-            for (resp_parsed.map) |entry| {
-                if (entry.key == .string and std.mem.eql(u8, entry.key.string, "type")) {
-                    try testing.expectEqualStrings("ok", entry.value.string);
+            var it = resp_parsed.map.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
+                    try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
                     found_ok = true;
                 }
             }
@@ -427,24 +448,25 @@ test "Property 27: StoreSet success response" {
     {
         const message = try msgpack_helpers.createStoreSetMessage(allocator, 999, "ns", "/p", "v");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should have expected format
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;
         var found_id = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "type")) found_type = true;
-                if (std.mem.eql(u8, entry.key.string, "id")) found_id = true;
-            }
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) found_type = true;
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) found_id = true;
         }
         try testing.expect(found_type and found_id);
     }
@@ -458,18 +480,18 @@ test "Property 27: StoreSet success response" {
 test "Property 28: StoreGet field extraction" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property28");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property28");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property28") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property28") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -480,7 +502,7 @@ test "Property 28: StoreGet field extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -492,8 +514,9 @@ test "Property 28: StoreGet field extraction" {
     {
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test_ns", "/test/path");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
@@ -521,8 +544,9 @@ test "Property 28: StoreGet field extraction" {
             const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i), tc.namespace, tc.path);
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -545,8 +569,9 @@ test "Property 28: StoreGet field extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "/test");
 
         const message = buf.items;
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -567,8 +592,9 @@ test "Property 28: StoreGet field extraction" {
         try msgpack_helpers.writeString(allocator, &buf, "test");
 
         const message = buf.items;
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -585,18 +611,18 @@ test "Property 28: StoreGet field extraction" {
 test "Property 29: StoreGet storage engine call" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property29");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property29");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property29") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property29") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -607,7 +633,7 @@ test "Property 29: StoreGet storage engine call" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -626,23 +652,24 @@ test "Property 29: StoreGet storage engine call" {
         // Now get it via message handler
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/key1");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the value (proving storage engine was called)
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var val: ?[]const u8 = null;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                if (entry.value == .string) {
-                    val = entry.value.string;
-                }
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                val = entry.value_ptr.*.str.value();
             }
         }
         try testing.expect(val != null);
@@ -674,23 +701,24 @@ test "Property 29: StoreGet storage engine call" {
             const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i + 10), td.namespace, td.path);
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
             defer allocator.free(response);
 
             // Response should contain the expected value
-            const resp_parsed = try parser.parse(response);
-            defer parser.freeValue(resp_parsed);
+            var resp_reader: std.Io.Reader = .fixed(response);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
             var val: ?[]const u8 = null;
-            for (resp_parsed.map) |entry| {
-                if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                    if (entry.value == .string) {
-                        val = entry.value.string;
-                    }
+            var it = resp_parsed.map.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                    val = entry.value_ptr.*.str.value();
                 }
             }
             try testing.expect(val != null);
@@ -702,21 +730,24 @@ test "Property 29: StoreGet storage engine call" {
     {
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/nonexistent");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Should get a NOT_FOUND response
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_not_found = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "code")) {
-                try testing.expectEqualStrings("NOT_FOUND", entry.value.string);
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "code")) {
+                try testing.expectEqualStrings("NOT_FOUND", entry.value_ptr.*.str.value());
                 found_not_found = true;
             }
         }
@@ -732,18 +763,18 @@ test "Property 29: StoreGet storage engine call" {
 test "Property 30: StoreGet value response" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/store_operations/test_data_property30");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property30");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/store_operations/test_data_property30") catch {};
+        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property30") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -754,7 +785,7 @@ test "Property 30: StoreGet value response" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -773,33 +804,32 @@ test "Property 30: StoreGet value response" {
         // Get it
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 1, "test", "/key1");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the value
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;
         var found_id = false;
         var val: ?[]const u8 = null;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "type")) {
-                    try testing.expectEqualStrings("ok", entry.value.string);
-                    found_type = true;
-                } else if (std.mem.eql(u8, entry.key.string, "id")) {
-                    try testing.expectEqual(@as(u64, 1), entry.value.unsigned);
-                    found_id = true;
-                } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                    if (entry.value == .string) {
-                        val = entry.value.string;
-                    }
-                }
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
+                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
+                found_type = true;
+            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
+                try testing.expectEqual(@as(u64, 1), entry.value_ptr.*.uint);
+                found_id = true;
+            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                val = entry.value_ptr.*.str.value();
             }
         }
         try testing.expect(found_type and found_id);
@@ -832,23 +862,24 @@ test "Property 30: StoreGet value response" {
             const message = try msgpack_helpers.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
             defer allocator.free(response);
 
             // Response should contain the specific value
-            const resp_parsed = try parser.parse(response);
-            defer parser.freeValue(resp_parsed);
+            var resp_reader: std.Io.Reader = .fixed(response);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
             var val: ?[]const u8 = null;
-            for (resp_parsed.map) |entry| {
-                if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                    if (entry.value == .string) {
-                        val = entry.value.string;
-                    }
+            var it = resp_parsed.map.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                    val = entry.value_ptr.*.str.value();
                 }
             }
             try testing.expect(val != null);
@@ -860,21 +891,24 @@ test "Property 30: StoreGet value response" {
     {
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 999, "test", "/does_not_exist");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should indicate not found
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var is_error = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "type")) {
-                if (std.mem.eql(u8, entry.value.string, "error")) is_error = true;
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
+                if (std.mem.eql(u8, entry.value_ptr.*.str.value(), "error")) is_error = true;
             }
         }
         try testing.expect(is_error);
@@ -890,26 +924,27 @@ test "Property 30: StoreGet value response" {
 
         const message = try msgpack_helpers.createStoreGetMessage(allocator, 777, "format_test", "/key");
         defer allocator.free(message);
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should have expected format
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;
         var found_id = false;
         var found_value = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string) {
-                if (std.mem.eql(u8, entry.key.string, "type")) found_type = true;
-                if (std.mem.eql(u8, entry.key.string, "id")) found_id = true;
-                if (std.mem.eql(u8, entry.key.string, "value")) found_value = true;
-            }
+        var it = resp_parsed.map.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) found_type = true;
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) found_id = true;
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) found_value = true;
         }
         try testing.expect(found_type and found_id and found_value);
     }

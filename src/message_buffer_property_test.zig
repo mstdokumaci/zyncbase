@@ -1,15 +1,20 @@
 const std = @import("std");
 
-
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const msgpack_lib = @import("msgpack");
+const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const msgpack = struct {
+    pub const Payload = msgpack_lib.Payload;
+    pub const decode = msgpack_utils.decodePayload;
+};
 
 test "Property 32: Message buffer deallocation" {
     // **Property 32: Message buffer deallocation**
@@ -36,13 +41,13 @@ test "Property 32: Message buffer deallocation" {
     var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
-    var parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
     // Create temporary directory for storage engine
-    const test_dir = "test-data/message_buffer/dealloc";
+    const test_dir = "test-artifact/message_buffer/dealloc";
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
@@ -61,7 +66,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -74,8 +79,9 @@ test "Property 32: Message buffer deallocation" {
         defer allocator.free(message);
 
         // Parse the message
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         // Extract message info
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -94,7 +100,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -108,8 +114,9 @@ test "Property 32: Message buffer deallocation" {
             const message = try createTestMessage(allocator, "StoreSet", i, "test_ns", "/path", "value");
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -123,7 +130,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -139,8 +146,9 @@ test "Property 32: Message buffer deallocation" {
         const message = try createTestMessage(allocator, "StoreSet", 1, "test_ns", "/path", large_value);
         defer allocator.free(message);
 
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(1, msg_info, parsed);
@@ -153,7 +161,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -165,8 +173,9 @@ test "Property 32: Message buffer deallocation" {
         const invalid_message = try createInvalidMessage(allocator);
         defer allocator.free(invalid_message);
 
-        const parsed = try parser.parse(invalid_message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(invalid_message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         // This should fail but not leak memory
         const result = handler.extractMessageInfo(parsed);
@@ -177,7 +186,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -198,8 +207,9 @@ test "Property 32: Message buffer deallocation" {
             );
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -211,7 +221,7 @@ test "Property 32: Message buffer deallocation" {
     {
         var handler = try MessageHandler.init(
             allocator,
-            parser,
+            &tracker,
             &request_handler,
             storage_engine,
             subscription_manager,
@@ -224,8 +234,9 @@ test "Property 32: Message buffer deallocation" {
             const message = try createTestMessage(allocator, "StoreSet", 1, "test_ns", "/key1", "value1");
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -237,8 +248,9 @@ test "Property 32: Message buffer deallocation" {
             const message = try createGetMessage(allocator, "StoreGet", 2, "test_ns", "/key1");
             defer allocator.free(message);
 
-            const parsed = try parser.parse(message);
-            defer parser.freeValue(parsed);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
@@ -301,12 +313,12 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
     var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
-    var parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    var tracker = ViolationTracker.init(allocator, 10);
+    defer tracker.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const test_dir = "test-data/message_buffer/concurrent";
+    const test_dir = "test-artifact/message_buffer/concurrent";
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
@@ -323,7 +335,7 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
 
     var handler = try MessageHandler.init(
         allocator,
-        parser,
+        &tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -333,7 +345,6 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
 
     const ThreadContext = struct {
         handler: *MessageHandler,
-        parser: *MessagePackParser,
         allocator: std.mem.Allocator,
         iterations: usize,
     };
@@ -352,8 +363,9 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
                 ) catch unreachable;
                 defer ctx.allocator.free(message);
 
-                const parsed = ctx.parser.parse(message) catch unreachable;
-                defer ctx.parser.freeValue(parsed);
+                var reader: std.Io.Reader = .fixed(message);
+                const parsed = msgpack.decode(ctx.allocator, &reader) catch unreachable;
+                defer parsed.free(ctx.allocator);
 
                 const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable;
                 const response = ctx.handler.routeMessage(1, msg_info, parsed) catch unreachable;
@@ -369,7 +381,6 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
     for (&contexts, 0..) |*ctx, idx| {
         ctx.* = .{
             .handler = handler,
-            .parser = parser,
             .allocator = allocator,
             .iterations = 50,
         };

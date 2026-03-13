@@ -1,15 +1,20 @@
 const std = @import("std");
 
-
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MessagePackParser = @import("messagepack_parser.zig").MessagePackParser;
+const msgpack_lib = @import("msgpack");
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const msgpack = struct {
+    pub const Payload = msgpack_lib.Payload;
+    pub const decode = msgpack_utils.decodePayload;
+};
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -25,18 +30,22 @@ test "Verification: WebSocket connection lifecycle" {
     const allocator = testing.allocator;
 
     // Initialize all required components
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    defer {
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+    }
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/integration/verification/test_data_verification_lifecycle");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_lifecycle");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/integration/verification/test_data_verification_lifecycle") catch {};
+        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_lifecycle") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -47,7 +56,7 @@ test "Verification: WebSocket connection lifecycle" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        violation_tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -79,18 +88,22 @@ test "Verification: WebSocket connection lifecycle" {
 test "Verification: StoreSet message processing" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    defer {
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+    }
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/integration/verification/test_data_verification_storeset");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_storeset");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/integration/verification/test_data_verification_storeset") catch {};
+        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_storeset") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -101,7 +114,7 @@ test "Verification: StoreSet message processing" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        violation_tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -120,8 +133,9 @@ test "Verification: StoreSet message processing" {
     defer allocator.free(message);
 
     // Parse the message
-    const parsed = try parser.parse(message);
-    defer parser.freeValue(parsed);
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
 
     // Extract message info
     const msg_info = try handler.extractMessageInfo(parsed);
@@ -133,19 +147,24 @@ test "Verification: StoreSet message processing" {
     defer allocator.free(response);
 
     // Verify response indicates success
-    const resp_parsed = try parser.parse(response);
-    defer parser.freeValue(resp_parsed);
+    var resp_reader: std.Io.Reader = .fixed(response);
+    const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+    defer resp_parsed.free(allocator);
 
     try testing.expect(resp_parsed == .map);
     var found_type = false;
     var found_id = false;
-    for (resp_parsed.map) |entry| {
-        if (entry.key == .string) {
-            if (std.mem.eql(u8, entry.key.string, "type")) {
-                try testing.expectEqualStrings("ok", entry.value.string);
+    var it = resp_parsed.map.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        if (key == .str) {
+            const key_str = key.str.value();
+            if (std.mem.eql(u8, key_str, "type")) {
+                try testing.expectEqualStrings("ok", val.str.value());
                 found_type = true;
-            } else if (std.mem.eql(u8, entry.key.string, "id")) {
-                try testing.expectEqual(@as(u64, 1), entry.value.unsigned);
+            } else if (std.mem.eql(u8, key_str, "id")) {
+                try testing.expectEqual(@as(u64, 1), val.uint);
                 found_id = true;
             }
         }
@@ -159,29 +178,34 @@ test "Verification: StoreSet message processing" {
     const stored_value = try storage_engine.get("test_namespace", "/test/key");
     defer if (stored_value) |v| allocator.free(v);
     try testing.expect(stored_value != null);
-    
+
     // Value is stored as MessagePack-serialized
-    const stored_parsed = try parser.parse(stored_value.?);
-    defer parser.freeValue(stored_parsed);
-    try testing.expectEqualStrings("test_value", stored_parsed.string);
+    var stored_reader: std.Io.Reader = .fixed(stored_value.?);
+    const stored_parsed = try msgpack.decode(allocator, &stored_reader);
+    defer stored_parsed.free(allocator);
+    try testing.expectEqualStrings("test_value", stored_parsed.str.value());
 }
 
 // Task 14 Verification: StoreGet message processing
 test "Verification: StoreGet message processing" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    defer {
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+    }
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/integration/verification/test_data_verification_storeget");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_storeget");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/integration/verification/test_data_verification_storeget") catch {};
+        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_storeget") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -192,7 +216,7 @@ test "Verification: StoreGet message processing" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        violation_tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -216,8 +240,9 @@ test "Verification: StoreGet message processing" {
     defer allocator.free(message);
 
     // Parse the message
-    const parsed = try parser.parse(message);
-    defer parser.freeValue(parsed);
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
 
     // Extract message info
     const msg_info = try handler.extractMessageInfo(parsed);
@@ -229,24 +254,29 @@ test "Verification: StoreGet message processing" {
     defer allocator.free(response);
 
     // Verify response contains the value
-    const resp_parsed = try parser.parse(response);
-    defer parser.freeValue(resp_parsed);
+    var resp_reader: std.Io.Reader = .fixed(response);
+    const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+    defer resp_parsed.free(allocator);
 
     try testing.expect(resp_parsed == .map);
     var found_type = false;
     var found_id = false;
     var found_value = false;
-    for (resp_parsed.map) |entry| {
-        if (entry.key == .string) {
-            if (std.mem.eql(u8, entry.key.string, "type")) {
-                try testing.expectEqualStrings("ok", entry.value.string);
+    var it = resp_parsed.map.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        if (key == .str) {
+            const key_str = key.str.value();
+            if (std.mem.eql(u8, key_str, "type")) {
+                try testing.expectEqualStrings("ok", val.str.value());
                 found_type = true;
-            } else if (std.mem.eql(u8, entry.key.string, "id")) {
-                try testing.expectEqual(@as(u64, 2), entry.value.unsigned);
+            } else if (std.mem.eql(u8, key_str, "id")) {
+                try testing.expectEqual(@as(u64, 2), val.uint);
                 found_id = true;
-            } else if (std.mem.eql(u8, entry.key.string, "value")) {
-                if (entry.value == .string) {
-                    try testing.expectEqualStrings("stored_value", entry.value.string);
+            } else if (std.mem.eql(u8, key_str, "value")) {
+                if (val == .str) {
+                    try testing.expectEqualStrings("stored_value", val.str.value());
                     found_value = true;
                 }
             }
@@ -259,18 +289,22 @@ test "Verification: StoreGet message processing" {
 test "Verification: Error handling for invalid messages" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    defer {
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+    }
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/integration/verification/test_data_verification_errors");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_errors");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/integration/verification/test_data_verification_errors") catch {};
+        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_errors") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -281,7 +315,7 @@ test "Verification: Error handling for invalid messages" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        violation_tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -293,8 +327,9 @@ test "Verification: Error handling for invalid messages" {
     {
         // Create truly invalid MessagePack (incomplete map)
         const invalid_message = &[_]u8{0x81}; // fixmap with 1 element but no elements follow
-        const result = parser.parse(invalid_message);
-        try testing.expectError(error.UnexpectedEOF, result);
+        var reader: std.Io.Reader = .fixed(invalid_message);
+        const result = msgpack.decode(allocator, &reader);
+        try testing.expectError(error.EndOfStream, result);
     }
 
     // Test 2: Message missing required fields should fail
@@ -315,8 +350,10 @@ test "Verification: Error handling for invalid messages" {
         const message = try buf.toOwnedSlice(allocator);
         defer allocator.free(message);
 
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+
+        defer parsed.free(allocator);
 
         // Should fail to extract message info (missing id)
         const result = handler.extractMessageInfo(parsed);
@@ -368,8 +405,10 @@ test "Verification: Error handling for invalid messages" {
         const message = try buf.toOwnedSlice(allocator);
         defer allocator.free(message);
 
-        const parsed = try parser.parse(message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
+
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const result = handler.routeMessage(1, msg_info, parsed);
@@ -381,18 +420,22 @@ test "Verification: Error handling for invalid messages" {
 test "Verification: End-to-end StoreSet and StoreGet flow" {
     const allocator = testing.allocator;
 
-    const parser = try MessagePackParser.init(allocator, .{});
-    defer parser.deinit();
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    defer {
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+    }
 
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-data/integration/verification/test_data_verification_e2e");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_e2e");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-data/integration/verification/test_data_verification_e2e") catch {};
+        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_e2e") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -403,7 +446,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     const handler = try MessageHandler.init(
         allocator,
-        parser,
+        violation_tracker,
         &request_handler,
         storage_engine,
         subscription_manager,
@@ -439,21 +482,26 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         );
         defer allocator.free(set_message);
 
-        const parsed = try parser.parse(set_message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(set_message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(conn_id, msg_info, parsed);
         defer allocator.free(response);
 
         // Verify success response
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_ok = false;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "type")) {
-                try testing.expectEqualStrings("ok", entry.value.string);
+        var rit = resp_parsed.map.iterator();
+        while (rit.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str and std.mem.eql(u8, key.str.value(), "type")) {
+                try testing.expectEqualStrings("ok", val.str.value());
                 found_ok = true;
             }
         }
@@ -473,21 +521,25 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         );
         defer allocator.free(get_message);
 
-        const parsed = try parser.parse(get_message);
-        defer parser.freeValue(parsed);
+        var reader: std.Io.Reader = .fixed(get_message);
+        const parsed = try msgpack.decode(allocator, &reader);
+        defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
         const response = try handler.routeMessage(conn_id, msg_info, parsed);
         defer allocator.free(response);
 
         // Verify response contains the value
-        const resp_parsed = try parser.parse(response);
-        defer parser.freeValue(resp_parsed);
+        var resp_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var val: ?[]const u8 = null;
-        for (resp_parsed.map) |entry| {
-            if (entry.key == .string and std.mem.eql(u8, entry.key.string, "value")) {
-                val = entry.value.string;
+        var rit = resp_parsed.map.iterator();
+        while (rit.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (key == .str and std.mem.eql(u8, key.str.value(), "value")) {
+                val = entry.value_ptr.*.str.value();
             }
         }
         try testing.expect(val != null);
