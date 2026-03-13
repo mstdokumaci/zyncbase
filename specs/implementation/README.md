@@ -16,7 +16,7 @@ This directory contains the technical details, internal implementations, and low
 
 ## Security & Reliability
 - [Security Model](./security.md) — Comprehensive security audit and threat model.
-- [Auth System](./auth-system.md) — JSON-declarative rules (`auth.json`).
+- [Auth System](./auth-system.md) — JSON-declarative rules (`authorization.json`).
 - [Auth Exchange](./auth-exchange.md) — Ticket-based handshake and session enrichment.
 - [Error Taxonomy](./error-taxonomy.md) — Formal classification for retries and monitoring.
 - [Sanitizers](./sanitizers.md) — Reliability strategies using TSan/ASan.

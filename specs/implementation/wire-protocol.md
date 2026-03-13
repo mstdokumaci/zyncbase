@@ -688,7 +688,7 @@ All errors follow a consistent envelope:
 | `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
 | `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
-| `PERMISSION_DENIED` | authorization | `auth.json` or Hook Server rejected the operation |
+| `PERMISSION_DENIED` | authorization | `authorization.json` or Hook Server rejected the operation |
 | `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
 | `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
 | `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
@@ -745,7 +745,7 @@ Sent when a ticket is requested or a session is refreshed.
 
 ### `HookServerAuthCheck`
 
-Sent when `auth.json` delegates a rule to the hook server.
+Sent when `authorization.json` delegates a rule to the hook server.
 
 **Request**:
 ```json

@@ -1,6 +1,6 @@
 # Memory Management Implementation
 
-**Drivers**: [Threading Model Architecture](../../architecture/threading-model.md), [ADR-004: Zig as Core Language](../architecture/adrs.md#adr-004-zig-as-core-system-language)
+**Drivers**: [Threading Model Architecture](../../architecture/threading-model.md), [ADR-001: Zig as Core Language](../architecture/adrs.md#adr-001-zig-as-core-system-language)
 
 This document contains technical implementation details for ZyncBase's memory management, focusing on manual allocation strategies, request-scoped lifetimes, and object pooling.
 

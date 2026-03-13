@@ -47,7 +47,7 @@ Detailed Zig implementation and memory ordering specifics can be found in the [L
 - **Scaling**: Near-linear scaling of reads with additional CPU cores.
 - **Latency**: Sub-millisecond retrieval for cached keys.
 
-See [ADR-002](./adrs.md#adr-002-performance-targets--vertical-scaling) for more on our performance philosophy.
+See [ADR-020](./adrs.md#adr-020-performance-targets--vertical-scaling) for more on our performance philosophy.
 
 ---
 

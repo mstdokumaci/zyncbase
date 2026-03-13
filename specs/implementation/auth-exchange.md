@@ -7,7 +7,7 @@
 ZyncBase is a **Resource Server (Validator)**, not an Identity Provider (IDP). It does not manage user accounts, passwords, or OAuth flows. It trusts external tokens (JWTs) or relies on a developer-provided **Bun Hook Server** to resolve identity into a local session context.
 
 ## 2. The `$session` Context
-The `$session` object is the unified source of truth for authorization. It replaces the raw `$jwt` in all `auth.json` rules. 
+The `$session` object is the unified source of truth for authorization. It replaces the raw `$jwt` in all `authorization.json` rules. 
 
 - **Source**: Populated via the `onConnect` hook in the Hook Server.
 - **Default**: If no Hook Server is present, `$session` defaults to the standard claims found in the validated external JWT.
@@ -71,5 +71,5 @@ Subsequent operations on the same connection now evaluate against the updated `$
 
 ## 5. Security & Performance
 - **Zero-Trust Handshake**: Zig never accepts a WebSocket connection without a valid ticket.
-- **Microsecond Authorization**: Because the `$session` is baked into the connection (or ticket), `auth.json` evaluation happens natively in Zig with no foreign calls.
+- **Microsecond Authorization**: Because the `$session` is baked into the connection (or ticket), `authorization.json` evaluation happens natively in Zig with no foreign calls.
 - **No Hook Server Latency on Sync**: Relational lookups are done once (at ticket time) and cached in the `$session`, keeping the sync loop incredibly fast.

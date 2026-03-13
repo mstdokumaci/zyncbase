@@ -12,7 +12,7 @@ Complete guide to configuring the ZyncBase server with JSON files.
 2. [zyncbase-config.json](#zyncbase-configjson)
 3. [schema.json](#schemajson)
 4. [Schema Migrations](#schema-migrations)
-5. [auth.json](#authjson)
+5. [authorization.json](#authorizationjson)
 6. [Environment Variables](#environment-variables)
 7. [Examples](#examples)
 
@@ -28,7 +28,7 @@ my-app/
 ├── zyncbase-server          # Downloaded binary (or use Docker)
 ├── zyncbase-config.json     # Main server configuration
 ├── schema.json         # Your data schema (JSON Schema format)
-├── auth.json           # Authentication & authorization rules
+├── authorization.json     # Authentication & authorization rules
 └── client/
     └── app.ts          # Your frontend code (TypeScript SDK)
 ```
@@ -47,7 +47,7 @@ Main server configuration file.
     "port": 3000
   },
   "schema": "./schema.json",
-  "authorization": "./auth.json",
+  "authorization": "./authorization.json",
   "authentication": {
     "jwt": {
       "secret": "${JWT_SECRET}"
@@ -179,11 +179,11 @@ Or simple string format:
 
 #### `authorization`
 
-Path to the `auth.json` file containing authorization rules.
+Path to the `authorization.json` file containing authorization rules.
 
 ```json
 {
-  "authorization": "./auth.json"
+  "authorization": "./authorization.json"
 }
 ```
 
@@ -914,7 +914,7 @@ For detailed migration guides, see the ZyncBase documentation (MIGRATIONS.md was
 
 ---
 
-## auth.json
+## authorization.json
 
 Define authorization rules using a simple expression language.
 
@@ -996,7 +996,7 @@ import { createAdminClient } from '@zyncbase/server';
 // Automatically configured to talk to the local Zig core
 const client = createAdminClient();
 
-// Function names match the "hook" rules in auth.json
+// Function names match the "hook" rules in authorization.json
 export async function isRoomMember({ session, namespace, path, value }) {
   const roomId = namespace.split(':')[1];
   
@@ -1023,7 +1023,7 @@ export async function hasPermission({ session, namespace, path, value }) {
 }
 ```
 
-**auth.json:**
+**authorization.json:**
 ```json
 {
   "rules": [
@@ -1122,7 +1122,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 }
 ```
 
-**auth.json:**
+**authorization.json:**
 ```json
 {
   "rules": [
@@ -1156,7 +1156,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 }
 ```
 
-**auth.json:**
+**authorization.json:**
 ```json
 {
   "rules": [
@@ -1175,7 +1175,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ### Example 3: Complex Authorization with Hook Server
 
-If `auth.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic:
+If `authorization.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic:
 
 **zyncbase.auth.ts:**
 ```typescript
@@ -1201,7 +1201,7 @@ export async function checkDocumentAccess({ session, namespace, path, value }) {
 }
 ```
 
-**auth.json:**
+**authorization.json:**
 ```json
 {
   "rules": [
@@ -1222,22 +1222,14 @@ The Hook Server is automatically managed by the ZyncBase CLI - you just write Ty
 
 ---
 
-## Hot Reload
-
-ZyncBase watches config files and reloads automatically when they change:
-
-```bash
-# Edit config
-vim zyncbase-config.json
-
-# Server automatically reloads
-# No restart needed!
+# Server restart is required for config changes.
+# v1: No automatic hot reload is supported.
 ```
 
 **What triggers reload:**
-- `zyncbase-config.json` changes
-- `schema.json` changes
-- `auth.json` changes
+- `zyncbase-config.json` changes (requires restart)
+- `schema.json` changes (requires restart)
+- `authorization.json` changes (requires restart)
 
 **What doesn't trigger reload:**
 - Environment variable changes (requires restart)

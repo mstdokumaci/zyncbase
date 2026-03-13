@@ -36,7 +36,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `AUTH_FAILED` | Authentication | Identity verification failed | Invalid ticket or expired initial JWT | 401 | No - Get new token |
 | `TOKEN_EXPIRED` | Authentication | Session has expired | Connection closed by server; requires re-auth | 401 | Yes - Refresh token |
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
-| `PERMISSION_DENIED` | Authorization | Rule blocked operation | `auth.json` or Hook Server returned `false` | 403 | No - Check permissions |
+| `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` or Hook Server returned `false` | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |
 | `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Exponential backoff |

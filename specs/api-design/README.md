@@ -23,7 +23,7 @@ For ephemeral, transient user awareness (cursors, typing indicators). Data is ke
 Complete guide to server configuration, including:
 - Server settings (port, host, security)
 - Schema definitions and migrations
-- Authorization rules (`auth.json`)
+- Authorization rules (`authorization.json`)
 - Namespaces and multi-tenancy
 
 ---

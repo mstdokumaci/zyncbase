@@ -1,4 +1,4 @@
-# ZyncBase Authorization Format (`auth.json`) - Draft Spec
+# ZyncBase Authorization Format (`authorization.json`) - Draft Spec
 
 **Status**:  Done
 **Context**: Replaces complex row-level security (RLS) with a high-performance, JSON-declarative model executed natively by the ZyncBase Zig core. Evaluated on every incoming MessagePack frame.
@@ -133,12 +133,12 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
 The core tension in authorization is between **stateless performance** and **complex relational permissions** (e.g., "does this user belong to the workspace that owns the folder containing this document?").
 
 To solve this, ZyncBase draws a hard line:
-1. **`auth.json` is strictly for stateless checks.** (e.g., `$namespace.tenant == $session.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
+1. **`authorization.json` is strictly for stateless checks.** (e.g., `$namespace.tenant == $session.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
 2. **Any rule requiring a database lookup (`$doc` or external tables) is delegated to the Bun Hook Server.**
 
-We do *not* attempt to build a Turing-complete database lookup engine into `auth.json`. Instead, ZyncBase provides an out-of-the-box Bun WebSocket server. Developers simply write a TypeScript function to handle complex auth logic.
+We do *not* attempt to build a Turing-complete database lookup engine into `authorization.json`. Instead, ZyncBase provides an out-of-the-box Bun WebSocket server. Developers simply write a TypeScript function to handle complex auth logic.
 
-**Example `auth.json` delegation:**
+**Example `authorization.json` delegation:**
 ```json
 {
   "namespace": "tenant:*",
@@ -160,7 +160,7 @@ We do *not* attempt to build a Turing-complete database lookup engine into `auth
 **The Developer Experience:**
 The developer writes authorization logic in a designated file (e.g., `zyncbase.auth.ts`). The CLI spins up the Bun Hook Server automatically. 
 
-Crucially, **the Hook Server is provided a privileged ZyncBase client**. The developer queries ZyncBase using the exact same `client.store` API they use in the frontend, but running as an admin that bypasses `auth.json`. This eliminates the need to configure Prisma, Drizzle, or raw SQL just for authorization.
+Crucially, **the Hook Server is provided a privileged ZyncBase client**. The developer queries ZyncBase using the exact same `client.store` API they use in the frontend, but running as an admin that bypasses `authorization.json`. This eliminates the need to configure Prisma, Drizzle, or raw SQL just for authorization.
 
 ```typescript
 // zyncbase.auth.ts
@@ -169,7 +169,7 @@ import { createAdminClient } from '@zyncbase/server';
 // Automatically configured to talk to the local Zig core over IPC/WebSocket
 const client = createAdminClient();
 
-// The function name matches the `"hook"` rule in auth.json
+// The function name matches the `"hook"` rule in authorization.json
 export async function checkDocumentAccess({ session, namespace, path, value }) {
   const workspaceId = namespace.split(':')[1];
   
