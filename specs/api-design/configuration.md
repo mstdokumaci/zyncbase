@@ -1040,7 +1040,7 @@ export async function hasPermission({ session, namespace, path, value }) {
 }
 ```
 
-The CLI automatically spins up the Bun Hook Server and manages the IPC/WebSocket connection. See [../implementation/auth-system.md](./../implementation/auth-system.md) for complete details.
+The CLI automatically spins up the Bun Hook Server and manages the IPC/WebSocket connection.
 
 ---
 
@@ -1218,7 +1218,7 @@ export async function checkDocumentAccess({ session, namespace, path, value }) {
 }
 ```
 
-The Hook Server is automatically managed by the ZyncBase CLI - you just write TypeScript functions and the CLI handles deployment, IPC, and connection management. See [../implementation/auth-system.md](./../implementation/auth-system.md) for details.
+The Hook Server is automatically managed by the ZyncBase CLI - you just write TypeScript functions and the CLI handles deployment, IPC, and connection management.
 
 ---
 
@@ -1264,6 +1264,6 @@ Fix: Add "schema": "./schema.json" to your config
 
 ## Next Steps
 
-- [API Reference](./client-sdk-api.md) - Learn the client SDK
+- [Store API](./store-api.md) - Learn the data sync API
 -  - Deploy to production (removed - aspirational content)
 - [Examples](https://github.com/zyncbase/examples) - See complete examples

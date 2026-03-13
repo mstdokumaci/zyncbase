@@ -29,6 +29,41 @@ ZyncBase's query language is inspired by Prisma with improvements:
 - **Standard SQL terms** - `limit` (not `take`)
 - **Cursor-based pagination** - Use `after` for stable real-time navigation
 
+### Why Prisma-inspired?
+
+We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Prisma-inspired syntax because:
+
+1. **TypeScript-first** - Matches our target audience (modern web developers)
+2. **Clean syntax** - No `$` or `_` prefixes that feel like workarounds
+3. **Growing adoption** - Developers are already learning Prisma
+4. **Well-designed** - Learned from MongoDB's mistakes over 15+ years
+
+### Our improvements over Prisma
+
+| Aspect | Prisma | ZyncBase | Why |
+|--------|--------|-----|-----|
+| AND operator | `AND: [...]` | Implicit at root | Simpler for common case |
+| OR operator | `OR: [...]` | `or: [...]` | Consistent lowercase |
+| Equality | `equals: value` | `eq: value` | Shorter, clearer |
+| Not equal | `not: value` | `ne: value` | Explicit operator |
+| Pagination | `take`/`skip` | `limit`/`after` | Standard SQL terms + Cursor |
+
+### Comparison with alternatives
+
+```typescript
+// MongoDB style
+{ $and: [{ age: { $gte: 18 } }, { status: { $eq: 'active' } }] }
+
+// GraphQL/Hasura style
+{ _and: [{ age: { _gte: 18 } }, { status: { _eq: 'active' } }] }
+
+// Prisma style
+{ AND: [{ age: { gte: 18 } }, { status: { equals: 'active' } }] }
+
+// ZyncBase style (implicit AND)
+{ age: { gte: 18 }, status: { eq: 'active' } }
+```
+
 ---
 
 ## Query Operators
