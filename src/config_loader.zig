@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 
 pub const Config = struct {
     server: ServerConfig,
-    auth: AuthConfig,
+    authentication: AuthConfig,
     security: SecurityConfig,
     logging: LoggingConfig,
     performance: PerformanceConfig,
     data_dir: []const u8,
     schema_file: ?[]const u8,
-    auth_rules_file: ?[]const u8,
+    authorization_file: ?[]const u8,
     allocator: Allocator,
 
     pub const ServerConfig = struct {
@@ -59,14 +59,14 @@ pub const Config = struct {
 
     pub fn deinit(self: *Config) void {
         // Free allocated strings
-        if (self.auth.jwt_secret) |secret| {
+        if (self.authentication.jwt_secret) |secret| {
             self.allocator.free(secret);
         }
-        self.allocator.free(self.auth.jwt_algorithm);
-        if (self.auth.jwt_issuer) |issuer| {
+        self.allocator.free(self.authentication.jwt_algorithm);
+        if (self.authentication.jwt_issuer) |issuer| {
             self.allocator.free(issuer);
         }
-        if (self.auth.jwt_audience) |audience| {
+        if (self.authentication.jwt_audience) |audience| {
             self.allocator.free(audience);
         }
         for (self.security.allowed_origins) |origin| {
@@ -78,7 +78,7 @@ pub const Config = struct {
         if (self.schema_file) |file| {
             self.allocator.free(file);
         }
-        if (self.auth_rules_file) |file| {
+        if (self.authorization_file) |file| {
             self.allocator.free(file);
         }
     }
@@ -128,7 +128,7 @@ pub const ConfigLoader = struct {
             .server = .{
                 .host = try allocator.dupe(u8, "0.0.0.0"),
             },
-            .auth = .{
+            .authentication = .{
                 .jwt_algorithm = try allocator.dupe(u8, "HS256"),
             },
             .security = .{},
@@ -136,7 +136,7 @@ pub const ConfigLoader = struct {
             .performance = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
             .schema_file = null,
-            .auth_rules_file = null,
+            .authorization_file = null,
             .allocator = allocator,
         };
     }
@@ -186,7 +186,7 @@ pub const ConfigLoader = struct {
             .server = .{
                 .host = try allocator.dupe(u8, "0.0.0.0"),
             },
-            .auth = .{
+            .authentication = .{
                 .jwt_algorithm = try allocator.dupe(u8, "HS256"),
             },
             .security = .{},
@@ -194,7 +194,7 @@ pub const ConfigLoader = struct {
             .performance = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
             .schema_file = null,
-            .auth_rules_file = null,
+            .authorization_file = null,
             .allocator = allocator,
         };
         errdefer config.deinit();
@@ -234,8 +234,8 @@ pub const ConfigLoader = struct {
             }
         }
 
-        // Parse auth config
-        if (obj.get("auth")) |auth_json| {
+        // Parse authentication config
+        if (obj.get("authentication")) |auth_json| {
             if (auth_json == .object) {
                 const auth_obj = auth_json.object;
 
@@ -245,26 +245,26 @@ pub const ConfigLoader = struct {
 
                         if (jwt_obj.get("secret")) |secret| {
                             if (secret == .string) {
-                                config.auth.jwt_secret = try allocator.dupe(u8, secret.string);
+                                config.authentication.jwt_secret = try allocator.dupe(u8, secret.string);
                             }
                         }
 
                         if (jwt_obj.get("algorithm")) |algo| {
                             if (algo == .string) {
-                                allocator.free(config.auth.jwt_algorithm);
-                                config.auth.jwt_algorithm = try allocator.dupe(u8, algo.string);
+                                allocator.free(config.authentication.jwt_algorithm);
+                                config.authentication.jwt_algorithm = try allocator.dupe(u8, algo.string);
                             }
                         }
 
                         if (jwt_obj.get("issuer")) |issuer| {
                             if (issuer == .string) {
-                                config.auth.jwt_issuer = try allocator.dupe(u8, issuer.string);
+                                config.authentication.jwt_issuer = try allocator.dupe(u8, issuer.string);
                             }
                         }
 
                         if (jwt_obj.get("audience")) |audience| {
                             if (audience == .string) {
-                                config.auth.jwt_audience = try allocator.dupe(u8, audience.string);
+                                config.authentication.jwt_audience = try allocator.dupe(u8, audience.string);
                             }
                         }
                     }
@@ -287,10 +287,10 @@ pub const ConfigLoader = struct {
             }
         }
 
-        // Parse auth rules file
-        if (obj.get("authRules")) |auth_rules| {
+        // Parse authorization rules file
+        if (obj.get("authorization")) |auth_rules| {
             if (auth_rules == .string) {
-                config.auth_rules_file = try allocator.dupe(u8, auth_rules.string);
+                config.authorization_file = try allocator.dupe(u8, auth_rules.string);
             }
         }
 
@@ -334,7 +334,7 @@ pub const ConfigLoader = struct {
                         config.security.max_message_size = @intCast(max_size.integer);
                     }
                 }
-                
+
                 if (security_obj.get("violationThreshold")) |threshold| {
                     if (threshold == .integer) {
                         config.security.violation_threshold = @intCast(threshold.integer);
@@ -422,8 +422,8 @@ pub const ConfigLoader = struct {
             };
         }
 
-        // Validate auth rules file exists if specified
-        if (config.auth_rules_file) |auth_file| {
+        // Validate authorization rules file exists if specified
+        if (config.authorization_file) |auth_file| {
             std.fs.cwd().access(auth_file, .{}) catch {
                 return error.AuthRulesFileNotFound;
             };

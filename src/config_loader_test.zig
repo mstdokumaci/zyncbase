@@ -101,7 +101,7 @@ test "ConfigLoader parses auth config" {
 
     const config_content =
         \\{
-        \\  "auth": {
+        \\  "authentication": {
         \\    "jwt": {
         \\      "secret": "my-secret-key",
         \\      "algorithm": "HS512",
@@ -120,13 +120,13 @@ test "ConfigLoader parses auth config" {
     defer config.deinit();
 
     // Verify auth config (JWT validation only - Hook Server is managed by CLI)
-    try std.testing.expect(config.auth.jwt_secret != null);
-    try std.testing.expectEqualStrings("my-secret-key", config.auth.jwt_secret.?);
-    try std.testing.expectEqualStrings("HS512", config.auth.jwt_algorithm);
-    try std.testing.expect(config.auth.jwt_issuer != null);
-    try std.testing.expectEqualStrings("zyncbase", config.auth.jwt_issuer.?);
-    try std.testing.expect(config.auth.jwt_audience != null);
-    try std.testing.expectEqualStrings("api", config.auth.jwt_audience.?);
+    try std.testing.expect(config.authentication.jwt_secret != null);
+    try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
+    try std.testing.expectEqualStrings("HS512", config.authentication.jwt_algorithm);
+    try std.testing.expect(config.authentication.jwt_issuer != null);
+    try std.testing.expectEqualStrings("zyncbase", config.authentication.jwt_issuer.?);
+    try std.testing.expect(config.authentication.jwt_audience != null);
+    try std.testing.expectEqualStrings("api", config.authentication.jwt_audience.?);
 }
 
 test "ConfigLoader parses security config" {

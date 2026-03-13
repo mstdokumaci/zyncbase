@@ -31,7 +31,7 @@ test "Property 12: Environment variable substitution" {
         \\    "port": ${TEST_PORT},
         \\    "host": "${TEST_HOST}"
         \\  },
-        \\  "auth": {
+        \\  "authentication": {
         \\    "jwt": {
         \\      "secret": "${TEST_JWT_SECRET}"
         \\    }
@@ -50,8 +50,8 @@ test "Property 12: Environment variable substitution" {
     // Verify environment variables were substituted
     try std.testing.expectEqual(@as(u16, 8080), config.server.port);
     try std.testing.expectEqualStrings("192.168.1.1", config.server.host);
-    try std.testing.expect(config.auth.jwt_secret != null);
-    try std.testing.expectEqualStrings("test-secret-key", config.auth.jwt_secret.?);
+    try std.testing.expect(config.authentication.jwt_secret != null);
+    try std.testing.expectEqualStrings("test-secret-key", config.authentication.jwt_secret.?);
     try std.testing.expectEqualStrings("/tmp/test-data", config.data_dir);
 }
 
@@ -220,7 +220,7 @@ test "Property 14: File existence validation - auth rules file not found" {
 
     const config_content =
         \\{
-        \\  "authRules": "/nonexistent/auth-rules.json"
+        \\  "authorization": "/nonexistent/auth-rules.json"
         \\}
     ;
 
@@ -268,7 +268,7 @@ test "Property 14: File existence validation - valid auth rules file" {
 
     const config_content =
         \\{
-        \\  "authRules": "test-artifact/test-auth-rules.json"
+        \\  "authorization": "test-artifact/test-auth-rules.json"
         \\}
     ;
 
@@ -280,8 +280,8 @@ test "Property 14: File existence validation - valid auth rules file" {
     defer config.deinit();
 
     // Verify auth rules file was loaded
-    try std.testing.expect(config.auth_rules_file != null);
-    try std.testing.expectEqualStrings("test-artifact/test-auth-rules.json", config.auth_rules_file.?);
+    try std.testing.expect(config.authorization_file != null);
+    try std.testing.expectEqualStrings("test-artifact/test-auth-rules.json", config.authorization_file.?);
 }
 
 // **Validates: Requirements 8.10**
@@ -318,7 +318,7 @@ test "Property 15: Configuration round-trip - auth config" {
 
     const config_content =
         \\{
-        \\  "auth": {
+        \\  "authentication": {
         \\    "jwt": {
         \\      "secret": "my-secret-key",
         \\      "algorithm": "HS512",
@@ -337,13 +337,13 @@ test "Property 15: Configuration round-trip - auth config" {
     defer config.deinit();
 
     // Verify values match original
-    try std.testing.expect(config.auth.jwt_secret != null);
-    try std.testing.expectEqualStrings("my-secret-key", config.auth.jwt_secret.?);
-    try std.testing.expectEqualStrings("HS512", config.auth.jwt_algorithm);
-    try std.testing.expect(config.auth.jwt_issuer != null);
-    try std.testing.expectEqualStrings("zyncbase", config.auth.jwt_issuer.?);
-    try std.testing.expect(config.auth.jwt_audience != null);
-    try std.testing.expectEqualStrings("api", config.auth.jwt_audience.?);
+    try std.testing.expect(config.authentication.jwt_secret != null);
+    try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
+    try std.testing.expectEqualStrings("HS512", config.authentication.jwt_algorithm);
+    try std.testing.expect(config.authentication.jwt_issuer != null);
+    try std.testing.expectEqualStrings("zyncbase", config.authentication.jwt_issuer.?);
+    try std.testing.expect(config.authentication.jwt_audience != null);
+    try std.testing.expectEqualStrings("api", config.authentication.jwt_audience.?);
 }
 
 test "Property 15: Configuration round-trip - security config" {
@@ -438,7 +438,7 @@ test "Property 15: Configuration round-trip - complete config" {
         \\    "host": "127.0.0.1",
         \\    "maxConnections": 50000
         \\  },
-        \\  "auth": {
+        \\  "authentication": {
         \\    "jwt": {
         \\      "secret": "my-secret-key",
         \\      "algorithm": "HS512",
@@ -478,9 +478,9 @@ test "Property 15: Configuration round-trip - complete config" {
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
     try std.testing.expectEqual(@as(usize, 50000), config.server.max_connections);
 
-    try std.testing.expect(config.auth.jwt_secret != null);
-    try std.testing.expectEqualStrings("my-secret-key", config.auth.jwt_secret.?);
-    try std.testing.expectEqualStrings("HS512", config.auth.jwt_algorithm);
+    try std.testing.expect(config.authentication.jwt_secret != null);
+    try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
+    try std.testing.expectEqualStrings("HS512", config.authentication.jwt_algorithm);
 
     try std.testing.expectEqual(@as(usize, 1), config.security.allowed_origins.len);
     try std.testing.expectEqualStrings("https://example.com", config.security.allowed_origins[0]);
