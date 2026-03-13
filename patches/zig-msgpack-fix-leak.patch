@@ -1,8 +1,8 @@
 diff --git a/src/msgpack.zig b/src/msgpack.zig
-index b3c642a..bdfe85a 100644
+index 33b22ae..2054066 100644
 --- a/src/msgpack.zig
 +++ b/src/msgpack.zig
-@@ -2847,6 +2847,7 @@
+@@ -2847,6 +2847,7 @@ pub fn PackWithLimits(
              else
                  std.ArrayList(ParseState){};
              defer if (current_zig.minor == 14) parse_stack.deinit() else parse_stack.deinit(allocator);

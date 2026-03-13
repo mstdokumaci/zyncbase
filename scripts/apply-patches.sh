@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply patches to Bun's uWebSockets to remove dependencies we don't need
+# Apply patches to vendored dependencies
 
 set -e
 
@@ -7,13 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 PATCHES_DIR="$PROJECT_ROOT/patches"
 BUN_DIR="$PROJECT_ROOT/vendor/bun"
+MSGPACK_DIR="$PROJECT_ROOT/vendor/zig_msgpack"
 
+# 1. Apply patches to Bun's uWebSockets
 echo "Applying patches to Bun's uWebSockets..."
-
-# Check if patches are already applied
 cd "$BUN_DIR"
 if git diff --quiet packages/bun-uws/src/PerMessageDeflate.h packages/bun-uws/src/WebSocketProtocol.h; then
-    echo "Applying patches..."
+    echo "Applying Bun patches..."
     
     # Apply libdeflate patch
     if [ -f "$PATCHES_DIR/bun-uws-disable-libdeflate.patch" ]; then
@@ -26,8 +26,22 @@ if git diff --quiet packages/bun-uws/src/PerMessageDeflate.h packages/bun-uws/sr
         git apply "$PATCHES_DIR/bun-uws-disable-simdutf.patch"
         echo "  ✓ Applied SIMDUTF patch"
     fi
-    
-    echo "Patches applied successfully"
 else
-    echo "Patches already applied or files modified"
+    echo "  - Bun patches already applied or files modified"
 fi
+
+# 2. Apply patches to zig-msgpack
+echo "Applying patches to zig-msgpack..."
+cd "$MSGPACK_DIR"
+if git diff --quiet src/msgpack.zig; then
+    if [ -f "$PATCHES_DIR/zig-msgpack-fix-leak.patch" ]; then
+        git apply "$PATCHES_DIR/zig-msgpack-fix-leak.patch"
+        echo "  ✓ Applied zig-msgpack-fix-leak patch"
+    else
+        echo "  ! zig-msgpack-fix-leak.patch not found"
+    fi
+else
+    echo "  - zig-msgpack patches already applied or files modified"
+fi
+
+echo "All patches applied successfully"
