@@ -9,10 +9,10 @@ test "Integration: All components properly wired" {
     const allocator = testing.allocator;
 
     // Initialize server with unique data directory
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifact/integration/wiring/test_data_wiring");
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_wiring");
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/wiring/test_data_wiring") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_wiring") catch {};
     }
 
     // Verify all components are initialized and connected (pointers are non-null)
@@ -40,10 +40,10 @@ test "Integration: All components properly wired" {
 test "Integration: Error propagation through layers" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifact/integration/wiring/test_data_propagation");
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_propagation");
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/wiring/test_data_propagation") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_propagation") catch {};
     }
 
     // Test that storage engine errors propagate correctly
@@ -68,10 +68,10 @@ test "Integration: Error propagation through layers" {
 test "Integration: Graceful shutdown propagation" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifact/integration/wiring/test_data_shutdown");
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_shutdown");
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/wiring/test_data_shutdown") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_shutdown") catch {};
     }
 
     // Initiate shutdown
@@ -91,10 +91,10 @@ test "Integration: Graceful shutdown propagation" {
 test "Integration: WebSocket callback wiring" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifact/integration/wiring/test_data_callback");
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_callback");
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/wiring/test_data_callback") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_callback") catch {};
     }
 
     // Verify WebSocket server is initialized

@@ -30,10 +30,10 @@ test "Property 4: Connection open/close is inverse operation" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property4");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property4");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property4") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property4") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -396,10 +396,10 @@ test "Property 5: Unique connection IDs" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property5");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property5");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property5") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property5") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -589,10 +589,10 @@ test "Property 7: All messages are parsed" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property7");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property7");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property7") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property7") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -691,10 +691,10 @@ test "Property 8: Message type extraction" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property8");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property8");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property8") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property8") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -970,10 +970,10 @@ test "Property 10: Response correlation" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property10");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property10");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property10") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property10") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -1158,10 +1158,10 @@ test "Property 11: Error responses for invalid messages" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/message_handler/test_data_property11");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/message_handler/test_data_property11");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/message_handler/test_data_property11") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property11") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);

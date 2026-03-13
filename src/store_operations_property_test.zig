@@ -34,10 +34,10 @@ test "Property 25: StoreSet field extraction" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property25");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property25");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property25") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property25") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -201,10 +201,10 @@ test "Property 26: StoreSet storage engine call" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property26");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property26");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property26") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property26") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -348,10 +348,10 @@ test "Property 27: StoreSet success response" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property27");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property27");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property27") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property27") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -482,10 +482,10 @@ test "Property 28: StoreGet field extraction" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property28");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property28");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property28") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property28") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -613,10 +613,10 @@ test "Property 29: StoreGet storage engine call" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property29");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property29");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property29") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property29") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -765,10 +765,10 @@ test "Property 30: StoreGet value response" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/store_operations/test_data_property30");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property30");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/store_operations/test_data_property30") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property30") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);

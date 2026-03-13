@@ -21,7 +21,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 test "property: server stability - no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/concurrent_errors";
+    const tmp_path = "test-artifacts/stability/concurrent_errors";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -88,7 +88,7 @@ test "property: server stability - no crashes on concurrent errors" {
 test "property: server stability - continues after transaction errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/transaction_errors";
+    const tmp_path = "test-artifacts/stability/transaction_errors";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -127,7 +127,7 @@ test "property: server stability - continues after transaction errors" {
 test "property: server stability - handles rapid error conditions" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/rapid_errors";
+    const tmp_path = "test-artifacts/stability/rapid_errors";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -156,7 +156,7 @@ test "property: server stability - handles rapid error conditions" {
 test "property: server stability - error recovery with valid operations" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/recovery";
+    const tmp_path = "test-artifacts/stability/recovery";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -196,7 +196,7 @@ test "property: server stability - error recovery with valid operations" {
 test "property: server stability - resource cleanup after errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/resource_cleanup";
+    const tmp_path = "test-artifacts/stability/resource_cleanup";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -232,7 +232,7 @@ test "property: server stability - resource cleanup after errors" {
 test "property: server stability - mixed error and success scenarios" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/mixed_scenarios";
+    const tmp_path = "test-artifacts/stability/mixed_scenarios";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -278,7 +278,7 @@ test "property: server stability - mixed error and success scenarios" {
 test "property: server stability - concurrent reads during write errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/stability/concurrent_reads";
+    const tmp_path = "test-artifacts/stability/concurrent_reads";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 

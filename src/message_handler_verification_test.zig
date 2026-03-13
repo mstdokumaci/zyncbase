@@ -36,10 +36,10 @@ test "Verification: WebSocket connection lifecycle" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_lifecycle");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_lifecycle");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_lifecycle") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_lifecycle") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -94,10 +94,10 @@ test "Verification: StoreSet message processing" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_storeset");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_storeset");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_storeset") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_storeset") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -196,10 +196,10 @@ test "Verification: StoreGet message processing" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_storeget");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_storeget");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_storeget") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_storeget") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -295,10 +295,10 @@ test "Verification: Error handling for invalid messages" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_errors");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_errors");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_errors") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_errors") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -426,10 +426,10 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifact/integration/verification/test_data_verification_e2e");
+    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_e2e");
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifact/integration/verification/test_data_verification_e2e") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_e2e") catch {};
     }
 
     const subscription_manager = try SubscriptionManager.init(allocator);

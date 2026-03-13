@@ -41,7 +41,7 @@ test "Property 32: Message buffer deallocation" {
     var request_handler = RequestHandler.init(&memory_strategy);
 
     // Create temporary directory for storage engine
-    const test_dir = "test-artifact/message_buffer/dealloc";
+    const test_dir = "test-artifacts/message_buffer/dealloc";
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
@@ -312,7 +312,7 @@ test "Property 32: Message buffer deallocation - concurrent processing" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const test_dir = "test-artifact/message_buffer/concurrent";
+    const test_dir = "test-artifacts/message_buffer/concurrent";
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };

@@ -39,7 +39,7 @@ test "property: database error handling - invalid database path" {
 test "property: database error handling - read-only filesystem" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/read_only";
+    const tmp_path = "test-artifacts/error/read_only";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -63,7 +63,7 @@ test "property: database error handling - read-only filesystem" {
 test "property: database error handling - constraint violations" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/constraints";
+    const tmp_path = "test-artifacts/error/constraints";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -91,7 +91,7 @@ test "property: database error handling - constraint violations" {
 test "property: database error handling - transaction rollback on error" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/rollback";
+    const tmp_path = "test-artifacts/error/rollback";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -119,7 +119,7 @@ test "property: database error handling - transaction rollback on error" {
 test "property: database error handling - multiple transaction errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/multiple_transactions";
+    const tmp_path = "test-artifacts/error/multiple_transactions";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -148,7 +148,7 @@ test "property: database error handling - multiple transaction errors" {
 test "property: database error handling - concurrent access safety" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/concurrent";
+    const tmp_path = "test-artifacts/error/concurrent";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -217,7 +217,7 @@ test "property: database error handling - concurrent access safety" {
 test "property: database error handling - empty namespace and path" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/empty_paths";
+    const tmp_path = "test-artifacts/error/empty_paths";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -240,7 +240,7 @@ test "property: database error handling - empty namespace and path" {
 test "property: database error handling - large values" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/large_values";
+    const tmp_path = "test-artifacts/error/large_values";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -269,7 +269,7 @@ test "property: database error handling - large values" {
 test "property: database error handling - query with no results" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/no_results";
+    const tmp_path = "test-artifacts/error/no_results";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
@@ -293,7 +293,7 @@ test "property: database error handling - query with no results" {
 test "property: database error handling - delete non-existent key" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifact/error/delete_nonexistent";
+    const tmp_path = "test-artifacts/error/delete_nonexistent";
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 

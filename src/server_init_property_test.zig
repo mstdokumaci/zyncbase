@@ -26,8 +26,8 @@ test "Property 3: Component initialization is idempotent" {
     const allocator = gpa.allocator();
 
     // Ensure test data directory is clean
-    std.fs.cwd().deleteTree("test-artifact/server_init/test_data_idempotence") catch {};
-    defer std.fs.cwd().deleteTree("test-artifact/server_init/test_data_idempotence") catch {};
+    std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
+    defer std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
 
     // Property: Multiple init/deinit cycles should not leak memory
     // Test with 1 cycle first to debug leaks
@@ -35,7 +35,7 @@ test "Property 3: Component initialization is idempotent" {
     var i: usize = 0;
     while (i < num_cycles) : (i += 1) {
         // Initialize server with unique data directory
-        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifact/server_init/test_data_idempotence");
+        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence");
         std.log.debug("Server initialized", .{});
         defer {
             std.log.debug("About to call server.deinit()", .{});
@@ -57,7 +57,7 @@ test "Property 3: Component initialization is idempotent" {
         try testing.expect(!server.shutdown_requested.load(.acquire));
 
         // Clean up database file between cycles
-        std.fs.cwd().deleteTree("test-artifact/server_init/test_data_idempotence") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
     }
 
     // If we reach here without panicking, the property holds
