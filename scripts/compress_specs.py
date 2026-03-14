@@ -5,6 +5,7 @@ a mirrored directory with .txt files containing compressed content.
 """
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ TARGET_DIR = "specs_llm"
 MODEL_NAME = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
 COMPRESSION_RATE = 0.4
 USE_LLMLINGUA2 = True
+PROTECT_CODE_BLOCKS = True
 # ========================================================
 
 
@@ -73,8 +75,28 @@ def main():
                 with open(source_file, "r", encoding="utf-8") as f:
                     content = f.read()
 
-                result = llm_lingua.compress_prompt(content, rate=COMPRESSION_RATE)
-                compressed = result["compressed_prompt"]
+                if PROTECT_CODE_BLOCKS:
+                    # Split by code blocks to keep them intact
+                    pattern = r"(```[\s\S]*?```)"
+                    parts = re.split(pattern, content)
+                    compressed_parts = []
+                    
+                    for part in parts:
+                        if part.startswith("```"):
+                            # Preserve code blocks/diagrams exactly
+                            compressed_parts.append(part)
+                        elif len(part.strip()) > 20:
+                            # Compress prose segments that have significant content
+                            res = llm_lingua.compress_prompt(part, rate=COMPRESSION_RATE)
+                            compressed_parts.append(res["compressed_prompt"])
+                        else:
+                            # Keep very short snippets or whitespace as is
+                            compressed_parts.append(part)
+                    
+                    compressed = "".join(compressed_parts)
+                else:
+                    result = llm_lingua.compress_prompt(content, rate=COMPRESSION_RATE)
+                    compressed = result["compressed_prompt"]
 
                 with open(target_file, "w", encoding="utf-8") as f:
                     f.write(compressed)
