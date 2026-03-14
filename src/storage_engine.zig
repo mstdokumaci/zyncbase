@@ -730,7 +730,7 @@ pub const StorageEngine = struct {
                     logDatabaseError("executeBatch DELETE", classified_err, op.path.?);
                     return classified_err;
                 },
-                else => unreachable, // Non-batch ops should not be here
+                .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable, // Non-batch ops filtered by loop
             }
         }
 

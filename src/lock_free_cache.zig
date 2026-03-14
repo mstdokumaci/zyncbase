@@ -211,7 +211,7 @@ pub const LockFreeCache = struct {
             node.resource = .{ .entry = resource };
         } else if (T == []const u8) {
             node.resource = .{ .key = resource };
-        } else unreachable;
+        } else @compileError("Unsupported resource type for deferFree: " ++ @typeName(T));
 
         var current_head = self.defer_stack.load(.acquire);
         while (true) {
