@@ -3,6 +3,7 @@
 .kiro
 .zig-cache
 .serena
+.agents
 zig-out
 test-artifacts/
 node_modules/

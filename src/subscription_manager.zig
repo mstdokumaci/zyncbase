@@ -101,6 +101,7 @@ pub const SubscriptionManager = struct {
     subscriptions: std.AutoHashMap(SubscriptionId, Subscription),
     index: std.StringHashMap(std.ArrayList(SubscriptionId)),
     allocator: Allocator,
+    lock: std.Thread.RwLock = .{},
 
     pub fn init(allocator: Allocator) !*SubscriptionManager {
         const self = try allocator.create(SubscriptionManager);
@@ -127,6 +128,8 @@ pub const SubscriptionManager = struct {
 
     /// Subscribe to a query
     pub fn subscribe(self: *SubscriptionManager, sub: Subscription) !void {
+        self.lock.lock();
+        defer self.lock.unlock();
         // Add to subscriptions map
         try self.subscriptions.put(sub.id, sub);
 
@@ -150,6 +153,8 @@ pub const SubscriptionManager = struct {
 
     /// Unsubscribe from a query
     pub fn unsubscribe(self: *SubscriptionManager, id: SubscriptionId) !void {
+        self.lock.lock();
+        defer self.lock.unlock();
         // Get subscription to find its index key
         const sub = self.subscriptions.get(id) orelse return error.SubscriptionNotFound;
 
@@ -180,6 +185,8 @@ pub const SubscriptionManager = struct {
         self: *SubscriptionManager,
         change: RowChange,
     ) ![]SubscriptionId {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
         var matches = std.ArrayListUnmanaged(SubscriptionId){};
         errdefer matches.deinit(self.allocator);
 

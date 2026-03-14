@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const sqlite_module = sqlite_dep.module("sqlite");
- 
+
     // Use zig-msgpack dependency
     const msgpack_dep = b.dependency("zig_msgpack", .{
         .target = target,
@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) void {
         "src/config_loader_test.zig",
         "src/request_handler_test.zig",
         "src/message_handler_test.zig",
+        "src/subscription_manager_thread_safety_test.zig",
     };
     for (unit_tests) |file| {
         const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);

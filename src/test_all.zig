@@ -49,6 +49,9 @@ test {
     std.testing.refAllDecls(@import("memory_safety_property_test.zig"));
     std.testing.refAllDecls(@import("msgpack_utils_property_test.zig"));
 
+    // Thread-safety tests
+    std.testing.refAllDecls(@import("subscription_manager_thread_safety_test.zig"));
+
     // Integration tests
     std.testing.refAllDecls(@import("integration_wiring_test.zig"));
     std.testing.refAllDecls(@import("message_handler_verification_test.zig"));
