@@ -20,12 +20,18 @@ client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
 
 ### `presence.get(userId)`
 Get a specific user's current presence data.
+
+> [!NOTE]
+> This is a **synchronous local lookup** in the SDK's internal cache. It only returns values if you have an active [Subscription](#presence-subscribe) to the namespace.
 ```typescript
 const alice = client.presence.get('user-123')
 ```
 
 ### `presence.getAll(options?)`
 Returns all users' presence data in the namespace. Excludes self by default.
+
+> [!NOTE]
+> Like `get()`, this is a **synchronous local lookup**. It returns an empty array if no active subscription exists.
 ```typescript
 const everyone = client.presence.getAll({ includeSelf: true })
 ```

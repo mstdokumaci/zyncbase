@@ -178,6 +178,23 @@ The server batches presence updates every 50ms. If multiple users update their s
 ### Automatic Cleanup
 When a WebSocket connection is closed (manual disconnect or heartbeats fail), the server automatically removes the associated presence data using `PresenceManager.remove()` and broadcasts a removal message.
 
+---
+
+## Client-Side State Management
+
+To enable sub-millisecond local reads, the ZyncBase Client SDKs maintain a mirrored state of the active `presenceNamespace`.
+
+### Synchronous Getters
+The SDK methods `presence.get(userId)` and `presence.getAll()` are **not** mapped to wire protocol messages. Instead, they perform O(1) lookups against an internal cache.
+
+1. **Populating the Cache**: The cache is initialized when the client receives the `PresenceSubscribe` response (which contains the current snapshot).
+2. **Updating the Cache**: The cache is updated in real-time as `PresenceBroadcast` messages arrive (joins, updates, leaves).
+3. **Invalidation**: The cache is cleared when the client unsubscribes or the connection is lost.
+
+### Rationale for Omission from Wire Protocol
+* **Performance**: UI rendering loops (like cursor tracking) cannot afford a network round-trip for every frame. Local sync lookups are effectively 0ms.
+* **Architecture**: Since the client must subscribe to receive updates anyway, the SDK already possesses the necessary data to fulfill "Get" requests locally.
+
 ## Validation & Success Criteria
 
 ### Success Metrics
