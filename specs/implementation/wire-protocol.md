@@ -1,7 +1,7 @@
 # ZyncBase Wire Protocol Specification
 
 **Last Updated**: 2026-03-09  
-**Status**: Draft — Pending Review  
+**Status**: v1 — Stable  
 
 ---
 
@@ -157,6 +157,7 @@ Remove a value at a path.
   "type": "ok",
   "id":   3
 }
+```
 
 ---
 
@@ -190,7 +191,6 @@ Perform multiple write operations atomically. See the [Batch Operations Specific
 ```
 
 On failure, the `details` object in the error response will include `batchIndex` pointing to the first operation that caused the failure.
-```
 
 ---
 
@@ -318,7 +318,6 @@ Request more historical data for an active subscription.
 **Response** (`type: "ok"`):
 
 The server responds with an `ok` message for the request, and then pushes a `StoreDelta` containing the additional items.
-```
 
 After subscription, the server pushes `StoreDelta` messages when the query result set changes.
 
@@ -630,7 +629,7 @@ The server validates:
 
 On success: HTTP 101 Switching Protocols. On failure: HTTP 401 or 403.
 
-### 2. Connected message
+### 3. Connected message
 
 After the WebSocket is established, the server sends a `Connected` push:
 
@@ -646,18 +645,18 @@ After the WebSocket is established, the server sends a `Connected` push:
 
 The client should wait for this message before sending any other messages.
 
-### 3. Heartbeat
+### 4. Heartbeat
 
 The server sends WebSocket-level **ping** frames at a configurable interval (default: 30 seconds). The client responds with **pong** frames (handled automatically by WebSocket implementations). If no pong is received within the timeout (default: 10 seconds), the server closes the connection.
 
 No application-level heartbeat messages are needed — WebSocket ping/pong is sufficient.
 
-### 4. Graceful close
+### 5. Graceful close
 
 - **Client-initiated:** Client sends a WebSocket close frame. Server cleans up subscriptions and presence.
 - **Server-initiated:** Server sends a `ServerDisconnect` message, then closes the WebSocket.
 
-### 5. Reconnection Strategy
+### 6. Reconnection Strategy
 
 When a connection is lost unexpectedly, clients should implement an exponential backoff strategy with optional jitter to prevent thundering herd scenarios upon server restart.
 The recommended formula for delay before the next attempt is:

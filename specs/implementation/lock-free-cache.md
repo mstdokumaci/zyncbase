@@ -55,9 +55,40 @@ pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
 }
 ```
 
+## Invariants & Error Conditions
+
+### ref_count Overflow
+`ref_count` is a `u32`. If it reaches `std.math.maxInt(u32)`, the next `fetchAdd` wraps to 0, causing a use-after-free when the writer evicts the entry while readers still hold it. This must never happen in practice because the number of concurrent reader threads is bounded by the CPU core count (≤ 256 on supported hardware). The invariant is:
+
+```
+ref_count ≤ thread_count_max  (always << u32 max)
+```
+
+In debug builds, assert this after every `fetchAdd`:
+```zig
+const prev = entry.ref_count.fetchAdd(1, .AcqRel);
+std.debug.assert(prev < 65536); // sanity bound well below u32 max
+```
+
+### Eviction Contract
+An entry may only be freed by the writer when `ref_count == 0`. The writer must:
+1. Remove the entry from the map (under `write_mutex`).
+2. Spin-wait or defer until `entry.ref_count.load(.Acquire) == 0`.
+3. Only then call `allocator.destroy(entry)`.
+
+Readers that loaded the pointer before the map swap may still hold a reference; the eviction wait ensures they complete before the memory is reclaimed.
+
+### Error Conditions
+
+| Error | Cause | Behaviour |
+|-------|-------|-----------|
+| `error.NotFound` | Namespace not in map | Caller falls through to storage |
+| ref_count overflow | > 65536 concurrent readers on one entry | Debug assert fires; release build: undefined behaviour — must not occur |
+| Double-release | `release()` called without matching `get()` | ref_count underflows; debug assert fires |
+
 ## Operational Logic
 
-### Memory Ordering guarantees
+### Memory Ordering Guarantees
 - **Acquire/Release**: Used for map pointer synchronization to ensure a reader never sees a partially updated map.
 - **AcqRel**: Used for reference counting to ensure visibility across all cores.
 

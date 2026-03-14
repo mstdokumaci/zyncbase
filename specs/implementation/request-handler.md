@@ -1,264 +1,92 @@
-# Request Handler with Arena Allocator
+# Request Handler
 
-## Overview
+**Drivers**: [Memory Management](./memory-management.md), [Threading Implementation](./threading.md)
 
-The `RequestHandler` implements efficient memory management for WebSocket request processing by integrating the arena allocator from the `MemoryStrategy`. This design ensures that all temporary allocations during request processing are freed in bulk after each request completes, preventing memory fragmentation and improving performance.
+The `RequestHandler` owns the per-request memory lifecycle. It creates an arena allocator scoped to a single WebSocket message, processes the message using that arena, copies the response to GPA-backed memory, then resets the arena — freeing all temporary allocations in one operation.
 
-## Architecture
+---
 
-### Memory Lifecycle
-
-```
-Request Start
-    ↓
-Get Arena Allocator
-    ↓
-Parse Request (arena)
-    ↓
-Process Request (arena)
-    ↓
-Build Response (arena)
-    ↓
-Copy Response to GPA
-    ↓
-Reset Arena (bulk free)
-    ↓
-Request Complete
-```
-
-### Key Components
-
-1. **RequestHandler**: Manages request lifecycle and coordinates with MemoryStrategy
-2. **RequestContext**: Holds temporary data for a single request using arena allocator
-3. **MemoryStrategy**: Provides arena allocator and handles reset
-
-## Usage Example
+## Interface / Contract
 
 ```zig
-const std = @import("std");
-const RequestHandler = @import("request_handler.zig").RequestHandler;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+pub const RequestHandler = struct {
+    memory: *MemoryStrategy,
 
-pub fn main() !void {
-    // Initialize memory strategy
-    var memory_strategy = try MemoryStrategy.init();
-    defer memory_strategy.deinit();
+    /// Process one WebSocket message.
+    ///
+    /// Guarantees:
+    ///   - All temporary allocations (parse buffers, intermediate results) are
+    ///     freed before this function returns, even on error.
+    ///   - The returned Response.data is allocated from the GPA and must be
+    ///     freed by the caller after the response is sent.
+    ///   - Arena is reset via `defer` so it is always released on error paths.
+    pub fn handleRequest(self: *RequestHandler, message: []const u8) !Response {
+        defer self.memory.resetArena();
+        const arena = self.memory.arenaAllocator();
 
-    // Create request handler
-    var handler = RequestHandler.init(&memory_strategy);
+        const parsed = try msgpack.decode(arena, message);
+        const result  = try self.dispatch(arena, parsed);
 
-    // Handle incoming WebSocket message
-    const message = "{ \"operation\": \"read\", \"path\": \"tasks.task-1\" }";
-    const response = try handler.handleRequest(message);
-    defer memory_strategy.generalAllocator().free(response.data);
-
-    // Response data is in long-lived memory (GPA)
-    // Arena has been reset, all temporary memory freed
-    std.debug.print("Response: {s}\n", .{response.data});
-}
-```
-
-## Implementation Details
-
-### Arena Allocator Reset
-
-The `handleRequest` function uses a `defer` statement to ensure the arena is reset even if an error occurs:
-
-```zig
-pub fn handleRequest(self: *RequestHandler, message: []const u8) !Response {
-    const arena_allocator = self.memory_strategy.arenaAllocator();
-    
-    // Ensure arena is reset after request completes (even on error)
-    defer self.memory_strategy.resetArena();
-    
-    // ... process request using arena_allocator ...
-    
-    // Copy response to GPA before arena reset
-    const gpa = self.memory_strategy.generalAllocator();
-    const response_copy = try gpa.dupe(u8, response_data);
-    
-    return Response{ .data = response_copy, .status = .success };
-    // Arena is automatically reset here by defer
-}
-```
-
-### Memory Allocation Strategy
-
-| Allocation Type | Allocator | Lifetime | Example |
-|----------------|-----------|----------|---------|
-| Request parsing | Arena | Single request | Parse buffers, temporary strings |
-| Response building | Arena | Single request | Response buffer, formatting |
-| Response data | GPA | Until client receives | Final response bytes |
-| Cache entries | GPA | Until evicted | State tree, subscriptions |
-| Pooled objects | Pool | Reused | Messages, buffers, connections |
-
-## Benefits
-
-### 1. Bulk Deallocation
-
-Instead of freeing each allocation individually, the arena reset frees all temporary memory in a single operation:
-
-```zig
-// Without arena: O(n) individual frees
-allocator.free(parse_buffer);
-allocator.free(temp_string1);
-allocator.free(temp_string2);
-// ... many more frees ...
-
-// With arena: O(1) bulk free
-memory_strategy.resetArena();
-```
-
-### 2. Memory Fragmentation Prevention
-
-Arena allocator allocates memory sequentially, reducing fragmentation compared to individual allocations scattered across the heap.
-
-### 3. Error Safety
-
-The `defer` mechanism ensures arena is reset even if request processing fails:
-
-```zig
-defer self.memory_strategy.resetArena(); // Always executes
-
-// Even if this fails, arena is still reset
-const result = try processRequest(ctx, parsed_request);
-```
-
-### 4. Performance
-
-- **Allocation**: O(1) bump pointer allocation (very fast)
-- **Deallocation**: O(1) bulk reset (very fast)
-- **No fragmentation**: Sequential allocation pattern
-- **Cache friendly**: Temporary data allocated close together
-
-## Testing
-
-The request handler includes comprehensive tests to verify arena reset behavior:
-
-### Test: Arena Reset After Request
-
-```zig
-test "RequestHandler: arena reset after request" {
-    var memory_strategy = try MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
-    var handler = RequestHandler.init(&memory_strategy);
-
-    // Process multiple requests
-    const response1 = try handler.handleRequest(message);
-    defer memory_strategy.generalAllocator().free(response1.data);
-
-    // Arena should be reset, second request should succeed
-    const response2 = try handler.handleRequest(message);
-    defer memory_strategy.generalAllocator().free(response2.data);
-
-    try testing.expect(response1.status == .success);
-    try testing.expect(response2.status == .success);
-}
-```
-
-### Test: Bulk Memory Deallocation
-
-```zig
-test "RequestHandler: bulk memory deallocation" {
-    var memory_strategy = try MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
-    var handler = RequestHandler.init(&memory_strategy);
-
-    // Process many requests
-    var i: usize = 0;
-    while (i < 100) : (i += 1) {
-        const response = try handler.handleRequest(message);
-        defer memory_strategy.generalAllocator().free(response.data);
+        // Copy response out of arena before reset
+        const gpa = self.memory.generalAllocator();
+        const data = try gpa.dupe(u8, result);
+        return Response{ .data = data, .status = .success };
     }
+};
 
-    // If arena wasn't being reset, memory would grow unbounded
-}
+pub const Response = struct {
+    data:   []u8,   // GPA-owned; caller must free
+    status: Status,
+};
+
+pub const Status = enum { success, @"error" };
 ```
 
-## Integration with ZyncBase
+### Allocator Routing
 
-The request handler is designed to integrate with the WebSocket server:
+| Allocation | Allocator | Freed by |
+|------------|-----------|----------|
+| Parse buffers, temp strings | Arena | `resetArena()` at end of `handleRequest` |
+| Response bytes | GPA | Caller after `ws.send()` |
+| Cache entries, subscriptions | GPA | On eviction / disconnect |
+| Pooled objects (Message, Buffer) | Pool | `Pool.release()` |
 
-```zig
-// In WebSocket message callback
-fn onMessage(ws: *WebSocket, data: []const u8) void {
-    const response = handler.handleRequest(data) catch |err| {
-        std.log.err("Request handling failed: {}", .{err});
-        ws.close(1011, "Internal error");
-        return;
-    };
-    defer memory_strategy.generalAllocator().free(response.data);
+### Thread Safety
+Arena allocator is not thread-safe. Each uWebSockets worker thread owns its own `MemoryStrategy` instance (thread-local). `RequestHandler` must not be shared across threads.
 
-    ws.send(response.data) catch |err| {
-        std.log.err("Failed to send response: {}", .{err});
-    };
-}
+---
+
+## Invariants & Error Conditions
+
+| Invariant | Description |
+|-----------|-------------|
+| Arena always reset | `defer resetArena()` fires even when `handleRequest` returns an error |
+| Response outlives arena | `gpa.dupe` copies response bytes before arena reset |
+| No arena allocation escapes | Nothing allocated from `arena` is stored in long-lived state |
+
+| Error | Cause | Behaviour |
+|-------|-------|-----------|
+| `error.OutOfMemory` | Arena or GPA exhausted | Arena reset fires; `INTERNAL_ERROR` returned to client |
+| `error.InvalidMessage` | MessagePack parse failure | Arena reset fires; `INVALID_MESSAGE` returned to client |
+| `error.Unauthorized` | Auth check failed | Arena reset fires; `UNAUTHORIZED` returned to client |
+
+---
+
+## Validation & Success Criteria
+
+- [ ] Arena is reset after every request, including error paths
+- [ ] Response data is valid after arena reset (GPA copy confirmed)
+- [ ] No memory leaks across 10,000 sequential requests (GPA leak check passes)
+
+### Verification Commands
+```bash
+zig test src/request_handler_test.zig
+zig test src/request_handler_test.zig -Dsanitize=thread
 ```
 
-## Thread Safety
-
-**Important**: Arena allocator is NOT thread-safe. Each thread or connection should have its own arena allocator instance.
-
-For multi-threaded request handling:
-
-```zig
-// Per-thread memory strategy
-threadlocal var thread_memory_strategy: ?*MemoryStrategy = null;
-
-fn workerThread() !void {
-    var memory_strategy = try MemoryStrategy.init();
-    defer memory_strategy.deinit();
-    thread_memory_strategy = &memory_strategy;
-
-    var handler = RequestHandler.init(&memory_strategy);
-
-    // Process requests on this thread
-    while (true) {
-        const message = try queue.pop();
-        const response = try handler.handleRequest(message);
-        // ... send response ...
-    }
-}
-```
-
-## Performance Characteristics
-
-### Allocation Performance
-
-- **Arena allocation**: ~10-20 nanoseconds (bump pointer)
-- **GPA allocation**: ~100-200 nanoseconds (general purpose)
-- **Arena reset**: ~50-100 nanoseconds (bulk free)
-
-### Memory Usage
-
-- **Per-request overhead**: ~4KB (arena page size)
-- **Memory reuse**: Arena pages reused across requests
-- **Peak memory**: Bounded by max request size
-
-### Throughput Impact
-
-With arena allocator reset:
-- **Allocation overhead**: Reduced by 80-90%
-- **Deallocation overhead**: Reduced by 95%+
-- **Memory fragmentation**: Eliminated for temporary allocations
-- **Cache efficiency**: Improved due to sequential allocation
-
-## Requirements Addressed
-
-This implementation addresses **Requirement 7.4** from the architecture improvements spec:
-
-> **7.4** WHEN a request completes, THE ZyncBase_Core SHALL reset the ArenaAllocator to free all temporary memory in bulk
-
-The implementation ensures:
-- ✅ Arena allocator is reset after each request
-- ✅ All temporary memory is freed in bulk
-- ✅ Reset happens even on error (via defer)
-- ✅ Response data is copied to GPA before reset
-- ✅ Memory isolation between requests
+---
 
 ## See Also
-
-- [Memory Strategy Documentation](../src/memory_strategy.zig)
-- [Requirements: Memory Management Strategy](../.kiro/specs/architecture-improvements/requirements.md#requirement-7-memory-management-strategy)
+- [Memory Management](./memory-management.md) — Arena and GPA strategy
+- [Threading Implementation](./threading.md) — Per-thread memory isolation
+- [Wire Protocol](./wire-protocol.md) — Message format handled by this handler

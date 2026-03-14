@@ -73,3 +73,20 @@ Subsequent operations on the same connection now evaluate against the updated `$
 - **Zero-Trust Handshake**: Zig never accepts a WebSocket connection without a valid ticket.
 - **Microsecond Authorization**: Because the `$session` is baked into the connection (or ticket), `authorization.json` evaluation happens natively in Zig with no foreign calls.
 - **No Hook Server Latency on Sync**: Relational lookups are done once (at ticket time) and cached in the `$session`, keeping the sync loop incredibly fast.
+
+---
+
+## 6. Error Conditions
+
+| Step | Condition | HTTP/WS Response |
+|------|-----------|-----------------|
+| Ticket Request | JWT signature invalid or expired | HTTP 401 `AUTH_FAILED` |
+| Ticket Request | Hook Server unreachable | HTTP 503 `HOOK_SERVER_UNAVAILABLE` |
+| Ticket Request | Hook Server `onConnect` returns error | HTTP 403 `HOOK_DENIED` |
+| WebSocket Upgrade | Ticket expired (> 5 min) | HTTP 401 `AUTH_FAILED` |
+| WebSocket Upgrade | Ticket already used (single-use) | HTTP 401 `AUTH_FAILED` |
+| WebSocket Upgrade | Origin not in `allowedOrigins` | HTTP 403 |
+| `AuthRefresh` | New JWT invalid | WS error `AUTH_FAILED` |
+| `AuthRefresh` | Hook Server `onConnect` returns error | WS error `HOOK_DENIED` |
+
+In all failure cases, the connection is not established (or is closed if already open). No partial session state is retained.

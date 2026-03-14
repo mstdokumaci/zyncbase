@@ -6,9 +6,7 @@
 
 ## Overview
 
-ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig for maximum performance. This is the same engine that powers Bun, providing 200,000+ requests/second with microsecond latency.
-
-**Key Innovation**: Direct Zig + uWebSockets integration = Bun-level performance without JavaScript overhead
+ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig. uWebSockets provides the multi-threaded event loop, TLS via BoringSSL, and zero-copy I/O that the ZyncBase server is built on.
 
 ---
 
@@ -237,22 +235,6 @@ WebSocket frames have minimal overhead:
 
 ## MessagePack Serialization
 
-### Why MessagePack?
-
-**Advantages over JSON:**
-- **Smaller payloads** - Binary encoding
-- **Faster parsing** - No string parsing
-- **Type safety** - Explicit types
-- **Streaming** - Iterative parsing
-
-**Comparison:**
-
-| Format | Size | Parse Speed | Type Safety |
-|--------|------|-------------|-------------|
-| MessagePack | Smallest | Fastest | Strong |
-| JSON | Large | Slow | Weak |
-| Protobuf | Small | Fast | Very Strong |
-
 ### Message Format
 
 ```zig
@@ -397,53 +379,6 @@ fn validateOrigin(origin: []const u8, allowed: []const []const u8) bool {
 
 ---
 
-## Performance Characteristics
-
-### Throughput
-
-| Metric | uWebSockets | Node.js | Deno |
-|--------|-------------|---------|------|
-| Requests/sec | 200,000+ | ~13,254 | ~22,286 |
-| Connections | Millions | 100k+ | 100k+ |
-| Latency (p50) | < 1ms | ~5ms | ~3ms |
-| Latency (p99) | < 10ms | ~50ms | ~30ms |
-
-### Memory Usage
-
-**Per connection:**
-- uWebSockets: < 1KB
-- Node.js: ~5KB
-- Deno: ~3KB
-
-**For 100,000 connections:**
-- uWebSockets: ~100MB
-- Node.js: ~500MB
-- Deno: ~300MB
-
----
-
-## Compression
-
-### Per-Message Deflate
-
-**Trade-off:**
-- **Pros**: Smaller payloads, less bandwidth
-- **Cons**: Higher CPU usage, increased latency
-
-**Recommendation**: Disable for real-time apps
-
-```zig
-const app = uws.uWS_App_create(0, null); // No compression
-```
-
-**Why?**
-- Real-time apps prioritize latency over bandwidth
-- MessagePack is already efficient
-- Compression adds 1-5ms latency
-- CPU better spent on queries/subscriptions
-
----
-
 ## Error Handling
 
 ### Connection Errors
@@ -481,64 +416,6 @@ fn handleMessage(msg: []const u8) !Response {
     
     // Process message...
 }
-```
-
----
-
-## Security Best Practices
-
-### 1. Validate Origin Header
-
-Prevent CSWSH attacks by checking Origin header during handshake.
-
-### 2. Use Ticket-Based Auth
-
-Don't pass JWTs in query params (they get logged).
-
-### 3. Rate Limiting
-
-Limit messages per connection per second:
-
-```zig
-const RateLimiter = struct {
-    max_per_second: usize = 100,
-    
-    pub fn check(self: *RateLimiter, conn_id: u64) bool {
-        // Check if connection exceeded rate limit
-        // ...
-    }
-};
-```
-
-### 4. Input Validation
-
-Validate all incoming messages against schema:
-
-```zig
-fn validateMessage(msg: Message) !void {
-    if (msg.namespace.len > 256) {
-        return error.NamespaceTooLong;
-    }
-    
-    if (msg.payload.len > 1024 * 1024) { // 1MB
-        return error.PayloadTooLarge;
-    }
-}
-```
-
-### 5. Connection Limits
-
-Limit connections per IP address:
-
-```zig
-const ConnectionLimiter = struct {
-    max_per_ip: usize = 100,
-    
-    pub fn check(self: *ConnectionLimiter, ip: []const u8) bool {
-        // Check if IP exceeded connection limit
-        // ...
-    }
-};
 ```
 
 ---

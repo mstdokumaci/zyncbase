@@ -113,36 +113,23 @@ const LockFreeCache = struct {
 
 ---
 
-## Performance Validation
+## Validation & Success Criteria
 
-### Benchmarking Strategy
-
-**1. Measure read throughput:**
+### Verification Commands
 ```bash
-./benchmark --readers 16 --duration 60s
-```
+# Run threading unit tests with thread sanitizer
+zig test src/core_engine_test.zig -Dsanitize=thread
 
-**2. Measure write throughput:**
-```bash
-./benchmark --writers 1 --duration 60s
-```
+# Run lock-free cache concurrency tests
+zig test src/cache_stress_test.zig -Dsanitize=thread
 
-**3. Measure mixed workload:**
-```bash
-# Simulate 90% reads, 10% writes
-./benchmark --mixed 90:10 --duration 60s
-```
-
-**4. Measure CPU utilization:**
-```bash
-# Should see ~95% CPU usage across all cores
-htop
+# Run full test suite to confirm no regressions
+zig build test
 ```
 
 ### Success Criteria
 
-- ✅ Read throughput scales linearly with cores
-- ✅ Write throughput meets 10k+ writes/sec
-- ✅ Mixed workload achieves 170k+ ops/sec
-- ✅ CPU utilization > 90% on all cores
-- ✅ No lock contention in read path
+- [ ] Read throughput scales linearly with cores (verified via `cache_stress_test.zig`)
+- [ ] Write throughput: single-writer serialization holds under concurrent load (TSan clean)
+- [ ] Mixed workload: no deadlocks or data races detected by TSan
+- [ ] No lock contention on the read path (TSan reports zero races on `get`)

@@ -66,7 +66,7 @@ const PresenceManager = struct {
         return ns.get(user_id);
     }
     
-    pub fn getAll(self: *PresenceManager, namespace: []const u8) []PresenceEntry {
+    pub fn getAll(self: *PresenceManager, namespace: []const u8) ![]PresenceEntry {
         const ns = self.presence.get(namespace) orelse return &.{};
         
         var result = ArrayList(PresenceEntry).init(self.allocator);
@@ -74,7 +74,7 @@ const PresenceManager = struct {
         while (iter.next()) |entry| {
             try result.append(.{
                 .user_id = entry.key_ptr.*,
-                .data = entry.value_ptr.*,
+                .data = entry.value_ptr.data,
                 .joined_at = entry.value_ptr.joined_at,
             });
         }
@@ -204,7 +204,14 @@ The SDK methods `presence.get(userId)` and `presence.getAll()` are **not** mappe
 
 ### Verification Commands
 ```bash
+# Unit tests for PresenceManager (set/get/remove/getAll)
 zig test src/presence_manager_test.zig
+
+# Verify batching interval with thread sanitizer
+zig test src/presence_manager_test.zig -Dsanitize=thread
+
+# Verify history ring buffer eviction
+zig test src/ring_buffer_test.zig
 ```
 
 ---

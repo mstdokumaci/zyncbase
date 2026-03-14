@@ -1,125 +1,82 @@
-# Memory Sanitizers
+# Sanitizer Configuration
 
-ZyncBase uses memory sanitizers to detect memory safety issues, memory leaks, and data races during testing.
+**Drivers**: [Threading Implementation](./threading.md), [Memory Management](./memory-management.md)
 
-**Drivers**:
-- [Configuration Spec](../api-design/configuration.md) - Requirements for system reliability and performance validation.
+This document specifies which sanitizers run against which test targets, what invariants each sanitizer enforces, and what a passing CI run looks like.
 
 ---
 
-## Available Sanitizers
+## Purpose
 
-### ThreadSanitizer (TSan)
+ZyncBase uses two sanitizer strategies to enforce memory and concurrency correctness:
 
-Detects data races and other threading issues.
+1. **ThreadSanitizer (TSan)** — enforces the lock-free cache's SWMR invariant: no unsynchronized concurrent writes, no read/write races on shared state.
+2. **GeneralPurposeAllocator safety mode** — enforces the arena/GPA invariant: every GPA allocation is freed exactly once; no use-after-free, no double-free.
 
-**Usage:**
+Valgrind is available as a supplementary tool for C interop paths (uWebSockets, SQLite) where Zig's GPA does not cover allocations.
+
+---
+
+## Invariants Enforced
+
+| Sanitizer | Invariant |
+|-----------|-----------|
+| TSan | No data race on `LockFreeCache.entries` pointer or any `CacheEntry` field |
+| TSan | `write_mutex` is always held when mutating cache entries |
+| TSan | `PresenceManager.pending_updates` is only written from the single flush goroutine |
+| GPA safety | Every `alloc` from the GPA has exactly one matching `free` |
+| GPA safety | Arena memory is never accessed after `resetArena()` |
+| GPA safety | Pool `release` is never called on an item not currently acquired |
+
+---
+
+## Test Targets & Sanitizer Matrix
+
+| Test file | TSan | GPA safety |
+|-----------|------|------------|
+| `src/cache_stress_test.zig` | ✓ required | ✓ |
+| `src/core_engine_test.zig` | ✓ required | ✓ |
+| `src/presence_manager_test.zig` | ✓ required | ✓ |
+| `src/memory_strategy_test.zig` | — | ✓ required |
+| `src/request_handler_test.zig` | — | ✓ required |
+| `src/memory_strategy_test.zig` | — | ✓ |
+| `src/query_engine_test.zig` | — | ✓ |
+
+TSan is required on all tests that exercise shared mutable state across threads. GPA safety is always on in debug builds.
+
+---
+
+## CI Pass / Fail Contract
+
+A CI run passes when:
+- `zig build test -Dsanitize=thread` exits 0 with no TSan warnings in stderr.
+- `zig build test` (debug, no TSan) exits 0 with no GPA leak report at program exit.
+
+A CI run fails when:
+- Any TSan warning appears, regardless of test exit code. TSan warnings are treated as build failures.
+- GPA reports any leak at exit (`error: GeneralPurposeAllocator detected memory leaks`).
+- Any test panics or returns a non-zero exit code.
+
+TSan warnings that are confirmed false positives must be suppressed via a `tsan_suppressions.txt` file checked into the repo, with a comment explaining the suppression.
+
+---
+
+## Verification Commands
+
 ```bash
+# TSan — must be clean
 zig build test -Dsanitize=thread
+
+# GPA leak check — must be clean (debug build, default)
+zig build test
+
+# Supplementary: Valgrind for C interop paths
+valgrind --leak-check=full --error-exitcode=1 ./zig-out/bin/zyncbase-test
 ```
 
-**Environment Variables:**
-```bash
-export TSAN_OPTIONS="second_deadlock_stack=1:history_size=7"
-zig build test -Dsanitize=thread
-```
+---
 
-**What it detects:**
-- Data races between threads
-- Deadlocks
-- Thread leaks
-- Use of uninitialized memory in multithreaded contexts
-
-### AddressSanitizer (ASan) and LeakSanitizer (LSan)
-
-**Note:** In Zig 0.15, AddressSanitizer and LeakSanitizer are not directly supported through build options. These sanitizers are typically provided by the C/C++ compiler (Clang/GCC) and work with C code.
-
-For Zig code, memory safety is largely guaranteed by the language itself. However, when interfacing with C code or using unsafe operations, you can:
-
-1. Use Valgrind for memory leak detection:
-```bash
-valgrind --leak-check=full --show-leak-kinds=all ./zig-out/bin/zyncbase
-```
-
-2. Use the Zig standard library's `GeneralPurposeAllocator` with safety checks enabled (already configured in `MemoryStrategy`):
-```zig
-var gpa = std.heap.GeneralPurposeAllocator(.{
-    .safety = true,
-    .thread_safe = true,
-}){};
-```
-
-## CI Integration
-
-The CI pipeline automatically runs tests with ThreadSanitizer to detect data races. See `.github/workflows/ci.yml` for the configuration.
-
-## Interpreting Results
-
-### ThreadSanitizer Output
-
-When TSan detects a data race, it will output:
-- The location of the conflicting memory accesses
-- Stack traces for both threads
-- The type of conflict (read-write, write-write)
-
-**Example:**
-```
-WARNING: ThreadSanitizer: data race (pid=12345)
-  Write of size 8 at 0x7b0400000000 by thread T1:
-    #0 Pool(Message).release src/memory_strategy.zig:156
-    ...
-  Previous read of size 8 at 0x7b0400000000 by main thread:
-    #0 Pool(Message).acquire src/memory_strategy.zig:134
-    ...
-```
-
-### Memory Leak Detection
-
-The `GeneralPurposeAllocator` in debug mode will report memory leaks at program exit:
-```
-error: GeneralPurposeAllocator detected memory leaks:
-  - 1024 bytes allocated at src/memory_strategy.zig:29:51
-```
-
-## Best Practices
-
-1. **Run sanitizers locally** before pushing code:
-   ```bash
-   zig build test -Dsanitize=thread
-   ```
-
-2. **Fix issues immediately** - sanitizer warnings indicate real bugs that can cause crashes or data corruption in production.
-
-3. **Use atomic operations** for shared state accessed by multiple threads:
-   ```zig
-   var ref_count: std.atomic.Value(u32) = .{ .raw = 0 };
-   _ = ref_count.fetchAdd(1, .acquire);
-   ```
-
-4. **Protect shared data** with mutexes when atomic operations aren't sufficient:
-   ```zig
-   var mutex: std.Thread.Mutex = .{};
-   mutex.lock();
-   defer mutex.unlock();
-   // Access shared data
-   ```
-
-5. **Use the arena allocator** for per-request allocations to avoid leaks:
-   ```zig
-   const arena = memory_strategy.arenaAllocator();
-   defer memory_strategy.resetArena();
-   // All allocations freed in bulk
-   ```
-
-## Known Issues
-
-- ThreadSanitizer may report false positives in some cases. Review each warning carefully.
-- ThreadSanitizer significantly slows down execution (5-15x overhead).
-- Some tests may timeout when running with sanitizers due to the overhead.
-
-## Requirements Validation
-
-This sanitizer configuration validates:
-- **Requirement 7.6**: Tests run with AddressSanitizer (via GPA safety checks and Valgrind)
-- **Requirement 7.7**: Tests run with LeakSanitizer (via GPA leak detection)
-- **Requirement 7.8**: Tests run with ThreadSanitizer (via `-Dsanitize=thread`)
+## See Also
+- [Threading Implementation](./threading.md) — lock-free cache SWMR model
+- [Memory Management](./memory-management.md) — GPA / arena / pool strategy
+- [Lock-Free Cache](./lock-free-cache.md) — ref_count invariants

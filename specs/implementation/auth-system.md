@@ -1,6 +1,6 @@
-# ZyncBase Authorization Format (`authorization.json`) - Draft Spec
+# ZyncBase Authorization Format (`authorization.json`)
 
-**Status**:  Done
+**Status**: v1 — Stable  
 **Context**: Replaces complex row-level security (RLS) with a high-performance, JSON-declarative model executed natively by the ZyncBase Zig core. Evaluated on every incoming MessagePack frame.
 
 **Drivers**:
@@ -59,9 +59,8 @@ The file is organized by **Namespaces**, followed by **Paths** within those name
 
 ## 3. Evaluation Order & Conflict Resolution
 
-- **Top-Down Evaluation**: Rules within the `rules` array, and `paths` arrays, are evaluated top-down. 
-  - *Alternative to consider*: Most-specific-match first (avoids ordering bugs, but harder to implement and reason about).
-- **Early Exit**: As soon as a rule explicitly grants access (`true` or matching condition), evaluation stops and access is permitted. 
+- **Top-Down Evaluation**: Rules within the `rules` array, and `paths` arrays, are evaluated top-down. The first matching rule wins.
+- **Early Exit**: As soon as a rule explicitly grants access (`true` or matching condition), evaluation stops and access is permitted.
 - **Namespace-First**: The frame's namespace is checked first. If no namespace rule matches or the namespace `condition` fails, the frame is rejected immediately, bypassing path evaluation.
 
 ## 4. Namespace Wildcard Behavior & Session Expectations
@@ -81,7 +80,7 @@ Any hierarchical namespace authorization requires that data to be present in the
 - If you use a namespace like `tenant:acme:workspace:123`, how does ZyncBase know the user is allowed in `workspace:123`?
 - **Option A (Injected arrays)**: The `$session` (via `onConnect`) contains an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
   - Rule: `{ "$namespace.workspace": { "in": "$session.workspaces" } }`
-- **Option B (Document-level check)**: If the `$session` only has the user me ID, ZyncBase would need to check the database (`$doc`) to see if the user is a member of the workspace. (See Open Questions).
+- **Option B (Document-level check)**: If the `$session` only has the user ID, ZyncBase would need to check the database (`$doc`) to see if the user is a member of the workspace. This requires Hook Server delegation (see Section 7).
 
 To keep the initial implementation focused and performant, we should prioritize **Namespace matching against the resolved `$session`**, keeping the hierarchy shallow until we decide on the necessity of `$doc` evaluation.
 
