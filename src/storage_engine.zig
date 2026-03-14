@@ -70,6 +70,8 @@ pub const StorageEngine = struct {
     transaction_active: std.atomic.Value(bool),
     pending_writes_count: std.atomic.Value(usize),
     reconnection_config: ReconnectionConfig,
+    write_mutex: std.Thread.Mutex,
+    write_cond: std.Thread.Condition,
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
@@ -136,6 +138,8 @@ pub const StorageEngine = struct {
             .transaction_active = std.atomic.Value(bool).init(false),
             .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
+            .write_mutex = .{},
+            .write_cond = .{},
         };
 
         // Start write thread
@@ -148,11 +152,9 @@ pub const StorageEngine = struct {
     }
 
     pub fn deinit(self: *StorageEngine) void {
-        // Signal shutdown
+        // Signal shutdown and wake the write thread immediately
         self.shutdown_requested.store(true, .release);
-
-        // Give write thread time to see shutdown signal
-        std.Thread.sleep(50 * std.time.ns_per_ms);
+        self.write_cond.signal();
 
         // Wait for write thread
         if (self.write_thread) |thread| {
@@ -194,7 +196,7 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
 
         try signal.wait();
         return signal.result orelse error.InvalidOperation;
@@ -274,7 +276,7 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
     }
 
     pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
@@ -319,7 +321,7 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
     }
 
     pub fn query(
@@ -404,7 +406,7 @@ pub const StorageEngine = struct {
             .completion_signal = &signal,
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
         return signal.wait();
     }
 
@@ -418,7 +420,7 @@ pub const StorageEngine = struct {
             .completion_signal = &signal,
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
         return signal.wait();
     }
 
@@ -432,7 +434,7 @@ pub const StorageEngine = struct {
             .completion_signal = &signal,
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.write_queue.push(op);
+        try self.pushWrite(op);
         return signal.wait();
     }
 
@@ -521,6 +523,12 @@ pub const StorageEngine = struct {
                 },
             });
         }
+    }
+
+    /// Push a write op and wake the write thread immediately.
+    fn pushWrite(self: *StorageEngine, op: WriteOp) !void {
+        try self.write_queue.push(op);
+        self.write_cond.signal();
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
@@ -641,8 +649,28 @@ pub const StorageEngine = struct {
             if (should_flush) {
                 try self.flushBatch(&batch, &last_batch_time);
             } else {
-                // Sleep briefly to avoid busy-waiting
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                // Wait for new work or timeout (for batch flushing), instead of busy-sleeping
+                self.write_mutex.lock();
+                defer self.write_mutex.unlock();
+                self.write_cond.timedWait(&self.write_mutex, 1 * std.time.ns_per_ms) catch {};
+            }
+        }
+
+        // Drain any ops still in the queue that weren't popped before shutdown was signalled
+        while (self.write_queue.pop()) |op| {
+            switch (op.type) {
+                .set, .delete => {
+                    batch.append(self.allocator, op) catch {
+                        op.deinit(self.allocator);
+                        _ = self.pending_writes_count.fetchSub(1, .release);
+                    };
+                },
+                else => {
+                    // Signal waiting callers so they don't hang forever
+                    if (op.completion_signal) |sig| sig.signal(StorageError.InvalidOperation);
+                    op.deinit(self.allocator);
+                    _ = self.pending_writes_count.fetchSub(1, .release);
+                },
             }
         }
 
@@ -838,14 +866,7 @@ pub const StorageEngine = struct {
 };
 
 pub const WriteOp = struct {
-    type: enum { 
-        set, 
-        delete, 
-        begin_transaction, 
-        commit_transaction, 
-        rollback_transaction, 
-        checkpoint 
-    },
+    type: enum { set, delete, begin_transaction, commit_transaction, rollback_transaction, checkpoint },
     namespace: ?[]const u8 = null,
     path: ?[]const u8 = null,
     value: ?[]const u8 = null,
@@ -911,10 +932,7 @@ pub const WriteQueue = struct {
 
     pub fn init(allocator: Allocator, _: usize) !WriteQueue {
         const stub = try allocator.create(Node);
-        stub.* = .{ 
-            .op = undefined, 
-            .next = std.atomic.Value(?*Node).init(null) 
-        };
+        stub.* = .{ .op = undefined, .next = std.atomic.Value(?*Node).init(null) };
         return WriteQueue{
             .head = stub,
             .tail = std.atomic.Value(*Node).init(stub),
@@ -931,10 +949,7 @@ pub const WriteQueue = struct {
 
     pub fn push(self: *WriteQueue, op: WriteOp) !void {
         const node = try self.allocator.create(Node);
-        node.* = .{ 
-            .op = op, 
-            .next = std.atomic.Value(?*Node).init(null) 
-        };
+        node.* = .{ .op = op, .next = std.atomic.Value(?*Node).init(null) };
         // swap tail to point to our new node
         const prev = self.tail.swap(node, .acq_rel);
         // Link the previous node to our new node
@@ -944,7 +959,7 @@ pub const WriteQueue = struct {
     pub fn pop(self: *WriteQueue) ?WriteOp {
         const head = self.head;
         const next = head.next.load(.acquire) orelse return null;
-        
+
         self.head = next;
         const op = next.op;
         self.allocator.destroy(head);

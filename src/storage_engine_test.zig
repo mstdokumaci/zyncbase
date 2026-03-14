@@ -262,3 +262,43 @@ test "StorageEngine: concurrent reads" {
         thread.join();
     }
 }
+
+test "StorageEngine: all pending writes are flushed before deinit returns" {
+    // Regression test for brittle shutdown synchronization.
+    // Previously deinit() used a fixed 50ms sleep before joining the write
+    // thread, which could race and lose in-flight writes. Now it signals
+    // write_cond and joins cleanly, guaranteeing the write thread has flushed
+    // its remaining batch before deinit returns.
+    //
+    // We verify the behavioral guarantee directly: enqueue writes, call deinit,
+    // then reopen the same DB file and confirm every write was persisted.
+    const allocator = testing.allocator;
+
+    const test_dir = "test-artifacts/unit/storage_engine/test_data_deinit_flush";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const num_keys = 50;
+
+    {
+        const engine = try StorageEngine.init(allocator, test_dir);
+        // Enqueue a burst of writes without waiting — deinit must flush them.
+        for (0..num_keys) |i| {
+            var key_buf: [32]u8 = undefined;
+            const key = try std.fmt.bufPrint(&key_buf, "/key/{d}", .{i});
+            try engine.set("ns", key, "1");
+        }
+        engine.deinit(); // must not return until all writes are on disk
+    }
+
+    // Reopen the same database and verify every key is present.
+    const verify_engine = try StorageEngine.init(allocator, test_dir);
+    defer verify_engine.deinit();
+
+    for (0..num_keys) |i| {
+        var key_buf: [32]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "/key/{d}", .{i});
+        const value = try verify_engine.get("ns", key);
+        defer if (value) |v| allocator.free(v);
+        try testing.expect(value != null);
+    }
+}
