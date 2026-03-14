@@ -1,1 +1,305 @@
-ZyncBase Wire Protocol Specification 2026-03-09 v1 Table Contents Serialization [Message Envelope [Client→Server Messages [Server→Client Messages Endpoints (HTTP) Lifecycle Format [Extensibility [Internal Messages (Zig Hook Server [Message Type Summary specifies client-server contract ZyncBase WebSocket message **MessagePack-encoded JSON message conforms principles SDK client method maps one message type No overloaded messages by client request unique `id server response echoes unsolicited** Server-initiated messages own types carry request `id **Extend never New fields added message type Unknown fields ignored[Extensibility Transport Serialization Property Value Transport WebSocket (RFC 6455) Frame type Binary`opcode 0x02 Serialization MessagePack JSON (debug Max message size 10 MB (configurable.rateLimit.maxMessageSize Max nesting depth 32 levels ADR-010 Compression None in v1 ADR-012) Message Envelope MessagePack `type` field Client-originated messages carry `id` for request-response correlation Client→Server envelope Unique request ID Type-specific fields Server→Client response envelope <uint64 Echoed request ID Type-specific fields Server→Client push envelope Type-specific fields "id unsolicited Nesting payload under key indirection no benefit fields inline simpler parse compact Client→Server Messages Store operations `StoreGet` value path1 Array strings format **Response** "ok" 1 "value" <any> Array collections Object documents scalar properties null if found `StoreSet` Write value path Applied client "StoreSet", 2 "rect-1" "value" "x 100 "y 200 "width 50 "height 50 **Response**`type "ok" 2 failure error response triggers optimistic revert client `StoreRemove` Remove value path "StoreRemove", 3 "rect-1" **Response** "ok 3 `StoreBatch` multiple write operations [Batch Operations Specification wire format details execution logic"StoreBatch", 4 "123" "assigned" "taskCount 5"temporary_locks", "123 **Operation codes"s Set (requires `path `value"r Remove `path`type "ok" 4 failure `details` error response `batchIndex` first operation `StoreSubscribe` Start real-time updates path 4 "path"elements" "ok initial snapshot 4 "subId "sub-abc-123", Server-assigned subscription ID unsubscribe delta matching "value" ... Current snapshot path After subscription server pushes `StoreDelta` messages [Server→Client Pushes `StoreUnsubscribe` Stop updates subscription"StoreUnsubscribe", 5 "subId "sub-abc-123 **Response** "ok 5 `StoreQuery one-off filtered query-real-time). "StoreQuery", 6"users 18 "active 50 "after "eyJpZCI6... " **Response** "ok" 6 "value [ ... ] Array matching items "nextCursor "eyJpZCI6... " Opaque token next page null end `StoreQuerySubscribe` Subscribe filtered query results real "StoreQuerySubscribe", 7"tasks "orderBy "limit 50 **Response** "ok includes initial snapshot 7 "subId "sub-def-456", "value [ ... ] "hasMore true `StoreLoadMore` Request more historical data active subscription"StoreLoadMore", 8 "subId-def-456 "ok server responds `ok` message pushes `StoreDelta additional items After subscription pushes `StoreDelta messages when query result changes Presence operations `PresenceSet` Update local user presence data Partial updates merge with existing state "PresenceSet", 8 100 200#ff0000" **Response** "ok" 8 After processing server broadcasts `PresenceBroadcast` other users `PresenceSubscribe` Subscribe presence changes current "PresenceSubscribe", 9 "ok includes current presence snapshot 9 "subId-pres-789", 100 200#ff0000" "joinedAt 1234567890 `PresenceUnsubscribe` Stop receiving presence updates"PresenceUnsubscribe", 10 "subId "sub-pres-789" **Response** "ok 10 `PresenceRemove` Remove local user presence data on disconnect). "PresenceRemove", 11 "ok 11 `AuthRefresh` Update session context new external JWT "AuthRefresh", 11<new_external_jwt>" **Response** "ok" 11 ... resolved $session context Namespace operations `StoreSetNamespace` Switch connection active store namespace 12 "tenant:acme:workspace:ws-2" 12 Active store subscriptions invalidated when changes client re-subscribe `PresenceSetNamespace` Switch connection active presence namespace Clears old presence joins new namespace"PresenceSetNamespace", 13, "tenant:acme:document:doc-456" **Response** (`type "ok" 13 Server→Client Messages Response messages use `type "ok or "error"` `type Request succeeded Fields depend original request type"error" Request failed [Error Format include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies subscribed client data path query changed "type "StoreDelta", "subId "sub-abc-123", subscription delta belongs Array atomic operations "value 50 75 absent "remove" **Operation types `op`"set" value created or updated new state"remove" value deleted No `value` field send per-operation deltas full snapshots client maintains local state applies operationsquery subscriptions client full re-evaluation if delta expressed individual ops sort-order `PresenceBroadcast` Notifies clients presence changes namespace "PresenceBroadcast", "subId-pres-789", "userId "user-123", 101 201 "join "update types"join user entered presence namespace contains initial presence"update" user updated presence changed fields"leave user left presence namespace No `data` field `ServerDisconnect` Server-initiated disconnection server shutdown token expiry). "TOKEN_EXPIRED", authentication token expired." Ticket Endpoints (HTTP) Ticket Exchange WebSocket client obtains single-use ticketPOST /auth/ticket Authorization Bearer <external_jwt 200 OK_tk_abc123..." 1741551234 Connection Lifecycle WebSocket Upgrade opens WebSocket connection ticket GET=zyc_tk_abc123... HTTP/1.1 Upgrade websocket Origin https://app.example server validates Origin header Ticket signature expiry$session success HTTP 101 Switching Protocols failure HTTP 401 or 403. Connected message WebSocket server sends `Connected push Authenticated user ID $session context client wait message messages Heartbeat server sends WebSocket frames 30 client responds frames no pong server closes connection No application-level heartbeat messages WebSocket ping/pong Graceful close-initiated WebSocket close frame cleans subscriptions presence `ServerDisconnect message closes WebSocket 6. Reconnection Strategy connection lost exponential backoff strategy optional jitter prevent server restartrecommended formula delay attempt(reconnectDelay * 2^attempt + jitter maxReconnectDelay Error Format errors follow consistent envelope 2 Echoed request ID "SCHEMA_VALIDATION Machine-readable error code Functional category ERROR_TAXONOMY 'priority integer "retryAfter 5000 wait before retry "priority integer field-level error context Error codes Category Description `AUTH_FAILED Invalid ticket expired JWT_EXPIRED Session expired re-authenticate_UNAUTHORIZED Not authorized access namespace `PERMISSION_DENIEDHook Server rejected operation `SCHEMA_VALIDATION_FAILED Data match schema definition `INVALID_MESSAGE Malformed MessagePack missing `type field `RATE_LIMITED Too many messages `retryAfter `MESSAGE_TOO_LARGE Payload exceeds `maxMessageSize `CONNECTION_FAILED Transport-level failure (WebSocket closed `TIMEOUT processing exceeded timeout `INTERNAL_ERROR Unexpected server failure `HOOK_SERVER_UNAVAILABLE reach Hook Server `HOOK_DENIED TypeScript hook returned error `SUBSCRIPTION_NOT_FOUND `subId recognized Extensibility new message types future versions ignore unknown values new fields message types ignore unknown fields non-breaking evolution Protocol version message `protocolVersion field future versions version `1` version negotiation added response without handshakeInternal Messages (Zig ↔ Hook Server travel internal IPC/WebSocket channel between Zig core Bun Hook Server `HookServerOnConnect` Sent ticket requested session refreshed`json "HookServerOnConnect", verified by Zig "namespace "tenant:acme" Initial namespace context **Response** ( "ok"_id "acme" $session `HookServerAuthCheck` Sent `authorization.json delegates rule to hook server "HookServerAuthCheck", "checkDocumentAccess", "tenant:acme","docs", "123" "value": ... data written applicable **Response** ( "ok" "allowed true Message Type Summary Direction SDK method Response `StoreGet`.get(path) `StoreSet.set(path `StoreRemove`.remove(path) `StoreBatch`.batch(ops C→S `StoreSubscribe(path) `subId `value C→S `StoreUnsubscribe C→S `StoreQuery(path opts `value `nextCursor `StoreQuerySubscribe.subscribe(path `subId `value `hasMore C→S `StoreLoadMore `subscription.loadMore( `ok `StoreDelta C→S `PresenceSet.set(data) `ok C→S `PresenceSubscribe.subscribe(cb) `subId `users C→S `PresenceUnsubscribe `ok C→S `PresenceRemove.remove() `ok C→S `StoreSetNamespace.setStoreNamespace(ns) `ok C→S `PresenceSetNamespace.setPresenceNamespace C→S `AuthRefresh.reauthenticate(token `ok S→C `Connected Push `id S→C `StoreDelta Push `id S→C `PresenceBroadcast Push `id S→C `ServerDisconnect `id Z↔H `HookServerOnConnect Request/Response Z↔H `HookServerAuthCheck
+ZyncBase Wire Protocol Specification 2026-03-09 v1 Table Contents Serialization [Message Envelope [Client→Server Messages [Server→Client Messages Endpoints (HTTP) Lifecycle Format [Extensibility [Internal Messages (Zig Hook Server [Message Type Summary specifies client-server contract ZyncBase WebSocket message **MessagePack-encoded JSON message conforms principles SDK client method maps one message type No overloaded messages by client request unique `id server response echoes unsolicited** Server-initiated messages own types carry request `id **Extend never New fields added message type Unknown fields ignoredTransport Serialization WebSocket (RFC 6455) Frame Binary 0x02 Serialization MessagePack JSON Max message size 10 MB Max nesting depth 32 levels ADR-010 Compression None v1 ADR-012) Message Envelope MessagePack `type field Client-originated messages carry `id` request-response correlation Client→Server envelope```
+{
+  "type": <string>,     // Message type (see catalog below)
+  "id":   <uint64>,     // Unique request ID, generated by client
+  ...                   // Type-specific fields (inline, not nested in a "payload" key)
+}
+```envelope```
+{
+  "type": "ok" | "error",  // Result type
+  "id":   <uint64>,        // Echoed request ID
+  ...                      // Type-specific fields
+}
+```envelope```
+{
+  "type": <string>,     // Push type (e.g., "StoreDelta", "PresenceBroadcast")
+  ...                   // Type-specific fields (no "id" — pushes are unsolicited)
+}
+```flat payload key indirection no benefit fields inline simpler compact Client→Server Messages Store operations `StoreGet Retrieve value path```
+{
+  "type": "StoreGet",
+  "id":   1,
+  "path": ["tasks", "task-1", "title"]   // Array of strings (canonical format)
+}
+```"ok"```
+{
+  "type":  "ok",
+  "id":    1,
+  "value": <any>    // Array for collections, Object for documents, scalar for properties, null if not found
+}
+````StoreSet` value path Applied client```
+{
+  "type":  "StoreSet",
+  "id":    2,
+  "path":  ["elements", "rect-1"],
+  "value": { "x": 100, "y": 200, "width": 50, "height": 50 }
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   2
+}
+```failure error triggers optimistic client `StoreRemove value path```
+{
+  "type": "StoreRemove",
+  "id":   3,
+  "path": ["elements", "rect-1"]
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   3
+}
+````StoreBatch write operations Operations Specification wire format execution logic```
+{
+  "type": "StoreBatch",
+  "id":   4,
+  "ops": [
+    ["s", ["tasks", "123"], { "status": "assigned" }],
+    ["s", ["users", "bob", "taskCount"], 5],
+    ["r", ["temporary_locks", "123"]]
+  ]
+}
+```codes `"s" Set `"r" Remove `path "ok"```
+{
+  "type": "ok",
+  "id":   4
+}
+```failure `details` object `batchIndex` first operation failure `StoreSubscribe` real-time updates path```
+{
+  "type": "StoreSubscribe",
+  "id":   4,
+  "path": ["elements"]
+}
+```"ok" includes snapshot```
+{
+  "type":  "ok",
+  "id":    4,
+  "subId": "sub-abc-123",      // Server-assigned subscription ID (used for unsubscribe and delta matching)
+  "value": [ ... ]             // Current snapshot at path
+}
+```subscription server pushes messages Pushes Stop updates subscription```
+{
+  "type":  "StoreUnsubscribe",
+  "id":    5,
+  "subId": "sub-abc-123"
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   5
+}
+````StoreQuery filtered query-real-time).```
+{
+  "type":  "StoreQuery",
+  "id":    6,
+  "path":  ["users"],
+  "where": {
+    "age":    { "gte": 18 },
+    "status": { "eq": "active" }
+  },
+  "orderBy": { "created_at": "desc" },
+  "limit":   50,
+  "after":   "eyJpZCI6... "
+}
+```"ok"```
+{
+  "type":       "ok",
+  "id":         6,
+  "value":      [ ... ],    // Array of matching items
+  "nextCursor": "eyJpZCI6... " // Opaque token for next page, null if end
+}
+```filtered query results real-time```
+{
+  "type":    "StoreQuerySubscribe",
+  "id":      7,
+  "path":    ["tasks"],
+  "where":   { "status": { "eq": "active" } },
+  "orderBy": { "created_at": "desc" },
+  "limit":   50
+}
+```"ok" includes snapshot```
+{
+  "type":       "ok",
+  "id":         7,
+  "subId":      "sub-def-456",
+  "value":      [ ... ],
+  "hasMore":    true
+}
+````StoreLoadMore data subscription```
+{
+  "type":  "StoreLoadMore",
+  "id":    8,
+  "subId": "sub-def-456"
+}
+```server responds `ok pushes `StoreDelta additional items subscription pushes query result changes Presence operations Update local user presence data updates merge state```
+{
+  "type": "PresenceSet",
+  "id":   8,
+  "data": { "cursor": { "x": 100, "y": 200 }, "color": "#ff0000" }
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   8
+}
+```processing server broadcasts `PresenceBroadcast users `PresenceSubscribe presence changes namespace```
+{
+  "type": "PresenceSubscribe",
+  "id":   9
+}
+```"ok includes presence snapshot```
+{
+  "type":  "ok",
+  "id":    9,
+  "subId": "sub-pres-789",
+  "users": [
+    {
+      "userId":   "user-123",
+      "data":     { "cursor": { "x": 100, "y": 200 }, "color": "#ff0000" },
+      "joinedAt": 1234567890
+    }
+  ]
+}
+```Stop updates```
+{
+  "type":  "PresenceUnsubscribe",
+  "id":    10,
+  "subId": "sub-pres-789"
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   10
+}
+````PresenceRemove local user presence data```
+{
+  "type": "PresenceRemove",
+  "id":   11
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   11
+}
+````AuthRefresh Update session context JWT```
+{
+  "type":  "AuthRefresh",
+  "id":    11,
+  "token": "<new_external_jwt>"
+}
+```"ok"```
+{
+  "type":    "ok",
+  "id":      11,
+  "session": { ... } // The newly resolved $session context
+}
+```Namespace operations Switch store namespace```
+{
+  "type":      "StoreSetNamespace",
+  "id":        12,
+  "namespace": "tenant:acme:workspace:ws-2"
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   12
+}
+```store subscriptions invalidated namespace changes client re-subscribe Switch namespace Clears joins```
+{
+  "type":      "PresenceSetNamespace",
+  "id":        13,
+  "namespace": "tenant:acme:document:doc-456"
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   13
+}
+```Server→Client Messages Response messages use "ok" or "error"` `"ok"` Request succeeded Fields depend original request type"error"` Request failed Format include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies client data changed```
+{
+  "type":  "StoreDelta",
+  "subId": "sub-abc-123",              // Which subscription this delta belongs to
+  "ops":   [                           // Array of atomic operations
+    {
+      "op":    "set",                  // "set" | "remove"
+      "path":  ["elements", "rect-2"],
+      "value": { "x": 50, "y": 75 }   // Present for "set", absent for "remove"
+    },
+    {
+      "op":   "remove",
+      "path": ["elements", "rect-3"]
+    }
+  ]
+}
+```types `op Description"set" value created updated new state"remove" value deleted No `value field note send per-operation deltas snapshots client maintains local state applies operations query subscriptions full re-evaluation delta sort-order `PresenceBroadcast Notifies clients changes```
+{
+  "type":  "PresenceBroadcast",
+  "subId": "sub-pres-789",
+  "event": "update",                  // "join" | "update" | "leave"
+  "userId": "user-123",
+  "data":   { "cursor": { "x": 101, "y": 201 } }    // Present for "join" and "update"
+}
+```types `event"join" user entered presence namespace `data` initial presence"update" user updated presence` changed fields"leave" left No `data` field `ServerDisconnect` Server-initiated disconnection shutdown token```
+{
+  "type":    "ServerDisconnect",
+  "code":    "TOKEN_EXPIRED",
+  "message": "Your authentication token has expired."
+}
+```Ticket Endpoints Exchange WebSocket client obtains single-use ticket```
+POST /auth/ticket
+Authorization: Bearer <external_jwt>
+```200 OK```json
+{
+  "ticket":    "zyc_tk_abc123...",
+  "expiresAt": 1741551234
+}
+```Connection Lifecycle WebSocket Upgrade opens ticket```
+GET /ws?ticket=zyc_tk_abc123... HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+Origin: https://app.example.com
+```server validates Origin header Ticket signature expiry$session success HTTP 101 failure HTTP 401 403. Connected message WebSocket sends push```
+{
+  "type":               "Connected",
+  "userId":             "user-123",       // Authenticated user ID (from sub claim)
+  "session":            { ... },          // The full resolved $session context
+  "storeNamespace":     "tenant:acme",    
+  "presenceNamespace":  "tenant:acme"     
+}
+```client wait message before Heartbeat server sends WebSocket frames 30 client responds frames no pong received timeout 10 server closes connection No application heartbeat messages WebSocket ping/pong close sends WebSocket close Server cleans subscriptions presence sends closes WebSocket 6. Reconnection Strategy connection lost exponential backoff strategy optional jitter formula delay `min(reconnectDelay * 2^attempt jitter maxReconnectDelay Error Format envelope```
+{
+  "type":       "error",
+  "id":         2,                          // Echoed request ID (if responding to a request)
+  "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
+  "category":   "validation",               // Functional category (see ERROR_TAXONOMY.md)
+  "message":    "Field 'priority' must be an integer, got string.",
+  "retryAfter": 5000,                       // (Optional) ms to wait before retry
+  "details":    { "priority": ["must be integer"] } // (Optional) field-level error context
+}
+```Error codes Category `AUTH_FAILED` Invalid ticket expired JWT `TOKEN_EXPIRED Session expired re-authenticate `NAMESPACE_UNAUTHORIZED Not authorized access namespace `PERMISSION_DENIED` rejected operation `SCHEMA_VALIDATION_FAILED Data match schema definition `INVALID_MESSAGE Malformed MessagePack missing `type field `RATE_LIMITED` many messages `retryAfter `MESSAGE_TOO_LARGE exceeds `maxMessageSize `CONNECTION_FAILED Transport-level failure closed `TIMEOUT exceeded timeout `INTERNAL_ERROR` Unexpected server failure `HOOK_SERVER_UNAVAILABLE` reach Hook Server `HOOK_DENIED` TypeScript hook returned error `SUBSCRIPTION_NOT_FOUND` not recognized Extensibility new message types types future versionsClients servers ignore unknown values fields message types ignore unknown fields allows non-breaking evolution Protocol version `Connected message `protocolVersion future versions v1 version `1` version negotiation added response without handshake Internal Messages (Zig Hook Server IPC/WebSocket Zig core Hook Server `HookServerOnConnect ticket requested session refreshed```json
+{
+  "type":      "HookServerOnConnect",
+  "jwt":       { ...claims... },  // Already verified by Zig
+  "namespace": "tenant:acme"      // Initial namespace context
+}
+```"ok"```json
+{
+  "type":    "ok",
+  "session": { "role": "admin", "tenant_id": "acme" } // Becomes the $session
+}
+````HookServerAuthCheck.json delegates rule server```json
+{
+  "type":      "HookServerAuthCheck",
+  "function":  "checkDocumentAccess",
+  "session":   { ... },
+  "namespace": "tenant:acme",
+  "path":      ["docs", "123"],
+  "value":     { ... } // The data being written (if applicable)
+}
+```"ok"```json
+{
+  "type":    "ok",
+  "allowed": true
+}
+```Message Summary Direction SDK method Response C→S `StoreGet.get(path) with `value C→S `StoreSet.set(path value `ok C→S `StoreRemove(path) `ok C→S `StoreBatch `store.batch `ok C→S `StoreSubscribe(path with `subId `value C→S `StoreUnsubscribe` C→S `StoreQuery(path `value `nextCursor C→S `StoreQuerySubscribe.subscribe `subId `value C→S `StoreLoadMore.loadMore( `StoreDelta` C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe.subscribe(cb) with `subId `users C→S `PresenceUnsubscribe` C→S `PresenceRemove` `presence.remove( `ok C→S `StoreSetNamespace.setStoreNamespace C→S `PresenceSetNamespace.setPresenceNamespace `ok C→S `AuthRefresh.reauthenticate(token) `ok `session S→C `Connected Push `id S→C `StoreDelta `id S→C `PresenceBroadcast S→C `ServerDisconnect `id Z↔H `HookServerOnConnect Request/Response Z↔H `HookServerAuthCheck Request/Response

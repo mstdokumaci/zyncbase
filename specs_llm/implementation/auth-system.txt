@@ -1,1 +1,82 @@
-ZyncBase Authorization Format.json v1 Stable Replaces row-level security with high-performance JSON-declarative model ZyncBase Zig core Evaluated MessagePack frame [Configuration API Design/configuration.md Authorization rules hook management requirements Core Principles **Deny by Default** access denied unless allowed by rule Rules evaluated against context$session resolved session context JWT$namespace current string$path specific data path$doc existing document database attribute-based access control Language Conditions use same JSON structure ZyncBase Query Language `or$session.role easy parsing safe evaluation without `eval( of Concerns** Namespaces handle path rules access Rule Format Structure file organized by followed **Paths** namespaces "rules true false_id$session.tenantId$namespace_id "presence "read "write "paths$session.role "users.$_id true "write$session.sub$path.user_id Evaluation Order Conflict Resolution-Down Rules evaluated top-down first matching rule wins **Early Exit** rule grants access evaluation stops access permitted **Namespace-First** frame namespace checked first no namespace rule matches fails frame path evaluation Namespace Wildcard Behavior Session Expectations Namespaces colon-separated segment model Wildcards match segments extract variables$namespace context ZyncBase stateless authorization hierarchical namespace authorization requires data$session 1: Tenant Isolation Session contains "tenant_id "acme Namespace `tenant:${tenant_id} Rule$namespace.tenant_id$session.tenant_id User connects to `tenant:acme ZyncBase extracts `acme$namespace.tenant_id compares$session.tenant_idmatch access granted 2: Workspace Isolation namespace `tenant:acme:workspace:123 ZyncBase know user:123? A (Injected arrays `$session` contains allowed workspaces Rule$namespace.workspace$session.workspaces B (Document-level check `$session` user ID ZyncBase check database$doc user member workspace requires Hook Server delegation Section 7) prioritize **Namespace matching against$session hierarchy shallow until `$doc` evaluation Presence API Authorization Store API Presence API flat-wide concept Users join namespace broadcast state listen others authorization defined `namespace` level `paths`read subscribe channel see online`write broadcast presence object validation presence ephemeral no `$doc` equivalent path-level routing Server Support rules support Hook Server Delegation 7 Hook relational lookups before join presence channeluser paid delegate like path rule "presence "checkPresenceAccess "write$session.role "paid Composition Model (Conditions Conditions mirror `QUERY_LANGUAGE.md` operators evaluation engine Zig **Boolean Values** `true (allow or `false `eq` `ne `in `contains `and` `or` "write$session.role "admin.sub$path.user_id Bun Hook Server (Managing Complexity tension authorization between **stateless **complex relational permissions** user workspace folder ZyncBase`authorization.json for stateless checks$namespace.tenant $session.tenant_id fast evaluated natively in Zig rule database lookup delegated to Bun Hook Server Turing-complete database lookup engine into `authorization.json ZyncBase provides-box Bun WebSocket server Developers write TypeScript function handle complex auth logic`authorization.json delegation "checkDocumentAccess MessagePack ZyncBase maintains high-speed connection Bun Hook Server write matches"hook rule streams MessagePack payload$session `value function name"checkDocumentAccess Bun Hook Server executes developer's TypeScript function access database Prisma Drizzle raw SQL fetch Hook Server responds `true or (deny MessagePack payload Developer Experience writes authorization logic file `zyncbase.auth.ts CLI spins Bun Hook Server privileged ZyncBase developer queries ZyncBase.store API admin bypasses `authorization.json eliminates Prisma Drizzle raw SQL authorization zyncbase.auth.ts createAdminClient local Zig core IPC/WebSocket client createAdminClient function name matches"hook rule authorization.json async function checkDocumentAccess( session path value workspaceIdsplit( same Query API frontend memberships client.store.query('workspace_members userId workspaceId (memberships.length === 0 return false role = memberships.role 'admin' 'editor' ensures ZyncBase core fast decoupled business logic smooth unified API experience
+ZyncBase Authorization Format.json v1 Stable Replaces row-level security with high JSON-declarative model ZyncBase Zig core Evaluated MessagePack frame [Configuration API Design/configuration.md Authorization rules hook management requirements Core Principles by Default** access denied unless allowed by rule Rules evaluated against context$session resolved session context JWT$namespace current string$path specific data path$doc existing document attribute-based access control Language Conditions use same JSON structure ZyncBase Query Language `or easy parsing safe evaluation without `eval( of Namespaces handle path rules access Rule Format Structure file organized by followed namespaces```json
+{
+  "rules": [
+    {
+      "namespace": "public",
+      "read": true,
+      "write": false
+    },
+    {
+      "namespace": "tenant:${tenant_id}:*",
+      "condition": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      
+      "presence": {
+        "read": true,
+        "write": true
+      },
+
+      "paths": [
+        {
+          "path": "*",
+          "read": true,
+          "write": { "$session.role": { "in": ["admin", "editor"] } }
+        },
+        {
+          "path": "users.${user_id}",
+          "read": true,
+          "write": { "$session.sub": { "eq": "$path.user_id" } }
+        }
+      ]
+    }
+  ]
+}
+```Evaluation Order Conflict Resolution-Down Rules evaluated first matching rule wins **Early rule grants access evaluation stops access permitted **Namespace-First** frame namespace checked first no rule matches fails frame rejected path evaluation Namespace Wildcard Behavior Session Expectations Namespaces colon-separated segment model Wildcards match segments extract variables$namespace context ZyncBase stateless authorization hierarchical namespace authorization requires data$session 1: Tenant Isolation Session contains_id "acme Namespace$_id Rule$namespace.tenant_id$session.tenant_id User connects namespace `tenant:acme ZyncBase extracts `acme_id compares$session.tenant_id If access granted 2: Workspace Isolation namespace `tenant:acme:workspace:123 ZyncBase user:123 A (Injected arrays$session contains allowed workspaces Rule$namespace.workspaceworkspaces B (Document-level check `$session` user ID ZyncBase database$doc user member workspace requires Hook Server delegation Section 7) implementation prioritize **Namespace matching against$session hierarchy shallow until `$doc` evaluation Presence API Authorization Store API-wide concept Users join namespace broadcast state listen others presence authorization defined `namespace level `paths`read subscribe channel see online`write broadcast presence object validation presence ephemeral no `$doc` equivalent path-level routing Server Support Presence rules support Hook Server Delegation 7 Hook relational lookups before user presence channel paid delegate like path rule```json
+"presence": {
+  "read": { "hook": "checkPresenceAccess" },
+  "write": { "$session.role": { "in": ["admin", "paid"] } }
+}
+```Composition Model (Conditions mirror `QUERY_LANGUAGE.md operators evaluation engine Zig `true `false `eq `ne `in `contains `and `or```json
+"write": {
+  "or": [
+    { "$session.role": { "eq": "admin" } },
+    { 
+      "$session.role": { "eq": "editor" },
+      "$session.sub": { "eq": "$path.user_id" }
+    }
+  ]
+}
+```Bun Hook Server Complexity tension authorization between relational user ZyncBase`authorization.json for stateless checks$namespace.tenant.tenant_id fast evaluated in Zig. rule database lookup delegated to Bun Hook Server Turing-complete database lookup engine into `authorization.json ZyncBase provides-box Bun WebSocket server Developers write TypeScript function complex auth logic `authorization.json` delegation```json
+{
+  "namespace": "tenant:*",
+  "paths": [
+    {
+      "path": "documents.*",
+      "write": { "hook": "checkDocumentAccess" } 
+    }
+  ]
+}
+```MessagePack ZyncBase connection Bun Hook Server write matches rule ZyncBase streams MessagePack payload$session incoming `value requested function name Bun Hook Server executes developer TypeScript function access database Prisma Drizzle SQL fetch Hook Server responds or MessagePack payload Developer Experience writes authorization logic file.auth.ts CLI spins Bun Hook Server Hook Server privileged ZyncBase developer queries ZyncBase.store API admin bypasses `authorization.json eliminates Prisma Drizzle raw SQL authorization```typescript
+// zyncbase.auth.ts
+import { createAdminClient } from '@zyncbase/server';
+
+// Automatically configured to talk to the local Zig core over IPC/WebSocket
+const client = createAdminClient();
+
+// The function name matches the `"hook"` rule in authorization.json
+export async function checkDocumentAccess({ session, namespace, path, value }) {
+  const workspaceId = namespace.split(':')[1];
+  
+  // Use the exact same Query API you use on the frontend
+  const memberships = await client.store.query('workspace_members', {
+    where: { 
+      userId: { eq: session.sub },
+      workspaceId: { eq: workspaceId }
+    }
+  });
+
+  if (memberships.length === 0) return false;
+  
+  const role = memberships[0].role;
+  return role === 'admin' || role === 'editor';
+}
+```architecture ZyncBase core fast decoupled business logic smooth API experience

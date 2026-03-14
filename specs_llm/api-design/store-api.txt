@@ -1,1 +1,48 @@
-Store API handles synchronized data validated against [Schema persisted to SQLite synchronized across clients Table Contents Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access Target items properties dot-notation arrays `store.get(path) value state tree value `undefined if `store.set(path value) Write value applied locally synced Reverted if server rejects Server-Time Last-Write-Wins) Path level client.store.set.remove(path) Removes value path.subscribe(path Subscribe real-time updates path unsubscribe.subscribe( unsubscribe function Query API (Path Filtering) filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions.query(path options Execute one-off query-real-time). users await client.store.query( age 18 status 'active orderBy created limit 50 Load next page cursor (users.nextCursor await.store.query limit 50 **Parameters `path query `options Filter conditions `orderBy Sort order `limit Max results return `after` Opaque token next page<Array nextCursor null standard JavaScript Array additional `nextCursor` property `store.subscribe(path options callback Subscribe filtered query results (real-time). unsubscribe loadMore client.store.subscribe('tasks status limit 50 renderTaskList Load older history live view await loadMore( **Parameters `path query `options `callback (function Called results change unsubscribe void loadMore Promise<void hasMore boolean See [Query Language Reference-language.md operators`eq Batch Operations Perform multiple write operations`set `remove `store.batch(operations operation fails batch await client.store.batch 'set 'tasks.123 status 'assigned 'remove 'temporary_locks.123 Max 500 operations per batch `set` `remove` allowed Path Syntax (Strings Arrays methods accept dot-notation strings Arrays Array canonical formatAddressing Data Paths variadic follow progression collections documents fields Target Pattern Array Dot Example **Collection**'users' **Document**[collection id'users' 'u1'.u1 **Field**[collection id field'users 'name.u1.name' **Nested Field**[collection, id ...fields'users 'address 'city'.u1.address.city' use Arrays preferred variables IDs dots userId = 'alice.smith' Dot ID Dot-notation breaks client.store.get(`users.name Array handles safely See [Presence API user awareness features [Query Language Reference Detailed query syntax [Configuration & Schema] schema definitions
+Store API handles synchronized data validated against persisted to SQLite synchronized across clients Table Contents Path Access API Filtering Operations [Path Syntax-strings-arrays Direct Path Access Target items properties dot-notation arrays.get(path) value state tree```typescript
+const element = client.store.get('elements.rect-1')
+```value path `undefined.set(path value Write value applied locally synced Reverted server rejects Server-Time Last-Write-Wins Path level```typescript
+client.store.set('user.name', 'Alice')
+```.remove(path Removes value path```typescript
+client.store.remove('elements.rect-1')
+````store.subscribe(path callback updates path```typescript
+const unsubscribe = client.store.subscribe('elements', (elements) => {
+  render(elements)
+})
+```unsubscribe function Query API Filtering filtering sorting searching data Form validation Server-side rendering Filtered real-time subscriptions.query one-off query-real```typescript
+const users = await client.store.query('users', {
+  where: { age: { gte: 18 }, status: { eq: 'active' } },
+  orderBy: { created_at: 'desc' },
+  limit: 50
+})
+
+// Load next page using the attached cursor
+if (users.nextCursor) {
+  const nextPage = await client.store.query('users', {
+    after: users.nextCursor,
+    limit: 50
+  })
+}
+````path query `options Filter conditions `orderBy Sort order `limit Max results return `after Opaque token next page `Promise<Array nextCursor null standard JavaScript Array additional `nextCursor property `store.subscribe(path options callback Subscribe filtered query results```typescript
+const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
+  where: { status: { eq: 'active' } },
+  limit: 50
+}, (tasks) => {
+  renderTaskList(tasks)
+})
+
+// Load older history into the live view
+if (hasMore) await loadMore()
+````path to query `options( `callback (function Called when results change unsubscribe void loadMore Promise<void hasMore boolean See [Query Language Reference-language.md operators`eq `contains Batch Operations Perform write operations`set `remove `store.batch(operations) operation fails batch rejected reverted).```typescript
+await client.store.batch([
+  { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
+  { op: 'remove', path: 'temporary_locks.123' }
+])
+```Max 500 operations per batch `set `remove allowed Path Syntax (Strings vs Arrays methods accept dot-notation strings Arrays Array canonical format Addressing Data Paths variadic follow logical progression from collections documents fields Target Pattern Array Dot Example **Collection**'users **Document**[collection id'users 'u1.u1 **Field**[collection id field.u1.name' **Nested Field**[collection id ...fields'users 'address 'city.u1.address.city' use Arrays? preferred variables IDs dots```typescript
+const userId = 'alice.smith' // Dot in ID!
+
+// ❌ Dot-notation breaks (ambiguous)
+client.store.get(`users.${userId}.name`) 
+
+// ✅ Array handles it safely
+client.store.get(['users', userId, 'name'])
+```API.md user awareness features Language Reference-language.md Detailed query syntax Schema.md schema definitions

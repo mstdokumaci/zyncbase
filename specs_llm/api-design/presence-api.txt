@@ -1,1 +1,29 @@
-Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory cleaned on disconnect Table of Contents [Methods-methods [Namespaces-namespaces [Use Cases Examples [Best Practices Presence Methods `presence.set(data) presence data broadcast to users client.presence.set( cursor 100 200 status 'active `presence.subscribe(callback Subscribe real-time changes users namespace `presence.get(userId) user current presence data **synchronous local returns active [Subscription.presence.get(-123 `presence.getAll(options Returns users' presence data namespace Excludes self returns empty array if no active subscription client.presence.getAll( includeSelf true Presence Namespaces scoped to `presenceNamespace` set during [Client Initialization/configurationusers same namespace see each other Document-Scoped Presence** client createClient presenceNamespace:acme:doc:123 Users doc:123 see cursors Use Cases Examples Collaborative Editor (Cursors document.addEventListener client.presence.set cursor name 'Alice client.presence.subscribe((users users.forEach renderCursor.userId.cursor.name Typing Indicators input.addEventListener client.presence.set( true setTimeout( false Best Practices Data Presence updates frequent include essential transient state Granularity** Use specific namespaces:123 reduce unneeded broadcasts Late receive last updates [Store API Reference persistent state management [Configuration].md Defining presence fields schema
+Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory cleaned disconnect Table Contents [Methods-methods-namespaces Cases Examples Practices Presence Methods.set(data presence data broadcast users same```typescript
+client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
+````presence.subscribe real-time changes leaves users namespace```typescript
+client.presence.subscribe((users) => {
+  renderCursors(users)
+})
+````presence.get(userId) user's current presence data **synchronous local SDK cache returns values active [Subscription namespace```typescript
+const alice = client.presence.get('user-123')
+````presence.getAll Returns users presence data namespace Excludes self Like( local returns empty array no subscription```typescript
+const everyone = client.presence.getAll({ includeSelf: true })
+```Presence Namespaces scoped Initialization users same namespace see other Document-Scoped Presence**```typescript
+const client = createClient({
+  presenceNamespace: 'workspace:acme:doc:123'
+})
+// Users in doc:123 only see each other's cursors.
+```Cases Examples Collaborative Editor```typescript
+document.addEventListener('mousemove', (e) => {
+  client.presence.set({ cursor: { x: e.clientX, y: e.clientY }, name: 'Alice' })
+})
+
+client.presence.subscribe((users) => {
+  users.forEach(u => renderCursor(u.userId, u.data.cursor, u.data.name))
+})
+```Typing```typescript
+input.addEventListener('input', () => {
+  client.presence.set({ typing: true })
+  setTimeout(() => client.presence.set({ typing: false }), 3000)
+})
+```Best Practices Data Presence updates frequent include essential transient state Use specific namespaces:123 reduce unneeded broadcasts Late receive last 5s updates See API Reference-api.md persistent state management [Configuration.md Defining presence fields schema

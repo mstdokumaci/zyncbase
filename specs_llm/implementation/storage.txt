@@ -1,1 +1,266 @@
-Storage Implementation Layer Architecture ZyncBase storage layer SQLite configuration connection management schema generation migration logic SQLite Configuration Pragma Settings PRAGMAs high workloads Enable WAL mode reads Increase cache 64MB cache_size -64000 Synchronous NORMAL durability performance Memory-mapped I/O syscall overhead mmap_size 268435456 256MB Multiple reader connections reads read_uncommitted 1 Proactive checkpoint management WAL growth_autocheckpoint 1000 SQLite Configuration WAL Mode leverages high-performance concurrency Layer Architecture settings_size -64000 Caches hot pages I/O Negative value (64MB NORMAL Balances durability performance Safe crashes vulnerable power failure_size 256MB Maps database memory syscall overhead reads Connection Pool Implementation ZyncBase thread-local connection pool read throughputStorageLayer write_conn.Connection Single read_pool.Connection Multiple readers write_queue RingBuffer init(allocator*StorageLayer num_readers.Thread.getCpuCount reader_pool allocator.alloc(sqlite self allocator.create_conn sqlite.open"ZyncBase_pool allocator.alloc_queue RingBuffer(WriteOp).init one reader connection per CPU core.read_pool sqlite.open("ZyncBase.db Initial setup connection.write_conn.exec journal_mode synchronous NORMAL cache_size getReader *StorageLayer *sqlite.Connection Thread-local selection avoid connection contention thread_id.Thread.getCurrentId reader_idx thread_id self.read_pool.len_pool Schema-to-DDL ZyncBase transforms JSON store into SQLite relational tablesType Mapping Implementation JSON Schema SQLite Notes `string` `TEXT` Map UTF-8 text `integer` 64-bit signed integer `number` `REAL` 64-bit float `boolean` `INTEGER` Stored 0 or 1 `object` (nested Flattened columns `address.city` `address_city TEXT` `array` (primitives `TEXT` Stored JSON blob Implementation Logic SchemaParser allocator parseTable store_item json.Value fields_obj store_item.get( error.InvalidSchema required.get("required fields = ArrayList(Field).init include fields fields.append_key Parse schema fields (fields_obj.object.items_entry field_name.key_def.value Check field nested object nested_fieldsflattenNestedObject fields.appendSlice field self.parseField fields.append include timestamps fields.append "created.append "updated return Table.fields fields.toOwnedSlice isNestedObject *SchemaParser field_def json.Value field_type_def.get( return false.mem.eql return false field_def.get null flattenNestedObject *SchemaParser prefix u8 field_def json.Value fields ArrayList(Field).init(self.allocator); properties field_def.get("properties") return error.InvalidSchema (properties.object.items_entry flattened_name std.fmt.allocPrint(self.allocator prefix prop_entry.key field self.parseField(flattened_name_entry.value fields.append return fields.toOwnedSlice parseField *SchemaParser name u8 field_def json.Value field_type_def.get( return error.InvalidSchema Field.name =.type.mapType.required.indexed_def.get( null DDLGenerator allocator Allocator generateDDL *DDLGenerator table Table u8 buf = ArrayList(u8).init(self.allocator); buf.appendSlice("CREATE TABLE.appendSlice(table (table.fields buf.appendSlice.fmt.allocPrint(self.allocator.name.sqlType.required.appendSlice( NOT NULL.primary_key.appendSlice( PRIMARY KEY < table.fields.len - 1) buf.appendSlice Auto-generate indexes (table.fields.indexed std.mem.eql(u8 field.name "namespace_id") buf.appendSlice.fmt.allocPrintallocator "CREATE INDEX.name field return buf.toOwnedSlice Relational Features **Foreign Keys** `references property Supports `cascade `restrict `set_null **FTS5** Virtual tables full-text search designated paths Auto-Migration Implementation ZyncBase manages schema evolution current state target schema Execution Strategy MigrationDetector struct detectChanges(old new_schema changes ArrayList(Change).init_schema.tables_schema.hasTable.name changes.append(_table new_table add_column remove change return changes.toOwnedSlice MigrationExecutor.Connection execute *MigrationExecutor self.db.exec("BEGIN TRANSACTION.db.exec("ROLLBACK").changes.type.create_table.db.exec(change.add_column sql std.fmt.allocPrint(allocator "ALTER TABLE ADD COLUMN.table.name sqlType try self.db.exec(sql);_type.remove_column self.recreateTable self.db.exec("COMMIT recreateTable *MigrationExecutor backup_name.fmt.allocPrint.allocator_migration_backup",.name defer self.db.allocator.free(backup Copy into temporary backup table create_backup.allocPrint "CREATE TABLE SELECT FROM backup_name table.name defer.db.allocator.free.exec Drop original table drop_original.allocPrint TABLE.name defer.free.exec(drop Recreate new schema DDLGenerator self.db.exec(table Copy rows back mapping columns schemas common_cols self.commonColumns(backup_name defer self.db.allocator.free(common_cols); reinsert.allocPrint.allocator SELECT FROM tablecommon_cols backup_name defer self.db.allocator.free try self.db.exec Drop backup table_backup std.fmt.allocPrint(self.db.allocator TABLE_name defer self.db.allocator.free(drop self.db.exec(drop Strategy Async Batching I/O bottlenecks ZyncBase groups operations single transactions StorageLayer write_queue RingBuffer batch_size 100 queueWrite self.write_queue.push_queue.len >.batch_size self.flushBatch batch self.write_queue.drain self.write_conn.exec("BEGIN TRANSACTION self.executeWrite self.write_conn.exec("COMMIT Read Strategy Cache Integration lock-free-memory cache read-through layer StateManager cache HashMap( storage *StorageLayer getNamespace.cache.get(id return ns self.storage.loadNamespacecache.put(id return Checkpoint Management Prevents WAL file starvation minimizes read degradation Mode Behavior Use Case PASSIVE Non-blocking best effort Background maintenance FULL Waits readers completes Scheduled maintenance TRUNCATE Resets shrinks WAL Reclaim disk space Performance Optimization Authorization Snapshots overhead permission queries In-memory lookup prevents authorization read-path Backup Online Backup server checkpoints WAL main database copies atomically SQLite online backup API backup Checkpoint WAL main database.write.exec SQLite online backup API copy.backupInit.finish copy 100 pages a time Invariants destination file valid readable SQLite database success source database operational during backup returns error destination file incomplete discarded Verification_backup_test [Storage Layer Architecture/storage-layer WAL pooling design Model Multi-threaded core integration Benchmarks performance validation
+Storage Implementation Layer Architecture ZyncBase storage layer SQLite configuration connection management schema generation migration logic SQLite Configuration Pragma Settings PRAGMAs high workloads```sql
+-- Enable WAL mode (parallel reads + better concurrency)
+PRAGMA journal_mode = WAL;
+
+-- Increase cache size to 64MB (hot pages in RAM)
+PRAGMA cache_size = -64000;
+
+-- Synchronous = NORMAL (balance between durability and performance)
+PRAGMA synchronous = NORMAL;
+
+-- Memory-mapped I/O (reduces syscall overhead for reads)
+PRAGMA mmap_size = 268435456; -- 256MB
+
+-- Multiple reader connections (parallel reads)
+PRAGMA read_uncommitted = 1;
+
+-- Proactive checkpoint management (prevent WAL growth)
+PRAGMA wal_autocheckpoint = 1000;
+```SQLite WAL Mode ZyncBase leverages SQLite high-performance concurrency Layer Architecture enforce settings connection_size -64000 Caches pages RAM I/O Negative (64MB NORMAL Balances durability performance Safe crashes vulnerable power failure_size 256MB Maps database memory syscall overhead reads Connection Pool ZyncBase thread-local connection pool read throughput```zig
+const StorageLayer = struct {
+    write_conn: *sqlite.Connection,      // Single writer
+    read_pool: []sqlite.Connection,      // Multiple readers
+    write_queue: RingBuffer(WriteOp),
+    
+    pub fn init(allocator: Allocator) !*StorageLayer {
+        const num_readers = try std.Thread.getCpuCount();
+        const reader_pool = try allocator.alloc(sqlite.Db, num_readers);
+        
+        const self = try allocator.create(StorageLayer);
+        self.* = .{
+            .write_conn = try sqlite.open("ZyncBase.db"),
+            .read_pool = try allocator.alloc(sqlite.Connection, num_readers),
+            .write_queue = RingBuffer(WriteOp).init(allocator),
+        };
+        
+        // Open one reader connection per CPU core
+        for (self.read_pool) |*conn| {
+            conn.* = try sqlite.open("ZyncBase.db");
+        }
+        
+        // Initial setup for the writer connection
+        try self.write_conn.exec("PRAGMA journal_mode = WAL");
+        try self.write_conn.exec("PRAGMA synchronous = NORMAL");
+        try self.write_conn.exec("PRAGMA cache_size = -64000");
+        
+        return self;
+    }
+    
+    pub fn getReader(self: *StorageLayer) *sqlite.Connection {
+        // Thread-local selection to avoid connection contention
+        const thread_id = std.Thread.getCurrentId();
+        const reader_idx = thread_id % self.read_pool.len;
+        return &self.read_pool[reader_idx];
+    }
+};
+```Schema-to-DDL ZyncBase transforms JSON into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored 0 or 1 `object Flattened columns `address.city `address_city TEXT `array` Stored JSON blob Implementation Logic```zig
+const SchemaParser = struct {
+    allocator: Allocator,
+    
+    pub fn parseTable(self: *SchemaParser, name: []const u8, store_item: json.Value) !Table {
+        const fields_obj = store_item.get("fields") orelse return error.InvalidSchema;
+        const required = store_item.get("required");
+        
+        var fields = ArrayList(Field).init(self.allocator);
+        
+        // Always include these fields
+        try fields.append(.{ .name = "id", .type = .text, .required = true, .primary_key = true });
+        try fields.append(.{ .name = "namespace_id", .type = .text, .required = true });
+        
+        // Parse schema fields
+        for (fields_obj.object.items) |field_entry| {
+            const field_name = field_entry.key;
+            const field_def = field_entry.value;
+            
+            // Check if field is nested object (flatten it)
+            if (self.isNestedObject(field_def)) {
+                const nested_fields = try self.flattenNestedObject(field_name, field_def);
+                try fields.appendSlice(nested_fields);
+            } else {
+                const field = try self.parseField(field_name, field_def, required);
+                try fields.append(field);
+            }
+        }
+        
+        // Always include timestamps
+        try fields.append(.{ .name = "created_at", .type = .integer, .required = true });
+        try fields.append(.{ .name = "updated_at", .type = .integer, .required = true });
+        
+        return Table{
+            .name = name,
+            .fields = fields.toOwnedSlice(),
+        };
+    }
+    
+    fn isNestedObject(self: *SchemaParser, field_def: json.Value) bool {
+        const field_type = field_def.get("type") orelse return false;
+        if (!std.mem.eql(u8, field_type.string, "object")) return false;
+        return field_def.get("properties") != null;
+    }
+    
+    fn flattenNestedObject(self: *SchemaParser, prefix: []const u8, field_def: json.Value) ![]Field {
+        var fields = ArrayList(Field).init(self.allocator);
+        const properties = field_def.get("properties") orelse return error.InvalidSchema;
+        for (properties.object.items) |prop_entry| {
+            const flattened_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ prefix, prop_entry.key });
+            const field = try self.parseField(flattened_name, prop_entry.value, null);
+            try fields.append(field);
+        }
+        return fields.toOwnedSlice();
+    }
+    
+    fn parseField(self: *SchemaParser, name: []const u8, field_def: json.Value, required: ?json.Value) !Field {
+        const field_type = field_def.get("type") orelse return error.InvalidSchema;
+        return Field{
+            .name = name,
+            .type = try self.mapType(field_type.string, field_def),
+            .required = self.isRequired(name, required),
+            .indexed = field_def.get("indexed") != null,
+        };
+    }
+};
+
+const DDLGenerator = struct {
+    allocator: Allocator,
+    
+    pub fn generateDDL(self: *DDLGenerator, table: Table) ![]const u8 {
+        var buf = ArrayList(u8).init(self.allocator);
+        try buf.appendSlice("CREATE TABLE ");
+        try buf.appendSlice(table.name);
+        try buf.appendSlice(" (\n");
+        
+        for (table.fields, 0..) |field, i| {
+            try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "    {s} {s}", .{field.name, self.sqlType(field.type)}));
+            if (field.required) try buf.appendSlice(" NOT NULL");
+            if (field.primary_key) try buf.appendSlice(" PRIMARY KEY");
+            if (i < table.fields.len - 1) try buf.appendSlice(",\n");
+        }
+        try buf.appendSlice("\n);\n");
+        
+        // Auto-generate indexes
+        for (table.fields) |field| {
+            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id")) {
+                try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "CREATE INDEX idx_{s}_{s} ON {s}({s});\n", .{table.name, field.name, table.name, field.name}));
+            }
+        }
+        return buf.toOwnedSlice();
+    }
+};
+```Relational Features Supports `cascade_null Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current target schema Execution Strategy```zig
+const MigrationDetector = struct {
+    pub fn detectChanges(old_schema: Schema, new_schema: Schema) ![]Change {
+        var changes = ArrayList(Change).init(allocator);
+        for (new_schema.tables) |new_table| {
+            if (!old_schema.hasTable(new_table.name)) {
+                try changes.append(.{ .type = .create_table, .table = new_table });
+                continue;
+            }
+            // Logic for add_column, remove_column, change_type...
+        }
+        return changes.toOwnedSlice();
+    }
+};
+
+const MigrationExecutor = struct {
+    db: *sqlite.Connection,
+    
+    pub fn execute(self: *MigrationExecutor, plan: MigrationPlan) !void {
+        try self.db.exec("BEGIN TRANSACTION");
+        errdefer self.db.exec("ROLLBACK") catch {};
+        
+        for (plan.changes) |change| {
+            switch (change.type) {
+                .create_table => try self.db.exec(change.ddl),
+                .add_column => {
+                    const sql = try std.fmt.allocPrint(allocator, "ALTER TABLE {s} ADD COLUMN {s} {s}", .{change.table, change.field.name, sqlType(change.field.type)});
+                    try self.db.exec(sql);
+                },
+                .change_type, .remove_column => try self.recreateTable(change.table),
+            }
+        }
+        try self.db.exec("COMMIT");
+    }
+    
+    fn recreateTable(self: *MigrationExecutor, table: Table) !void {
+        const backup_name = try std.fmt.allocPrint(self.db.allocator, "{s}_migration_backup", .{table.name});
+        defer self.db.allocator.free(backup_name);
+
+        // 1. Copy existing rows into a temporary backup table
+        const create_backup = try std.fmt.allocPrint(self.db.allocator,
+            "CREATE TABLE {s} AS SELECT * FROM {s}", .{ backup_name, table.name });
+        defer self.db.allocator.free(create_backup);
+        try self.db.exec(create_backup);
+
+        // 2. Drop the original table
+        const drop_original = try std.fmt.allocPrint(self.db.allocator,
+            "DROP TABLE {s}", .{table.name});
+        defer self.db.allocator.free(drop_original);
+        try self.db.exec(drop_original);
+
+        // 3. Recreate with the new schema (DDL already generated by DDLGenerator)
+        try self.db.exec(table.ddl);
+
+        // 4. Copy rows back, mapping only columns that exist in both schemas
+        const common_cols = try self.commonColumns(backup_name, table);
+        defer self.db.allocator.free(common_cols);
+        const reinsert = try std.fmt.allocPrint(self.db.allocator,
+            "INSERT INTO {s} ({s}) SELECT {s} FROM {s}",
+            .{ table.name, common_cols, common_cols, backup_name });
+        defer self.db.allocator.free(reinsert);
+        try self.db.exec(reinsert);
+
+        // 5. Drop the backup table
+        const drop_backup = try std.fmt.allocPrint(self.db.allocator,
+            "DROP TABLE {s}", .{backup_name});
+        defer self.db.allocator.free(drop_backup);
+        try self.db.exec(drop_backup);
+    }};
+```Async Batching avoid I/O ZyncBase transactions```zig
+const StorageLayer = struct {
+    write_queue: RingBuffer(WriteOp),
+    batch_size: usize = 100,
+    
+    pub fn queueWrite(self: *StorageLayer, op: WriteOp) !void {
+        try self.write_queue.push(op);
+        if (self.write_queue.len() >= self.batch_size) {
+            try self.flushBatch();
+        }
+    }
+
+    fn flushBatch(self: *StorageLayer) !void {
+        const batch = self.write_queue.drain();
+        try self.write_conn.exec("BEGIN TRANSACTION");
+        for (batch) |op| {
+            try self.executeWrite(op);
+        }
+        try self.write_conn.exec("COMMIT");
+    }
+};
+```Strategy Cache Integration lock-free cache read-through```zig
+const StateManager = struct {
+    cache: HashMap([]const u8, *Namespace),
+    storage: *StorageLayer,
+    
+    pub fn getNamespace(self: *StateManager, id: []const u8) !*Namespace {
+        if (self.cache.get(id)) |ns| return ns;
+        
+        const ns = try self.storage.loadNamespace(id);
+        try self.cache.put(id, ns);
+        return ns;
+    }
+};
+```Checkpoint Management Prevents starvation minimizes degradation PASSIVE Non-blocking best effort Background maintenance Waits readers completes Scheduled maintenance Resets shrinks WAL disk space Performance Optimization Authorization Snapshots permission queries connection In-memory lookup prevents authorization read-path Backup Online Backup checkpoints WAL database copies SQLite online backup API```zig
+pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
+    // Checkpoint WAL into the main database file
+    try self.write_conn.exec("PRAGMA wal_checkpoint(FULL)");
+
+    // Use SQLite's online backup API for an atomic, consistent copy
+    const dest = try sqlite.open(dest_path);
+    defer dest.close();
+    const bk = try sqlite.backupInit(dest, "main", self.write_conn, "main");
+    defer bk.finish();
+    while (try bk.step(100) == .more) {} // copy 100 pages at a time
+}
+```Invariants destination file valid SQLite database source database operational backup error destination file incomplete discarded Verification```bash
+zig test src/storage_backup_test.zig
+```Layer Architecture dive WAL pooling design [Threading Model Multi-threaded core integration Benchmarks performance validation

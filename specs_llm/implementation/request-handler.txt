@@ -1,1 +1,36 @@
-Request Handler [Memory Management [Threading Implementation `RequestHandler owns per-request memory lifecycle creates arena allocator WebSocket message processes copies response to GPA-backed memory resets arena freeing temporary allocations operation Interface Contract RequestHandler one WebSocket message Guarantees temporary allocations freed before function returns error returned Response.data allocated from GPA freed caller after response sent Arena reset via `defer released on error paths handleRequest.memory.resetArena.arenaAllocator parsed.decode result.dispatch Copy response arena before reset gpa.memory.generalAllocator data gpa.dupe Response.data.statussuccess Response data GPA-owned caller free status success Allocator Routing Parse buffers temp strings Arena `resetArena() `handleRequest Response bytes GPA Caller.send() Cache entries subscriptions GPA eviction disconnect Pooled objects Buffer Pool.release() Thread Safety Arena allocator not thread-safe uWebSockets thread `MemoryStrategy `RequestHandler shared threads Invariants Error Conditions Arena reset `defer resetArena() fires error Response outlives arena.dupe copies response bytes before reset No arena allocation escapes allocated stored long state Error Cause `error.OutOfMemory Arena GPA exhausted reset fires_ERROR returned.InvalidMessage parse failure Arena reset_MESSAGE returnedUnauthorized Auth check failed Arena reset fires returned client Validation Success Criteria Arena reset after request error paths Response data valid No memory leaks across 10,000 requests leak check passes Verification Commands -Dsanitize=thread Management Arena GPA strategy Implementation Per-thread memory Protocol Message format
+Request Handler Management Implementation owns per-request memory lifecycle creates arena allocator WebSocket message processes copies response GPA memory resets temporary allocations Interface Contract```zig
+pub const RequestHandler = struct {
+    memory: *MemoryStrategy,
+
+    /// Process one WebSocket message.
+    ///
+    /// Guarantees:
+    ///   - All temporary allocations (parse buffers, intermediate results) are
+    ///     freed before this function returns, even on error.
+    ///   - The returned Response.data is allocated from the GPA and must be
+    ///     freed by the caller after the response is sent.
+    ///   - Arena is reset via `defer` so it is always released on error paths.
+    pub fn handleRequest(self: *RequestHandler, message: []const u8) !Response {
+        defer self.memory.resetArena();
+        const arena = self.memory.arenaAllocator();
+
+        const parsed = try msgpack.decode(arena, message);
+        const result  = try self.dispatch(arena, parsed);
+
+        // Copy response out of arena before reset
+        const gpa = self.memory.generalAllocator();
+        const data = try gpa.dupe(u8, result);
+        return Response{ .data = data, .status = .success };
+    }
+};
+
+pub const Response = struct {
+    data:   []u8,   // GPA-owned; caller must free
+    status: Status,
+};
+
+pub const Status = enum { success, @"error" };
+```Allocator Routing Parse buffers temp strings Arena `resetArena() `handleRequest Response bytes Caller.send() Cache entries subscriptions eviction disconnect Pooled objects Buffer Pool.release() Thread Safety Arena allocator not thread-safe uWebSockets thread `MemoryStrategy `RequestHandler shared threads Invariants Error Conditions Arena reset `defer resetArena() fires error Response outlives arena.dupe copies response bytes before reset No arena allocation escapes Nothing allocated stored long state Error `error.OutOfMemory` Arena GPA exhausted reset fires_ERROR.InvalidMessage parse failure reset_MESSAGEUnauthorized Auth check failed Arena reset returned Validation Success Criteria Arena reset request error paths Response data valid No memory leaks 10,000 requests Verification Commands```bash
+zig test src/request_handler_test.zig
+zig test src/request_handler_test.zig -Dsanitize=thread
+```[Memory Management Arena GPA strategy Implementation Per-thread memory isolation Protocol Message format handler

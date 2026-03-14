@@ -1,1 +1,42 @@
-Lock-Free Cache Implementation-Free Cache Architecture [Threading Implementation specifics ZyncBase lock-free cache parallel read access across CPU cores without global locks lock-free cache uses atomic reference counting single-writer-multiple-reader model Writes serialized by mutex reads wait-free [Reader Thread A B Value Hash Map Pointer Thread C Hash Map 1 2 3 Implementation Artifacts Core Structure LockFreeCache Atomic pointer current hash map entries.atomic allocator write_mutex CacheEntry StateTree version.atomic.Value ref_count timestamp Wait-Free Read Path *LockFreeCache namespace Acquire current map pointer.load error.NotFound increment reference count.fetchAdd(1Invariants Error Conditions ref_count Overflow `u32 reaches.maxInt(u32) `fetchAdd wraps to 0 use-after-free writer evicts entry readers hold reader threads CPU core count 256 invariant ref_count ≤ thread_count_max << u32 max assert after `fetchAdd prev.ref_count.fetchAdd(1.assert(prev < below u32 max Eviction Contract entry freed writer_count == 0 Remove entry map Spin-wait defer until.ref_count.load == 0 call `allocator.destroy(entry) Readers pointer before hold reference eviction wait before memory reclaimed Error Conditions Cause BehaviourNotFound Namespace map Caller storage ref_count overflow 65536 readers entry Debug assert fires release undefined Double-release()() ref_count underflows debug assert fires Operational Logic Memory Ordering Guarantees/Release** map pointer synchronization partially updated map reference counting visibility cores Writer Serialization reads lock-free mutations acquire `write_mutex one thread re-building map race conditions rotation Validation Success Criteria Performance Targets Concurrent Read Scaling 64 cores Read Latency < 500ns hot entries Zero Lock Contention read path Verification Commands stress tests thread sanitizer Implementation Management
+Lock-Free Cache Implementation Cache Architecture ZyncBase lock-free cache parallel read access CPU cores without locks-free cache atomic reference counting single-writer-multiple-reader model Writes serialized mutex reads wait-free```
+[Reader Thread A] --+
+[Reader Thread B] --+--> [Atomic Value: Hash Map Pointer]
+[Reader Thread C] --+           |
+                                v
+                       [Current Hash Map]
+                        /       |       \
+               [Entry 1]    [Entry 2]    [Entry 3]
+```Implementation Structure```zig
+pub const LockFreeCache = struct {
+    // Atomic pointer to the current hash map
+    entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
+    allocator: Allocator,
+    write_mutex: std.Thread.Mutex,
+};
+
+pub const CacheEntry = struct {
+    state: StateTree,
+    version: std.atomic.Value(u64),
+    ref_count: std.atomic.Value(u32),
+    timestamp: std.atomic.Value(i64),
+};
+```Wait```zig
+pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
+    // Acquire the current map pointer
+    const map = self.entries.load(.Acquire);
+    const entry = map.get(namespace) orelse return error.NotFound;
+    
+    // Safely increment reference count before return
+    _ = entry.ref_count.fetchAdd(1, .AcqRel);
+    
+    return &entry.state;
+}
+```Invariants Error Conditions ref_count Overflow `u32 reaches.math.maxInt(u32) `fetchAdd wraps 0 use-after-free writer evicts entry readers hold reader threads CPU core 256 invariant```
+ref_count ≤ thread_count_max  (always << u32 max)
+```debug builds assert```zig
+const prev = entry.ref_count.fetchAdd(1, .AcqRel);
+std.debug.assert(prev < 65536); // sanity bound well below u32 max
+```Eviction Contract entry freed by writer when `ref_count == 0 Remove entry from map_mutex-wait until.ref_count.load == 0 call `allocator.destroy(entry) Readers pointer before swap hold reference eviction wait before memory Error Conditions `error.NotFound Namespace not in map Caller storage ref_count overflow > 65536 readers on entry Double-release ref_count underflows Operational Logic Memory Ordering Guarantees **Acquire/Release** pointer synchronization **AcqRel** reference counting visibility Writer Serialization reads lock-free mutations acquire `write_mutex thread map race conditions rotation Validation Success Criteria Performance Targets Concurrent Read Scaling 64 cores Read Latency < 500ns for entries Zero Lock Contention on path Verification Commands```bash
+# Run stress tests with thread sanitizer
+zig test src/cache_stress_test.zig -fsanitize=thread
+```See [Threading.md [Storage Implementation [Memory Management

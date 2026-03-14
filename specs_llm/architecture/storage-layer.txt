@@ -1,1 +1,63 @@
-Storage Layer 2026-03-09 ZyncBase uses SQLite Write-Ahead Logging mode storage zero-config deployment ACID transactions parallel critical vertical scaling SQLite WAL mode connection pool parallel reads CPU cores architectural decision-004-wal-mode SQLite Advantages Embedded database no separate server Data integrity-text FTS5 extension 20+ years billions devices Parallel reads scaling Easy backup deployment Performance+ reads,600+ writes batching-millisecond-memory cache CPU reads WAL Mode transforms SQLite concurrency model single-user high engineWithout WAL (Rollback Journal) Single Writer Blocks ALL Readers Random I/O patterns Slower write performance Limited concurrency With WAL Multiple Readers (Parallel) R1 R2 Single Writer (No blocking) Writes to WAL file Sequential I/O patterns Faster write performance parallel reads WAL Works **Writes to WAL Not main database avoiding contention **Readers access Main DB + WAL file concurrent read/write **Checkpoint merges** WAL entries merged to main DB periodically blocking** Readers and operate independentlyPerformance Impact 16-core machine WAL mode Reads 16 threads 10k 160k reads/sec Writes 1 thread 10k 10k writes/sec Total 170k ops/sec (90% read workload Connection Pool Strategy cores ZyncBase connection pool one reader per core writes queued executed single writer connection SQLite serialization requirements reader per Maximizes read throughput contention Batched efficiency overhead-local Minimizes synchronization overhead Schema Design Relational-Document Hybrid ZyncBase generates SQLite tables.json core relational integrity Path-to-Table Mapping path maps database table simplifies indexing query optimization Relational Patterns objects flattened relational columns SQLite foreign keys configurable actions stored JSON blobsforbidden use separate store paths references Schema Example Tasks Projects schema ZyncBase generates DDL Projects table CREATE TABLE projects id namespace_id name created updated Tasks table key CREATE TABLE tasks_id title status priority projectId created updated CREATE INDEX_tasks_namespace_projectId Write Strategy Batching for Throughput SQLite single-writer limitation mitigated async ring-buffer queue transaction batching Batching Each separate call limits throughput ~100 writes/sec batching 100+ operations one transaction one call enables 10,000+ writes/sec 100x improvement Batching Strategy Triggered queue threshold Triggered if operations queued long Auto-Migration System ZyncBase structural detection system manages schema evolutiontables columns automatically Type column removals gated behind environment configuration Uses temporary table backups SQLite `ALTER TABLE limitations Checkpoint Management WAL files require management disk bloat read degradation Non-blocking merges idle Triggered by file page threshold Forced merges maintenance windows Comparison Alternatives Database Type Concurrency Setup Performance Use Case Embedded Parallel Zero-config 70k reads/s Vertical scaling Complex 100k Horizontal scaling In-memory Single-threaded Caching Medium Limitations Trade-offs Single Writer SQLite allows one writer write-heavy workloads writers Checkpoint Starvation Heavy read load entries DB file growth read degradation ZyncBase manages proactive checkpointing No Horizontal Scaling storage vertical scaling single node multi-node clusters suggests LiteFS MarmotSee Implementation Zig code PRAGMAs DDL generator Model connection pool parallel reads Architectural Decision Records SQLite performance benchmarks
+Storage Layer 2026-03-09 ZyncBase uses SQLite Write-Ahead Logging mode storage zero-config deployment ACID transactions parallel critical vertical scaling SQLite WAL mode connection pool parallel reads CPU cores architectural decision [ADR-004-wal-mode SQLite Advantages Embedded database no separate server Data integrity-text FTS5 extension 20+ years billions devices Parallel reads scaling Easy backup deployment Performance+ reads WAL,600+ writes batching-millisecond-memory cache CPU reads WAL Mode transforms SQLite concurrency model single-user high engine```
+┌───────────────────────────────────────┐
+│           Single Writer               │
+│  ┌─────────────────────────────────┐  │
+│  │      Blocks ALL Readers         │  │
+│  └─────────────────────────────────┘  │
+│                                       │
+│          Random I/O patterns          │
+│       Slower write performance        │
+│          Limited concurrency          │
+└───────────────────────────────────────┘
+```
+
+### With WAL
+
+```
+┌───────────────────────────────────────┐
+│     Multiple Readers (Parallel)       │
+│  ┌──────┐    ┌──────┐    ┌──────┐     │
+│  │  R1  │    │  R2  │    │  RN  │     │
+│  └──────┘    └──────┘    └──────┘     │
+│                                       │
+│     Single Writer (No blocking)       │
+│  ┌─────────────────────────────────┐  │
+│  │      Writes to WAL file         │  │
+│  └─────────────────────────────────┘  │
+│                                       │
+│        Sequential I/O patterns        │
+│       Faster write performance        │
+│          True parallel reads          │
+└───────────────────────────────────────┘
+```WAL Works WAL Not main database contention access Main DB WAL concurrent read/write WAL entries main DB Readers operate independently Performance Impact```
+16-core machine with WAL mode:
+- Reads: 16 threads × 10k = 160k reads/sec
+- Writes: 1 thread × 10k = 10k writes/sec
+- Total: 170k ops/sec (90% read workload)
+```Connection Pool Strategy CPU cores ZyncBase connection pool one reader per core writes queued executed single connection SQLite serialization requirements-005-threaded-core reader per Maximizes read throughput contention Batched efficiency `fsync overhead-local Minimizes synchronization Schema Design Relational-Document Hybrid generates SQLite tables declarative.json frontend developers work paths core relational integrity [ADR-019 Path-to-Table Mapping path maps database table simplifies indexing query optimization Relational Patterns objects flattened relational columns SQLite foreign keys configurable actions stored JSON blobs forbidden separate paths references Schema Example Tasks Projects declarative schema ZyncBase generates optimized DDL```sql
+-- Projects table
+CREATE TABLE projects (
+    id TEXT PRIMARY KEY,
+    namespace_id TEXT NOT NULL,
+    name TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Tasks table with foreign key
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    namespace_id TEXT NOT NULL,
+    title TEXT,
+    status TEXT,
+    priority INTEGER,
+    projectId TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_projectId ON tasks(projectId);
+```Strategy Batching Throughput SQLite single-writer limitation mitigated async ring-buffer queue transaction batching separate call limits throughput writes/sec batching 100+ operations one transaction one call enables 10,000+ writes/sec 100x improvement Batching Strategy Triggered queue threshold Triggered queued long Auto-Migration System ZyncBase structural detection schema evolution Creating tables columns Type column removals gated behind configuration temporary table backups TABLE limitations Checkpoint Management WAL files management disk bloat read degradation Non-blocking merges idle periods Triggered page threshold Forced merges maintenance windowsComparison Alternatives Database Type Concurrency Setup Performance Use Case **SQLite Embedded Parallel reads Zero-config 70k reads/s Vertical scaling Server Full parallel Complex 100k+ ops/s Horizontal scaling In-memory Single-threaded Simple 100k+ ops/s Caching Server Full parallel Medium 50k+ ops/s Document store Limitations Trade-offs Single Writer SQLite allows one writer batching write workloads Checkpoint Starvation read load entries file growth degradation ZyncBase manages checkpointing No Horizontal Scaling storage vertical scaling single node multi clusters suggests LiteFS Marmot Implementation Zig code PRAGMAs DDL generator Model parallel reads SQLite performance benchmarks

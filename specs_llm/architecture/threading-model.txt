@@ -1,1 +1,54 @@
-Threading Model 2026-03-09 ZyncBase-threaded architecture read/write vertical scaling CPU cores read correctness serialized writes**Key Innovation**: Lock-free cache for reads + mutex for writes = 17x performance improvement ## Architecture Diagram ``` uWebSockets Event Loop (Multi-threaded) │ │ │ Thread 1 Thread 2 Thread N │ WebSocket │ Connections │ │ │ Callbacks (Zig) │ │ Message Router │ │ │ │ │ READ PATH WRITE PATH │ │ (Parallel, Lock-Free) (Serialized, Mutex) │ │ │ Lock-Free Cache │ │ Write Mutex │ │T1│ │T2│ │TN│ Single Writer│ │ Atomic Ref Count │ State Updates │ SQLite Read Pool │ │ SQLite Writer │WAL Batching (WAL Mode Performance (16-core 90% Reads 16 × 11k = 176k req/sec (parallel Writes 1 × 10k 10k req/sec (serialized Total ~170k req/sec CPU usage ~95% cores uWebSockets Handles Multi-threading Event loop distributes connections network I/O No blocking Zig Callbacks Execute Parallel threads router directs read write path No blocking Writes queued serialized Core Engine Uses Read/Write Separation Path Lock-free cache access Multiple threads execute SQLite connection parallel reads Scales linearly CPU cores Path Mutex-protected Single thread Batched writes SQLite Notifies subscribers after write Safety Strategy core engine messages parallel read serialized write path lock-free cache storage synchronization logic Zig implementation [Threading ImplementationPerformance Characteristics Workload reads 10% writes-core machine Reads 16 176k req/sec Writes 1 core ~10k 10k req/sec ~170k req/sec CPU usage ~95% Single-threaded approach Reads 1 core 10k 10k Writes 10k CPU usage 6% 17x performance improvement Reads lock Multiple threads SQLite parallel reads Writes single-writer limitation fast (10k+ writes/sec Read-heavy workloads scale-time apps 80-95% reads use CPU cores Writes bottleneck Memory Management Strategy ZyncBase specialized allocation minimize overhead high Management Implementation data structures**Allocator (Arena Pool Pros Cons CPU vertical scaling scale More cores more throughput parallel better single-threaded No complex locking patterns Cons SQLite single-writer limitation atomic lock-free cache single serialized workloads read-heavy 10k writes/sec batch writes higher throughput atomic operations Zig safe atomic primitives Compile-time checks prevent race conditions testing validates correctness Comparison Alternatives Single-threaded Core Simpler implementation No race conditions Easier multiple cores Limited ~10k req/sec Wastes SQLite parallel read capability Not competitive systems Thread-per-Namespace Natural isolation tenant scale beyond single-writer limit complex Harder load balance sophisticated scheduling Defer to v2.5+ Layer parallel disk access Principles Performance validation benchmarks
+Threading Model 2026-03-09 ZyncBase-threaded architecture read/write vertical scaling CPU cores writes Lock-free cache reads mutex writes 17x performance improvement Architecture Diagram```
+┌─────────────────────────────────────────────────────────┐
+│          uWebSockets Event Loop (Multi-threaded)        │
+│       │                    │                    │       │
+│    Thread 1             Thread 2             Thread N   │
+│   WebSocket            WebSocket            WebSocket   │
+│  Connections          Connections          Connections  │
+│       │                    │                    │       │
+│       └────────────────────┼────────────────────┘       │
+│                            │                            │
+│                     Callbacks (Zig)                     │
+│                            │                            │
+│              ┌─────────────▼─────────────┐              │
+│              │       Message Router      │              │
+│              └─────────────┬─────────────┘              │
+│                            │                            │
+│              ┌─────────────┴─────────────┐              │
+│              │                           │              │
+│          READ PATH                   WRITE PATH         │
+│    (Parallel, Lock-Free)        (Serialized, Mutex)     │
+│              │                           │              │
+│    ┌─────────▼─────────┐       ┌─────────▼─────────┐    │
+│    │  Lock-Free Cache  │       │    Write Mutex    │    │
+│    │  ┌──┐  ┌──┐  ┌──┐ │       │  ┌──────────────┐ │    │
+│    │  │T1│  │T2│  │TN│ │       │  │ Single Writer│ │    │
+│    │  └──┘  └──┘  └──┘ │       │  └──────────────┘ │    │
+│    │  Atomic Ref Count │       │    State Updates  │    │
+│    └─────────┬─────────┘       └─────────┬─────────┘    │
+│              │                           │              │
+│    ┌─────────▼─────────┐       ┌─────────▼─────────┐    │
+│    │ SQLite Read Pool  │       │   SQLite Writer   │    │
+│    │  ┌──┐  ┌──┐  ┌──┐ │       │  ┌──────────────┐ │    │
+│    │  │R1│  │R2│  │RN│ │       │  │ WAL Batching │ │    │
+│    │  └──┘  └──┘  └──┘ │       │  └──────────────┘ │    │
+│    │    (WAL Mode)     │       │    (WAL Mode)     │    │
+│    └───────────────────┘       └───────────────────┘    │
+│                                                         │
+│  Performance (16-core, 90% reads):                      │
+│  - Reads:  16 × 11k = 176k req/sec (parallel)           │
+│  - Writes:  1 × 10k =  10k req/sec (serialized)         │
+│  - Total: ~170k req/sec average                         │
+│  - CPU usage: ~95% (all cores utilized)                 │
+└─────────────────────────────────────────────────────────┘
+```uWebSockets Multi-threading Event loop distributes connections network I/O No blocking Zig Callbacks Parallel threads process router directs read write path No blocking Writes queued serialized Core Engine Read/Write Separation Lock-free cache access Multiple threads execute SQLite parallel reads Scales CPU cores Path Mutex-protected Single thread Batched writes SQLite Notifies subscribers write Safety core engine messages parallel read serialized write path lock-free cache storage synchronization Zig implementation Implementation Performance Workload reads 10% writes-core machine```
+Reads:  16 cores × ~11k each = 176k req/sec (parallel)
+Writes:  1 core  × ~10k      =  10k req/sec (serialized)
+Combined: ~170k req/sec average
+CPU usage: ~95% (all cores utilized)
+```Single-threaded```
+Reads:  1 core × 10k = 10k req/sec
+Writes: 1 core × 10k = 10k req/sec
+Combined: 10k req/sec
+CPU usage: 6% (1/16 cores)
+```17x performance improvement Reads lock Multiple threads read scales CPU SQLite parallel reads Writes correctness SQLite single-writer limitation fast (10k+ writes/sec Read-heavy workloads scale real-time apps 80-95% reads use CPU cores bottleneck Memory Management ZyncBase specialized allocation minimize overhead high Management Implementation data structures**Allocator (Arena Pool Pros Cons CPU vertical scaling scale More cores more throughput parallel better single-threaded No complex locking patterns Cons SQLite single-writer limitation atomic lock-free cache single serialized workloads read-heavy 10k writes/sec batch writes higher throughput atomic operations Zig safe atomic primitives Compile-time checks prevent race conditions testing validates correctness Comparison Alternatives Single-threaded Core Simpler implementation No race conditions Easier multiple cores Limited ~10k req/sec Wastes SQLite parallel read capability Not competitive systems Thread-per-Namespace Natural isolation tenant scale beyond single-writer limit complex Harder load balance sophisticated scheduling Defer to v2.5+ Layer parallel disk access Principles Performance validation benchmarks

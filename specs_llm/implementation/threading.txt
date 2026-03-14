@@ -1,1 +1,94 @@
-Threading Implementation [Threading Model Architecture document contains implementation specifics ZyncBase threading model Core Engine Implementation Lock-free cache reads (parallel access state_cache LockFreeCache Mutex writes (serialized_mutex.Thread.Mutex Storage layer parallel reads *StorageLayer handleMessage switch Reads No lock parallel execution self.handleQueryParallel Writes Serialized mutex self.handleMutationSerialized error.UnknownMessageType Parallel reads mutex uses CPU cores handleQueryParallel LockFreeCache read pattern handle.state_cache.get defer.release state self.executeQuery Serialized writes mutex single-writer handleMutationSerialized self.write_mutex.lock.unlock one thread executes self.state_cache.update.namespace self.storage.queueWrite self.notifySubscribersLock-Free Cache Coordination interaction CoreEngine Lock-Free Cache critical performance LockFreeCache atomic reference counting cache entries.atomic.Value(*HashMap u8 *CacheEntry CacheEntry state StateTree version.atomic.Value(u64) ref_count.Value(u32) *LockFreeCache Lock-free multiple threads execute entries.entries.load( entry.get(namespace return error.NotFound Increment ref count.ref_count.fetchAdd(1.acq Handle.cache.entry entry release *LockFreeCache Decrement ref count.ref_count.fetchSub(1.acq update *LockFreeCache u8 mutation write_mutex mutate writes serialized entries.entries.load( entry.get(namespace return error.NotFound entry.state.apply(mutation); entry.version.fetchAdd(1Implementation Notes use atomic operations cache mutex negates benefits reads block Performance single-threaded levels~10k req/sec 17x improvement lock-free reads ordering.Acquire loads writes.Release stores writes visible.AcqRel read-modify-write combines Validation Success Criteria Verification Commands Run threading tests lock-free cache concurrency tests full test suite no regressions Success Criteria Read throughput scales linearly with cores Write throughput single-writer serialization holds under concurrent load Mixed workload no deadlocks data races No lock contention read path zero races
+Threading Implementation Model Architecture ZyncBase threading model Core Engine Implementation```zig
+pub const CoreEngine = struct {
+    // Lock-free cache for reads (parallel access)
+    state_cache: LockFreeCache,
+    
+    // Mutex only for writes (serialized)
+    write_mutex: std.Thread.Mutex,
+    
+    // Storage layer with parallel reads
+    storage: *StorageLayer,
+    
+    pub fn handleMessage(self: *CoreEngine, msg: Message) !Message {
+        return switch (msg.type) {
+            // Reads: No lock, parallel execution
+            .query => try self.handleQueryParallel(msg),
+            .subscribe => try self.handleSubscribeParallel(msg),
+            
+            // Writes: Serialized with mutex
+            .mutation => try self.handleMutationSerialized(msg),
+            
+            else => error.UnknownMessageType,
+        };
+    }
+    
+    // Parallel reads (no mutex) - uses all CPU cores
+    fn handleQueryParallel(self: *CoreEngine, msg: Message) !Message {
+        // Correct LockFreeCache read pattern
+        const handle = try self.state_cache.get(msg.namespace);
+        defer handle.release();
+
+        const state = handle.state();
+        return try self.executeQuery(state, msg.query);
+    }
+    
+    // Serialized writes (with mutex) - single-writer
+    fn handleMutationSerialized(self: *CoreEngine, msg: Message) !Message {
+        self.write_mutex.lock();
+        defer self.write_mutex.unlock();
+        
+        // Only one thread executes this at a time
+        try self.state_cache.update(msg.namespace, msg.mutation);
+        try self.storage.queueWrite(msg.namespace, msg.mutation);
+        try self.notifySubscribers(msg.namespace);
+        
+        return .{ .type = .success };
+    }
+};
+```Lock-Free Cache Coordination CoreEngine Lock-Free Cache```zig
+const LockFreeCache = struct {
+    // Use atomic reference counting for cache entries
+    entries: std.atomic.Value(*HashMap([]const u8, *CacheEntry)),
+    
+    const CacheEntry = struct {
+        state: StateTree,
+        version: std.atomic.Value(u64),
+        ref_count: std.atomic.Value(u32),
+    };
+    
+    pub fn get(self: *LockFreeCache, namespace: []const u8) !Handle {
+        // Lock-free read - multiple threads can execute simultaneously
+        const entries = self.entries.load(.acquire);
+        const entry = entries.get(namespace) orelse return error.NotFound;
+        
+        // Increment ref count atomically
+        _ = entry.ref_count.fetchAdd(1, .acq_rel);
+        
+        return Handle{ .cache = self, .entry = entry };
+    }
+    
+    pub fn release(self: *LockFreeCache, handle: Handle) void {
+        // Decrement ref count atomically
+        _ = handle.entry.ref_count.fetchSub(1, .acq_rel);
+    }
+    
+    pub fn update(self: *LockFreeCache, namespace: []const u8, mutation: Mutation) !void {
+        // Called only from write_mutex critical section
+        // Safe to mutate because writes are serialized
+        const entries = self.entries.load(.acquire);
+        const entry = entries.get(namespace) orelse return error.NotFound;
+        
+        try entry.state.apply(mutation);
+        _ = entry.version.fetchAdd(1, .release);
+    }
+};
+```Critical Implementation Notes use atomic operations cache mutex negates benefits reads block Performance single-threaded~10k req/sec 17x improvement lock-free reads ordering.Acquire loads previous writes.Release stores visible.AcqRel read-modify-write combines Validation Success Criteria Verification Commands```bash
+# Run threading unit tests with thread sanitizer
+zig test src/core_engine_test.zig -Dsanitize=thread
+
+# Run lock-free cache concurrency tests
+zig test src/cache_stress_test.zig -Dsanitize=thread
+
+# Run full test suite to confirm no regressions
+zig build test
+```Success Criteria Read throughput scales cores_stress Write throughput single-writer load Mixed workload no deadlocks data races lock contention read path zero races

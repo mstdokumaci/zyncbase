@@ -1,1 +1,120 @@
-Security Model System Exchange Implementation describes security mechanisms ZyncBase covers defense-in-depth layer model parser limits circuit breaker contract Hook Server rate limiter data structures security seven layers 1: TLS encrypts traffic Rate Limiting per-IP connection message limits Input Validation enforces size limits allocation 4: Authentication validation connection 5 Authorization Server per-operation policy check 6 Namespace Isolation query_id 7 Audit Logging log event layer independent failure bypass layer access next applies MessagePack Parser Limits enforces limits before allocating memory Exceeding limit closes connectionParserConfig max_depth 32_size 10 * 1024 * 1024_string_length 1 * 1024 * 1024_array_length 100_000_map_size 100_000 parser iterative uses stack bounded_depth stack overflow impossible Violation Handling ViolationTracker count = 0 threshold = 3 Returns true connection closed record *ViolationTracker ParserError self.count + 1 logSecurityEvent self.count >=.threshold After violations connection closed code `4000 +(err Circuit Breaker Contract Hook Server client wraps authorization call circuit breaker breaker three states Closed threshold Open elapsed Half-Open Closed Requests Open authorization requests denied.CircuitOpen Half-Open One request forwarded success Closed failure Open CircuitBreaker struct stateclosed failure_count u32 = 0_threshold 5 open_timeout u64 = 10_000 opened_at 0 call *CircuitBreaker AuthRequest.state.open.opened >_timeout.half_open return error.CircuitOpen.closed.half_open result hookServerClient.authorize.recordFailure return err result recordFailure.failure_count += 1.failure_count >=_threshold.state.open.opened_at.milliTimestamp recordSuccess *CircuitBreaker self.failure_count = 0.state.closed circuit open ZyncBase denies operation returns `error.ServiceUnavailable never fails open Rate Limiter Data Structures Connection Limiter IP ConnectionLimiter connection count.StringHashMap(u32) max_per_ip = 100 allow *ConnectionLimiter entry.counts.getOrPutValue(ip return false.value_ptr >=.max_per_ip false entry.value_ptr += 1 true release *ConnectionLimiter ip void.getPtr(ip > 0 -= 1 Message Rate Limiter connection token bucket RateLimiter tokens f64 max_tokens 100.0 refill_rate 100.0 last_refill consume *RateLimiter elapsed_s(f64_refill 1000.0 self.tokens_tokens elapsed_s.refill_refill.tokens >= 1.0 -= 1.0 return true false Namespace Isolation SQLite query includes namespace_id = clause authenticated session context client-supplied data Cross-namespace access requires authorization Hook ServerInvariants Error Conditions Description Fail-secure circuit breaker open Hook Server access denied Parser-before-alloc No heap allocation until parser limits pass Namespace scoping `namespace_id from `AuthContext not wire message Violation threshold connection closed after parser violations Error Behaviour.CircuitOpen return `SERVICE_UNAVAILABLE.AuthTimeout return `UNAUTHORIZED.MaxDepthExceeded Record violation close connection.MaxSizeExceeded violation Validation Success Criteria TSan clean auth rate-limiter paths Parser rejects depth > 32 size > 10 MB Circuit breaker transitions Closed Open after 5 failures denies requests Open Connection limiter blocks connection 101 from IP Verification Commands -Dsanitize=thread [Auth System Hook Server authorization rules [Auth Exchange-exchange Ticket handshake session enrichment TSan GPA coverage TLS connection lifecycle
+Security Model System Exchange Implementation describes security mechanisms ZyncBase covers defense-in-depth layer model parser limits circuit breaker contract Hook Server rate limiter data structures security seven layers component```
+Layer 1: TLS (uWebSockets / BoringSSL)          — encrypts all client traffic
+Layer 2: Rate Limiting (ConnectionLimiter)       — per-IP connection and message limits
+Layer 3: Input Validation (MessagePack parser)   — enforces size/depth/type limits before any allocation
+Layer 4: Authentication (AuthExchange)           — ticket validation on every new connection
+Layer 5: Authorization (Hook Server client)      — per-operation policy check via Hook Server
+Layer 6: Namespace Isolation (StorageLayer)      — every query is scoped to namespace_id
+Layer 7: Audit Logging (SecurityLogger)          — structured log entry for every security event
+```layer independent failure layer access next applies MessagePack Parser Limits enforces before memory parsed Exceeding closes connection violations```zig
+pub const ParserConfig = struct {
+    max_depth:         usize = 32,
+    max_size:          usize = 10 * 1024 * 1024,  // 10 MB
+    max_string_length: usize = 1 * 1024 * 1024,   // 1 MB
+    max_array_length:  usize = 100_000,
+    max_map_size:      usize = 100_000,
+};
+```parser iterative uses explicit stack_depth overflow impossible input Violation Handling```zig
+pub const ViolationTracker = struct {
+    count:     u32 = 0,
+    threshold: u32 = 3,
+
+    /// Returns true when the connection must be closed.
+    pub fn record(self: *ViolationTracker, err: ParserError) bool {
+        self.count += 1;
+        logSecurityEvent(.msgpack_violation, err);
+        return self.count >= self.threshold;
+    }
+};
+```violations connection closed Circuit Breaker Contract Hook Server authorization call circuit breaker three states```
+Closed  ──(failures >= threshold)──▶  Open
+  ▲                                     │
+  │                                     │ (timeout elapsed)
+  └──────(success)──── Half-Open ◀──────┘
+```State Behaviour Closed Requests Hook Server Open authorization requests denied.CircuitOpen Half-Open probe request success Closed failure Open```zig
+pub const CircuitBreaker = struct {
+    state:             State = .closed,
+    failure_count:     u32  = 0,
+    failure_threshold: u32  = 5,
+    open_timeout_ms:   u64  = 10_000,
+    opened_at:         i64  = 0,
+
+    pub fn call(self: *CircuitBreaker, req: AuthRequest) !AuthResponse {
+        switch (self.state) {
+            .open => {
+                if (std.time.milliTimestamp() - self.opened_at >= self.open_timeout_ms) {
+                    self.state = .half_open;
+                } else {
+                    return error.CircuitOpen;
+                }
+            },
+            .closed, .half_open => {},
+        }
+
+        const result = hookServerClient.authorize(req) catch |err| {
+            self.recordFailure();
+            return err;
+        };
+
+        self.recordSuccess();
+        return result;
+    }
+
+    fn recordFailure(self: *CircuitBreaker) void {
+        self.failure_count += 1;
+        if (self.failure_count >= self.failure_threshold) {
+            self.state = .open;
+            self.opened_at = std.time.milliTimestamp();
+        }
+    }
+
+    fn recordSuccess(self: *CircuitBreaker) void {
+        self.failure_count = 0;
+        self.state = .closed;
+    }
+};
+```circuit open ZyncBase denies returns.ServiceUnavailable fails Rate Limiter Data Connection Limiter```zig
+pub const ConnectionLimiter = struct {
+    // ip_str -> active connection count
+    counts: std.StringHashMap(u32),
+    max_per_ip: u32 = 100,
+
+    pub fn allow(self: *ConnectionLimiter, ip: []const u8) bool {
+        const entry = self.counts.getOrPutValue(ip, 0) catch return false;
+        if (entry.value_ptr.* >= self.max_per_ip) return false;
+        entry.value_ptr.* += 1;
+        return true;
+    }
+
+    pub fn release(self: *ConnectionLimiter, ip: []const u8) void {
+        if (self.counts.getPtr(ip)) |count| {
+            if (count.* > 0) count.* -= 1;
+        }
+    }
+};
+```Message Rate Limiter```zig
+pub const RateLimiter = struct {
+    tokens:      f64,
+    max_tokens:  f64 = 100.0,
+    refill_rate: f64 = 100.0, // tokens per second
+    last_refill: i64,
+
+    pub fn consume(self: *RateLimiter) bool {
+        const now = std.time.milliTimestamp();
+        const elapsed_s = @as(f64, @floatFromInt(now - self.last_refill)) / 1000.0;
+        self.tokens = @min(self.max_tokens, self.tokens + elapsed_s * self.refill_rate);
+        self.last_refill = now;
+
+        if (self.tokens >= 1.0) {
+            self.tokens -= 1.0;
+            return true;
+        }
+        return false;
+    }
+};
+```Namespace Isolation SQLite query includes namespace_id = ? clause_id set from authenticated session context client-supplied data Cross-namespace access requires authorization Hook Server Invariants Error Conditions Fail-secure circuit breaker open Hook Server access denied Parser-before-alloc No heap allocation until parser limits pass Namespace scoping `namespace_id from `AuthContext not wire message Violation threshold connection closed after parser violations Error.CircuitOpen_UNAVAILABLE.AuthTimeout `UNAUTHORIZED.MaxDepthExceeded.MaxSizeExceeded Validation Success Criteria TSan clean auth rate-limiter paths Parser rejects depth > 32 size > 10 MB Circuit breaker Closed → Open after 5 failures denies requests Open Connection limiter blocks connection 101 from IP Verification Commands```bash
+zig test src/msgpack_parser_test.zig
+zig test src/circuit_breaker_test.zig
+zig test src/rate_limiter_test.zig
+zig build test -Dsanitize=thread
+```System Hook Server rules Exchange Ticket handshake session enrichment TSan GPA coverage Implementation TLS connection lifecycle

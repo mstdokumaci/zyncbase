@@ -1,1 +1,153 @@
-Presence Internals API Design-api.md requirements user awareness ephemeral state covers architectural details performance optimizations implementation ZyncBase presence system Logical Architecture Presence scoped `presenceNamespace server manages map namespaces active users presence updates affect same context [WebSocket Client [PresenceManager-Memory Map [History Buffer Presence 5 Seconds Implementation Artifacts Presence Manager state management keeps data in RAM sub-100ms latency PresenceManager allocator In-memory user_id presence_data HashMap History buffer 5 seconds late joiners RingBuffer snapshots Batching efficiency (50ms intervals batch_timer.time.Timer pending_updates ArrayList *PresenceManager namespace user_id data json.Value Store memory.presence.getOrPut.put_id.timemilliTimestamp( Add history buffer 5 seconds ns_history self.history.getOrPut_history.value_ptr.push(.user_id.timestamp.milliTimestamp Queue batched broadcast (50ms intervals self.pending_updates.append(.namespace_id get *PresenceManager user_id ?json.Value ns self.presence.get(namespace return null ns.get(user_id); getAll]PresenceEntry ns self.presence.get(namespace return result = ArrayList(PresenceEntry).init(self.allocator); iter ns.iterator.next( result.append(.user_id entry.key_ptr.data.joined_at return result.toOwnedSlice onJoin *PresenceManager u8) !PresenceSnapshot Return current state last 5 seconds history current = self.presence.get history.history.get.getLastNSeconds(5).currenthistory = remove *PresenceManager user_id Remove memory.presence.get(namespace.remove(user Broadcast removal self.broadcastRemoval(namespace user every 50ms batch presence updates flushBatch *PresenceManager.pending_updates.items.len 0 return Group updates by_namespace = HashMap( u8 ArrayList(PresenceUpdate)).init(self.allocator);.pending_updates.items ns_updates_namespace.getOrPut(update.value.append Broadcast batched updates each namespace iter_namespace.iterator.next.broadcastBatch_ptr.value_ptr Clear pending updates_updates.clearRetainingCapacity PresenceData json.Value joined i64 PresenceSnapshot user_id u8 data json.Value timestamp i64 PresenceUpdate user_id data json.Value History Ring Buffer immediate context late joinersRingBuffer]PresenceSnapshot getLastNSeconds seconds now.time.milliTimestamp cutoff - (seconds * result = ArrayList(PresenceSnapshot).init filtering logic return result.toOwnedSlice Operational Logic Client-Side Throttling High-frequency updates throttled to ~60fps (16ms overwhelming network Server-Side Batching batches updates every 50ms users broadcast single message Automatic Cleanup WebSocket connection closed server removes presence data.remove broadcasts removal message Client-Side State Management sub-millisecond ZyncBase Client SDKs maintain mirrored state `presenceNamespace Synchronous Getters SDK methods `presence.get.getAll( mapped to wire protocol messages perform lookups against internal cache initialized receives `PresenceSubscribe response-time messages cache cleared client unsubscribes or connection lostRationale Omission Wire Protocol UI rendering loops afford network round-trip Local sync lookups 0ms client subscribe updates SDK possesses data "Get requests locally Validation Success Criteria Metrics Latency < 1ms < 100μs Broadcast Interval 50ms 5ms Verification Commands Unit tests PresenceManager Verify batching interval thread sanitizer Verify history ring buffer eviction [Presence API Design Engine Implementation API Reference
+Presence Internals API Design.md requirements user awareness ephemeral state covers architectural details performance optimizations implementation ZyncBase presence system Architecture Presence scoped server manages active users presence updates affect context```
+[WebSocket Client] -> [PresenceManager (In-Memory)]
+                           |
+            +--------------+--------------+
+            |                             |
+      [State Map]                 [History Buffer]
+  (User -> Presence)             (Last 5 Seconds)
+```Implementation Presence Manager keeps data RAM sub-100ms latency```zig
+const PresenceManager = struct {
+    allocator: Allocator,
+    
+    // In-memory only (ephemeral)
+    // namespace -> user_id -> presence_data
+    presence: HashMap([]const u8, HashMap([]const u8, PresenceData)),
+    
+    // History buffer (last 5 seconds) for late joiners
+    // namespace -> RingBuffer of presence snapshots
+    history: HashMap([]const u8, RingBuffer(PresenceSnapshot)),
+    
+    // Batching for efficiency (50ms intervals)
+    batch_timer: std.time.Timer,
+    pending_updates: ArrayList(PresenceUpdate),
+    
+    pub fn set(self: *PresenceManager, namespace: []const u8, user_id: []const u8, data: json.Value) !void {
+        // Store in memory
+        var ns = try self.presence.getOrPut(namespace);
+        try ns.value_ptr.put(user_id, .{ .data = data, .joined_at = std.time.milliTimestamp() });
+        
+        // Add to history buffer (last 5 seconds)
+        var ns_history = try self.history.getOrPut(namespace);
+        try ns_history.value_ptr.push(.{
+            .user_id = user_id,
+            .data = data,
+            .timestamp = std.time.milliTimestamp(),
+        });
+        
+        // Queue for batched broadcast (50ms intervals)
+        try self.pending_updates.append(.{
+            .namespace = namespace,
+            .user_id = user_id,
+            .data = data,
+        });
+    }
+    
+    pub fn get(self: *PresenceManager, namespace: []const u8, user_id: []const u8) ?json.Value {
+        const ns = self.presence.get(namespace) orelse return null;
+        return ns.get(user_id);
+    }
+    
+    pub fn getAll(self: *PresenceManager, namespace: []const u8) ![]PresenceEntry {
+        const ns = self.presence.get(namespace) orelse return &.{};
+        
+        var result = ArrayList(PresenceEntry).init(self.allocator);
+        var iter = ns.iterator();
+        while (iter.next()) |entry| {
+            try result.append(.{
+                .user_id = entry.key_ptr.*,
+                .data = entry.value_ptr.data,
+                .joined_at = entry.value_ptr.joined_at,
+            });
+        }
+        return result.toOwnedSlice();
+    }
+    
+    pub fn onJoin(self: *PresenceManager, namespace: []const u8) !PresenceSnapshot {
+        // Return current state + last 5 seconds of history
+        const current = self.presence.get(namespace);
+        
+        const history = if (self.history.get(namespace)) |h|
+            h.getLastNSeconds(5)
+        else
+            &.{};
+        
+        return .{
+            .current = current,
+            .history = history,
+        };
+    }
+    
+    pub fn remove(self: *PresenceManager, namespace: []const u8, user_id: []const u8) !void {
+        // Remove from memory
+        if (self.presence.get(namespace)) |ns| {
+            _ = ns.remove(user_id);
+        }
+        
+        // Broadcast removal
+        try self.broadcastRemoval(namespace, user_id);
+    }
+    
+    // Called every 50ms to batch presence updates
+    pub fn flushBatch(self: *PresenceManager) !void {
+        if (self.pending_updates.items.len == 0) return;
+        
+        // Group updates by namespace
+        var by_namespace = HashMap([]const u8, ArrayList(PresenceUpdate)).init(self.allocator);
+        
+        for (self.pending_updates.items) |update| {
+            var ns_updates = try by_namespace.getOrPut(update.namespace);
+            try ns_updates.value_ptr.append(update);
+        }
+        
+        // Broadcast batched updates to each namespace
+        var iter = by_namespace.iterator();
+        while (iter.next()) |entry| {
+            try self.broadcastBatch(entry.key_ptr.*, entry.value_ptr.items);
+        }
+        
+        // Clear pending updates
+        self.pending_updates.clearRetainingCapacity();
+    }
+};
+
+const PresenceData = struct {
+    data: json.Value,
+    joined_at: i64,
+};
+
+const PresenceSnapshot = struct {
+    user_id: []const u8,
+    data: json.Value,
+    timestamp: i64,
+};
+
+const PresenceUpdate = struct {
+    namespace: []const u8,
+    user_id: []const u8,
+    data: json.Value,
+};
+```History Ring Buffer context late joiners```zig
+const RingBuffer = struct {
+    items: []PresenceSnapshot,
+    head: usize,
+    tail: usize,
+    
+    pub fn getLastNSeconds(self: *RingBuffer, seconds: i64) []PresenceSnapshot {
+        const now = std.time.milliTimestamp();
+        const cutoff = now - (seconds * 1000);
+        
+        var result = ArrayList(PresenceSnapshot).init(allocator);
+        // ... filtering logic ...
+        return result.toOwnedSlice();
+    }
+};
+```Operational Logic Client-Side Throttling High-frequency updates throttled SDK to (16ms overwhelming network server Server-Side Batching batches presence updates every 50ms multiple users update broadcast single message Automatic Cleanup WebSocket connection closed server removes presence data.remove broadcasts removal message Client-Side State Management sub-millisecond ZyncBase Client SDKs maintain mirrored state `presenceNamespace Synchronous Getters SDK methods.get.getAll( mapped to wire protocol messages perform lookups against internal cache initialized response messages cache cleared client unsubscribes connection lost Rationale Omission Wire Protocol UI rendering network round-trip Local sync lookups 0ms client subscribe updates SDK possesses data requests Validation Success Criteria Metrics Latency < 1ms < 100μs Broadcast Interval 50ms 5ms Verification Commands```bash
+# Unit tests for PresenceManager (set/get/remove/getAll)
+zig test src/presence_manager_test.zig
+
+# Verify batching interval with thread sanitizer
+zig test src/presence_manager_test.zig -Dsanitize=thread
+
+# Verify history ring buffer eviction
+zig test src/ring_buffer_test.zig
+```See API Design-api.md [Query Engine Implementation-engine.md API Reference-api.md

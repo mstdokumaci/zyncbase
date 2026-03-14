@@ -1,1 +1,44 @@
-uWebSockets Version Compatibility Implementation describes C binding interface ZyncBase uWebSockets version pinned compatibility contract uWebSockets not direct submodule/bun submodule/bun/libuwsockets.cpp C wrapper ZyncBase uWebSockets C++ headers μSockets headers/bun submodule pinned Bun commit.gitmodules effective uWebSockets version Bun's tree commit determine exact version git vendor/bun log grep "UWS_VERSION" calls uWebSockets `src/uws_wrapper.h/uwebsockets_wrapperfunctions App lifecycle uws_app_t*_create_app ssl_socket_context_options void uws_app_listen ssl port_handler user_data); void uws_app_run ssl_app_t* WebSocket route registration void uws_ws ssl void ctx pattern_len id_socket_behavior_t WebSocket operations uws_ws_send ssl_t msg_opcode void_ws_close ssl_websocket_t* void_ws_get_user_data ssl_websocket_t* Behavior Configuration.compression_COMPRESS_DISABLED.maxPayloadLength 10 * 1024.idleTimeout 120.maxBackpressure 64 * 1024.sendPingsAutomatically = true Compatibility Contract ZyncBase guarantees compatibility uWebSockets version commit No other version supported functions called uWebSockets change symbols safe `libuwsockets.cpp compiled from source build no pre-built binary dependency SSL compiled-DLIBUS_BORINGSSL=1 `WebSocketServer.Config.ssl = false SSL paths not exercised tests Compression Disabled Enabling requires.compression re-testing Updating Pinned Version update uWebSockets `vendor/bun submodule update changes/uws_wrapper.h/uwebsockets_wrapper.zig match Invariants Error Conditions Single app instance_server `uwebsockets_wrapper.zig holds one server pointer Multiple instances not supported App not destroyed_destroy not exposed lives until process exit SSL not validated SSL certificate paths accepted by `Config not tested CI Error.FailedToCreateApp returned null invalid SSLListenFailed Port use permission denied Verification Commands Build link uWebSockets Run wrapper unit tests property tests Implementation Server struct connection lifecycle Implementation Event loop threading model
+uWebSockets Compatibility Implementation describes C binding interface uWebSockets version pinned compatibility contract Pinned uWebSockets not direct submodule/bun submodule```
+vendor/bun/src/deps/libuwsockets.cpp   — C wrapper compiled into ZyncBase
+vendor/bun/packages/bun-uws/src/       — uWebSockets C++ headers
+vendor/bun/packages/bun-usockets/src/  — µSockets headers
+```/bun submodule Bun commit.gitmodules uWebSockets version Bun's tree determine version```bash
+git -C vendor/bun log --oneline -1
+grep -r "UWS_VERSION" vendor/bun/packages/bun-uws/src/ 2>/dev/null | head -5
+```ZyncBase calls uWebSockets `src/uws_wrapper.h included@cImport/uwebsockets_wrapper.zig functions```c
+// App lifecycle
+uws_app_t* uws_create_app(int ssl, us_bun_socket_context_options_t options);
+void       uws_app_listen(int ssl, uws_app_t* app, int port, uws_listen_handler handler, void* user_data);
+void       uws_app_run(int ssl, uws_app_t* app);
+
+// WebSocket route registration
+void uws_ws(int ssl, uws_app_t* app, void* ctx,
+            const char* pattern, size_t pattern_len,
+            int id, const uws_socket_behavior_t* behavior);
+
+// WebSocket operations
+int  uws_ws_send(int ssl, uws_websocket_t* ws,
+                 const char* msg, size_t len, uws_opcode_t opcode);
+void uws_ws_close(int ssl, uws_websocket_t* ws);
+void* uws_ws_get_user_data(int ssl, uws_websocket_t* ws);
+```Behavior Configuration```zig
+behavior.compression          = c.UWS_COMPRESS_DISABLED;
+behavior.maxPayloadLength     = 10 * 1024 * 1024; // 10 MB
+behavior.idleTimeout          = 120;               // seconds
+behavior.maxBackpressure      = 64 * 1024;         // 64 KB
+behavior.sendPingsAutomatically = true;
+```Compatibility Contract ZyncBase guarantees compatibility uWebSockets `vendor/bun commit No other version supported Guarantee functions called uWebSockets change safe `libuwsockets.cpp compiled no pre binary dependency SSL compiled `WebSocketServer.Config.ssl false SSL paths not exercised tests Compression Disabled Enabling.compression re-testing Updating Version update uWebSockets `vendor/bun submodule commit```bash
+git -C vendor/bun fetch origin
+git -C vendor/bun checkout <new-commit>
+git add vendor/bun
+zig build test   # must pass before committing
+```update changes C interface/uws_wrapper.h/uwebsockets_wrapper.zig match Invariants Error Conditions Single app instance_server `uwebsockets_wrapper.zig one server pointer Multiple instances not supported App not destroyed_app_destroy exposed wrapper lives until process exit SSL not validated certificate paths accepted not tested CI Error.FailedToCreateApp null invalid SSL.ListenFailed Port permission denied Verification Commands```bash
+# Build and link uWebSockets from source
+zig build
+
+# Run wrapper unit tests
+zig test src/uwebsockets_wrapper_test.zig
+
+# Run wrapper property tests
+zig test src/uwebsockets_wrapper_property_test.zig
+```Implementation Server struct connection lifecycle Implementation Event loop threading model

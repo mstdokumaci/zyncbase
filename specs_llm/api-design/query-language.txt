@@ -1,1 +1,283 @@
-ZyncBase Query Language Reference 2026-03-09 Prisma-inspired query language.store.query(.store.subscribe() Table of Contents Philosophy Operators [Combining Conditions [Pagination [Examples Design ZyncBase query language inspired Prisma-inspired TypeScript-first clean no prefixes root-level conditions AND **Explicit `or key conditions operator `eq` `gte` **Consistent operators keywords lowercase SQL `limit` **Cursor-based `after` real-time navigation Prisma-inspired evaluated MongoDB GraphQL/Hasura Prisma custom approacheschose Prisma syntax Matches target audience web developers No prefixes Developers learning Prisma-designed** Learned from MongoDB mistakes 15 years improvements over Prisma Aspect ZyncBase AND operator `AND: [...] Implicit root Simpler common case OR operator `OR: [...] Consistent lowercase Equality `equals: value `eq: value` Shorter clearer Not equal `not: value `ne: value` Explicit operator Pagination `take/`skip `limit/`after Standard SQL terms Cursor Comparison alternatives MongoDB style age 18 status 'active GraphQL/Hasura Prisma style age 18 status 'active ZyncBase style age 18 status eq 'active' Query Operators Equality Operators status 'active Equal status 'deleted Not equal `eq` Equal `ne` Not equal Comparison Operatorsage gt 18 Greater than 18 equal age lt 65 Less than lte 65 equal **Operators `gt` Greater `gte` equal `lt Less String Operators name 'john' substring name startsWith 'J' Starts endsWith 'son' Ends email '@example `contains` substring (case `startsWith` Starts prefix `endsWith` Ends with suffix String matching case-sensitive case-insensitive matching normalize data write use computed fieldsArray Operators`typescript role'admin' 'editor' notIn'guest' 'banned' Not in array `in` Value array `notIn` not Null Operators deleted_at isNull true verified isNotNull: true not null `isNull` Field null or undefined `isNotNull` Field value null/undefined Combining Conditions Implicit conditions root level combined with age >= 18 status = 'active' role'admin 'editor' age 18 status 'active' role'admin 'editor common case default keep queries clean Explicit OR `or` key for conditions status = 'active' 'pending' status eq 'active' 'pending' `or` key takes array of condition objectsComplex Nested (AND + OR Combine implicit with OR for complex queries age >= 18 (role = 'admin OR 'editor' age 18 role 'editor (status 'active OR 'pending priority = 'high' 'pending Multiple OR Groups multiple conditions with OR groups age >= 18 (role 'admin OR 'editor' status = 'active' age 18 status eq 'active 'editor one `or` key supported root level complex boolean logic restructuring query multiple queries Sorting Single Field Sort orderBy created_at 'desc' directions Ascending (A-Z 0-9 oldest Descending (Z-A 9-0 newest Multiple Field Sort (Future) orderBy priority 'desc created_at creation date Multi-field sorting planned for future release single-field sorting supported Pagination ZyncBase uses **cursor-based pagination** data consistency realOffset pagination supported causes skipped duplicated items scrolling Basic Pagination limit 50 Max results after '... Opaque token nextCursor Flow Execute initial query `limit` Save `nextCursor value result Pass `nextCursor `after parameter next page Page 1 items await.store.query( limit 20 Page 2 await.query limit 20.nextCursor Infinite Scroll Subscriptions query ZyncBase manages live window load older data without breaking sync.store.subscribe( limit 20 Load 20 more items 'items array await.loadMore( Form Validation Check username taken existing await client.store.query( isAvailable existing.length Date Range Query events within date range events await client.store.query('events' created_at startDate endDate status 'active' orderBy 'desc limit: 50 Multi-Status Filter tasks active or pending tasks await client.store.query('tasks' status 'active status 'pending' orderBy priority: 'desc' Role-Based Query users with admin or editor roles active users await client.store.query('users status 'active' role 'admin 'editor' Search by Substring users email domain users await client.store.query('users email '@example Exclude Deleted Items items soft-deleted items await client.store.query('items deleted_at isNull true Complex Business Logic high-priority tasks admins or editors not completed tasks await client.storequery('tasks' priority 'high status 'completed' assigned_role 'admin 'editor orderBy created 'desc limit: 100 Operator Reference Table Type Description Example `eq` Equal to status 'active' `ne` Not equal to status 'deleted' `gt` Number/Date Greater than `{ age gt 18 `gte` Greater{ age 18 `lt` Number/Date Less than{ age lt 65 `lte` Less than or equal `{ age lte 65 `contains` substring `{ name 'john' `startsWith` Starts with prefix{ name startsWith 'J' `endsWith` Ends with suffix `{ name endsWith 'son' `in` Value in array{ role'admin 'editor `notIn` Value not in array{ role notIn'guest' `isNull`null/undefined deleted_at isNull: true `isNotNull` value verified_at isNotNull: true Best Practices Use implicit AND for simplicity - clean readable age gte 18 status eq 'active' Avoid unnecessary complexity age 18 status eq 'active' Prefer `in` over multiple OR conditions - concise status'active' 'pending 'review' Avoid - verbose status 'active' paginate large result sets prevents memory issues status eq 'active' limit: 100 Risky - return thousands items Use specific queries over broad ones - targeted query project_id currentProject status eq 'active' Avoid fetches too much data status eq 'active' Performance Considerations Indexed Fields Queries perform best on indexed fields Common fields to index Primary keys Foreign keys `user_id `project_id Status fields Timestamp fields`updated Configure indexes `schema.json file Query Complexity Simple queries faster Single field equality Multiple conditions range queries **Slower** OR conditions string operations Real-time Subscriptions keep queries focused - specific subscription client.store.subscribe project_id status Avoid broad updates 'archived Limitations Current Limitations OR one `or key root level nested nest field Multi-field sorting future release aggregations** `count client-side separate endpoint joins** Query one path at a time (denormalize data Workarounds complex queries **Denormalize Duplicate avoid joins **Multiple Fetch related data separately **Client-side complex logic **Computed fields** Pre-compute values write [README API overview entry API queries SDK [Configuration Schema index configuration
+ZyncBase Query Language Reference 2026-03-09 Prisma-inspired query language.store.query(.store.subscribe() Table of Contents Philosophy Operators [Combining Conditions [Pagination [Examples Design ZyncBase query language inspired Prisma-inspired TypeScript-first clean no prefixes root-level conditions AND **Explicit `or key conditions operator `eq` `gte` **Consistent operators keywords lowercase SQL `limit` **Cursor-based `after` real-time navigation Prisma-inspired evaluated MongoDB GraphQL/Hasura Prisma custom approacheschose Prisma syntax Matches target audience web developers No prefixes Developers learning Prisma Learned from MongoDB mistakes improvements over Prisma Aspect ZyncBase operator Implicit root Simpler common case OR operator Consistent lowercase Equality `equals value: value Shorter clearer Not equal `not value: value Explicit operator Pagination `take`skip `limit`after Standard SQL terms Cursor Comparison alternatives```typescript
+// MongoDB style
+{ $and: [{ age: { $gte: 18 } }, { status: { $eq: 'active' } }] }
+
+// GraphQL/Hasura style
+{ _and: [{ age: { _gte: 18 } }, { status: { _eq: 'active' } }] }
+
+// Prisma style
+{ AND: [{ age: { gte: 18 } }, { status: { equals: 'active' } }] }
+
+// ZyncBase style (implicit AND)
+{ age: { gte: 18 }, status: { eq: 'active' } }
+```Query Equality```typescript
+{
+  where: {
+    status: { eq: 'active' },      // Equal
+    status: { ne: 'deleted' }      // Not equal
+  }
+}
+````eq Equal `ne` Not Comparison Operators```typescript
+{
+  where: {
+    age: { gt: 18 },               // Greater than
+    age: { gte: 18 },              // Greater than or equal
+    age: { lt: 65 },               // Less than
+    age: { lte: 65 }               // Less than or equal
+  }
+}
+```**Operators `gt` Greater than equal to `lt` Less than String Operators```typescript
+{
+  where: {
+    name: { contains: 'john' },    // Contains substring
+    name: { startsWith: 'J' },     // Starts with
+    name: { endsWith: 'son' },     // Ends with
+    email: { contains: '@example.com' }
+  }
+}
+```substring-sensitive prefix suffix String matching case-sensitive case-insensitive matching normalize data write use computed fields Array Operators```typescript
+{
+  where: {
+    role: { in: ['admin', 'editor'] },      // In array
+    role: { notIn: ['guest', 'banned'] }    // Not in array
+  }
+}
+```**Operators `in` Value array Value not array Null Operators```typescript
+{
+  where: {
+    deleted_at: { isNull: true },           // Is null
+    verified_at: { isNotNull: true }        // Is not null
+  }
+}
+````isNull` Field null undefined `isNotNull` Field value null Combining Conditions conditions root level combined```typescript
+// age >= 18 AND status = 'active' AND role IN ['admin', 'editor']
+{
+  where: {
+    age: { gte: 18 },
+    status: { eq: 'active' },
+    role: { in: ['admin', 'editor'] }
+  }
+}
+```common case default keep queries clean Explicit OR `or key conditions```typescript
+// status = 'active' OR status = 'pending'
+{
+  where: {
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } }
+    ]
+  }
+}
+````or key condition objects Complex Combine implicit AND OR queries```typescript
+// age >= 18 AND (role = 'admin' OR role = 'editor')
+{
+  where: {
+    age: { gte: 18 },
+    or: [
+      { role: { eq: 'admin' } },
+      { role: { eq: 'editor' } }
+    ]
+  }
+}
+```
+
+```typescript
+// (status = 'active' OR status = 'pending') AND priority = 'high'
+{
+  where: {
+    priority: { eq: 'high' },
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } }
+    ]
+  }
+}
+```Multiple OR Groups multiple conditions```typescript
+// age >= 18 AND (role = 'admin' OR role = 'editor') AND status = 'active'
+{
+  where: {
+    age: { gte: 18 },
+    status: { eq: 'active' },
+    or: [
+      { role: { eq: 'admin' } },
+      { role: { eq: 'editor' } }
+    ]
+  }
+}
+````or key supported root level complex boolean logic restructuring multiple Sorting Single Field```typescript
+{
+  orderBy: { created_at: 'desc' }
+}
+```directions Ascending-Z 0-9 oldest Descending-A 9-0 newest Multiple Field Sort```typescript
+{
+  orderBy: [
+    { priority: 'desc' },    // Sort by priority first
+    { created_at: 'asc' }    // Then by creation date
+  ]
+}
+```Multi-field sorting planned future release single-field sorting supported ZyncBase uses-based data consistency real Offset-based pagination causes skipped items Basic Pagination```typescript
+{
+  limit: 50,      // Max results to return
+  after: '...'    // Opaque token from previous nextCursor
+}
+```Execute query `limit Save `nextCursor Pass `nextCursor `after parameter next page```typescript
+// Page 1
+const items = await client.store.query('items', { 
+  limit: 20 
+})
+
+// Page 2
+const page2 = await client.store.query('items', {
+  limit: 20,
+  after: items.nextCursor 
+})
+```Infinite Scroll Subscriptions ZyncBase live window load older data sync```typescript
+const sub = client.store.subscribe('items', {
+  orderBy: { created_at: 'desc' },
+  limit: 20
+}, (items) => {
+  render(items)
+})
+
+// Load 20 more historical items into the 'items' array
+if (sub.hasMore) {
+  await sub.loadMore()
+}
+```Examples Form Validation username taken```typescript
+const existing = await client.store.query('users', {
+  where: { username: { eq: 'alice' } }
+})
+
+const isAvailable = existing.length === 0
+```Date Range Query events```typescript
+const events = await client.store.query('events', {
+  where: {
+    created_at: { gte: startDate, lte: endDate },
+    status: { eq: 'active' }
+  },
+  orderBy: { created_at: 'desc' },
+  limit: 50
+})
+```Multi-Status Filter active pending```typescript
+const tasks = await client.store.query('tasks', {
+  where: {
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } }
+    ]
+  },
+  orderBy: { priority: 'desc' }
+})
+```Role-Based Query admin editor active```typescript
+const users = await client.store.query('users', {
+  where: {
+    status: { eq: 'active' },
+    or: [
+      { role: { eq: 'admin' } },
+      { role: { eq: 'editor' } }
+    ]
+  }
+})
+```Search Substring users email domain```typescript
+const users = await client.store.query('users', {
+  where: {
+    email: { contains: '@example.com' }
+  }
+})
+```Exclude Deleted Items soft-deleted```typescript
+const items = await client.store.query('items', {
+  where: {
+    deleted_at: { isNull: true }
+  }
+})
+```Business Logic high-priority tasks admins editors```typescript
+const tasks = await client.store.query('tasks', {
+  where: {
+    priority: { eq: 'high' },
+    status: { ne: 'completed' },
+    or: [
+      { assigned_role: { eq: 'admin' } },
+      { assigned_role: { eq: 'editor' } }
+    ]
+  },
+  orderBy: { created_at: 'desc' },
+  limit: 100
+})
+```Operator Reference Table Type Description Example `eq` Equal to `{ status 'active' `ne` Not equal status 'deleted' `gt` Number/Date Greater `{ age gt: 18 `gte` Greater equal age gte 18 `lt` Number/Date{ age lt: 65 `lte` Less than equal{ age lte 65 `contains` substring `{ name contains 'john' `startsWith` Starts prefix{ name startsWith 'J' `endsWith` Ends suffix{ name endsWith 'son' `in` Value in array{ role'admin 'editor `notIn` Value not in array{ role notIn'guest' `isNull` null/undefined{ deleted_at isNull: true `isNotNull` value{ verified_at isNotNull: true Best Practices Use implicit simplicity```typescript
+// Good - clean and readable
+{
+  where: {
+    age: { gte: 18 },
+    status: { eq: 'active' }
+  }
+}
+
+// Avoid - unnecessary complexity
+{
+  where: {
+    and: [
+      { age: { gte: 18 } },
+      { status: { eq: 'active' } }
+    ]
+  }
+}
+```Prefer `in` conditions```typescript
+// Good - concise
+{
+  where: {
+    status: { in: ['active', 'pending', 'review'] }
+  }
+}
+
+// Avoid - verbose
+{
+  where: {
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } },
+      { status: { eq: 'review' } }
+    ]
+  }
+}
+```paginate result sets```typescript
+// Good - prevents memory issues
+{
+  where: { status: { eq: 'active' } },
+  limit: 100
+}
+
+// Risky - could return thousands of items
+{
+  where: { status: { eq: 'active' } }
+}
+```Use specific queries```typescript
+// Good - targeted query
+{
+  where: {
+    project_id: { eq: currentProject },
+    status: { eq: 'active' }
+  }
+}
+
+// Avoid - fetches too much data
+{
+  where: {
+    status: { eq: 'active' }
+  }
+}
+```Performance Considerations Indexed Fields Queries perform best indexed Common fields index Primary keys indexed Foreign keys_id_id Status fields Timestamp fields Configure indexes.json file Query Complexity Simple queries faster complex Single field equality Multiple conditions range queries conditions string operations Real-time Subscriptions keep queries focused```typescript
+// Good - specific subscription
+client.store.subscribe('tasks', {
+  where: {
+    project_id: { eq: currentProject },
+    status: { eq: 'active' }
+  }
+}, callback)
+
+// Avoid - too broad, updates frequently
+client.store.subscribe('tasks', {
+  where: {
+    status: { ne: 'archived' }
+  }
+}, callback)
+```Limitations OR one `or key root level nested nest OR within OR field Multi-field sorting future release No `count `avg client-side separate endpoint Query one path a time data Workarounds complex queries Duplicate avoid joins **Multiple Fetch data separately **Client-side complex logic **Computed Pre-compute values write [README API overview entry API queries SDK [Configuration Schema index configuration

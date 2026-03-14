@@ -1,1 +1,231 @@
-Query Engine 2026-03-09 handles filtering sorting real-time subscriptions executes queries in-memory cache SQLite storage tracks clients Fine change detection in-memory subscriptions efficient real-time updates Structure path u8 filters sort limit Opaque token encoded cursor field u8 op value jsonValue FilterOp = enum { eq == ne != gt > gte >= lt < lte <= in contains %value% startsWith endsWith %value isNull NULL isNotNull NOT NULL const Sort = { field:]const u8 direction: enum { asc, desc Query Execution Execution Flow Parse Query Validate syntax Build AST Check Cache Look for cached results Check if cache fresh Query Build SQL (if needed Execute on SQLite reader filter in-memory cache Apply Filters Filter results Sort results Apply limit cursorReturn Results Serialize MessagePack Send client Implementation QueryEngine storage *StorageLayer cache *LockFreeCache execute *QueryEngine Query.Value Try cache self.executeFromCache(query return results Build SQL sql self.buildSQL SQLite reader reader.storage.getReader rows reader.query(sql); Parse results self.parseResults(rows); buildSQL *QueryEngine Query u8 buf = ArrayList(u8).init(self.allocator); Query path table buf.appendSlice("SELECT FROM.appendSlice(query.path); 'tasks' buf.appendSlice(_id = (query.filters) buf.appendSlice( self.appendFilter( (query.sort buf.appendSlice( ORDER.appendSlice(sort.direction .asc DESC (query.limit) std.fmt.format(buf.writer LIMIT.Implementation Decode token apply filters self.appendCursorFilters( return buf.toOwnedSlice Real-time Subscriptions Subscription Tracking Subscription struct id u64 connection_id query last_result.Value_version u64 SubscriptionManager subscriptions HashMap(u64_index HashMap( u8 ArrayList add *SubscriptionManager self.subscriptions.put(sub.id Index namespace lookup.namespace_index.getOrPut(sub list.value_ptr.append(sub remove *SubscriptionManager sub_id u64).subscriptions.fetchRemove(sub_id sub entry.value Remove namespace index_index.get.items sub_id list.swapRemove Change Detection ZyncBase **Fine-Grained Observation** strategy sub-100ms real-time sync without overloading SQLite reader pool Writer thread emits change event id operation old new_row`SubscriptionManager evaluates_row against active subscription filters SQLite queries re during broadcast for filter matches Updates pushed to clients if row matching query changed Fine-Grained Implementation notification pipeline in RAM notify *SubscriptionManager table changed_id new_row.Value.table_index.get.subscriptions.get Evaluate filters in RAM SQLite if self.evaluator.matches(new_row.query.filters Push delta to client self.sendDelta(sub.connection_id new_row); affectsSubscription changed_ids If no filters change affects if.query.filters.len == 0 true Check if changed ID matches filters for_ids handle self.cache.get defer.release self.matchesFilters return true false Presence Awareness ZyncBase presence system tracks user state real-time data stored in-memory details see [Presence InternalsAuthorization Optimization Problem SQL queries for authorization WebSocket bottleneck Cursor movement (100 SQL query (1ms = 100ms latency Solution: Permission Snapshots connection onConnect Execute SQL queries determine permissions.query room_id FROM room_members user_id Cache memory.permissions PermissionSnapshot 1 Fast path checkPermission room_id Memory lookup return.permissions.rooms.contains(room Invalidation onRoomMembershipChange(user_id Find connections user Re-query permissions refreshPermissions Common path Nanosecond memory lookup Rare path SQL query when permissions change Authorization doesn't bottleneck operations [Core Principles Design [Threading Model Parallel query execution [Storage Layer SQLite optimization Layer WebSocket protocol [Query Language-design-language Query syntax reference.md Performance validation
+Query Engine 2026-03-09 handles filtering sorting real-time subscriptions executes queries-memory cache SQLite storage tracks change detection in-memory subscriptions efficient real-time updates```zig
+const Query = struct {
+    path: []const u8,
+    filters: []Filter,
+    sort: ?Sort,
+    limit: ?usize,
+    after: ?[]const u8, // Opaque token (base64 encoded cursor)
+};
+
+const Filter = struct {
+    field: []const u8,
+    op: FilterOp,
+    value: json.Value,
+};
+
+const FilterOp = enum {
+    eq,         // ==
+    ne,         // !=
+    gt,         // >
+    gte,        // >=
+    lt,         // <
+    lte,        // <=
+    in,         // IN
+    contains,   // LIKE %value%
+    startsWith, // LIKE value%
+    endsWith,   // LIKE %value
+    isNull,     // IS NULL
+    isNotNull,  // IS NOT NULL
+};
+
+const Sort = struct {
+    field: []const u8,
+    direction: enum { asc, desc },
+};
+```Query Execution```
+┌─────────────────────────────────────────────────┐
+│  1. Parse Query                                 │
+│     - Validate syntax                           │
+│     - Build AST                                 │
+└─────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────┐
+│  2. Check Cache                                 │
+│     - Look for cached results                   │
+│     - Check if cache is fresh                   │
+└─────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────┐
+│  3. Execute Query                               │
+│     - Build SQL (if needed)                     │
+│     - Execute on SQLite reader                  │
+│     - Or filter in-memory cache                 │
+└─────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────┐
+│  4. Apply Filters                               │
+│     - Filter results                            │
+│     - Sort results                              │
+│     - Apply limit and cursor (after)            │
+└─────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────┐
+│  5. Return Results                              │
+│     - Serialize to MessagePack                  │
+│     - Send to client                            │
+└─────────────────────────────────────────────────┘
+```
+
+### Implementation
+
+```zig
+const QueryEngine = struct {
+    storage: *StorageLayer,
+    cache: *LockFreeCache,
+    
+    pub fn execute(self: *QueryEngine, query: Query) ![]json.Value {
+        // Try cache first
+        if (try self.executeFromCache(query)) |results| {
+            return results;
+        }
+        
+        // Build SQL
+        const sql = try self.buildSQL(query);
+        
+        // Execute on SQLite reader (parallel)
+        const reader = self.storage.getReader();
+        const rows = try reader.query(sql);
+        
+        // Parse results
+        return try self.parseResults(rows);
+    }
+    
+    fn buildSQL(self: *QueryEngine, query: Query) ![]const u8 {
+        var buf = ArrayList(u8).init(self.allocator);
+        
+        // Query the path's table directly
+        try buf.appendSlice("SELECT * FROM ");
+        try buf.appendSlice(query.path);  // e.g., 'tasks'
+        try buf.appendSlice(" WHERE namespace_id = ?");
+        
+        for (query.filters) |filter| {
+            try buf.appendSlice(" AND ");
+            try self.appendFilter(&buf, filter);
+        }
+        
+        if (query.sort) |sort| {
+            try buf.appendSlice(" ORDER BY ");
+            try buf.appendSlice(sort.field);
+            try buf.appendSlice(if (sort.direction == .asc) " ASC" else " DESC");
+        }
+        
+        if (query.limit) |limit| {
+            try std.fmt.format(buf.writer(), " LIMIT {}", .{limit});
+        }
+        
+        if (query.after) |after| {
+            // Implementation detail: Decode after token and apply WHERE filters
+            try self.appendCursorFilters(&buf, after);
+        }
+        
+        return buf.toOwnedSlice();
+    }
+};
+```Subscriptions Tracking```zig
+const Subscription = struct {
+    id: u64,
+    connection_id: u64,
+    namespace: []const u8,
+    query: Query,
+    last_result: []json.Value,
+    last_version: u64,
+};
+
+const SubscriptionManager = struct {
+    subscriptions: HashMap(u64, *Subscription),
+    namespace_index: HashMap([]const u8, ArrayList(u64)),
+    
+    pub fn add(self: *SubscriptionManager, sub: Subscription) !void {
+        try self.subscriptions.put(sub.id, &sub);
+        
+        // Index by namespace for efficient lookup
+        var list = try self.namespace_index.getOrPut(sub.namespace);
+        try list.value_ptr.append(sub.id);
+    }
+    
+    pub fn remove(self: *SubscriptionManager, sub_id: u64) void {
+        if (self.subscriptions.fetchRemove(sub_id)) |entry| {
+            const sub = entry.value;
+            
+            // Remove from namespace index
+            if (self.namespace_index.get(sub.namespace)) |list| {
+                for (list.items, 0..) |id, i| {
+                    if (id == sub_id) {
+                        _ = list.swapRemove(i);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+};
+```Change Detection ZyncBase-Grained strategy sub-100ms sync without overloading SQLite reader pool Writer thread emits change event `SubscriptionManager evaluates_row against filters SQLite queries re broadcast for filter matches Updates if row matching changed Fine-Grained Implementation notification pipeline RAM```zig
+pub fn notify(self: *SubscriptionManager, table: []const u8, changed_id: []const u8, new_row: json.Value) !void {
+    const subs = self.table_index.get(table) orelse return;
+    
+    for (subs.items) |sub_id| {
+        const sub = self.subscriptions.get(sub_id).?;
+        
+        // Evaluate filters in RAM (no SQLite)
+        if (try self.evaluator.matches(new_row, sub.query.filters)) {
+            // Push individual delta to client
+            try self.sendDelta(sub.connection_id, sub_id, new_row);
+        }
+    }
+}
+```
+
+```zig
+fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_ids: []const []const u8) !bool {
+    // If subscription has no filters, any change affects it
+    if (sub.query.filters.len == 0) {
+        return true;
+    }
+    
+    // Check if any changed ID matches the subscription's filters
+    for (changed_ids) |id| {
+        const handle = try self.cache.get(id);
+        defer handle.release();
+        if (try self.matchesFilters(handle.state(), sub.query.filters)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+```Presence Awareness ZyncBase system tracks user state real-time data stored in-memory state management batching history buffers Internals Authorization Optimization SQL queries authorization WebSocket bottleneck```
+Cursor movement (100/sec) × SQL query (1ms) = 100ms latency
+```Solution Permission connection```zig
+fn onConnect(conn: *Connection) !void {
+    // Execute SQL queries to determine permissions
+    const permissions = try db.query(
+        "SELECT room_id FROM room_members WHERE user_id = ?",
+        .{conn.user_id}
+    );
+    
+    // Cache in memory
+    conn.permissions = PermissionSnapshot{
+        .rooms = permissions,
+        .version = 1,
+    };
+}
+```Fast path```zig
+fn checkPermission(conn: *Connection, room_id: []const u8) bool {
+    // Memory lookup (nanoseconds)
+    return conn.permissions.rooms.contains(room_id);
+}
+```. Invalidation```zig
+fn onRoomMembershipChange(user_id: []const u8) !void {
+    // Find all connections for this user
+    for (connections) |conn| {
+        if (conn.user_id == user_id) {
+            // Re-query permissions
+            conn.permissions = try refreshPermissions(conn);
+        }
+    }
+}
+```Common Nanosecond memory lookup Rare SQL query permissions change Authorization doesn bottleneck operations Principles Design [Threading Model Parallel query execution Layer SQLite optimization Layer WebSocket protocol Language Query syntax reference Performance validation
