@@ -6,6 +6,10 @@
             .url = "https://github.com/vrischmann/zig-sqlite/archive/refs/heads/master.tar.gz",
             .hash = "sqlite-3.48.0-F2R_a8eODgD9X8XjvWlZ1K7C-tDuHae4FuShM2N-yIT2",
         },
+        .zig_msgpack = .{
+            .url = "https://github.com/zigcc/zig-msgpack/archive/73b174dbf95cd0d670cf5259f9cefe264fabba39.tar.gz",
+            .hash = "zig_msgpack-0.0.14-evvueIkqBQA7F_-8hpmPYvAjmg9MOWJLm6p8sb0HnGem",
+        },
     },
     .paths = .{
         "build.zig",

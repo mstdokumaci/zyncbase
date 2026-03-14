@@ -30,18 +30,4 @@ else
     echo "  - Bun patches already applied or files modified"
 fi
 
-# 2. Apply patches to zig-msgpack
-echo "Applying patches to zig-msgpack..."
-cd "$MSGPACK_DIR"
-if git diff --quiet src/msgpack.zig; then
-    if [ -f "$PATCHES_DIR/zig-msgpack-fix-leak.patch" ]; then
-        git apply "$PATCHES_DIR/zig-msgpack-fix-leak.patch"
-        echo "  ✓ Applied zig-msgpack-fix-leak patch"
-    else
-        echo "  ! zig-msgpack-fix-leak.patch not found"
-    fi
-else
-    echo "  - zig-msgpack patches already applied or files modified"
-fi
-
 echo "All patches applied successfully"

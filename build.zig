@@ -18,12 +18,12 @@ pub fn build(b: *std.Build) void {
     });
     const sqlite_module = sqlite_dep.module("sqlite");
  
-    // Use vendored zig-msgpack
-    const msgpack_module = b.createModule(.{
-        .root_source_file = b.path("vendor/zig_msgpack/src/msgpack.zig"),
+    // Use zig-msgpack dependency
+    const msgpack_dep = b.dependency("zig_msgpack", .{
         .target = target,
         .optimize = optimize,
     });
+    const msgpack_module = msgpack_dep.module("msgpack");
 
     // Create the main executable
     const exe = b.addExecutable(.{
