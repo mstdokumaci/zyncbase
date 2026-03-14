@@ -5,9 +5,9 @@ const Message = @import("memory_strategy.zig").Message;
 const Buffer = @import("memory_strategy.zig").Buffer;
 const Connection = @import("memory_strategy.zig").Connection;
 
-test "Property 6: Memory Safety - no leaks, no use-after-free, ref_count invariants" {
+test "memory: safety and pool invariants" {
     // **Property 6: Memory Safety**
-    // **Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5**
+// Memory safety properties
     //
     // This property test verifies that the memory management strategy:
     // - Tracks all allocations and deallocations correctly
@@ -217,7 +217,7 @@ test "Property 6: Memory Safety - no leaks, no use-after-free, ref_count invaria
     }
 }
 
-test "Property 6: Memory Safety - concurrent pool access" {
+test "memory: concurrent pool access" {
     var strategy = try MemoryStrategy.init();
     defer strategy.deinit();
 
@@ -263,7 +263,7 @@ test "Property 6: Memory Safety - concurrent pool access" {
     }
 }
 
-test "Property 6: Memory Safety - arena isolation between requests" {
+test "memory: arena isolation between requests" {
     var strategy = try MemoryStrategy.init();
     defer strategy.deinit();
 
@@ -291,7 +291,7 @@ test "Property 6: Memory Safety - arena isolation between requests" {
     strategy.resetArena();
 }
 
-test "Property 6: Memory Safety - GPA allocation tracking" {
+test "memory: GPA allocation tracking" {
     var strategy = try MemoryStrategy.init();
     defer strategy.deinit();
 
@@ -315,7 +315,7 @@ test "Property 6: Memory Safety - GPA allocation tracking" {
     }
 }
 
-test "Property 6: Memory Safety - subscription pool reuse" {
+test "memory: subscription pool reuse" {
     var strategy = try MemoryStrategy.init();
     defer strategy.deinit();
 

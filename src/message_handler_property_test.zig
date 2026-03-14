@@ -14,11 +14,11 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const ArrayList = std.ArrayList;
 
-// **Property 4: Connection open/close is inverse operation**
-// **Validates: Requirements 5.9**
+// **Property: Connection open/close is inverse operation**
+// Connection properties
 //
 // For any connection, opening then closing should remove all associated state from the ConnectionRegistry.
-test "Property 4: Connection open/close is inverse operation" {
+test "connection: open/close is inverse operation" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
@@ -132,11 +132,10 @@ fn createMockWebSocket() WebSocket {
     };
 }
 
-// Property 6: Thread-safe connection registry access
+// Property: Thread-safe connection registry access
 // For any concurrent read and write operations on the ConnectionRegistry,
 // no data races should occur and all operations should complete successfully.
-// Validates: Requirements 5.8, 7.5, 7.6, 7.8
-test "Property 6: Thread-safe connection registry access" {
+test "connection: thread-safe registry access" {
     const allocator = testing.allocator;
 
     var registry = try ConnectionRegistry.init(allocator);
@@ -203,7 +202,7 @@ fn concurrentRegistryOps(
 }
 
 // Additional property test: Concurrent reads should not block each other
-test "Property 6 variant: Concurrent reads are non-blocking" {
+test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
 
     var registry = try ConnectionRegistry.init(allocator);
@@ -259,7 +258,7 @@ fn concurrentReads(
 }
 
 // Additional property test: Mixed concurrent operations
-test "Property 6 variant: Mixed concurrent add/get/remove operations" {
+test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
 
     var registry = try ConnectionRegistry.init(allocator);
@@ -324,7 +323,7 @@ fn mixedConcurrentOps(
 }
 
 // Property test: Clear operation is thread-safe
-test "Property 6 variant: Clear operation is thread-safe" {
+test "connection: clear is thread-safe" {
     const allocator = testing.allocator;
 
     var registry = try ConnectionRegistry.init(allocator);
@@ -380,11 +379,7 @@ fn addConnections(
     }
 }
 
-// **Property 5: Unique connection IDs**
-// **Validates: Requirements 5.3**
-//
-// For any two connections opened at different times, they should receive different connection IDs.
-test "Property 5: Unique connection IDs" {
+test "connection: unique monotonically increasing IDs" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
@@ -572,12 +567,7 @@ fn openConnectionsConcurrently(
     }
 }
 
-// **Property 7: All messages are parsed**
-// **Validates: Requirements 6.1**
-//
-// For any valid MessagePack binary message received on a WebSocket connection,
-// the zig-msgpack library should successfully parse it without errors.
-test "Property 7: All messages are parsed" {
+test "message: all valid frames are parsed" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler
@@ -675,12 +665,12 @@ test "Property 7: All messages are parsed" {
     }
 }
 
-// **Property 8: Message type extraction**
-// **Validates: Requirements 6.2**
+// **Property: Message type extraction**
+// Message type extraction properties
 //
 // For any successfully parsed message, the message type field should be extractable
 // from the MessagePack map.
-test "Property 8: Message type extraction" {
+test "message: type extraction" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
     var tracker = ViolationTracker.init(allocator, 10);
@@ -818,12 +808,12 @@ test "Property 8: Message type extraction" {
     }
 }
 
-// **Property 9: Request routing**
-// **Validates: Requirements 6.3**
+// **Property: Request routing**
+// Message routing properties
 //
 // For any message with a recognized type (StoreSet, StoreGet), the message should be
 // routed to the appropriate handler function.
-test "Property 9: Request routing" {
+test "message: request routing to handlers" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
     var tracker = ViolationTracker.init(allocator, 10);
@@ -954,12 +944,12 @@ test "Property 9: Request routing" {
     }
 }
 
-// **Property 10: Response correlation**
-// **Validates: Requirements 6.9**
+// **Property: Response correlation**
+// Message correlation properties
 //
 // For any request message with a correlation ID, the response message should include
 // the same correlation ID.
-test "Property 10: Response correlation" {
+test "message: response correlation by ID" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
     var tracker = ViolationTracker.init(allocator, 10);
@@ -1141,12 +1131,12 @@ test "Property 10: Response correlation" {
     }
 }
 
-// **Property 11: Error responses for invalid messages**
-// **Validates: Requirements 6.7, 6.8**
+// **Property: Error responses for invalid messages**
+// Message validation properties
 //
 // For any message that fails parsing, an error response in Wire Protocol format
 // should be sent to the client.
-test "Property 11: Error responses for invalid messages" {
+test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
 
     // Initialize all required components for MessageHandler

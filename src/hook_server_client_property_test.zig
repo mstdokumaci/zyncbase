@@ -6,15 +6,15 @@ const HookServerClient = hook_server.HookServerClient;
 const AuthRequest = hook_server.AuthRequest;
 const ConnectionState = hook_server.ConnectionState;
 
-// **Property 5: Hook Server Circuit Breaker**
-// **Validates: Requirements 5.3, 5.4, 5.5**
+// **Property: Hook Server Circuit Breaker**
+// Hook server and client properties
 //
-// This property test verifies that the circuit breaker correctly:
+// This invariant test verifies that the circuit breaker correctly:
 // 1. Opens after threshold failures
 // 2. Fails fast when circuit is open
 // 3. Transitions to half-open after timeout
 // 4. Closes on successful request in half-open state
-test "Property 5: Circuit breaker opens after threshold failures" {
+test "circuit-breaker: opens after threshold failures" {
     const allocator = testing.allocator;
 
     // Create client with low threshold for testing
@@ -60,7 +60,7 @@ test "Property 5: Circuit breaker opens after threshold failures" {
     try testing.expectEqual(@as(u32, 3), client.getFailureCount());
 }
 
-test "Property 5: Circuit breaker transitions to half-open after timeout" {
+test "circuit-breaker: transitions to half-open after timeout" {
     const allocator = testing.allocator;
 
     var client = try HookServerClient.init(allocator, .{
@@ -100,7 +100,7 @@ test "Property 5: Circuit breaker transitions to half-open after timeout" {
     try testing.expectError(error.ConnectionFailed, result);
 }
 
-test "Property 5: Circuit breaker resets on successful authorization" {
+test "circuit-breaker: resets on successful authorization" {
     const allocator = testing.allocator;
 
     var client = try HookServerClient.init(allocator, .{
@@ -147,7 +147,7 @@ test "Property 5: Circuit breaker resets on successful authorization" {
     try testing.expectEqual(ConnectionState.connected, client.getState());
 }
 
-test "Property 5: Fail-fast latency when circuit open" {
+test "circuit-breaker: fail-fast latency when circuit open" {
     const allocator = testing.allocator;
 
     var client = try HookServerClient.init(allocator, .{
@@ -185,7 +185,7 @@ test "Property 5: Fail-fast latency when circuit open" {
     try testing.expect(elapsed < 10);
 }
 
-test "Property 5: Authorization response caching" {
+test "cache: authorization response caching" {
     const allocator = testing.allocator;
 
     var client = try HookServerClient.init(allocator, .{
@@ -224,7 +224,7 @@ test "Property 5: Authorization response caching" {
     try testing.expectEqual(result1.allowed, result2.allowed);
 }
 
-test "Property 5: Cache eviction on TTL expiration" {
+test "cache: eviction on TTL expiration" {
     const allocator = testing.allocator;
 
     var client = try HookServerClient.init(allocator, .{
@@ -268,7 +268,7 @@ test "Property 5: Cache eviction on TTL expiration" {
     }
 }
 
-test "Property 5: TLS protocol validation" {
+test "hook: TLS protocol validation" {
     const allocator = testing.allocator;
 
     // Test wss:// with TLS enabled - should succeed

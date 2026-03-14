@@ -4,7 +4,7 @@ const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // Test that verifies all components are properly wired together
-// This test validates Requirements 17.3, 17.4, 17.5 for task 23
+// Integration wiring and component interaction properties
 test "Integration: All components properly wired" {
     const allocator = testing.allocator;
 
@@ -36,7 +36,7 @@ test "Integration: All components properly wired" {
 }
 
 // Test that error propagation works through all layers
-// Validates Requirements 17.3, 17.4
+// Component interaction properties
 test "Integration: Error propagation through layers" {
     const allocator = testing.allocator;
 
@@ -64,7 +64,7 @@ test "Integration: Error propagation through layers" {
 }
 
 // Test that graceful shutdown propagates through all components
-// Validates Requirements 17.5
+// System end-to-end properties
 test "Integration: Graceful shutdown propagation" {
     const allocator = testing.allocator;
 

@@ -3,7 +3,7 @@ const testing = std.testing;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 
 // **Property 3: Checkpoint Correctness**
-// **Validates: Requirements 4.3, 4.4, 4.5, 4.6**
+// **Property 3: Checkpoint Correctness**
 //
 // This property test verifies that checkpoint operations maintain data integrity
 // and correctly manage WAL file size under various conditions.
@@ -15,7 +15,7 @@ const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 // 4. Failed checkpoints don't corrupt database state
 // 5. Concurrent reads can continue during checkpoint
 
-test "property: checkpoint correctness - no data loss" {
+test "checkpoint: integrity no data loss" {
     const allocator = testing.allocator;
 
     // Create mock storage layer
@@ -54,7 +54,7 @@ test "property: checkpoint correctness - no data loss" {
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 }
 
-test "property: checkpoint correctness - WAL size management" {
+test "checkpoint: WAL size management" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -80,7 +80,7 @@ test "property: checkpoint correctness - WAL size management" {
     }
 }
 
-test "property: checkpoint correctness - threshold detection" {
+test "checkpoint: threshold detection" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -107,7 +107,7 @@ test "property: checkpoint correctness - threshold detection" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "property: checkpoint correctness - failure handling" {
+test "checkpoint: failure handling" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -128,7 +128,7 @@ test "property: checkpoint correctness - failure handling" {
     try testing.expect(initial_failures == 0);
 }
 
-test "property: checkpoint correctness - metrics accuracy" {
+test "checkpoint: metrics accuracy" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -161,7 +161,7 @@ test "property: checkpoint correctness - metrics accuracy" {
     try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
-test "property: checkpoint correctness - escalation logic" {
+test "checkpoint: escalation logic" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -186,7 +186,7 @@ test "property: checkpoint correctness - escalation logic" {
     try testing.expect(result.duration_ms >= 0);
 }
 
-test "property: checkpoint correctness - Prometheus metrics format" {
+test "checkpoint: Prometheus formatting" {
     const allocator = testing.allocator;
 
     const metrics = CheckpointManager.CheckpointMetrics{

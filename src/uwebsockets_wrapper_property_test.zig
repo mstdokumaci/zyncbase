@@ -6,7 +6,7 @@ const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 
 // **Property 2: WebSocket callbacks invoked for all events**
-// **Validates: Requirements 2.9**
+// WebSocket wrapper properties
 //
 // This property test verifies that WebSocket callbacks are invoked for all connection events:
 // - on_open callback is invoked when a connection opens
@@ -21,7 +21,7 @@ const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 // 4. Close callbacks receive correct close code and message
 // 5. Callbacks are not invoked if not registered
 
-test "property: WebSocket callbacks invoked for all events" {
+test "ws: callbacks invoked for all events" {
     const allocator = testing.allocator;
 
     // Test case structure
@@ -178,7 +178,7 @@ test "property: WebSocket callbacks invoked for all events" {
     }
 }
 
-test "property: message callback receives correct message content and type" {
+test "ws: message callback content and type" {
     const allocator = testing.allocator;
 
     // Test different message types and content
@@ -237,7 +237,7 @@ test "property: message callback receives correct message content and type" {
     }
 }
 
-test "property: close callback receives correct close code and message" {
+test "ws: close callback code and message" {
     const allocator = testing.allocator;
 
     // Test different close codes and messages
@@ -298,7 +298,7 @@ test "property: close callback receives correct close code and message" {
     }
 }
 
-test "property: callbacks invoked exactly once per event" {
+test "ws: callbacks invoked exactly once" {
     const allocator = testing.allocator;
 
     var ctx = CallbackContext{

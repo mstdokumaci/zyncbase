@@ -13,7 +13,7 @@ const Row = @import("subscription_manager.zig").Row;
 const RowChange = @import("subscription_manager.zig").RowChange;
 
 // **Property 4: Subscription Invalidation Accuracy**
-// **Validates: Requirements 6.2, 6.3, 6.4, 6.5, 6.7, 6.10**
+// Subscription manager core properties
 //
 // This property test verifies that subscription matching is accurate:
 // - All matching subscriptions are found (no false negatives)
@@ -22,7 +22,7 @@ const RowChange = @import("subscription_manager.zig").RowChange;
 // - Empty filters match all rows
 // - Complex AND/OR conditions work correctly
 
-test "property: subscription invalidation finds all matches without false positives" {
+test "subscription: invalidation matches" {
     const allocator = testing.allocator;
 
     // Test with various scenarios
@@ -286,7 +286,7 @@ test "property: subscription invalidation finds all matches without false positi
     }
 }
 
-test "property: update operation notifies when row enters or leaves filter" {
+test "subscription: update row transitions" {
     const allocator = testing.allocator;
 
     var mgr = try SubscriptionManager.init(allocator);
@@ -382,7 +382,7 @@ test "property: update operation notifies when row enters or leaves filter" {
     }
 }
 
-test "property: sort field change detection" {
+test "subscription: sort field change detection" {
     const allocator = testing.allocator;
 
     var mgr = try SubscriptionManager.init(allocator);

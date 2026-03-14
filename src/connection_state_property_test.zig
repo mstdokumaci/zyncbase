@@ -12,9 +12,8 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
-test "Property 31: Connection state deallocation" {
+test "connection: state deallocation on close" {
     // **Property 31: Connection state deallocation**
-    // **Validates: Requirements 17.6**
     //
     // This property test verifies that for any connection that closes,
     // all associated connection state is deallocated properly.
@@ -217,7 +216,7 @@ test "Property 31: Connection state deallocation" {
     }
 }
 
-test "Property 31: Connection state deallocation - edge cases" {
+test "connection: state deallocation edge cases" {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
         .thread_safe = true,

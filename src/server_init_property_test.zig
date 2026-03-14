@@ -4,7 +4,7 @@ const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // **Property 3: Component initialization is idempotent**
-// **Validates: Requirements 3.12**
+// Server initialization properties
 //
 // For any initialized component, calling init() then deinit() should leave no memory leaks
 // and allow re-initialization.
@@ -13,7 +13,7 @@ const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 // 1. ZyncBaseServer can be initialized and deinitialized multiple times
 // 2. No memory leaks occur during init/deinit cycles
 // 3. Each init/deinit cycle is independent and doesn't affect subsequent cycles
-test "Property 3: Component initialization is idempotent" {
+test "server: initialization is idempotent" {
     // Use GeneralPurposeAllocator to detect memory leaks
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {

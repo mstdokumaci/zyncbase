@@ -3,14 +3,14 @@ const testing = std.testing;
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack = @import("msgpack");
 
-// **Validates: Requirements 1.1, 1.2, 1.3, 1.4**
+// MessagePack utility properties
 //
-// Property 1: Bug Condition — Oversized Payloads Parsed Without Error
+// Invariant: Oversized Payloads Rejected
 //
 // This test MUST FAIL on unfixed code (PackerIO uses DEFAULT_LIMITS which are too permissive).
 // Failure confirms the bug exists. When the fix is applied (PackWithLimits + TIGHT_LIMITS),
 // this test will PASS.
-test "Property 1: Bug Condition - oversized payloads are rejected" {
+test "msgpack: reject oversized payloads (depth, array, map, string)" {
     const allocator = testing.allocator;
 
     // --- Depth bomb ---
@@ -119,7 +119,7 @@ test "Property 1: Bug Condition - oversized payloads are rejected" {
     }
 }
 
-test "Property: MsgPack round-trip encoding/decoding" {
+test "msgpack: round-trip encoding/decoding preservation" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xdeadbeef);
     const random = prng.random();
@@ -182,13 +182,13 @@ test "Property: MsgPack round-trip encoding/decoding" {
     }
 }
 
-// **Validates: Requirements 3.1, 3.2, 3.3**
+// Boundary success properties
 //
-// Property 2: Preservation — Boundary Success Tests
+// Invariant: Boundary Success Tests
 //
 // Payloads exactly at the TIGHT_LIMITS boundary must decode successfully on both unfixed and fixed code.
 // These tests MUST PASS on unfixed code (confirms baseline behavior to preserve).
-test "Property 2: Preservation - boundary payloads decode successfully" {
+test "msgpack: boundary success (15 depth, 1000 items, 64KB str)" {
     const allocator = testing.allocator;
 
     // --- Depth exactly 15 (max allowed with max_depth=16) ---
@@ -246,14 +246,14 @@ test "Property 2: Preservation - boundary payloads decode successfully" {
     }
 }
 
-// **Validates: Requirements 3.1, 3.2, 3.3**
+// Boundary failure properties
 //
-// Property 2: Preservation — One-Over-Boundary Tests
+// Invariant: One-Over-Boundary Tests
 //
 // Payloads one unit over the TIGHT_LIMITS boundary must return the appropriate limit error.
 // These tests MUST FAIL on unfixed code (confirms limits are not enforced yet).
 // After the fix is applied, these tests will PASS.
-test "Property 2: Preservation - one-over-boundary payloads are rejected" {
+test "msgpack: reject one-over-boundary payloads" {
     const allocator = testing.allocator;
 
     // --- Depth 16 (one over the effective max of 15 with max_depth=16) ---

@@ -10,9 +10,9 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
 
-test "Property 32: Message buffer deallocation" {
+test "buffer: message deallocation after processing" {
     // **Property 32: Message buffer deallocation**
-    // **Validates: Requirements 17.7**
+// Message buffer deallocation properties
     //
     // This property test verifies that for any processed message,
     // the message buffer is deallocated after processing completes.
@@ -289,7 +289,7 @@ fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
     return buf.toOwnedSlice(allocator);
 }
 
-test "Property 32: Message buffer deallocation - concurrent processing" {
+test "buffer: concurrent message deallocation" {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
         .thread_safe = true,

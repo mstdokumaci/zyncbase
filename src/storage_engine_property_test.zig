@@ -2,8 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
-// **Validates: Requirements 10.9**
-test "Property 16: Database initialization errors" {
+test "storage: engine initialization errors" {
     const allocator = testing.allocator;
 
     // Test 1: Invalid directory path (read-only filesystem simulation)
@@ -44,8 +43,8 @@ test "Property 16: Database initialization errors" {
     db_file.close();
 }
 
-// **Validates: Requirements 11.3, 11.4**
-test "Property 17: Thread-safe storage access" {
+// Storage engine thread safety properties
+test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_thread_safe";
@@ -129,8 +128,7 @@ test "Property 17: Thread-safe storage access" {
     try testing.expect(value != null);
 }
 
-// **Validates: Requirements 11.7**
-test "Property 18: Connection release" {
+test "storage: connection pool reuse and release" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_conn_release";
@@ -158,8 +156,7 @@ test "Property 18: Connection release" {
     // If we got here, connections were properly released and reused
 }
 
-// **Validates: Requirements 12.11**
-test "Property 19: Data persistence round-trip" {
+test "storage: persistence round-trip (various types)" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_roundtrip";
@@ -200,8 +197,7 @@ test "Property 19: Data persistence round-trip" {
     }
 }
 
-// **Validates: Requirements 12.12**
-test "Property 20: Insert/delete inverse operation" {
+test "storage: insert/delete inverse consistency" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_inverse";
@@ -241,8 +237,7 @@ test "Property 20: Insert/delete inverse operation" {
     }
 }
 
-// **Validates: Requirements 13.7**
-test "Property 21: Transaction isolation" {
+test "storage: transaction isolation and consistency" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_transaction_isolation";
@@ -326,8 +321,7 @@ test "Property 21: Transaction isolation" {
     }
 }
 
-// **Validates: Requirements 13.8**
-test "Property 22: Automatic transaction rollback" {
+test "storage: automatic transaction rollback on failure" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_auto_rollback";

@@ -4,7 +4,7 @@ const testing = std.testing;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
 // **Property 23: Database error handling**
-// **Validates: Requirements 14.1, 14.2**
+// Database error handling properties
 //
 // This property test verifies that database operations handle errors gracefully:
 // 1. All database operation failures return descriptive errors
@@ -18,7 +18,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 // - Connection failures
 // - Corrupted database files
 
-test "property: database error handling - invalid database path" {
+test "storage: error handling invalid database path" {
     const allocator = testing.allocator;
 
     // Try to create storage engine with invalid path
@@ -36,7 +36,7 @@ test "property: database error handling - invalid database path" {
     }
 }
 
-test "property: database error handling - read-only filesystem" {
+test "storage: error handling read-only filesystem" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/read_only";
@@ -60,7 +60,7 @@ test "property: database error handling - read-only filesystem" {
     defer if (value) |v| allocator.free(v);
 }
 
-test "property: database error handling - constraint violations" {
+test "storage: error handling constraint violations" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/constraints";
@@ -88,7 +88,7 @@ test "property: database error handling - constraint violations" {
     }
 }
 
-test "property: database error handling - transaction rollback on error" {
+test "storage: error handling transaction rollback on error" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/rollback";
@@ -116,7 +116,7 @@ test "property: database error handling - transaction rollback on error" {
     try testing.expect(value2 == null);
 }
 
-test "property: database error handling - multiple transaction errors" {
+test "storage: error handling multiple transaction errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/multiple_transactions";
@@ -145,7 +145,7 @@ test "property: database error handling - multiple transaction errors" {
     try storage.rollbackTransaction();
 }
 
-test "property: database error handling - concurrent access safety" {
+test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/concurrent";
@@ -214,7 +214,7 @@ test "property: database error handling - concurrent access safety" {
     }
 }
 
-test "property: database error handling - empty namespace and path" {
+test "storage: error handling empty namespace and path" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/empty_paths";
@@ -237,7 +237,7 @@ test "property: database error handling - empty namespace and path" {
     }
 }
 
-test "property: database error handling - large values" {
+test "storage: error handling large values" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/large_values";
@@ -266,7 +266,7 @@ test "property: database error handling - large values" {
     }
 }
 
-test "property: database error handling - query with no results" {
+test "storage: error handling query with no results" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/no_results";
@@ -290,7 +290,7 @@ test "property: database error handling - query with no results" {
     try testing.expectEqual(@as(usize, 0), results.len);
 }
 
-test "property: database error handling - delete non-existent key" {
+test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/error/delete_nonexistent";

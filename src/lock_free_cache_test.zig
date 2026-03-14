@@ -5,10 +5,10 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const testing = std.testing;
 
 // Property 1: Lock-Free Cache Consistency
-// Validates: Requirements 1.1, 1.2, 1.3, 1.6
+// Lock-free cache properties
 // Test concurrent reads never block each other
 // Verify ref_count correctly incremented for each reader
-test "lock-free cache: concurrent reads never block" {
+test "cache: concurrent reads never block" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -82,7 +82,7 @@ test "lock-free cache: concurrent reads never block" {
 }
 
 // Test ref_count never goes negative
-test "lock-free cache: ref_count never negative" {
+test "cache: ref_count never negative" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -111,7 +111,7 @@ test "lock-free cache: ref_count never negative" {
 }
 
 // Test ref_count overflow protection
-test "lock-free cache: ref_count overflow protection" {
+test "cache: ref_count overflow protection" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -135,7 +135,7 @@ test "lock-free cache: ref_count overflow protection" {
 }
 
 // Test concurrent reads with random namespaces
-test "lock-free cache: concurrent reads with multiple namespaces" {
+test "cache: concurrent reads multi-namespace" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -206,7 +206,7 @@ test "lock-free cache: concurrent reads with multiple namespaces" {
 }
 
 // Test memory ordering guarantees
-test "lock-free cache: memory ordering with updates" {
+test "cache: memory ordering updates" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -296,10 +296,10 @@ test "lock-free cache: memory ordering with updates" {
 }
 
 // Unit Tests for Cache Edge Cases
-// Validates: Requirements 1.5, 1.7, 1.8
+// Cache entry lifecycle properties
 
 // Test cache miss scenarios
-test "lock-free cache: cache miss returns NotFound" {
+test "cache: miss returns NotFound" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -311,7 +311,7 @@ test "lock-free cache: cache miss returns NotFound" {
 }
 
 // Test eviction with non-zero ref_count
-test "lock-free cache: eviction fails with non-zero ref_count" {
+test "cache: eviction fails on active refs" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -337,7 +337,7 @@ test "lock-free cache: eviction fails with non-zero ref_count" {
 }
 
 // Test update on non-existent namespace
-test "lock-free cache: update on non-existent namespace fails" {
+test "cache: update non-existent fails" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -354,7 +354,7 @@ test "lock-free cache: update on non-existent namespace fails" {
 }
 
 // Test eviction on non-existent namespace
-test "lock-free cache: eviction on non-existent namespace fails" {
+test "cache: eviction non-existent fails" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -365,7 +365,7 @@ test "lock-free cache: eviction on non-existent namespace fails" {
 }
 
 // Test version increments on update
-test "lock-free cache: version increments on update" {
+test "cache: version increments" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -396,7 +396,7 @@ test "lock-free cache: version increments on update" {
 }
 
 // Test timestamp updates on update
-test "lock-free cache: timestamp updates on update" {
+test "cache: timestamp updates" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -425,7 +425,7 @@ test "lock-free cache: timestamp updates on update" {
 }
 
 // Test multiple creates of same namespace
-test "lock-free cache: multiple creates of same namespace" {
+test "cache: idempotent create" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -443,7 +443,7 @@ test "lock-free cache: multiple creates of same namespace" {
 }
 
 // Test empty namespace string
-test "lock-free cache: empty namespace string" {
+test "cache: empty namespace key" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -458,7 +458,7 @@ test "lock-free cache: empty namespace string" {
 }
 
 // Test very long namespace string
-test "lock-free cache: very long namespace string" {
+test "cache: long namespace key" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -474,7 +474,7 @@ test "lock-free cache: very long namespace string" {
 }
 
 // Test StateTree node operations
-test "lock-free cache: StateTree node creation and cleanup" {
+test "cache: StateTree node lifecycle" {
     const allocator = testing.allocator;
 
     var state = try LockFreeCache.StateTree.init(allocator);
@@ -498,7 +498,7 @@ test "lock-free cache: StateTree node creation and cleanup" {
 }
 
 // Test that deferred resources are properly cleaned up
-test "lock-free cache: deferred cleanup after concurrent updates" {
+test "cache: deferred cleanup" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);
@@ -547,7 +547,7 @@ test "lock-free cache: deferred cleanup after concurrent updates" {
 }
 
 // Test that readers see consistent state during concurrent updates
-test "lock-free cache: readers see consistent state during updates" {
+test "cache: consistency during updates" {
     const allocator = testing.allocator;
 
     var cache = try LockFreeCache.init(allocator);

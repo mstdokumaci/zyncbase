@@ -4,7 +4,7 @@ const testing = std.testing;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
 // **Property 24: Server stability on database errors**
-// **Validates: Requirements 14.8**
+// Storage engine stability properties
 //
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -18,7 +18,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 // - Error recovery and retry logic
 // - Resource cleanup after errors
 
-test "property: server stability - no crashes on concurrent errors" {
+test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/concurrent_errors";
@@ -85,7 +85,7 @@ test "property: server stability - no crashes on concurrent errors" {
     try storage.flushPendingWrites();
 }
 
-test "property: server stability - continues after transaction errors" {
+test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/transaction_errors";
@@ -124,7 +124,7 @@ test "property: server stability - continues after transaction errors" {
     defer if (value2) |v| allocator.free(v);
 }
 
-test "property: server stability - handles rapid error conditions" {
+test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/rapid_errors";
@@ -153,7 +153,7 @@ test "property: server stability - handles rapid error conditions" {
     defer if (value) |v| allocator.free(v);
 }
 
-test "property: server stability - error recovery with valid operations" {
+test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/recovery";
@@ -193,7 +193,7 @@ test "property: server stability - error recovery with valid operations" {
     defer if (value) |v| allocator.free(v);
 }
 
-test "property: server stability - resource cleanup after errors" {
+test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/resource_cleanup";
@@ -229,7 +229,7 @@ test "property: server stability - resource cleanup after errors" {
     defer if (value) |v| allocator.free(v);
 }
 
-test "property: server stability - mixed error and success scenarios" {
+test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/mixed_scenarios";
@@ -275,7 +275,7 @@ test "property: server stability - mixed error and success scenarios" {
     defer if (value3) |v| allocator.free(v);
 }
 
-test "property: server stability - concurrent reads during write errors" {
+test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/concurrent_reads";

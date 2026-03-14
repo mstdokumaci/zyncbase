@@ -6,10 +6,10 @@ const c = @cImport({
     @cInclude("stdlib.h");
 });
 
-// **Validates: Requirements 8.3**
-// Property 12: Environment variable substitution
+// Configuration validation properties
+// Invariant: Environment variable substitution
 // For any configuration field containing ${VAR_NAME} syntax, the environment variable value should be substituted if it exists.
-test "Property 12: Environment variable substitution" {
+test "config: env var substitution" {
     const allocator = std.testing.allocator;
 
     // Set up test environment variables using C setenv
@@ -55,7 +55,7 @@ test "Property 12: Environment variable substitution" {
     try std.testing.expectEqualStrings("/tmp/test-artifacts", config.data_dir);
 }
 
-test "Property 12: Environment variable substitution - missing variable keeps original" {
+test "config: env var substitution - missing variable keeps original" {
     const allocator = std.testing.allocator;
 
     // Ensure the variable doesn't exist
@@ -79,7 +79,7 @@ test "Property 12: Environment variable substitution - missing variable keeps or
     try std.testing.expectEqualStrings("test-artifacts/${NONEXISTENT_VAR}", config.data_dir);
 }
 
-test "Property 12: Environment variable substitution - multiple variables" {
+test "config: env var substitution - multiple variables" {
     const allocator = std.testing.allocator;
 
     // Set up multiple test environment variables
@@ -116,10 +116,10 @@ test "Property 12: Environment variable substitution - multiple variables" {
     try std.testing.expectEqual(@as(u32, 200), config.security.rate_limit_messages_per_second);
 }
 
-// **Validates: Requirements 9.1, 9.2, 9.5, 9.8**
-// Property 13: Configuration validation
+// Server configuration properties
+// Invariant: Configuration validation
 // For any configuration, validation should catch invalid values and return descriptive errors.
-test "Property 13: Configuration validation - invalid port" {
+test "config: validation - invalid port" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -138,7 +138,7 @@ test "Property 13: Configuration validation - invalid port" {
     try std.testing.expectError(error.InvalidPort, result);
 }
 
-test "Property 13: Configuration validation - port zero" {
+test "config: validation - port zero" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -157,7 +157,7 @@ test "Property 13: Configuration validation - port zero" {
     try std.testing.expectError(error.InvalidPort, result);
 }
 
-test "Property 13: Configuration validation - invalid buffer size" {
+test "config: validation - invalid buffer size" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -176,7 +176,7 @@ test "Property 13: Configuration validation - invalid buffer size" {
     try std.testing.expectError(error.InvalidBufferSize, result);
 }
 
-test "Property 13: Configuration validation - invalid max message size" {
+test "config: validation - invalid max message size" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -195,10 +195,10 @@ test "Property 13: Configuration validation - invalid max message size" {
     try std.testing.expectError(error.InvalidMaxMessageSize, result);
 }
 
-// **Validates: Requirements 9.3, 9.4, 9.6, 9.7**
-// Property 14: File existence validation
+// Logging configuration properties
+// Invariant: File existence validation
 // For any file path in configuration, validation should verify the file exists.
-test "Property 14: File existence validation - schema file not found" {
+test "config: file existence validation - schema file not found" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -215,7 +215,7 @@ test "Property 14: File existence validation - schema file not found" {
     try std.testing.expectError(error.SchemaFileNotFound, result);
 }
 
-test "Property 14: File existence validation - auth rules file not found" {
+test "config: file existence validation - auth rules file not found" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -232,7 +232,7 @@ test "Property 14: File existence validation - auth rules file not found" {
     try std.testing.expectError(error.AuthRulesFileNotFound, result);
 }
 
-test "Property 14: File existence validation - valid schema file" {
+test "config: file existence validation - valid schema file" {
     const allocator = std.testing.allocator;
 
     // Create a temporary schema file
@@ -258,7 +258,7 @@ test "Property 14: File existence validation - valid schema file" {
     try std.testing.expectEqualStrings("test-artifacts/test-schema.json", config.schema_file.?);
 }
 
-test "Property 14: File existence validation - valid auth rules file" {
+test "config: file existence validation - valid auth rules file" {
     const allocator = std.testing.allocator;
 
     // Create a temporary auth rules file
@@ -284,10 +284,10 @@ test "Property 14: File existence validation - valid auth rules file" {
     try std.testing.expectEqualStrings("test-artifacts/test-auth-rules.json", config.authorization_file.?);
 }
 
-// **Validates: Requirements 8.10**
-// Property 15: Configuration round-trip
+// Authorization selection properties
+// Invariant: Configuration round-trip
 // For any valid configuration, serializing then parsing should produce an equivalent configuration.
-test "Property 15: Configuration round-trip - server config" {
+test "config: round-trip - server config" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -313,7 +313,7 @@ test "Property 15: Configuration round-trip - server config" {
     try std.testing.expectEqual(@as(usize, 50000), config.server.max_connections);
 }
 
-test "Property 15: Configuration round-trip - auth config" {
+test "config: round-trip - auth config" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -346,7 +346,7 @@ test "Property 15: Configuration round-trip - auth config" {
     try std.testing.expectEqualStrings("api", config.authentication.jwt_audience.?);
 }
 
-test "Property 15: Configuration round-trip - security config" {
+test "config: round-trip - security config" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -378,7 +378,7 @@ test "Property 15: Configuration round-trip - security config" {
     try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 }
 
-test "Property 15: Configuration round-trip - logging config" {
+test "config: round-trip - logging config" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -402,7 +402,7 @@ test "Property 15: Configuration round-trip - logging config" {
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
 }
 
-test "Property 15: Configuration round-trip - performance config" {
+test "config: round-trip - performance config" {
     const allocator = std.testing.allocator;
 
     const config_content =
@@ -428,7 +428,7 @@ test "Property 15: Configuration round-trip - performance config" {
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout_ms);
 }
 
-test "Property 15: Configuration round-trip - complete config" {
+test "config: round-trip - complete config" {
     const allocator = std.testing.allocator;
 
     const config_content =

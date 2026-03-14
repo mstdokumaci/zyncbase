@@ -8,7 +8,7 @@ const Row = @import("subscription_manager.zig").Row;
 const RowChange = @import("subscription_manager.zig").RowChange;
 
 // Performance test: Verify subscription matching completes in < 1ms for 10k subscriptions
-// Validates Requirement 6.8
+// Performance test properties
 test "performance: subscription matching < 1ms for 10k subscriptions" {
     const allocator = testing.allocator;
 

@@ -437,7 +437,7 @@ pub const HookServerClient = struct {
     }
 
     /// Get fallback authorization response when Hook Server unavailable
-    /// According to Requirement 5.7 and 12.1: Deny by default for security
+    /// Deny by default for security
     pub fn getFallbackResponse(reason: []const u8) AuthResponse {
         return AuthResponse{
             .allowed = false,

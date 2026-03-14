@@ -18,12 +18,8 @@ fn createMockWebSocket() WebSocket {
     };
 }
 
-// **Property 25: StoreSet field extraction**
-// **Validates: Requirements 16.2**
-//
-// For any StoreSet message, the namespace, path, and value fields should be
-// extractable from the MessagePack map.
-test "Property 25: StoreSet field extraction" {
+// **Property: StoreSet field extraction**
+test "store: set field extraction" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -185,12 +181,7 @@ test "Property 25: StoreSet field extraction" {
     }
 }
 
-// **Property 26: StoreSet storage engine call**
-// **Validates: Requirements 16.3**
-//
-// For any StoreSet message, the Storage Engine insert or update function should be
-// called with the extracted parameters.
-test "Property 26: StoreSet storage engine call" {
+test "store: engine set integration" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -333,11 +324,7 @@ test "Property 26: StoreSet storage engine call" {
     }
 }
 
-// **Property 27: StoreSet success response**
-// **Validates: Requirements 16.4**
-//
-// For any successful StoreSet operation, a success response should be sent to the client.
-test "Property 27: StoreSet success response" {
+test "store: set success response format" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -466,12 +453,7 @@ test "Property 27: StoreSet success response" {
     }
 }
 
-// **Property 28: StoreGet field extraction**
-// **Validates: Requirements 16.6**
-//
-// For any StoreGet message, the namespace and path fields should be extractable
-// from the MessagePack map.
-test "Property 28: StoreGet field extraction" {
+test "store: get field extraction" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -597,12 +579,7 @@ test "Property 28: StoreGet field extraction" {
     }
 }
 
-// **Property 29: StoreGet storage engine call**
-// **Validates: Requirements 16.7**
-//
-// For any StoreGet message, the Storage Engine get function should be called with
-// the extracted parameters.
-test "Property 29: StoreGet storage engine call" {
+test "store: engine get integration" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -749,12 +726,7 @@ test "Property 29: StoreGet storage engine call" {
     }
 }
 
-// **Property 30: StoreGet value response**
-// **Validates: Requirements 16.8**
-//
-// For any successful StoreGet operation, a response containing the value should be
-// sent to the client.
-test "Property 30: StoreGet value response" {
+test "store: get value response format" {
     const allocator = testing.allocator;
 
     var tracker = ViolationTracker.init(allocator, 10);

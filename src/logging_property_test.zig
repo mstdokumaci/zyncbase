@@ -92,9 +92,9 @@ const LogCapture = struct {
     }
 };
 
-test "Property 33: Connection logging" {
+test "logging: connection events" {
     // **Property 33: Connection logging**
-    // **Validates: Requirements 18.2, 18.3**
+// Connection event logging properties
     //
     // This property test verifies that for any client connection or disconnection,
     // a log entry is written with the connection ID.
@@ -268,9 +268,9 @@ test "Property 33: Connection logging" {
     }
 }
 
-test "Property 34: Error logging" {
+test "logging: error details" {
     // **Property 34: Error logging**
-    // **Validates: Requirements 18.4, 18.5**
+// Error event logging properties
     //
     // This property test verifies that for any database or message parsing error,
     // a log entry is written with error details.
@@ -394,9 +394,8 @@ test "Property 34: Error logging" {
     }
 }
 
-test "Property 35: Log level filtering" {
+test "logging: level filtering" {
     // **Property 35: Log level filtering**
-    // **Validates: Requirements 18.7**
     //
     // This property test verifies that for any log message,
     // it is only written if its level meets or exceeds the configured log level.
@@ -471,9 +470,8 @@ test "Property 35: Log level filtering" {
     }
 }
 
-test "Property 36: Log message formatting" {
+test "logging: message formatting" {
     // **Property 36: Log message formatting**
-    // **Validates: Requirements 18.8**
     //
     // This property test verifies that for any log message,
     // it is formatted according to the configured format (JSON or text).
