@@ -61,11 +61,11 @@ pub fn Pool(comptime T: type) type {
         free_stack: std.atomic.Value(usize), // index of top free slot; usize_max = empty
 
         pub fn acquire(self: *Self) ?*T {
-            var top = self.free_stack.load(.Acquire);
+            var top = self.free_stack.load(.acquire);
             while (top != std.math.maxInt(usize)) {
                 const next = self.items[top].next_free; // embedded free-list index
-                if (self.free_stack.cmpxchgWeak(top, next, .AcqRel, .Acquire)) |_| {
-                    top = self.free_stack.load(.Acquire);
+                if (self.free_stack.cmpxchgWeak(top, next, .acq_rel, .acquire)) |_| {
+                    top = self.free_stack.load(.acquire);
                 } else {
                     return &self.items[top];
                 }
@@ -75,11 +75,11 @@ pub fn Pool(comptime T: type) type {
 
         pub fn release(self: *Self, item: *T) void {
             const idx = (@intFromPtr(item) - @intFromPtr(self.items.ptr)) / @sizeOf(T);
-            var top = self.free_stack.load(.Acquire);
+            var top = self.free_stack.load(.acquire);
             while (true) {
                 item.next_free = top;
-                if (self.free_stack.cmpxchgWeak(top, idx, .AcqRel, .Acquire)) |_| {
-                    top = self.free_stack.load(.Acquire);
+                if (self.free_stack.cmpxchgWeak(top, idx, .acq_rel, .acquire)) |_| {
+                    top = self.free_stack.load(.acquire);
                 } else {
                     return;
                 }

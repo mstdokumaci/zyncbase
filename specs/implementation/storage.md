@@ -61,7 +61,8 @@ const StorageLayer = struct {
     write_queue: RingBuffer(WriteOp),
     
     pub fn init(allocator: Allocator) !*StorageLayer {
-        const num_readers = std.Thread.getCpuCount();
+        const num_readers = try std.Thread.getCpuCount();
+        const reader_pool = try allocator.alloc(sqlite.Db, num_readers);
         
         const self = try allocator.create(StorageLayer);
         self.* = .{

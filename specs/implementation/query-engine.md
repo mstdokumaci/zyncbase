@@ -238,8 +238,9 @@ fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_i
     
     // Check if any changed ID matches the subscription's filters
     for (changed_ids) |id| {
-        const item = try self.cache.get(id);
-        if (try self.matchesFilters(item, sub.query.filters)) {
+        const handle = try self.cache.get(id);
+        defer handle.release();
+        if (try self.matchesFilters(handle.state(), sub.query.filters)) {
             return true;
         }
     }

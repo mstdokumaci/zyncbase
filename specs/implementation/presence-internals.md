@@ -43,7 +43,7 @@ const PresenceManager = struct {
     pub fn set(self: *PresenceManager, namespace: []const u8, user_id: []const u8, data: json.Value) !void {
         // Store in memory
         var ns = try self.presence.getOrPut(namespace);
-        try ns.value_ptr.put(user_id, data);
+        try ns.value_ptr.put(user_id, .{ .data = data, .joined_at = std.time.milliTimestamp() });
         
         // Add to history buffer (last 5 seconds)
         var ns_history = try self.history.getOrPut(namespace);

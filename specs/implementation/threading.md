@@ -32,8 +32,11 @@ pub const CoreEngine = struct {
     
     // Parallel reads (no mutex) - uses all CPU cores
     fn handleQueryParallel(self: *CoreEngine, msg: Message) !Message {
-        // Multiple threads execute this simultaneously
-        const state = try self.state_cache.get(msg.namespace);
+        // Correct LockFreeCache read pattern
+        const handle = try self.state_cache.get(msg.namespace);
+        defer handle.release();
+
+        const state = handle.state();
         return try self.executeQuery(state, msg.query);
     }
     
@@ -67,33 +70,30 @@ const LockFreeCache = struct {
         ref_count: std.atomic.Value(u32),
     };
     
-    pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
+    pub fn get(self: *LockFreeCache, namespace: []const u8) !Handle {
         // Lock-free read - multiple threads can execute simultaneously
-        const entries = self.entries.load(.Acquire);
+        const entries = self.entries.load(.acquire);
         const entry = entries.get(namespace) orelse return error.NotFound;
         
         // Increment ref count atomically
-        _ = entry.ref_count.fetchAdd(1, .AcqRel);
+        _ = entry.ref_count.fetchAdd(1, .acq_rel);
         
-        return &entry.state;
+        return Handle{ .cache = self, .entry = entry };
     }
     
-    pub fn release(self: *LockFreeCache, namespace: []const u8) void {
-        const entries = self.entries.load(.Acquire);
-        const entry = entries.get(namespace) orelse return;
-        
+    pub fn release(self: *LockFreeCache, handle: Handle) void {
         // Decrement ref count atomically
-        _ = entry.ref_count.fetchSub(1, .AcqRel);
+        _ = handle.entry.ref_count.fetchSub(1, .acq_rel);
     }
     
     pub fn update(self: *LockFreeCache, namespace: []const u8, mutation: Mutation) !void {
         // Called only from write_mutex critical section
         // Safe to mutate because writes are serialized
-        const entries = self.entries.load(.Acquire);
+        const entries = self.entries.load(.acquire);
         const entry = entries.get(namespace) orelse return error.NotFound;
         
         try entry.state.apply(mutation);
-        _ = entry.version.fetchAdd(1, .Release);
+        _ = entry.version.fetchAdd(1, .release);
     }
 };
 ```

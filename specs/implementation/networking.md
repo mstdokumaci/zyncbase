@@ -18,27 +18,27 @@ ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directl
 ┌─────────────────────────────────────────────────────┐
 │  uWebSockets (C++)                                  │
 │                                                     │
-│  ┌───────────────────────────────────────────────┐ │
-│  │  µSockets Foundation                          │ │
-│  │  ┌─────────────┐  ┌─────────────┐            │ │
-│  │  │  Eventing   │  │  Networking │            │ │
-│  │  │  (epoll/    │  │  (TCP/UDP)  │            │ │
-│  │  │   kqueue)   │  │             │            │ │
-│  │  └─────────────┘  └─────────────┘            │ │
-│  │  ┌─────────────────────────────────┐         │ │
-│  │  │  Cryptography (TLS 1.3)         │         │ │
-│  │  │  (BoringSSL)                    │         │ │
-│  │  └─────────────────────────────────┘         │ │
-│  └───────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  µSockets Foundation                          │  │
+│  │  ┌─────────────┐  ┌─────────────┐             │  │
+│  │  │  Eventing   │  │  Networking │             │  │
+│  │  │  (epoll/    │  │  (TCP/UDP)  │             │  │
+│  │  │   kqueue)   │  │             │             │  │
+│  │  └─────────────┘  └─────────────┘             │  │
+│  │  ┌─────────────────────────────────┐          │  │
+│  │  │  Cryptography (TLS 1.3)         │          │  │
+│  │  │  (BoringSSL)                    │          │  │
+│  │  └─────────────────────────────────┘          │  │
+│  └───────────────────────────────────────────────┘  │
 │                                                     │
-│  ┌───────────────────────────────────────────────┐ │
-│  │  Multi-threaded Event Loop                    │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐   │ │
-│  │  │ Thread 1 │  │ Thread 2 │  │ Thread N │   │ │
-│  │  │ WebSocket│  │ WebSocket│  │ WebSocket│   │ │
-│  │  │ + HTTP   │  │ + HTTP   │  │ + HTTP   │   │ │
-│  │  └──────────┘  └──────────┘  └──────────┘   │ │
-│  └───────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  Multi-threaded Event Loop                    │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │  │
+│  │  │ Thread 1 │  │ Thread 2 │  │ Thread N │     │  │
+│  │  │ WebSocket│  │ WebSocket│  │ WebSocket│     │  │
+│  │  │ + HTTP   │  │ + HTTP   │  │ + HTTP   │     │  │
+│  │  └──────────┘  └──────────┘  └──────────┘     │  │
+│  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -135,10 +135,14 @@ pub const Server = struct {
         opcode: uws.uWS_OpCode, 
         user_data: ?*anyopaque
     ) callconv(.C) void {
-        const self = @ptrCast(*Server, @alignCast(@alignOf(Server), user_data));
+        // Modern ptrCast syntax with alignCast
+        const self: *Server = @as(*Server, @ptrCast(@alignCast(user_data.?)));
         
         // Parse MessagePack
         const msg = msgpack.decode(message[0..length]) catch return;
+        
+        // Atomic shutdown flag
+        if (self.shutdown_requested.load(.acquire)) return;
         
         // Process in core engine
         const response = self.core.handleMessage(msg) catch return;
@@ -215,17 +219,17 @@ WebSocket frames have minimal overhead:
 ```
 ┌─────────────────────────────────────────────────┐
 │  Frame Header (2-6 bytes)                       │
-│  ┌──────────┬──────────┬──────────┬──────────┐ │
-│  │ FIN (1)  │ Opcode   │ Mask (1) │ Length   │ │
-│  │          │ (4 bits) │          │ (7 bits) │ │
-│  └──────────┴──────────┴──────────┴──────────┘ │
+│  ┌──────────┬──────────┬──────────┬──────────┐  │
+│  │ FIN (1)  │ Opcode   │ Mask (1) │ Length   │  │
+│  │          │ (4 bits) │          │ (7 bits) │  │
+│  └──────────┴──────────┴──────────┴──────────┘  │
 │                                                 │
 │  Payload (MessagePack binary data)              │
-│  ┌───────────────────────────────────────────┐ │
-│  │  Efficient binary serialization           │ │
-│  │  Small integers: 1 byte                   │ │
-│  │  Short strings: 2-6 bytes overhead        │ │
-│  └───────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────┐  │
+│  │  Efficient binary serialization           │  │
+│  │  Small integers: 1 byte                   │  │
+│  │  Short strings: 2-6 bytes overhead        │  │
+│  └───────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
 ```
 
