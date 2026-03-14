@@ -180,7 +180,13 @@ pub const SubscriptionManager = struct {
         _ = self.subscriptions.remove(id);
     }
 
-    /// Find all subscriptions that match a row change
+    /// Find all subscriptions that match a row change.
+    ///
+    /// Caller owns the returned slice and must free it with the same allocator
+    /// used to initialize this SubscriptionManager (i.e. `self.allocator`):
+    ///
+    ///     const matches = try mgr.findMatchingSubscriptions(change);
+    ///     defer mgr.allocator.free(matches);
     pub fn findMatchingSubscriptions(
         self: *SubscriptionManager,
         change: RowChange,
