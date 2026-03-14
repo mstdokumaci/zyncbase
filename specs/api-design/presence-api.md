@@ -18,6 +18,14 @@ Set your presence data. Automatically broadcast to all users in the same namespa
 client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
 ```
 
+### `presence.subscribe(callback)`
+Subscribe to real-time changes (joins, leaves, updates) for all users in the namespace.
+```typescript
+client.presence.subscribe((users) => {
+  renderCursors(users)
+})
+```
+
 ### `presence.get(userId)`
 Get a specific user's current presence data.
 
@@ -34,14 +42,6 @@ Returns all users' presence data in the namespace. Excludes self by default.
 > Like `get()`, this is a **synchronous local lookup**. It returns an empty array if no active subscription exists.
 ```typescript
 const everyone = client.presence.getAll({ includeSelf: true })
-```
-
-### `presence.subscribe(callback)`
-Subscribe to real-time changes (joins, leaves, updates) for all users in the namespace.
-```typescript
-client.presence.subscribe((users) => {
-  renderCursors(users)
-})
 ```
 
 ---
