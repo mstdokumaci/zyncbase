@@ -1,63 +1,91 @@
 #!/bin/bash
-# Build BoringSSL for ZyncBase
-# This script builds BoringSSL as a static library
-
+# Unified BoringSSL Builder for ZyncBase
+# Handles both native and cross-compilation using Zig
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BORINGSSL_DIR="$PROJECT_ROOT/vendor/boringssl"
-BUILD_DIR="$BORINGSSL_DIR/build"
 
-echo "Building BoringSSL..."
+TARGET="${1:-native}"
+SUFFIX="${2:-}" # Optional suffix for build directory naming
+BUILD_DIR="${3:-$BORINGSSL_DIR/build}"
+MACOS_SDK="$4"
 
-# Check if cmake is installed
-if ! command -v cmake &> /dev/null; then
-    echo "Error: cmake is not installed"
-    echo "Please install cmake:"
-    echo "  macOS: brew install cmake"
-    echo "  Linux: sudo apt-get install cmake"
-    exit 1
+if [[ "$TARGET" == "native" ]]; then
+    echo "Building BoringSSL for native target..."
+else
+    echo "Building BoringSSL for target: $TARGET..."
 fi
 
-# Check if go is installed (required by BoringSSL)
-if ! command -v go &> /dev/null; then
-    echo "Error: go is not installed (required by BoringSSL build)"
-    echo "Please install go:"
-    echo "  macOS: brew install go"
-    echo "  Linux: sudo apt-get install golang"
-    exit 1
+# Ensure build dir exists and handle generator mismatches
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    # If we are changing something fundamental, or just to be safe, prune the cache
+    echo "Existing CMake cache found. Cleaning for a fresh configuration..."
+    rm -rf "$BUILD_DIR"/*
 fi
-
-# Create build directory
 mkdir -p "$BUILD_DIR"
-
-# Configure and build only the libraries (not tests)
 cd "$BUILD_DIR"
-cmake -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . --target crypto --parallel
-cmake --build . --target ssl --parallel
-cmake --build . --target decrepit --parallel
 
-# Verify libraries were built
-if [ ! -f "$BUILD_DIR/libssl.a" ]; then
-    echo "Error: libssl.a was not built"
-    exit 1
+# Create the Zig wrapper script to handle assembler flag issues
+ZIG_WRAPPER="$(pwd)/zig-wrapper.sh"
+cat > "$ZIG_WRAPPER" <<EOF
+#!/bin/bash
+REAL_CMD=\$1
+if [[ "\$REAL_CMD" == "cc" ]] || [[ "\$REAL_CMD" == "c++" ]]; then
+    CMD="\$REAL_CMD"
+    shift
+elif [[ "\$REAL_CMD" == -* ]]; then
+    CMD="cc"
+else
+    # Default to cc if we're not sure, but keep the arg if it's not a known zig command
+    CMD="cc"
 fi
 
-if [ ! -f "$BUILD_DIR/libcrypto.a" ]; then
-    echo "Error: libcrypto.a was not built"
-    exit 1
+ARGS=()
+for arg in "\$@"; do
+    if [[ "\$arg" != "-Wa,-g" ]]; then
+        ARGS+=("\$arg")
+    fi
+done
+
+EXTRA_FLAGS=()
+if [[ "$TARGET" != "native" ]]; then
+    EXTRA_FLAGS+=("-target" "$TARGET")
 fi
 
-if [ ! -f "$BUILD_DIR/libdecrepit.a" ]; then
-    echo "Error: libdecrepit.a was not built"
-    exit 1
+if [[ -n "$MACOS_SDK" ]]; then
+    EXTRA_FLAGS+=("-isysroot" "$MACOS_SDK")
 fi
 
-echo "BoringSSL built successfully at $BUILD_DIR"
-echo "Libraries:"
-echo "  - $BUILD_DIR/libssl.a"
-echo "  - $BUILD_DIR/libcrypto.a"
-echo "  - $BUILD_DIR/libdecrepit.a"
+if [[ "$TARGET" == "x86_64"* ]]; then
+    EXTRA_FLAGS+=("-march=x86-64-v2")
+fi
 
+exec zig "\$CMD" "\${EXTRA_FLAGS[@]}" "\${ARGS[@]}"
+EOF
+chmod +x "$ZIG_WRAPPER"
+
+# Configure with CMake using our Zig wrapper
+if command -v ninja &> /dev/null; then
+    GENERATOR="Ninja"
+    BUILD_CMD="ninja"
+else
+    GENERATOR="Unix Makefiles"
+    BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+fi
+
+cmake -G "$GENERATOR" \
+      -DCMAKE_C_COMPILER="$ZIG_WRAPPER" \
+      -DCMAKE_CXX_COMPILER="$ZIG_WRAPPER" \
+      -DCMAKE_ASM_COMPILER="$ZIG_WRAPPER" \
+      -DCMAKE_C_COMPILER_ARG1="cc" \
+      -DCMAKE_CXX_COMPILER_ARG1="c++" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=OFF \
+      ..
+
+# Build
+$BUILD_CMD crypto ssl decrepit
+
+echo "✓ BoringSSL built successfully at $BUILD_DIR"
