@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, exe, sysroot);
+    linkUWS(b, exe, sysroot, sanitize);
     b.installArtifact(exe);
 
     // Setup Test Targets
@@ -151,11 +151,11 @@ fn setupTest(
             t.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, t, sysroot);
+    linkUWS(b, t, sysroot, sanitize);
     return t;
 }
 
-fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) void {
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
     const target = step.root_module.resolved_target.?.result;
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
@@ -209,7 +209,12 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) v
         "-D_POSIX_C_SOURCE=200809L",
     } else &.{};
 
-    const uws_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+    const sanitize_flags: []const []const u8 = if (sanitize) |san| (if (std.mem.eql(u8, san, "thread"))
+        &.{"-fsanitize=thread"}
+    else
+        &.{}) else &.{};
+
+    const uws_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c++20",
         "-fno-exceptions",
         "-fno-rtti",
@@ -229,7 +234,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) v
         .flags = uws_flags,
     });
 
-    const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+    const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c11",
         "-DUWS_NO_ZLIB",
         "-DUWS_USE_LIBDEFLATE=0",
@@ -253,7 +258,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) v
         .flags = usockets_flags,
     });
 
-    const sni_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+    const sni_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c++20",
         "-fno-exceptions",
         "-fno-rtti",
@@ -268,7 +273,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) v
         .flags = sni_flags,
     });
 
-    const stubs_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, &.{
+    const stubs_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c11",
     } }) catch unreachable;
 
