@@ -24,7 +24,7 @@ jobs:
         uses: ./.github/actions/setup-project
 
       - name: Run tests
-        run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+        run: zig build test -Doptimize=${{ matrix.optimize }} -Dcpu=x86_64_v2 --summary all
 
   test-sanitized:
     name: Test with ThreadSanitizer
@@ -59,4 +59,4 @@ jobs:
         uses: ./.github/actions/setup-project
 
       - name: Build
-        run: zig build -Doptimize=${{ matrix.optimize }}
+        run: zig build -Doptimize=${{ matrix.optimize }} -Dcpu=x86_64_v2
