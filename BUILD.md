@@ -42,31 +42,13 @@ git submodule update --init --recursive
 
 ### 2. Apply Patches to Bun's uWebSockets
 
-Bun's uWebSockets fork includes dependencies we don't need (libdeflate, SIMDUTF). Apply patches to disable them:
+Bun's uWebSockets fork includes several dependencies we don't need (like libdeflate and SIMDUTF). We use minimal patches to disable them and stub functions for Bun-specific runtime hooks.
 
 ```bash
 ./scripts/apply-patches.sh
 ```
 
-This applies minimal patches to:
-- Disable libdeflate compression library
-- Disable SIMDUTF validation (we use a simple stub instead)
-
-**Note:** These patches are non-invasive and only comment out dependency includes.
-
-### 2. Apply Patches to Bun's uWebSockets
-
-Bun's uWebSockets fork includes dependencies we don't need (libdeflate, SIMDUTF). Apply patches to disable them:
-
-```bash
-./scripts/apply-patches.sh
-```
-
-This applies minimal patches to:
-- Disable libdeflate compression library
-- Disable SIMDUTF validation (we use a simple stub instead)
-
-**Note:** These patches are non-invasive and only comment out dependency includes.
+For detailed technical information about the patches and stubs, see [patches.md](specs/implementation/patches.md).
 
 ### 3. Build BoringSSL
 

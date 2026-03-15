@@ -44,18 +44,18 @@ Bun's uWebSockets fork calls Bun-specific runtime functions. We provide stub imp
 ### Categories of Stubs
 
 #### 1. DNS Resolution
-- `Bun__addrinfo_get()`, `Bun__addrinfo_set()`, etc.
-- **Current**: Return errors (DNS not implemented)
+- `Bun__addrinfo_get()`, `Bun__addrinfo_set()`, `Bun__addrinfo_freeRequest()`, `Bun__addrinfo_getRequestResult()`
+- **Current**: Return errors or no-op (DNS not implemented)
 - **TODO**: Integrate with system `getaddrinfo()` or custom DNS resolver
 
 #### 2. Event Loop Integration
-- `Bun__JSC_onBeforeWait()`, `Bun__internal_dispatch_ready_poll()`, etc.
-- **Current**: No-ops (we don't use JavaScriptCore)
+- `Bun__JSC_onBeforeWait()`, `Bun__internal_dispatch_ready_poll()`, `Bun__internal_ensureDateHeaderTimerIsEnabled()`
+- **Current**: No-ops (we don't use JavaScriptCore or Bun's specific timers)
 - **Future**: May integrate with ZyncBase's event loop if needed
 
 #### 3. Thread Safety
-- `Bun__lock()`, `Bun__unlock()`
-- **Current**: No-ops (single-threaded MVP)
+- `Bun__lock()`, `Bun__unlock()`, `Bun__lock__size`
+- **Current**: No-ops (single-threaded MVP). `Bun__lock__size` returns the size of a dummy mutex structure.
 - **TODO**: Implement proper mutexes when adding multi-threading
 
 #### 4. HTTP Parsing
@@ -63,75 +63,22 @@ Bun's uWebSockets fork calls Bun-specific runtime functions. We provide stub imp
 - **Current**: Returns 0 (unknown method)
 - **TODO**: Implement if we need HTTP method detection
 
-#### 5. Platform Detection
-- `Bun__doesMacOSVersionSupportSendRecvMsgX()`
-- **Current**: Returns 1 on macOS, 0 elsewhere
-- **Status**: Complete (simple platform check)
+#### 5. Platform Detection and Networking
+- `Bun__doesMacOSVersionSupportSendRecvMsgX()`: Returns 1 on macOS, 0 elsewhere.
+- `Bun__isEpollPwait2SupportedOnLinuxKernel()`: Returns 0 to trigger fallback.
+- `sys_epoll_pwait2()`: Returns -1 (not supported).
+- **Status**: Complete (simple platform checks and fallbacks)
 
-#### 6. C-Ares Compatibility
-- `ares_inet_ntop()`
-- **Current**: Wraps standard `inet_ntop()`
-- **Status**: Complete (simple wrapper)
+#### 6. C-Ares and SSL Compatibility
+- `ares_inet_ntop()`: Wraps standard `inet_ntop()`.
+- `us_get_default_ca_store()`, `us_internal_raw_root_certs()`: Return NULL/0.
+- `Bun__Node__UseSystemCA`: Boolean flag set to `true`.
+- **Status**: Complete for MVP requirements
 
-## Applying Patches
-
-### Initial Setup
-
-```bash
-# After cloning with submodules
-./scripts/apply-patches.sh
-```
-
-### After Updating Bun Submodule
-
-```bash
-# Reset patches
-cd vendor/bun
-git checkout packages/bun-uws/src/PerMessageDeflate.h
-git checkout packages/bun-uws/src/WebSocketProtocol.h
-cd ../..
-
-# Reapply
-./scripts/apply-patches.sh
-```
-
-### Verifying Patches
-
-```bash
-cd vendor/bun
-git diff packages/bun-uws/src/PerMessageDeflate.h
-git diff packages/bun-uws/src/WebSocketProtocol.h
-```
-
-## Alternative Approaches Considered
-
-### 1. Fork Bun's uWebSockets
-**Pros**: Complete control
-**Cons**: Maintenance burden, diverges from Bun's updates
-**Decision**: Rejected - too much maintenance
-
-### 2. Use Vanilla uWebSockets
-**Pros**: No Bun dependencies
-**Cons**: Lose Bun's production testing and improvements
-**Decision**: Rejected - Bun's version is battle-tested
-
-### 3. Create Custom C Wrapper
-**Pros**: No Bun dependencies
-**Cons**: ~5000+ lines of code to write and maintain
-**Decision**: Rejected - reinventing the wheel
-
-### 4. Minimal Patches + Stubs (Current Approach)
-**Pros**: 
-- Leverage Bun's production code
-- Minimal maintenance
-- Easy to update
-- Clear separation of concerns
-
-**Cons**:
-- Requires patch management
-- Some features stubbed out
-
-**Decision**: Accepted - best balance of benefits
+#### 7. Error Handling and Lifecycle
+- `Bun__panic()`: Aborts the process with a message.
+- `bun_is_exiting()`, `set_bun_is_exiting()`: Managed lifecycle flags.
+- **Status**: Functional for basic process management
 
 ## Future Work
 
@@ -161,15 +108,3 @@ When updating the Bun submodule:
 3. **Test thoroughly**: Ensure WebSocket functionality still works
 4. **Update patches**: Regenerate patches if files changed significantly
 5. **Update stubs**: Add new stubs if Bun added new function calls
-
-## Questions?
-
-If you're unsure about:
-- Why a patch is needed: See the "Why" section above
-- How to apply patches: See "Applying Patches" section
-- What a stub does: See comments in `src/uws_stubs.c`
-- Whether to add a new stub: Check if it's called by uWebSockets code
-
-## Summary
-
-This approach allows us to use Bun's production-tested uWebSockets integration with minimal modifications. The patches are small, well-documented, and easy to maintain. As ZyncBase matures, we can implement the stubbed functions properly or re-enable disabled features as needed.
