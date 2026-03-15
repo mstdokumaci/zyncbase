@@ -177,7 +177,8 @@ fn concurrentRegistryOps(
         const conn_id = start_id + i;
 
         // Add connection
-        const state = ConnectionState.init(allocator, conn_id) catch {
+        const dummy_ws = createMockWebSocket();
+        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch {
             std.log.debug("Failed to init connection state\n", .{});
             return;
         };
@@ -212,7 +213,8 @@ test "connection: concurrent reads are non-blocking" {
     const num_connections = 100;
     var i: usize = 0;
     while (i < num_connections) : (i += 1) {
-        const state = try ConnectionState.init(allocator, i);
+        const dummy_ws = createMockWebSocket();
+        const state = try ConnectionState.init(allocator, i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -303,7 +305,8 @@ fn mixedConcurrentOps(
         switch (op) {
             0 => {
                 // Add operation
-                const state = ConnectionState.init(allocator, conn_id) catch continue;
+                const dummy_ws = createMockWebSocket();
+                const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue;
                 registry.add(conn_id, state) catch {
                     state.deinit(allocator);
                     continue;
@@ -332,7 +335,8 @@ test "connection: clear is thread-safe" {
     // Add some initial connections
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const state = try ConnectionState.init(allocator, i);
+        const dummy_ws = createMockWebSocket();
+        const state = try ConnectionState.init(allocator, i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -370,7 +374,8 @@ fn addConnections(
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
-        const state = ConnectionState.init(allocator, conn_id) catch continue;
+        const dummy_ws = createMockWebSocket();
+        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue;
         registry.add(conn_id, state) catch {
             state.deinit(allocator);
             continue;

@@ -67,7 +67,13 @@ void __attribute__((__noreturn__)) Bun__panic(const char* message, size_t length
     abort();
 }
 
-int bun_is_exiting() { return 0; }
+static int is_exiting_flag = 0;
+
+int bun_is_exiting() { return is_exiting_flag; }
+
+void set_bun_is_exiting(int exiting) {
+    is_exiting_flag = exiting;
+}
 
 bool Bun__Node__UseSystemCA = true;
 

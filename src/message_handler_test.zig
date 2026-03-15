@@ -2,11 +2,13 @@ const std = @import("std");
 const testing = std.testing;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "ConnectionState - init and deinit" {
     const allocator = testing.allocator;
 
-    const state = try ConnectionState.init(allocator, 1);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state = try ConnectionState.init(allocator, 1, dummy_ws);
     defer state.deinit(allocator);
 
     try testing.expectEqual(@as(u64, 1), state.id);
@@ -18,7 +20,8 @@ test "ConnectionState - init and deinit" {
 test "ConnectionState - add subscription IDs" {
     const allocator = testing.allocator;
 
-    const state = try ConnectionState.init(allocator, 1);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state = try ConnectionState.init(allocator, 1, dummy_ws);
     defer state.deinit(allocator);
 
     try state.subscription_ids.append(100);
@@ -46,7 +49,8 @@ test "ConnectionRegistry - add and get connection" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    const state = try ConnectionState.init(allocator, 1);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state = try ConnectionState.init(allocator, 1, dummy_ws);
     try registry.add(1, state);
 
     const retrieved = try registry.get(1);
@@ -70,7 +74,8 @@ test "ConnectionRegistry - remove connection" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    const state = try ConnectionState.init(allocator, 1);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state = try ConnectionState.init(allocator, 1, dummy_ws);
     try registry.add(1, state);
 
     try testing.expectEqual(@as(usize, 1), registry.connections.count());
@@ -88,9 +93,10 @@ test "ConnectionRegistry - clear all connections" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    const state1 = try ConnectionState.init(allocator, 1);
-    const state2 = try ConnectionState.init(allocator, 2);
-    const state3 = try ConnectionState.init(allocator, 3);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state1 = try ConnectionState.init(allocator, 1, dummy_ws);
+    const state2 = try ConnectionState.init(allocator, 2, dummy_ws);
+    const state3 = try ConnectionState.init(allocator, 3, dummy_ws);
 
     try registry.add(1, state1);
     try registry.add(2, state2);
@@ -110,8 +116,9 @@ test "ConnectionRegistry - multiple connections" {
     defer registry.deinit();
 
     // Add multiple connections
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     for (1..11) |i| {
-        const state = try ConnectionState.init(allocator, i);
+        const state = try ConnectionState.init(allocator, i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -130,8 +137,9 @@ test "ConnectionRegistry - iterator" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    const state1 = try ConnectionState.init(allocator, 1);
-    const state2 = try ConnectionState.init(allocator, 2);
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+    const state1 = try ConnectionState.init(allocator, 1, dummy_ws);
+    const state2 = try ConnectionState.init(allocator, 2, dummy_ws);
 
     try registry.add(1, state1);
     try registry.add(2, state2);
@@ -152,8 +160,9 @@ test "ConnectionRegistry - thread safety simulation" {
     defer registry.deinit();
 
     // Add connections
+    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     for (1..6) |i| {
-        const state = try ConnectionState.init(allocator, i);
+        const state = try ConnectionState.init(allocator, i, dummy_ws);
         try registry.add(i, state);
     }
 

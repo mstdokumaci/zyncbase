@@ -14,6 +14,7 @@ const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Global server reference for signal handlers
 var global_server: ?*ZyncBaseServer = null;
@@ -202,12 +203,21 @@ pub const ZyncBaseServer = struct {
 
         // Set shutdown flag
         self.shutdown_requested.store(true, .release);
+        uws_c.set_bun_is_exiting(1);
+
+        // Stop background checkpoint loop
+        self.checkpoint_manager.stop();
 
         // Stop accepting new connections
         self.websocket_server.close();
 
         // Close all active connections
         try self.message_handler.closeAllConnections();
+
+        // Wake up the event loop to ensure it notices the closed handles
+        if (uws_c.uws_get_loop()) |loop| {
+            uws_c.us_wakeup_loop(loop);
+        }
 
         // Flush pending writes
         try self.storage_engine.flushPendingWrites();

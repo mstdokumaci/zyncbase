@@ -38,7 +38,8 @@ test "connection: state deallocation on close" {
         defer registry.deinit();
 
         const conn_id: u64 = 1;
-        const state = try ConnectionState.init(allocator, conn_id);
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
 
         try registry.add(conn_id, state);
 
@@ -61,8 +62,9 @@ test "connection: state deallocation on close" {
 
         const num_connections = 100;
         var i: u64 = 0;
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i);
+            const state = try ConnectionState.init(allocator, i, dummy_ws);
             try registry.add(i, state);
         }
 
@@ -86,7 +88,8 @@ test "connection: state deallocation on close" {
         defer registry.deinit();
 
         const conn_id: u64 = 1;
-        const state = try ConnectionState.init(allocator, conn_id);
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
 
         // Add some subscription IDs
         try state.subscription_ids.append(100);
@@ -110,8 +113,9 @@ test "connection: state deallocation on close" {
 
         const num_connections = 50;
         var i: u64 = 0;
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i);
+            const state = try ConnectionState.init(allocator, i, dummy_ws);
             try registry.add(i, state);
         }
 
@@ -133,9 +137,10 @@ test "connection: state deallocation on close" {
 
         const iterations = 1000;
         var iter: usize = 0;
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (iter < iterations) : (iter += 1) {
             const conn_id = @as(u64, iter);
-            const state = try ConnectionState.init(allocator, conn_id);
+            const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
 
             // Add some subscriptions
             try state.subscription_ids.append(conn_id * 10);
@@ -165,7 +170,8 @@ test "connection: state deallocation on close" {
                 var i: u64 = 0;
                 while (i < ctx.count) : (i += 1) {
                     const conn_id = ctx.start_id + i;
-                    const state = ConnectionState.init(ctx.allocator, conn_id) catch unreachable;
+                    const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+                    const state = ConnectionState.init(ctx.allocator, conn_id, dummy_ws) catch unreachable;
 
                     // Add subscriptions
                     state.subscription_ids.append(conn_id * 100) catch unreachable;
@@ -205,8 +211,9 @@ test "connection: state deallocation on close" {
 
         const num_connections = 20;
         var i: u64 = 0;
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i);
+            const state = try ConnectionState.init(allocator, i, dummy_ws);
             try state.subscription_ids.append(i * 10);
             try registry.add(i, state);
         }
@@ -244,7 +251,8 @@ test "connection: state deallocation edge cases" {
         defer registry.deinit();
 
         const conn_id: u64 = 1;
-        const state = try ConnectionState.init(allocator, conn_id);
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
         // Don't add any subscriptions
 
         try registry.add(conn_id, state);
@@ -257,7 +265,8 @@ test "connection: state deallocation edge cases" {
         defer registry.deinit();
 
         const conn_id: u64 = 1;
-        const state = try ConnectionState.init(allocator, conn_id);
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
 
         // Add many subscriptions
         var i: u64 = 0;

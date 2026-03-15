@@ -13,6 +13,8 @@ pub const CheckpointManager = struct {
     checkpoint_count: std.atomic.Value(u64),
     failed_checkpoint_count: std.atomic.Value(u64),
     last_checkpoint_duration_ms: std.atomic.Value(u64),
+    background_thread: ?std.Thread,
+    shutdown_requested: std.atomic.Value(bool),
 
     /// Configuration for checkpoint behavior
     pub const Config = struct {
@@ -157,6 +159,8 @@ pub const CheckpointManager = struct {
             .checkpoint_count = std.atomic.Value(u64).init(0),
             .failed_checkpoint_count = std.atomic.Value(u64).init(0),
             .last_checkpoint_duration_ms = std.atomic.Value(u64).init(0),
+            .background_thread = null,
+            .shutdown_requested = std.atomic.Value(bool).init(false),
         };
 
         // Query initial WAL size
@@ -168,6 +172,11 @@ pub const CheckpointManager = struct {
 
     /// Clean up resources
     pub fn deinit(self: *CheckpointManager) void {
+        // If background thread is running, stop it and join
+        if (self.background_thread) |thread| {
+            self.stop();
+            thread.join();
+        }
         self.allocator.destroy(self);
     }
 
@@ -353,9 +362,11 @@ pub const CheckpointManager = struct {
     pub fn backgroundCheckpointLoop(self: *CheckpointManager) !void {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
-        while (true) {
+        while (!self.shutdown_requested.load(.acquire)) {
             // Sleep for configured interval
             std.Thread.sleep(self.config.check_interval_sec * std.time.ns_per_s);
+
+            if (self.shutdown_requested.load(.acquire)) break; // Check again after sleep
 
             // Check if checkpoint is needed
             if (self.shouldCheckpoint()) {
@@ -378,6 +389,12 @@ pub const CheckpointManager = struct {
                 }
             }
         }
+        std.log.info("Background checkpoint loop stopped.", .{});
+    }
+
+    /// Stop the background checkpoint loop
+    pub fn stop(self: *CheckpointManager) void {
+        self.shutdown_requested.store(true, .release);
     }
 
     /// Start background checkpoint loop in a separate thread

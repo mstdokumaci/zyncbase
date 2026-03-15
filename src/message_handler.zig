@@ -62,7 +62,7 @@ pub const MessageHandler = struct {
         const conn_id = self.next_connection_id.fetchAdd(1, .monotonic);
 
         // Create connection state
-        const conn_state = try ConnectionState.init(self.allocator, conn_id);
+        const conn_state = try ConnectionState.init(self.allocator, conn_id, ws.*);
         errdefer conn_state.deinit(self.allocator);
 
         // Store in registry
@@ -207,6 +207,9 @@ pub const MessageHandler = struct {
                     std.log.warn("Failed to unsubscribe {} during shutdown: {}", .{ sub_id, err });
                 };
             }
+
+            // Close the WebSocket connection
+            conn_state.ws.close();
 
             std.log.info("Closed connection: id={}", .{conn_id});
         }
@@ -460,13 +463,15 @@ pub const ConnectionState = struct {
     id: u64,
     user_id: ?[]const u8,
     namespace: []const u8,
+    ws: WebSocket,
     subscription_ids: std.array_list.Managed(u64),
     created_at: i64,
 
-    pub fn init(allocator: Allocator, id: u64) !*ConnectionState {
+    pub fn init(allocator: Allocator, id: u64, ws: WebSocket) !*ConnectionState {
         const state = try allocator.create(ConnectionState);
         state.* = .{
             .id = id,
+            .ws = ws,
             .user_id = null,
             .namespace = "default",
             .subscription_ids = std.array_list.Managed(u64).init(allocator),

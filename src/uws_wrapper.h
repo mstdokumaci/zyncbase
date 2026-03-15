@@ -92,7 +92,11 @@ typedef struct {
 // Function declarations
 uws_app_t *uws_create_app(int ssl, us_bun_socket_context_options_t options);
 void uws_app_run(int ssl, uws_app_t *app);
+void uws_app_close(int ssl, uws_app_t *app);
+void set_bun_is_exiting(int exiting);
 void uws_app_listen(int ssl, uws_app_t *app, int port, uws_listen_handler handler, void *user_data);
+void *uws_get_loop();
+void us_wakeup_loop(void *loop);
 void uws_ws(int ssl, uws_app_t *app, void *upgrade_context, const char *pattern, size_t pattern_length, size_t id, const uws_socket_behavior_t *behavior);
 uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t *ws, const char *message, size_t length, uws_opcode_t opcode);
 void uws_ws_close(int ssl, uws_websocket_t *ws);

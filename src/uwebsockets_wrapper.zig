@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 // C imports for Bun's uWebSockets wrapper
 // Using our wrapper header to avoid C++ enum issues
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
 
@@ -143,9 +143,7 @@ pub const WebSocketServer = struct {
     /// Close the server gracefully
     /// Requirements: 2.7
     pub fn close(self: *WebSocketServer) void {
-        // Note: uws_app_close is not exposed in the C API
-        // Server will be closed when process exits or event loop stops
-        _ = self;
+        c.uws_app_close(if (self.ssl) 1 else 0, self.app);
     }
 };
 
