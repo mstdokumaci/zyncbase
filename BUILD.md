@@ -1,5 +1,8 @@
 # Building ZyncBase
 
+> [!NOTE]
+> ZyncBase is licensed under the [Business Source License 1.1](LICENSE). Source code is available, but production use as a managed service is restricted until 2032-01-01.
+
 ## Prerequisites
 
 ### Required Tools

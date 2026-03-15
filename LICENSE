@@ -1,0 +1,47 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:           Mustafa Dokumacı
+Licensed Work:      ZyncBase
+Change Date:        2032-01-01
+Change License:     Apache License 2.0
+Additional Use Grant:
+                    You may make production use of the Licensed Work, provided
+                    such use does not include offering the Licensed Work to
+                    third parties as a managed service where the Licensed Work
+                    is the primary value proposition. All non-production use
+                    is permitted.
+
+----------------------------------------------------------------------
+
+Terms
+
+1. The Licensor hereby grants you the right to copy, modify, create
+   derivative works, redistribute, and make non-production use of the
+   Licensed Work. The Licensor also grants you the right to make
+   production use of the Licensed Work in accordance with the
+   Additional Use Grant, and starting on the Change Date, in
+   accordance with the Change License.
+
+2. You may copy and distribute the Licensed Work or your derivative
+   works only under this License or, starting on the Change Date, the
+   Change License.
+
+3. Each copy of the Licensed Work and your derivative works must
+   include a copy of this License or, starting on the Change Date, the
+   Change License.
+
+4. TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS
+   PROVIDED "AS IS" WITHOUT ANY WARRANTIES, EXPRESS OR IMPLIED.
+
+5. This License will automatically terminate if you violate its terms,
+   subject to a 30-day cure period.
+
+6. "Production use" means any use of the Licensed Work in a production
+   environment, including but not limited to using it to provide
+   services to third parties. "Non-production use" includes use in
+   development and testing environments, and for personal,
+   educational, or research purposes. "Managed service" means a hosted
+   service where the primary value of the service is the functionality
+   of the Licensed Work.

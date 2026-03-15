@@ -1,6 +1,7 @@
 .{
     .name = .zyncbase,
     .version = "0.15.2",
+    // Licensed under BSL 1.1 (Business Source License). See LICENSE for details.
     .dependencies = .{
         .sqlite = .{
             .url = "https://github.com/vrischmann/zig-sqlite/archive/refs/heads/master.tar.gz",
