@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-macos
+            os: macos-latest
+            suffix: macos-aarch64
+          - target: x86_64-macos
+            os: macos-latest
+            suffix: macos-x86_64
+          - target: aarch64-linux-gnu
+            os: ubuntu-latest
+            suffix: linux-aarch64
+          - target: x86_64-linux-gnu
+            os: ubuntu-latest
+            suffix: linux-x86_64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+        with:
+          boringssl-target: ${{ matrix.target }}
+          boringssl-suffix: ${{ matrix.suffix }}
+
+      - name: Build ZyncBase
+        shell: bash
+        run: |
+          ZIG_FLAGS=(
+            "build"
+            "-Dtarget=${{ matrix.target }}"
+            "-Doptimize=ReleaseFast"
+            "--prefix" "release-out"
+            "--summary" "all"
+          )
+          
+          if [[ "${{ matrix.target }}" == "x86_64"* ]]; then
+            ZIG_FLAGS+=("-Dcpu=x86_64_v2")
+          fi
+          
+          # Handle macOS sysroot if needed (setup-project exports ZYNCBASE_BORINGSSL_PATH)
+          if [[ "${{ matrix.target }}" == *"macos"* ]]; then
+            MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
+            if [ -n "$MACOS_SDK" ]; then
+              ZIG_FLAGS+=("--sysroot" "$MACOS_SDK")
+              ZIG_FLAGS+=("-Dsysroot=$MACOS_SDK")
+              export SDKROOT="$MACOS_SDK"
+            fi
+          fi
+          
+          zig "${ZIG_FLAGS[@]}"
+
+      - name: Package Release
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp release-out/bin/zyncbase dist/zyncbase-${{ matrix.suffix }}
+          cd dist
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            zip zyncbase-${{ matrix.suffix }}.zip zyncbase-${{ matrix.suffix }}
+          else
+            tar -czf zyncbase-${{ matrix.suffix }}.tar.gz zyncbase-${{ matrix.suffix }}
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zyncbase-${{ matrix.suffix }}
+          path: dist/zyncbase-${{ matrix.suffix }}.*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

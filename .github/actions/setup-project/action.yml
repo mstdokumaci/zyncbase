@@ -1,5 +1,15 @@
 name: 'Setup ZyncBase Project'
 description: 'Standard setup steps for ZyncBase project including Zig, Go, and BoringSSL'
+inputs:
+  boringssl-target:
+    description: 'Target for BoringSSL build (e.g., x86_64-linux-gnu)'
+    required: false
+    default: 'native'
+  boringssl-suffix:
+    description: 'Suffix for BoringSSL build directory'
+    required: false
+    default: ''
+
 runs:
   using: "composite"
   steps:
@@ -19,4 +29,21 @@ runs:
 
     - name: Build BoringSSL
       shell: bash
-      run: ./scripts/build-boringssl.sh
+      run: |
+        TARGET="${{ inputs.boringssl-target }}"
+        SUFFIX="${{ inputs.boringssl-suffix }}"
+        MACOS_SDK=""
+        
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
+        fi
+        
+        BUILD_DIR="vendor/boringssl/build"
+        if [ -n "$SUFFIX" ]; then
+            BUILD_DIR="vendor/boringssl/build-$SUFFIX"
+        fi
+
+        ./scripts/build-boringssl.sh "$TARGET" "$SUFFIX" "$BUILD_DIR" "$MACOS_SDK"
+        
+        # Export the path for subsequent zig build steps in the same job
+        echo "ZYNCBASE_BORINGSSL_PATH=$(pwd)/$BUILD_DIR" >> $GITHUB_ENV
