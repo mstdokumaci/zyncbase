@@ -10,6 +10,11 @@ pub fn build(b: *std.Build) void {
         "sanitize",
         "Enable sanitizer: address, leak, or thread",
     );
+    // Sysroot option for cross-compiling (especially macOS frameworks)
+    const sysroot = b.option([]const u8, "sysroot", "Path to sysroot");
+    if (sysroot) |s| {
+        b.sysroot = s;
+    }
 
     // Add SQLite dependency
     const sqlite_dep = b.dependency("sqlite", .{
@@ -41,7 +46,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, exe);
+    linkUWS(b, exe, sysroot);
     b.installArtifact(exe);
 
     // Setup Test Targets
@@ -53,7 +58,7 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
@@ -73,7 +78,7 @@ pub fn build(b: *std.Build) void {
         "src/subscription_manager_thread_safety_test.zig",
     };
     for (unit_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
         const run_t = b.addRunArtifact(t);
         test_unit_step.dependOn(&run_t.step);
     }
@@ -98,7 +103,7 @@ pub fn build(b: *std.Build) void {
         "src/msgpack_utils_property_test.zig",
     };
     for (property_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
         const run_t = b.addRunArtifact(t);
         test_property_step.dependOn(&run_t.step);
     }
@@ -110,7 +115,7 @@ pub fn build(b: *std.Build) void {
         "src/storage_crud_test.zig",
     };
     for (integration_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter);
+        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
         const run_t = b.addRunArtifact(t);
         test_integration_step.dependOn(&run_t.step);
     }
@@ -125,6 +130,7 @@ fn setupTest(
     root_file: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
+    sysroot: ?[]const u8,
 ) *std.Build.Step.Compile {
     const t = b.addTest(.{
         .root_module = b.createModule(.{
@@ -145,11 +151,12 @@ fn setupTest(
             t.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, t);
+    linkUWS(b, t, sysroot);
     return t;
 }
 
-fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8) void {
+    const target = step.root_module.resolved_target.?.result;
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
 
@@ -159,11 +166,17 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     var b_b_include: []const u8 = "vendor/boringssl/include";
     var is_absolute = false;
 
-    if (is_linux) {
+    if (std.process.getEnvVarOwned(b.allocator, "ZYNCBASE_BORINGSSL_PATH")) |env_path| {
+        b_b_path = env_path;
+        is_absolute = true;
+        // In local builds, we might set an absolute path to a target-specific BoringSSL build.
+        // We assume the include directory is a sibling to the build directory in the submodule structure.
+        b_b_include = b.fmt("{s}/../include", .{b_b_path});
+    } else |_| if (is_linux) {
         if (std.process.getEnvVarOwned(b.allocator, "ZYNCBASE_LINUX_BORINGSSL_PATH")) |env_path| {
             b_b_path = env_path;
             is_absolute = true;
-            b_b_include = b.fmt("{s}/../boringssl/include", .{b_b_path});
+            b_b_include = b.fmt("{s}/../include", .{b_b_path});
         } else |_| {}
     }
 
@@ -208,6 +221,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
         "-Wno-nullability-completeness",
         "-I",
         "vendor/bun/packages",
+        b.fmt("-I{s}", .{b_b_include}),
     } }) catch unreachable;
 
     step.addCSourceFile(.{
@@ -223,6 +237,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
         "-DLIBUS_USE_BORINGSSL=1",
         "-DWITH_BORINGSSL=1",
         "-Wno-nullability-completeness",
+        b.fmt("-I{s}", .{b_b_include}),
     } }) catch unreachable;
 
     step.addCSourceFiles(.{
@@ -245,6 +260,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
         "-DLIBUS_USE_OPENSSL=1",
         "-DLIBUS_USE_BORINGSSL=1",
         "-DWITH_BORINGSSL=1",
+        b.fmt("-I{s}", .{b_b_include}),
     } }) catch unreachable;
 
     step.addCSourceFile(.{
@@ -262,8 +278,13 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile) void {
     });
 
     step.linkLibC();
-    if (step.root_module.resolved_target.?.result.os.tag == .macos) {
-        step.linkFramework("CoreFoundation");
-        step.linkFramework("Security");
+    if (target.os.tag == .macos) {
+        if (sysroot) |s| {
+            step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd", .{s}) });
+            step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks/Security.framework/Security.tbd", .{s}) });
+        } else {
+            step.root_module.linkFramework("CoreFoundation", .{});
+            step.root_module.linkFramework("Security", .{});
+        }
     }
 }
