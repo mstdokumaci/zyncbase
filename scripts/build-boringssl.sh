@@ -92,6 +92,7 @@ cmake -G "$GENERATOR" \
       -DCMAKE_CXX_COMPILER_ARG1="c++" \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=OFF \
+      -DBUILD_TESTING=OFF \
       ..
 
 # Build
