@@ -75,7 +75,16 @@ else
     BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 fi
 
+EXTRA_CMAKE_FLAGS=()
+if [[ "$TARGET" == *"macos"* ]]; then
+    # Extract architecture from target (e.g., x86_64 from x86_64-macos)
+    ARCH=$(echo "$TARGET" | cut -d'-' -f1)
+    if [[ "$ARCH" == "aarch64" ]]; then ARCH="arm64"; fi
+    EXTRA_CMAKE_FLAGS+=("-DCMAKE_OSX_ARCHITECTURES=$ARCH")
+fi
+
 cmake -G "$GENERATOR" \
+      "${EXTRA_CMAKE_FLAGS[@]}" \
       -DCMAKE_C_COMPILER="$ZIG_WRAPPER" \
       -DCMAKE_CXX_COMPILER="$ZIG_WRAPPER" \
       -DCMAKE_ASM_COMPILER="$ZIG_WRAPPER" \
