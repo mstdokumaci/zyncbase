@@ -59,7 +59,7 @@ if [[ -n "$MACOS_SDK" ]]; then
 fi
 
 if [[ "$TARGET" == "x86_64"* ]]; then
-    EXTRA_FLAGS+=("-march=x86-64-v2")
+    EXTRA_FLAGS+=("-march=x86_64_v2")
 fi
 
 exec zig "\$CMD" "\${EXTRA_FLAGS[@]}" "\${ARGS[@]}"
