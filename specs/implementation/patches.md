@@ -60,13 +60,14 @@ Bun's uWebSockets fork calls Bun-specific runtime functions. We provide stub imp
 
 #### 4. HTTP Parsing
 - `Bun__HTTPMethod__from()`
-- **Current**: Returns 0 (unknown method)
-- **TODO**: Implement if we need HTTP method detection
+- `BUN_DEFAULT_MAX_HTTP_HEADER_SIZE`: Default header size limit (16KB).
+- **Current**: `Bun__HTTPMethod__from()` returns 0 (unknown). `BUN_DEFAULT_MAX_HTTP_HEADER_SIZE` is set to 16KB.
+- **TODO**: Implement method detection if needed.
 
 #### 5. Platform Detection and Networking
 - `Bun__doesMacOSVersionSupportSendRecvMsgX()`: Returns 1 on macOS, 0 elsewhere.
 - `Bun__isEpollPwait2SupportedOnLinuxKernel()`: Returns 0 to trigger fallback.
-- `sys_epoll_pwait2()`: Returns -1 (not supported).
+- `sys_epoll_pwait2()`: Returns `-ENOSYS` (not supported).
 - **Status**: Complete (simple platform checks and fallbacks)
 
 #### 6. C-Ares and SSL Compatibility
