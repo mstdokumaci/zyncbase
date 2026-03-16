@@ -6,6 +6,7 @@ pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
 
+
 /// WebSocket server wrapper using Bun's uWebSockets C API
 pub const WebSocketServer = struct {
     app: *c.uws_app_t,
@@ -14,8 +15,10 @@ pub const WebSocketServer = struct {
     handlers: WebSocketHandlers,
     user_data: ?*anyopaque,
     listen_socket: ?*c.struct_us_listen_socket_t = null,
-    loop: ?*anyopaque = null,
+    loop: std.atomic.Value(?*anyopaque) = std.atomic.Value(?*anyopaque).init(null),
     close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    is_closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    is_listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub const Config = struct {
         port: u16,
@@ -54,8 +57,10 @@ pub const WebSocketServer = struct {
             .handlers = .{},
             .user_data = null,
             .listen_socket = null,
-            .loop = null,
+            .loop = std.atomic.Value(?*anyopaque).init(null),
             .close_requested = std.atomic.Value(bool).init(false),
+            .is_closing = std.atomic.Value(bool).init(false),
+            .is_listening = std.atomic.Value(bool).init(false),
         };
 
         return self;
@@ -125,7 +130,7 @@ pub const WebSocketServer = struct {
     /// other uWebSockets instances in the same process.
     pub fn close(self: *WebSocketServer) void {
         self.close_requested.store(true, .monotonic);
-        if (self.loop) |loop| {
+        if (self.loop.load(.acquire)) |loop| {
             c.us_wakeup_loop(loop);
         }
     }
@@ -181,21 +186,31 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
     if (user_data) |ud| {
         const server: *WebSocketServer = @ptrCast(@alignCast(ud));
         server.listen_socket = listen_socket;
-        server.loop = c.uws_get_loop();
-        c.uws_loop_addPostHandler(server.loop, server, postHandler);
+        const loop = c.uws_get_loop();
+        server.loop.store(loop, .release);
+        c.uws_loop_addPostHandler(loop, server, postHandler);
+        server.is_listening.store(true, .release);
     }
 }
 
-fn postHandler(ctx: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
     if (ctx == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
-    if (server.close_requested.load(.monotonic)) {
+    
+    // Ensure we only perform shutdown once
+    if (server.close_requested.load(.monotonic) and !server.is_closing.swap(true, .acquire)) {
         c.set_bun_is_exiting(1);
         if (server.listen_socket) |ls| {
             c.us_listen_socket_close(if (server.ssl) 1 else 0, ls);
             server.listen_socket = null;
         }
         c.uws_app_close(if (server.ssl) 1 else 0, server.app);
+        
+        // Wake up the loop to ensure it runs one more iteration to finalize resource state
+        // and exit when num_polls hits zero.
+        if (loop_ptr) |loop| {
+            c.us_wakeup_loop(loop);
+        }
     }
 }
 

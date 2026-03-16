@@ -101,13 +101,15 @@ typedef struct { unsigned long sig[2]; } sigset_t;
 #endif
 #endif
 
+#include <errno.h>
+
 int Bun__isEpollPwait2SupportedOnLinuxKernel() {
     return 0; // Return 0 to trigger fallback to standard epoll_pwait
 }
 
 ssize_t sys_epoll_pwait2(int epfd, struct epoll_event* events, int maxevents, const struct timespec* timeout, const sigset_t* sigmask) {
     (void)epfd; (void)events; (void)maxevents; (void)timeout; (void)sigmask;
-    return -1;
+    return -ENOSYS;
 }
 
 // =============================================================================

@@ -8,4 +8,6 @@ echo "🚀 Building Linux test environment..."
 docker build -t zyncbase-repro .
 
 echo "🧪 Running tests in Linux container..."
-docker run --rm -v "$(pwd):/app" zyncbase-repro build test "$@"
+docker run --rm --memory 8g --entrypoint /bin/bash -v "$(pwd):/app" zyncbase-repro -c "
+  zig build test --cache-dir /tmp/zig-cache -Dcpu=x86_64_v2 --summary all \"\$@\"
+" -- "$@"

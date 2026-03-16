@@ -7,6 +7,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const c = @import("uwebsockets_wrapper.zig").c;
 
+
 test "WebSocketServer: init with valid config" {
     const allocator = testing.allocator;
 
@@ -135,7 +136,7 @@ test "WebSocketServer: full server lifecycle" {
                 return;
             };
 
-            ctx.ready.store(true, .seq_cst);
+
             server.run();
         }
     };
@@ -154,11 +155,20 @@ test "WebSocketServer: full server lifecycle" {
 
     // Wait for server to be ready or fail
     var timeout_counter: usize = 0;
-    while (!server_ready.load(.seq_cst)) {
-        if (server_error.load(.seq_cst)) return error.ServerInitializationFailed;
+    while (true) {
+        if (server_error.load(.seq_cst)) {
+            return error.ServerInitializationFailed;
+        }
+        if (server_atomic_ptr.load(.seq_cst)) |s| {
+            if (s.is_listening.load(.monotonic)) {
+                break;
+            }
+        }
         std.Thread.sleep(100 * std.time.ns_per_ms);
         timeout_counter += 1;
-        if (timeout_counter > 50) return error.ServerStartTimeout;
+        if (timeout_counter > 50) {
+            return error.ServerStartTimeout;
+        }
     }
     
     const server = server_atomic_ptr.load(.seq_cst) orelse return error.NullServerPointer;
