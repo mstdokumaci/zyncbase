@@ -1,8 +1,8 @@
-const port = process.argv[2] || "9001";
-const url = `ws://127.0.0.1:${port}/`;
-const healthUrl = `http://127.0.0.1:${port}/`;
+const inputArg = process.argv[2] || "9001";
+const url = inputArg.includes("://") ? inputArg : `ws://127.0.0.1:${inputArg}/`;
+const healthUrl = url.replace(/^ws/, "http");
 
-console.log(`=== Comprehensive WebSocket Test (Port: ${port}) ===`);
+console.log(`=== Comprehensive WebSocket Test (URL: ${url}) ===`);
 
 async function runTest() {
   console.log("Step 1: Verifying HTTP health check...");
