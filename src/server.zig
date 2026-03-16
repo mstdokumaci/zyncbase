@@ -172,7 +172,7 @@ pub const ZyncBaseServer = struct {
         });
 
         // Register WebSocket handlers with server as user data
-        try self.websocket_server.registerWebSocketHandlers(
+        self.websocket_server.registerWebSocketHandlers(
             "/*",
             .{
                 .on_open = onWebSocketOpen,
