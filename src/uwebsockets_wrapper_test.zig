@@ -83,6 +83,10 @@ test "WebSocketServer: full server lifecycle" {
     defer allocator.destroy(server_ready);
     server_ready.* = std.atomic.Value(bool).init(false);
     
+    const server_error = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(server_error);
+    server_error.* = std.atomic.Value(bool).init(false);
+    
     const server_atomic_ptr = try allocator.create(std.atomic.Value(?*WebSocketServer));
     defer allocator.destroy(server_atomic_ptr);
     server_atomic_ptr.* = std.atomic.Value(?*WebSocketServer).init(null);
@@ -106,31 +110,33 @@ test "WebSocketServer: full server lifecycle" {
         allocator: Allocator,
         config: WebSocketServer.Config,
         ready: *std.atomic.Value(bool),
+        err: *std.atomic.Value(bool),
         server_ptr: *std.atomic.Value(?*WebSocketServer),
         handlers: WebSocketHandlers,
         port: u16,
 
         fn runServer(ctx: @This()) void {
-            // Initialize server on the server thread
-            const server = WebSocketServer.init(ctx.allocator, ctx.config) catch return;
+            const server = WebSocketServer.init(ctx.allocator, ctx.config) catch {
+                ctx.err.store(true, .seq_cst);
+                return;
+            };
             ctx.server_ptr.store(server, .seq_cst);
 
-            // Register WebSocket handlers on the server thread
             server.registerWebSocketHandlers("/*", ctx.handlers, null);
 
-            // Add health check on the server thread
             c.uws_app_get(0, @ptrCast(server.app), "/", 1, struct {
                 fn handler(res: ?*c.uws_res_t, _: ?*c.uws_req_t, _: ?*anyopaque) callconv(.c) void {
                     c.uws_res_end(0, res, "OK", 2, true);
                 }
             }.handler, null);
 
-            // Listen on the server thread
-            server.listen(ctx.port) catch return;
+            server.listen(ctx.port) catch {
+                ctx.err.store(true, .seq_cst);
+                return;
+            };
 
             ctx.ready.store(true, .seq_cst);
             server.run();
-            // NOTE: We don't deinit here because the main thread might still be calling close()
         }
     };
 
@@ -138,6 +144,7 @@ test "WebSocketServer: full server lifecycle" {
         .allocator = allocator,
         .config = config,
         .ready = server_ready,
+        .err = server_error,
         .server_ptr = server_atomic_ptr,
         .handlers = handlers,
         .port = 9005,
@@ -145,25 +152,22 @@ test "WebSocketServer: full server lifecycle" {
 
     const server_thread = try std.Thread.spawn(.{}, ServerContext.runServer, .{server_ctx});
 
-    // Wait for server to be ready
+    // Wait for server to be ready or fail
     var timeout_counter: usize = 0;
     while (!server_ready.load(.seq_cst)) {
+        if (server_error.load(.seq_cst)) return error.ServerInitializationFailed;
         std.Thread.sleep(100 * std.time.ns_per_ms);
         timeout_counter += 1;
-        if (timeout_counter > 50) { // 5 seconds timeout
-            return error.ServerStartTimeout;
-        }
+        if (timeout_counter > 50) return error.ServerStartTimeout;
     }
     
-    const server = server_atomic_ptr.load(.seq_cst).?;
+    const server = server_atomic_ptr.load(.seq_cst) orelse return error.NullServerPointer;
 
     // Execute Bun client
     const client_cmd = [_][]const u8{ "bun", "tests/integration/websocket_client.ts", "9005" };
     var child = std.process.Child.init(&client_cmd, allocator);
-    
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
-    
     try child.spawn();
 
     const stdout = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024);
@@ -173,8 +177,10 @@ test "WebSocketServer: full server lifecycle" {
 
     const term = try child.wait();
 
-    // Shutdown server from main thread
+    // Shutdown server
     server.close();
+    
+    // Safety join: ThreadSanitizer will detect if we exit before the thread is gone
     server_thread.join();
     
     // Now it's safe to deinit
