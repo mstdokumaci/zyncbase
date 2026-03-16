@@ -216,6 +216,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     const uws_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c++20",
+        "-fno-sanitize=undefined",
         "-fno-exceptions",
         "-fno-rtti",
         "-DUWS_NO_ZLIB",
@@ -236,6 +237,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c11",
+        "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in bun-usockets
         "-DUWS_NO_ZLIB",
         "-DUWS_USE_LIBDEFLATE=0",
         "-DLIBUS_USE_OPENSSL=1",
@@ -260,6 +262,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     const sni_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c++20",
+        "-fno-sanitize=undefined",
         "-fno-exceptions",
         "-fno-rtti",
         "-DLIBUS_USE_OPENSSL=1",
