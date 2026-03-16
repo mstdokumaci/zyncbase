@@ -119,7 +119,7 @@ test "ws: callbacks invoked for all events" {
         };
 
         // Register handlers with context as user data
-        try server.registerWebSocketHandlers("/*", handlers, &ctx);
+        server.registerWebSocketHandlers("/*", handlers, &ctx);
 
         // Simulate WebSocket events by calling the handlers directly
         // In a real integration test, we would connect a client and trigger events
@@ -220,7 +220,7 @@ test "ws: message callback content and type" {
             .on_message = testOnMessageProperty,
         };
 
-        try server.registerWebSocketHandlers("/*", handlers, &ctx);
+        server.registerWebSocketHandlers("/*", handlers, &ctx);
 
         // Simulate message event
         var mock_ws = createMockWebSocket();
@@ -281,7 +281,7 @@ test "ws: close callback code and message" {
             .on_close = testOnCloseProperty,
         };
 
-        try server.registerWebSocketHandlers("/*", handlers, &ctx);
+        server.registerWebSocketHandlers("/*", handlers, &ctx);
 
         // Simulate close event
         var mock_ws = createMockWebSocket();
@@ -328,7 +328,7 @@ test "ws: callbacks invoked exactly once" {
         .on_close = testOnCloseProperty,
     };
 
-    try server.registerWebSocketHandlers("/*", handlers, &ctx);
+    server.registerWebSocketHandlers("/*", handlers, &ctx);
 
     // Simulate multiple events
     var mock_ws = createMockWebSocket();

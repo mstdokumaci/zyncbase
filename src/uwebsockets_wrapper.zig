@@ -17,6 +17,9 @@ pub const WebSocketServer = struct {
     ssl: bool,
     handlers: WebSocketHandlers,
     user_data: ?*anyopaque,
+    listen_socket: ?*c.struct_us_listen_socket_t = null,
+    loop: ?*anyopaque = null,
+    close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub const Config = struct {
         port: u16,
@@ -57,6 +60,9 @@ pub const WebSocketServer = struct {
             .ssl = config.ssl,
             .handlers = .{},
             .user_data = null,
+            .listen_socket = null,
+            .loop = null,
+            .close_requested = std.atomic.Value(bool).init(false),
         };
 
         return self;
@@ -65,58 +71,40 @@ pub const WebSocketServer = struct {
     /// Clean up resources
     /// Requirements: 2.7
     pub fn deinit(self: *WebSocketServer) void {
-        // Clear global server if it points to us
-        if (global_server == self) {
-            global_server = null;
-        }
-
         // Note: uws_app_destroy is not exposed in the C API
         // The app will be cleaned up when the process exits
         self.allocator.destroy(self);
     }
 
-    /// Register WebSocket handlers for a route pattern
-    /// Requirements: 2.4
-    pub fn registerWebSocketHandlers(
-        self: *WebSocketServer,
-        pattern: []const u8,
-        handlers: WebSocketHandlers,
-        user_data: ?*anyopaque,
-    ) !void {
+    /// Register WebSocket handlers for a specific pattern
+    /// Requirements: 2.2, 2.5
+    pub fn registerWebSocketHandlers(self: *WebSocketServer, pattern: []const u8, handlers: WebSocketHandlers, user_data: ?*anyopaque) void {
         self.handlers = handlers;
         self.user_data = user_data;
-
-        // Store server in global for C callback access
-        // Note: This limits us to one server instance, but that's acceptable for MVP
-        global_server = self;
-
-        // Create behavior struct with WebSocket configuration
+        
+        // Create the C handlers struct (behavior)
         var behavior = std.mem.zeroes(c.uws_socket_behavior_t);
-        behavior.compression = c.UWS_COMPRESS_DISABLED;
-        behavior.maxPayloadLength = 10 * 1024 * 1024; // 10MB
-        behavior.idleTimeout = 120; // 2 minutes
-        behavior.maxBackpressure = 64 * 1024; // 64KB
-        behavior.closeOnBackpressureLimit = false;
-        behavior.resetIdleTimeoutOnSend = false;
+        behavior.maxPayloadLength = 16 * 1024 * 1024;
+        behavior.idleTimeout = 120;
         behavior.sendPingsAutomatically = true;
-        behavior.maxLifetime = 0; // Disabled
-
-        // Set callback handlers - these will call our Zig wrappers
-        behavior.open = if (handlers.on_open != null) onOpenCallback else null;
-        behavior.message = if (handlers.on_message != null) onMessageCallback else null;
-        behavior.close = if (handlers.on_close != null) onCloseCallback else null;
-        behavior.drain = null; // Not used for MVP
-        behavior.ping = null; // Not used for MVP
-        behavior.pong = null; // Not used for MVP
-
-        // Register WebSocket route with uWebSockets
+        
+        // Setup upgrade context (user_data)
+        const ssl_flag: c_int = if (self.ssl) 1 else 0;
+        const id = @intFromPtr(self); // Use server pointer as ID
+        behavior.upgrade = onUpgradeCallback;
+        behavior.open = onOpenCallback;
+        behavior.message = onMessageCallback;
+        behavior.close = onCloseCallback;
+        behavior.drain = onDrainCallback;
+        
+        // Use verified signature for uws_ws (from vendor/bun/src/deps/uws/App.zig)
         c.uws_ws(
-            if (self.ssl) 1 else 0,
-            self.app,
-            self, // Pass server as upgrade context to access handlers
+            ssl_flag,
+            @ptrCast(self.app),
+            self, // ctx
             pattern.ptr,
             pattern.len,
-            0, // id parameter
+            id,
             &behavior,
         );
     }
@@ -134,8 +122,6 @@ pub const WebSocketServer = struct {
         );
     }
 
-    /// Run the event loop (blocks until shutdown)
-    /// Requirements: 2.6
     pub fn run(self: *WebSocketServer) void {
         c.uws_app_run(if (self.ssl) 1 else 0, self.app);
     }
@@ -143,7 +129,13 @@ pub const WebSocketServer = struct {
     /// Close the server gracefully
     /// Requirements: 2.7
     pub fn close(self: *WebSocketServer) void {
-        c.uws_app_close(if (self.ssl) 1 else 0, self.app);
+        // Set request flag
+        self.close_requested.store(true, .monotonic);
+
+        // Wake up loop to notice exit flag
+        if (self.loop) |loop| {
+            c.us_wakeup_loop(loop);
+        }
     }
 };
 
@@ -157,7 +149,7 @@ pub const WebSocket = struct {
     pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) void {
         if (self.ws == null) return; // Mock WebSocket, no-op
 
-        const opcode: c.uws_opcode_t = switch (msg_type) {
+        const opcode: c_int = switch (msg_type) {
             .text => c.UWS_OPCODE_TEXT,
             .binary => c.UWS_OPCODE_BINARY,
         };
@@ -167,7 +159,7 @@ pub const WebSocket = struct {
             self.ws.?,
             message.ptr,
             message.len,
-            opcode,
+            @intCast(opcode),
         );
     }
 
@@ -212,25 +204,49 @@ pub const WebSocketHandlers = struct {
     on_error: ?*const fn (*WebSocket, ?*anyopaque) void = null,
 };
 
-// Global storage for server context (needed for C callbacks)
-// This is a workaround since C callbacks can't capture Zig context directly
-var global_server: ?*WebSocketServer = null;
-
-/// Listen callback - called when server starts listening
 fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*anyopaque) callconv(.c) void {
-    _ = listen_socket;
-    _ = user_data;
-    // Server is now listening
-    std.log.info("WebSocket server listening", .{});
+    if (user_data) |ud| {
+        const server: *WebSocketServer = @ptrCast(@alignCast(ud));
+        server.listen_socket = listen_socket;
+        // Capture the loop pointer from the thread where listen is called
+        server.loop = c.uws_get_loop();
+        
+        // Register post handler to handle thread-safe close
+        c.uws_loop_addPostHandler(server.loop, server, postHandler);
+    }
 }
 
-/// C callback wrapper for WebSocket open event
-/// Requirements: 2.9
+fn postHandler(ctx: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
+    if (ctx == null) return;
+    const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
+    
+    if (server.close_requested.load(.monotonic)) {
+        // Signal loop to exit
+        c.set_bun_is_exiting(1);
+
+        // Close listen socket if it exists
+        if (server.listen_socket) |ls| {
+            c.us_listen_socket_close(if (server.ssl) 1 else 0, ls);
+            server.listen_socket = null;
+        }
+
+        // Close app
+        c.uws_app_close(if (server.ssl) 1 else 0, server.app);
+    }
+}
+
 fn onOpenCallback(ws: ?*c.uws_websocket_t) callconv(.c) void {
     if (ws == null) return;
-
-    // Get server context from global (set during registerWebSocketHandlers)
-    const server = global_server orelse return;
+    
+    // Get server context from WebSocket user data (set during upgrade)
+    // We assume SSL is not enabled for now to call c.uws_ws_get_user_data(0, ...)
+    // Or we need a way to know if it's SSL. 
+    // Since we only have one SSL flag in the server, and the connection is part of that server...
+    // But we don't know which server yet!
+    // TRICK: We can call uws_ws_get_user_data for BOTH 0 and 1 if we are careful?
+    // Actually, uWS implementation of getUserData is often the same for both.
+    const server_ptr = c.uws_ws_get_user_data(0, ws) orelse c.uws_ws_get_user_data(1, ws) orelse return;
+    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
 
     // Create Zig WebSocket wrapper
     var zig_ws = WebSocket{
@@ -244,8 +260,6 @@ fn onOpenCallback(ws: ?*c.uws_websocket_t) callconv(.c) void {
     }
 }
 
-/// C callback wrapper for WebSocket message event
-/// Requirements: 2.9
 fn onMessageCallback(
     ws: ?*c.uws_websocket_t,
     message: [*c]const u8,
@@ -254,8 +268,8 @@ fn onMessageCallback(
 ) callconv(.c) void {
     if (ws == null or message == null) return;
 
-    // Get server context
-    const server = global_server orelse return;
+    const server_ptr = c.uws_ws_get_user_data(0, ws) orelse c.uws_ws_get_user_data(1, ws) orelse return;
+    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
 
     // Create Zig WebSocket wrapper
     var zig_ws = WebSocket{
@@ -279,8 +293,6 @@ fn onMessageCallback(
     }
 }
 
-/// C callback wrapper for WebSocket close event
-/// Requirements: 2.9
 fn onCloseCallback(
     ws: ?*c.uws_websocket_t,
     code: c_int,
@@ -289,8 +301,8 @@ fn onCloseCallback(
 ) callconv(.c) void {
     if (ws == null) return;
 
-    // Get server context
-    const server = global_server orelse return;
+    const server_ptr = c.uws_ws_get_user_data(0, ws) orelse c.uws_ws_get_user_data(1, ws) orelse return;
+    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
 
     // Create Zig WebSocket wrapper
     var zig_ws = WebSocket{
@@ -305,4 +317,26 @@ fn onCloseCallback(
     if (server.handlers.on_close) |handler| {
         handler(&zig_ws, code, msg_slice, server.user_data);
     }
+}
+
+fn onDrainCallback(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    if (ws == null) return;
+}
+
+fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, id: usize) callconv(.c) void {
+    _ = id;
+    if (upgrade_context == null) return;
+    const server: *WebSocketServer = @ptrCast(@alignCast(upgrade_context.?));
+    const ssl: c_int = if (server.ssl) 1 else 0;
+
+    var key: [*c]const u8 = undefined;
+    const key_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-key", "sec-websocket-key".len, &key);
+
+    var protocol: [*c]const u8 = undefined;
+    const protocol_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-protocol", "sec-websocket-protocol".len, &protocol);
+
+    var extensions: [*c]const u8 = undefined;
+    const extensions_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-extensions", "sec-websocket-extensions".len, &extensions);
+
+    _ = c.uws_res_upgrade(ssl, res, upgrade_context, key, key_len, protocol, protocol_len, extensions, extensions_len, context);
 }

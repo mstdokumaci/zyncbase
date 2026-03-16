@@ -86,7 +86,7 @@ Bun's uWebSockets fork calls Bun-specific runtime functions. We provide stub imp
 - ✅ Disable libdeflate
 - ✅ Stub SIMDUTF
 - ✅ Stub Bun runtime hooks
-- ⏳ Test WebSocket connections work
+- ✅ Test WebSocket connections work
 
 ### Medium Term (Post-MVP)
 - [ ] Implement proper UTF-8 validation
