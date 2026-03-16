@@ -86,9 +86,26 @@ typedef struct {
     uws_websocket_close_handler close;
 } uws_socket_behavior_t;
 
-// SSL options struct (opaque for now)
+// SSL options struct (matches bun-usockets expectations)
 typedef struct {
-    char _placeholder;
+    const char *key_file_name;
+    const char *cert_file_name;
+    const char *passphrase;
+    const char *dh_params_file_name;
+    const char *ca_file_name;
+    const char *ssl_ciphers;
+    int ssl_prefer_low_memory_usage;
+    const char * const *key;
+    unsigned int key_count;
+    const char * const *cert;
+    unsigned int cert_count;
+    const char * const *ca;
+    unsigned int ca_count;
+    unsigned int secure_options;
+    int reject_unauthorized;
+    int request_cert;
+    unsigned int client_renegotiation_limit;
+    unsigned int client_renegotiation_window;
 } us_bun_socket_context_options_t;
 
 // Function declarations

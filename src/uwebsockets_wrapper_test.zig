@@ -24,8 +24,38 @@ test "WebSocketServer: init with valid config" {
 }
 
 test "WebSocketServer: init with SSL config" {
-    // Skip this test as it requires valid certificates to not crash in uWS
-    return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    // Create a temporary directory for certs
+    const tmp_dir = "test-artifacts/ssl_tmp";
+    std.fs.cwd().makePath(tmp_dir) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+
+    const cert_path = tmp_dir ++ "/cert.pem";
+    const key_path = tmp_dir ++ "/key.pem";
+
+    // Generate self-signed cert on the fly
+    const openssl_cmd = [_][]const u8{
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost"
+    };
+    var child = std.process.Child.init(&openssl_cmd, allocator);
+    const term = try child.spawnAndWait();
+    try testing.expectEqual(@as(std.process.Child.Term, .{ .Exited = 0 }), term);
+
+    const config = WebSocketServer.Config{
+        .port = 8443,
+        .host = "127.0.0.1",
+        .ssl = true,
+        .ssl_cert_path = cert_path,
+        .ssl_key_path = key_path,
+    };
+
+    const server = try WebSocketServer.init(allocator, config);
+    defer server.deinit();
+
+    try testing.expectEqual(true, server.ssl);
 }
 
 test "WebSocketServer: registerWebSocketHandlers" {

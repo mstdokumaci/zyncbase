@@ -40,7 +40,16 @@ pub const WebSocketServer = struct {
         const self = try allocator.create(WebSocketServer);
         errdefer allocator.destroy(self);
 
-        const ssl_options = std.mem.zeroes(c.us_bun_socket_context_options_t);
+        var ssl_options = std.mem.zeroes(c.us_bun_socket_context_options_t);
+        if (config.ssl) {
+            if (config.ssl_cert_path) |cert| {
+                ssl_options.cert_file_name = @ptrCast(cert);
+            }
+            if (config.ssl_key_path) |key| {
+                ssl_options.key_file_name = @ptrCast(key);
+            }
+        }
+
         const app = c.uws_create_app(
             if (config.ssl) 1 else 0,
             ssl_options,
