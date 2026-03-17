@@ -236,7 +236,26 @@ const StorageLayer = struct {
         try self.write_conn.exec("COMMIT");
     }
 };
-```Strategy Cache Integration lock-free cache read-through```zig
+```Asynchronous Completion Tracking Error Reporting track origin write operation Structural Changes Add metadata link operation requester```zig
+    pub const WriteOp = struct {
+        type: enum { ... },
+        // ... existing fields ...
+        client_id: ?u64 = null,    // Unique identifier for the WebSocket connection
+        request_id: ?u64 = null,  // Original id from the client message
+    };
+    ````StorageLayer callback interface report background processing results```zig
+    const StorageLayer = struct {
+        // ...
+        on_error: ?*const fn (client_id: u64, request_id: u64, err: anyerror) void = null,
+
+        fn flushBatch(self: *StorageLayer) !void {
+            // ... inside batch execution loop ...
+            if (result == .error and op.client_id != null) {
+                if (self.on_error) |cb| cb(op.client_id.?, op.request_id.?, err);
+            }
+        }
+    };
+    ```Server Integration `ZyncBaseServer_error callback_id registry sending late `error message WebSocket Strategy Cache Integration lock-free-memory cache read-through layer```zig
 const StateManager = struct {
     cache: HashMap([]const u8, *Namespace),
     storage: *StorageLayer,

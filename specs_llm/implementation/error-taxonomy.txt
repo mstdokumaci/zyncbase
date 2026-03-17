@@ -12,11 +12,7 @@ interface ZyncBaseError extends Error {
 // Example: React handling
 const { data, error } = useStore('tasks.123');
 
-if (error) {
-  if (error.code === 'PERMISSION_DENIED') return <NoAccess />;
-  return <ErrorMessage message={error.message} />;
-}
-```Retry Strategies Connection Errors_FAILED `TIMEOUT backoff jitter```typescript
+```4.1 Asynchronous Error Reporting high-throughput-and-forget operations server returns `ok unsolicited error background persistence fails server sends error `requestId matches original request seconds later errors related `DATABASE_BUSY_LOCKED_FULL_VIOLATION background batch processing unsolicited error `requestId SDK revert optimistic state user moved operations Detailed Retry Strategies Connection Errors `CONNECTION_FAILED `TIMEOUT backoff jitter```typescript
 const retryConfig = {
   initialDelay: 1000,      // 1 second
   maxDelay: 30000,         // 30 seconds
