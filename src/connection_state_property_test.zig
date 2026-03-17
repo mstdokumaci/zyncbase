@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionState = @import("message_handler.zig").ConnectionState;

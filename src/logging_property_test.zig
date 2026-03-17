@@ -94,7 +94,7 @@ const LogCapture = struct {
 
 test "logging: connection events" {
     // **Property 33: Connection logging**
-// Connection event logging properties
+    // Connection event logging properties
     //
     // This property test verifies that for any client connection or disconnection,
     // a log entry is written with the connection ID.
@@ -145,7 +145,8 @@ test "logging: connection events" {
         // Create a mock WebSocket (we'll use a stub)
         var ws = WebSocket{
             .ws = undefined, // Not used in this test
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Handle open - this should log "WebSocket connection opened: id={}"
@@ -164,7 +165,8 @@ test "logging: connection events" {
     {
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Open connection first
@@ -188,7 +190,8 @@ test "logging: connection events" {
         for (&connections) |*ws| {
             ws.* = WebSocket{
                 .ws = undefined,
-                .ssl = false, .user_data = null,
+                .ssl = false,
+                .user_data = null,
             };
             try handler.handleOpen(ws);
         }
@@ -213,7 +216,8 @@ test "logging: connection events" {
     {
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Open connection
@@ -241,7 +245,8 @@ test "logging: connection events" {
                 while (i < ctx.iterations) : (i += 1) {
                     var ws = WebSocket{
                         .ws = undefined,
-                        .ssl = false, .user_data = null,
+                        .ssl = false,
+                        .user_data = null,
                     };
 
                     // Open and close connection
@@ -270,7 +275,7 @@ test "logging: connection events" {
 
 test "logging: error details" {
     // **Property 34: Error logging**
-// Error event logging properties
+    // Error event logging properties
     //
     // This property test verifies that for any database or message parsing error,
     // a log entry is written with error details.
@@ -318,7 +323,8 @@ test "logging: error details" {
     {
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Open connection
@@ -338,7 +344,8 @@ test "logging: error details" {
     {
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         try handler.handleOpen(&ws);
@@ -370,7 +377,8 @@ test "logging: error details" {
     {
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         try handler.handleOpen(&ws);
@@ -445,7 +453,8 @@ test "logging: level filtering" {
         // Trigger different log levels
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Info level: connection open
@@ -522,7 +531,8 @@ test "logging: message formatting" {
         // Trigger various log messages
         var ws = WebSocket{
             .ws = undefined,
-            .ssl = false, .user_data = null,
+            .ssl = false,
+            .user_data = null,
         };
 
         // Connection logging includes connection ID
@@ -589,7 +599,8 @@ test "logging: message formatting" {
         for (&connections) |*ws| {
             ws.* = WebSocket{
                 .ws = undefined,
-                .ssl = false, .user_data = null,
+                .ssl = false,
+                .user_data = null,
             };
             try handler.handleOpen(ws);
         }

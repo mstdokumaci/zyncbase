@@ -93,11 +93,11 @@ pub const MessageHandler = struct {
         }
 
         // Parse MessagePack message
-        
+
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(self.allocator, &reader) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
-            
+
             // Record violation if it was a security/limit error
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
@@ -106,7 +106,7 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-            
+
             try self.sendError(ws, "INVALID_MESSAGE", "Failed to parse MessagePack");
             return;
         };
@@ -218,16 +218,16 @@ pub const MessageHandler = struct {
     /// Extract message type and correlation ID from parsed MessagePack
     /// Requirements: 6.2, 6.9
     pub fn extractMessageInfo(_: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
- 
+
         // Extract type and id from MessagePack map
         if (parsed != .map) {
             std.log.debug("parsed is not map, it is {}", .{parsed});
             return error.InvalidMessageFormat;
         }
- 
+
         var msg_type: ?[]const u8 = null;
         var msg_id: ?u64 = null;
- 
+
         var it = parsed.map.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
@@ -289,7 +289,7 @@ pub const MessageHandler = struct {
         var path: ?[]const u8 = null;
         var path_is_allocated = false;
         defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
-        
+
         var value: ?msgpack.Payload = null;
 
         var it = parsed.map.iterator();
@@ -403,10 +403,10 @@ pub const MessageHandler = struct {
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
-        
+
         try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
- 
+
         try msgpack.encode(payload, &aw.writer);
         return try aw.toOwnedSlice();
     }
@@ -419,11 +419,11 @@ pub const MessageHandler = struct {
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
- 
+
         if (value_bytes) |v| {
             try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
             try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-            
+
             // For the value, we can decode it first or send it as binary
             // Since it's already MessagePack, decoding it into a Payload is safest
             var reader: std.Io.Reader = .fixed(v);
@@ -434,7 +434,7 @@ pub const MessageHandler = struct {
             try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
             try payload.mapPut("code", try msgpack.Payload.strToPayload("NOT_FOUND", self.allocator));
         }
- 
+
         try msgpack.encode(payload, &aw.writer);
         return try aw.toOwnedSlice();
     }
@@ -456,7 +456,7 @@ pub const MessageHandler = struct {
 
         var value_map = msgpack.Payload.mapPayload(self.allocator);
         errdefer value_map.free(self.allocator);
-        
+
         for (results) |res| {
             var reader: std.Io.Reader = .fixed(res.value);
             const val_payload = try msgpack.decode(self.allocator, &reader);
@@ -477,18 +477,18 @@ pub const MessageHandler = struct {
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
- 
+
         try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
         try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
         try payload.mapPut("message", try msgpack.Payload.strToPayload(message, self.allocator));
- 
+
         try msgpack.encode(payload, &aw.writer);
         const error_msg = try aw.toOwnedSlice();
         defer self.allocator.free(error_msg);
- 
+
         ws.send(error_msg, .binary);
     }
- 
+
     fn isSecurityError(err: anyerror) bool {
         return switch (err) {
             error.MaxDepthExceeded,
@@ -517,7 +517,6 @@ pub const MessageHandler = struct {
         }
         return null;
     }
-
 
     /// Message information extracted from parsed MessagePack
     const MessageInfo = struct {

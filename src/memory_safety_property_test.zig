@@ -7,7 +7,7 @@ const Connection = @import("memory_strategy.zig").Connection;
 
 test "memory: safety and pool invariants" {
     // **Property 6: Memory Safety**
-// Memory safety properties
+    // Memory safety properties
     //
     // This property test verifies that the memory management strategy:
     // - Tracks all allocations and deallocations correctly

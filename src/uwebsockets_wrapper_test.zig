@@ -7,7 +7,6 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const c = @import("uwebsockets_wrapper.zig").c;
 
-
 test "WebSocketServer: init with valid config" {
     const allocator = testing.allocator;
 
@@ -37,9 +36,7 @@ test "WebSocketServer: init with SSL config" {
     const key_path = tmp_dir ++ "/key.pem";
 
     // Generate self-signed cert on the fly
-    const openssl_cmd = [_][]const u8{
-        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost"
-    };
+    const openssl_cmd = [_][]const u8{ "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost" };
     var child = std.process.Child.init(&openssl_cmd, allocator);
     const term = try child.spawnAndWait();
     try testing.expectEqual(@as(std.process.Child.Term, .{ .Exited = 0 }), term);
@@ -130,9 +127,7 @@ test "WebSocketServer: full server lifecycle with SSL" {
     const key_path = tmp_dir ++ "/key.pem";
 
     // Generate self-signed cert on the fly
-    const openssl_cmd = [_][]const u8{
-        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost"
-    };
+    const openssl_cmd = [_][]const u8{ "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost" };
     var child = std.process.Child.init(&openssl_cmd, allocator);
     const term = try child.spawnAndWait();
     try testing.expectEqual(@as(std.process.Child.Term, .{ .Exited = 0 }), term);
@@ -156,11 +151,11 @@ fn runFullLifecycleTest(
     const server_ready = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(server_ready);
     server_ready.* = std.atomic.Value(bool).init(false);
-    
+
     const server_error = try allocator.create(std.atomic.Value(bool));
     defer allocator.destroy(server_error);
     server_error.* = std.atomic.Value(bool).init(false);
-    
+
     const server_atomic_ptr = try allocator.create(std.atomic.Value(?*WebSocketServer));
     defer allocator.destroy(server_atomic_ptr);
     server_atomic_ptr.* = std.atomic.Value(?*WebSocketServer).init(null);
@@ -237,13 +232,13 @@ fn runFullLifecycleTest(
             return error.ServerStartTimeout;
         }
     }
-    
+
     const server = server_atomic_ptr.load(.seq_cst) orelse return error.NullServerPointer;
 
     // Execute Bun client
     const client_cmd = [_][]const u8{ "bun", "tests/integration/websocket_client.ts", client_arg };
     var child = std.process.Child.init(&client_cmd, allocator);
-    
+
     // Set environment variable if TLS should be ignored
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
@@ -251,7 +246,7 @@ fn runFullLifecycleTest(
         try env_map.put("NODE_TLS_REJECT_UNAUTHORIZED", "0");
     }
     child.env_map = &env_map;
-    
+
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
@@ -265,10 +260,10 @@ fn runFullLifecycleTest(
 
     // Shutdown server
     server.close();
-    
+
     // Safety join: ThreadSanitizer will detect if we exit before the thread is gone
     server_thread.join();
-    
+
     // Now it's safe to deinit
     server.deinit();
 

@@ -6,7 +6,6 @@ pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
 
-
 /// WebSocket server wrapper using Bun's uWebSockets C API
 pub const WebSocketServer = struct {
     app: *c.uws_app_t,
@@ -75,7 +74,7 @@ pub const WebSocketServer = struct {
         return self;
     }
 
-    /// Clean up resources. 
+    /// Clean up resources.
     /// CAUTION: Must be called only after the event loop (run()) has exited.
     /// In multi-threaded environments, ensure the server thread has joined.
     pub fn deinit(self: *WebSocketServer) void {
@@ -86,15 +85,15 @@ pub const WebSocketServer = struct {
     pub fn registerWebSocketHandlers(self: *WebSocketServer, pattern: []const u8, handlers: WebSocketHandlers, user_data: ?*anyopaque) void {
         self.handlers = handlers;
         self.user_data = user_data;
-        
+
         var behavior = std.mem.zeroes(c.uws_socket_behavior_t);
         behavior.maxPayloadLength = 16 * 1024 * 1024;
         behavior.idleTimeout = 120;
         behavior.sendPingsAutomatically = true;
-        
+
         const ssl_flag: c_int = if (self.ssl) 1 else 0;
         const id = @intFromPtr(self);
-        
+
         behavior.upgrade = onUpgradeCallback;
         if (self.ssl) {
             behavior.open = onOpenCallbackSSL;
@@ -107,7 +106,7 @@ pub const WebSocketServer = struct {
             behavior.close = onCloseCallbackNoSSL;
             behavior.drain = onDrainCallbackNoSSL;
         }
-        
+
         c.uws_ws(
             ssl_flag,
             @ptrCast(self.app),
@@ -205,7 +204,7 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
 fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
     if (ctx == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
-    
+
     // Ensure we only perform shutdown once
     if (server.close_requested.load(.monotonic) and !server.is_closing.swap(true, .acquire)) {
         c.set_bun_is_exiting(1);
@@ -214,7 +213,7 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
             server.listen_socket = null;
         }
         c.uws_app_close(if (server.ssl) 1 else 0, server.app);
-        
+
         // Wake up the loop to ensure it runs one more iteration to finalize resource state
         // and exit when num_polls hits zero.
         if (loop_ptr) |loop| {
@@ -253,17 +252,33 @@ fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: 
 
 // C callback entry points
 
-fn onOpenCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void { onOpen(ws, false); }
-fn onOpenCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void { onOpen(ws, true); }
+fn onOpenCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    onOpen(ws, false);
+}
+fn onOpenCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    onOpen(ws, true);
+}
 
-fn onMessageCallbackNoSSL(ws: ?*c.uws_websocket_t, msg: [*c]const u8, len: usize, op: c.uws_opcode_t) callconv(.c) void { onMessage(ws, msg, len, op, false); }
-fn onMessageCallbackSSL(ws: ?*c.uws_websocket_t, msg: [*c]const u8, len: usize, op: c.uws_opcode_t) callconv(.c) void { onMessage(ws, msg, len, op, true); }
+fn onMessageCallbackNoSSL(ws: ?*c.uws_websocket_t, msg: [*c]const u8, len: usize, op: c.uws_opcode_t) callconv(.c) void {
+    onMessage(ws, msg, len, op, false);
+}
+fn onMessageCallbackSSL(ws: ?*c.uws_websocket_t, msg: [*c]const u8, len: usize, op: c.uws_opcode_t) callconv(.c) void {
+    onMessage(ws, msg, len, op, true);
+}
 
-fn onCloseCallbackNoSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, len: usize) callconv(.c) void { onClose(ws, code, msg, len, false); }
-fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, len: usize) callconv(.c) void { onClose(ws, code, msg, len, true); }
+fn onCloseCallbackNoSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, len: usize) callconv(.c) void {
+    onClose(ws, code, msg, len, false);
+}
+fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, len: usize) callconv(.c) void {
+    onClose(ws, code, msg, len, true);
+}
 
-fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void { _ = ws; } // TODO: Implement drain handler
-fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void { _ = ws; }
+fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    _ = ws;
+} // TODO: Implement drain handler
+fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    _ = ws;
+}
 
 fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, id: usize) callconv(.c) void {
     _ = id;
