@@ -163,6 +163,9 @@ SQLite's single-writer limitation is mitigated by an async ring-buffer queue and
 - **Batch Size**: Triggered when the queue reaches a threshold (e.g., 100 ops).
 - **Timeout**: Triggered if operations have been queued for too long (e.g., 10ms) to maintain low latency.
 
+### Batching Trade-off: Asynchronous Error Reporting
+Because writes are asynchronous (fire-and-forget for low latency), the server returns an `ok` as soon as the operation is accepted into the memory queue. If a write fails during background persistence (e.g., disk full, constraint violation), the server is responsible for sending an asynchronous error message (NACK) to the client so the SDK can revert the optimistic update.
+
 ---
 
 ## Auto-Migration System

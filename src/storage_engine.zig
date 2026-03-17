@@ -268,18 +268,16 @@ pub const StorageEngine = struct {
     }
 
     pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .type = .set,
             .namespace = try self.allocator.dupe(u8, namespace),
             .path = try self.allocator.dupe(u8, path),
             .value = try self.allocator.dupe(u8, value),
-            .completion_signal = &signal,
+            .completion_signal = null,
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
-        return signal.wait();
     }
 
     pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
@@ -316,18 +314,16 @@ pub const StorageEngine = struct {
     }
 
     pub fn delete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .type = .delete,
             .namespace = try self.allocator.dupe(u8, namespace),
             .path = try self.allocator.dupe(u8, path),
             .value = null,
-            .completion_signal = &signal,
+            .completion_signal = null,
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
-        return signal.wait();
     }
 
     pub fn query(

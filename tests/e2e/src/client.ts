@@ -65,8 +65,32 @@ export class ZyncBaseClient {
         type: "StoreGet",
         id,
         namespace,
-        path, // Now passing array directly
+        path,
     });
+  }
+
+  /**
+   * Periodically polls the server until the predicate is satisfied or timeout is reached.
+   */
+  async waitFor<T>(
+    namespace: string,
+    path: string[],
+    predicate: (val: any) => T | null | undefined,
+    timeoutMs: number = 2000,
+    intervalMs: number = 100
+  ): Promise<T> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const val = await this.get(namespace, path);
+        const result = predicate(val);
+        if (result !== null && result !== undefined) return result as T;
+      } catch (err) {
+        // Ignore errors during polling (e.g. NOT_FOUND)
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    throw new Error(`Timeout waiting for condition on path: ${path.join("/")}`);
   }
 
   private async sendRequest(msg: ZyncBaseMessage): Promise<any> {

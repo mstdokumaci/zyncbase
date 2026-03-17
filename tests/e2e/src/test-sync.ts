@@ -16,20 +16,22 @@ async function main() {
     await clientA.set(namespace, ["tasks", "1"], { title: "A's Task" });
 
     // 2. Client B gets task 1 and verifies
-    console.log("Client B getting task 1...");
-    const task1 = await clientB.get(namespace, ["tasks", "1"]);
+    console.log("Client B waiting for task 1...");
+    const task1 = await clientB.waitFor(namespace, ["tasks", "1"], (val) => {
+      return val?.title === "A's Task" ? val : null;
+    });
     console.log("Client B received task 1:", task1);
-    if (task1?.title !== "A's Task") throw new Error("Sync failed for task 1");
 
     // 3. Client B sets task 2
     console.log("Client B setting task 2...");
     await clientB.set(namespace, ["tasks", "2"], { title: "B's Task" });
 
     // 4. Client A gets task 2 and verifies
-    console.log("Client A getting task 2...");
-    const task2 = await clientA.get(namespace, ["tasks", "2"]);
+    console.log("Client A waiting for task 2...");
+    const task2 = await clientA.waitFor(namespace, ["tasks", "2"], (val) => {
+      return val?.title === "B's Task" ? val : null;
+    });
     console.log("Client A received task 2:", task2);
-    if (task2?.title !== "B's Task") throw new Error("Sync failed for task 2");
 
     // 5. Both Client A and Client B get ["tasks"] and verify the collection contains both entries
     console.log("Verifying collection get for Client A...");

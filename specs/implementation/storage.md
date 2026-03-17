@@ -321,6 +321,44 @@ const StorageLayer = struct {
 
 ---
 
+## Asynchronous Completion Tracking
+
+To support **Asynchronous Error Reporting (NACKs)**, the `StorageLayer` must track the origin of each write operation.
+
+### Proposed Structural Changes
+
+1. **`WriteOp` Expansion**:
+    Add metadata to link the operation back to the requester.
+    ```zig
+    pub const WriteOp = struct {
+        type: enum { ... },
+        // ... existing fields ...
+        client_id: ?u64 = null,    // Unique identifier for the WebSocket connection
+        request_id: ?u64 = null,  // Original id from the client message
+    };
+    ```
+
+2. **Notification Callback**:
+    The `StorageLayer` should take a callback interface during initialization to report background processing results.
+    ```zig
+    const StorageLayer = struct {
+        // ...
+        on_error: ?*const fn (client_id: u64, request_id: u64, err: anyerror) void = null,
+
+        fn flushBatch(self: *StorageLayer) !void {
+            // ... inside batch execution loop ...
+            if (result == .error and op.client_id != null) {
+                if (self.on_error) |cb| cb(op.client_id.?, op.request_id.?, err);
+            }
+        }
+    };
+    ```
+
+### Server Integration
+The `ZyncBaseServer` will implement the `on_error` callback by looking up the `client_id` in its active connection registry and sending a late `error` message over the corresponding WebSocket.
+
+---
+
 ## Read Strategy: Cache Integration
 
 A lock-free in-memory cache acts as a read-through layer.

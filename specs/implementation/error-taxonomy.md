@@ -104,11 +104,15 @@ interface ZyncBaseError extends Error {
 // Example: React handling
 const { data, error } = useStore('tasks.123');
 
-if (error) {
-  if (error.code === 'PERMISSION_DENIED') return <NoAccess />;
-  return <ErrorMessage message={error.message} />;
-}
 ```
+
+### 4.1 Asynchronous Error Reporting (NACKs)
+
+For high-throughput "fire-and-forget" operations (where the server returns `ok` immediately after queueing), the server may send a later, unsolicited error message if the background persistence fails.
+
+1. **Protocol**: The server sends an error message where `requestId` matches the original write request, but potentially seconds later.
+2. **Context**: These errors are primarily related to `DATABASE_BUSY`, `DATABASE_LOCKED`, `DISK_FULL`, or `SCHEMA_VIOLATION` that occur during background batch processing.
+3. **SDK Action**: Upon receiving an unsolicited error with a known `requestId`, the SDK **must** asynchronously revert the optimistic state associated with that ID, even if the user has already moved on to other operations.
 
 ---
 
