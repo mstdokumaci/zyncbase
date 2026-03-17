@@ -12,8 +12,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "connection: state deallocation on close" {
-    // **Property 31: Connection state deallocation**
-    //
     // This property test verifies that for any connection that closes,
     // all associated connection state is deallocated properly.
 

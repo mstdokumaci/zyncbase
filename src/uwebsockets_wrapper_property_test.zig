@@ -5,9 +5,6 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 
-// **Property 2: WebSocket callbacks invoked for all events**
-// WebSocket wrapper properties
-//
 // This property test verifies that WebSocket callbacks are invoked for all connection events:
 // - on_open callback is invoked when a connection opens
 // - on_message callback is invoked when a message is received

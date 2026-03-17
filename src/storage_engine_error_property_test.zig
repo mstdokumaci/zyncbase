@@ -3,9 +3,6 @@ const std = @import("std");
 const testing = std.testing;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
-// **Property 23: Database error handling**
-// Database error handling properties
-//
 // This property test verifies that database operations handle errors gracefully:
 // 1. All database operation failures return descriptive errors
 // 2. All database errors are logged with full details

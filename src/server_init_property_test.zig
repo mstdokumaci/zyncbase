@@ -3,9 +3,6 @@ const std = @import("std");
 const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
-// **Property 3: Component initialization is idempotent**
-// Server initialization properties
-//
 // For any initialized component, calling init() then deinit() should leave no memory leaks
 // and allow re-initialization.
 //

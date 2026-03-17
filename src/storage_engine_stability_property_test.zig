@@ -3,9 +3,6 @@ const std = @import("std");
 const testing = std.testing;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 
-// **Property 24: Server stability on database errors**
-// Storage engine stability properties
-//
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
 // 2. Server continues operating after database errors

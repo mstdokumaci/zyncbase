@@ -2,13 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 
-// **Property 3: Checkpoint Correctness**
-// **Property 3: Checkpoint Correctness**
-//
-// This property test verifies that checkpoint operations maintain data integrity
-// and correctly manage WAL file size under various conditions.
-//
-// Properties tested:
 // 1. No data loss occurs during checkpoint
 // 2. WAL size decreases or stays same after successful checkpoint
 // 3. Checkpoint metrics accurately reflect operation

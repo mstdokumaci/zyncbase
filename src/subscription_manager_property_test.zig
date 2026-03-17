@@ -11,9 +11,6 @@ const SortSpec = @import("subscription_manager.zig").SortSpec;
 const Row = @import("subscription_manager.zig").Row;
 const RowChange = @import("subscription_manager.zig").RowChange;
 
-// **Property 4: Subscription Invalidation Accuracy**
-// Subscription manager core properties
-//
 // This property test verifies that subscription matching is accurate:
 // - All matching subscriptions are found (no false negatives)
 // - No non-matching subscriptions are included (no false positives)

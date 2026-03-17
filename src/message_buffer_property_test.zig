@@ -11,9 +11,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
 
 test "buffer: message deallocation after processing" {
-    // **Property 32: Message buffer deallocation**
-    // Message buffer deallocation properties
-    //
     // This property test verifies that for any processed message,
     // the message buffer is deallocated after processing completes.
 

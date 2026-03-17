@@ -3,7 +3,6 @@ const std = @import("std");
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const testing = std.testing;
 
-// Property 1: Lock-Free Cache Consistency
 // Lock-free cache properties
 // Test concurrent reads never block each other
 // Verify ref_count correctly incremented for each reader

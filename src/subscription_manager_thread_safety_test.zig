@@ -1,16 +1,5 @@
 // Thread-safety exploration and stress tests for SubscriptionManager.
 //
-// **Validates: Requirements 1.1, 1.2, 1.3**
-//
-// Task 1 — Bug Condition Exploration:
-//   These tests are designed to surface the data race on the UNFIXED code.
-//   Run under TSan: `zig test -fsanitize-thread src/subscription_manager_thread_safety_test.zig`
-//   EXPECTED OUTCOME on unfixed code: TSan reports a data race on
-//     `subscriptions` or `index` metadata (AutoHashMap internal state).
-//
-// Task 2 — Preservation Property Tests:
-//   Single-threaded property tests that establish a baseline of correct behavior.
-//   These PASS on unfixed code and must continue to pass after the fix.
 const std = @import("std");
 const testing = std.testing;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
@@ -70,7 +59,6 @@ fn concurrentSubscribeWorker(ctx: *ConcurrentSubscribeCtx) void {
 // UNFIXED: TSan reports a data race on `subscriptions` or `index` metadata.
 // FIXED:   Both threads complete; all 2000 subscriptions are registered.
 //
-// **Validates: Requirements 1.1, 2.1**
 test "concurrent subscribe: two threads each subscribe 1000 times" {
     const allocator = testing.allocator;
 
@@ -183,7 +171,6 @@ fn findLoopWorker(ctx: *FindLoopCtx) void {
 // UNFIXED: TSan reports a read-write race on `index` ArrayList or AutoHashMap.
 // FIXED:   Both threads complete without error; no torn reads.
 //
-// **Validates: Requirements 1.2, 2.2**
 test "concurrent subscribe+find: subscribe and findMatchingSubscriptions race" {
     const allocator = testing.allocator;
 
@@ -217,7 +204,6 @@ test "concurrent subscribe+find: subscribe and findMatchingSubscriptions race" {
 // **Property 2 — Preservation**: subscribe then findMatchingSubscriptions
 // returns the subscription ID.
 //
-// **Validates: Requirement 3.1**
 test "preservation: subscribe then findMatchingSubscriptions returns id" {
     const allocator = testing.allocator;
 
@@ -246,9 +232,6 @@ test "preservation: subscribe then findMatchingSubscriptions returns id" {
     try testing.expectEqual(@as(SubscriptionId, 42), matches[0]);
 }
 
-// **Property 2 — Preservation**: unsubscribe removes entry from both maps.
-//
-// **Validates: Requirement 3.2**
 test "preservation: unsubscribe removes subscription" {
     const allocator = testing.allocator;
 
@@ -278,10 +261,6 @@ test "preservation: unsubscribe removes subscription" {
     try testing.expectEqual(@as(u32, 0), mgr.subscriptions.count());
 }
 
-// **Property 2 — Preservation**: findMatchingSubscriptions with unknown
-// namespace/collection returns empty slice.
-//
-// **Validates: Requirement 3.3**
 test "preservation: findMatchingSubscriptions unknown namespace returns empty" {
     const allocator = testing.allocator;
 
@@ -306,10 +285,6 @@ test "preservation: findMatchingSubscriptions unknown namespace returns empty" {
     try testing.expectEqual(@as(usize, 0), matches.len);
 }
 
-// **Property 2 — Preservation**: evaluateFilter with empty conditions
-// always returns true.
-//
-// **Validates: Requirement 3.4**
 test "preservation: evaluateFilter with empty filter returns true" {
     const allocator = testing.allocator;
 
@@ -329,10 +304,6 @@ test "preservation: evaluateFilter with empty filter returns true" {
     try testing.expect(mgr.evaluateFilter(filter, empty_row));
 }
 
-// **Property 2 — Preservation**: unsubscribe with unknown ID returns
-// error.SubscriptionNotFound.
-//
-// **Validates: Requirement 3.5**
 test "preservation: unsubscribe unknown id returns SubscriptionNotFound" {
     const allocator = testing.allocator;
 

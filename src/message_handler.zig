@@ -22,7 +22,6 @@ pub const MessageHandler = struct {
     next_connection_id: std.atomic.Value(u64),
 
     /// Initialize message handler with all required components
-    /// Requirements: 5.1, 5.2, 5.3, 6.1
     pub fn init(
         allocator: Allocator,
         violation_tracker: *ViolationTracker,
@@ -56,7 +55,6 @@ pub const MessageHandler = struct {
 
     /// Handle WebSocket connection open event
     /// Generates unique connection ID and adds to registry
-    /// Requirements: 5.1, 5.2, 5.3
     pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
         // Generate unique connection ID (atomic increment)
         const conn_id = self.next_connection_id.fetchAdd(1, .monotonic);
@@ -76,7 +74,6 @@ pub const MessageHandler = struct {
 
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
-    /// Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9
     pub fn handleMessage(
         self: *MessageHandler,
         ws: *WebSocket,
@@ -133,7 +130,6 @@ pub const MessageHandler = struct {
 
     /// Handle WebSocket connection close event
     /// Removes subscriptions and connection state
-    /// Requirements: 5.4, 5.5
     pub fn handleClose(
         self: *MessageHandler,
         ws: *WebSocket,
@@ -167,7 +163,6 @@ pub const MessageHandler = struct {
 
     /// Handle WebSocket error event
     /// Cleans up connection state
-    /// Requirements: 5.6, 5.7
     pub fn handleError(self: *MessageHandler, ws: *WebSocket) !void {
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
 
@@ -192,7 +187,6 @@ pub const MessageHandler = struct {
     }
 
     /// Close all active connections for graceful shutdown
-    /// Requirements: 4.4
     pub fn closeAllConnections(self: *MessageHandler) !void {
         var it = self.connection_registry.iterator();
         while (it.next()) |entry| {
@@ -216,7 +210,6 @@ pub const MessageHandler = struct {
     }
 
     /// Extract message type and correlation ID from parsed MessagePack
-    /// Requirements: 6.2, 6.9
     pub fn extractMessageInfo(_: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
 
         // Extract type and id from MessagePack map
@@ -257,7 +250,6 @@ pub const MessageHandler = struct {
     }
 
     /// Route message to appropriate handler based on type
-    /// Requirements: 6.3
     pub fn routeMessage(
         self: *MessageHandler,
         conn_id: u64,
@@ -275,7 +267,6 @@ pub const MessageHandler = struct {
     }
 
     /// Handle StoreSet message
-    /// Requirements: 16.1, 16.2, 16.3, 16.4
     fn handleStoreSet(
         self: *MessageHandler,
         conn_id: u64,
@@ -332,7 +323,6 @@ pub const MessageHandler = struct {
     }
 
     /// Handle StoreGet message
-    /// Requirements: 16.5, 16.6, 16.7, 16.8, 16.9
     fn handleStoreGet(
         self: *MessageHandler,
         conn_id: u64,
@@ -396,7 +386,6 @@ pub const MessageHandler = struct {
     }
 
     /// Build success response for StoreSet
-    /// Requirements: 16.4
     fn buildSuccessResponse(self: *MessageHandler, msg_id: u64) ![]const u8 {
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
         defer aw.deinit();
@@ -412,7 +401,6 @@ pub const MessageHandler = struct {
     }
 
     /// Build value response for StoreGet
-    /// Requirements: 16.8, 16.9
     fn buildValueResponse(self: *MessageHandler, msg_id: u64, value_bytes: ?[]const u8) ![]const u8 {
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
         defer aw.deinit();
@@ -470,7 +458,6 @@ pub const MessageHandler = struct {
     }
 
     /// Send error response to client
-    /// Requirements: 6.7, 6.8
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
         defer aw.deinit();
