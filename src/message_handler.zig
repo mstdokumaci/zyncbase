@@ -93,11 +93,10 @@ pub const MessageHandler = struct {
         }
 
         // Parse MessagePack message
-        std.log.debug("Incoming message ({}): {x}", .{message.len, message});
         
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(self.allocator, &reader) catch |err| {
-            std.log.debug("Failed to parse message from connection {}: {}", .{ conn_id, err });
+            std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
             
             // Record violation if it was a security/limit error
             if (isSecurityError(err)) {
@@ -115,7 +114,7 @@ pub const MessageHandler = struct {
 
         // Extract message type and correlation ID
         const msg_info = self.extractMessageInfo(parsed) catch |err| {
-            std.log.debug("Failed to extract message info from connection {}: {}", .{ conn_id, err });
+            std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
             try self.sendError(ws, "INVALID_MESSAGE_FORMAT", "Missing required fields: type or id");
             return;
         };
@@ -129,7 +128,6 @@ pub const MessageHandler = struct {
         defer self.allocator.free(response);
 
         // Send response
-        std.log.debug("Outgoing response ({}): {x}", .{response.len, response});
         ws.send(response, .binary);
     }
 
@@ -289,8 +287,11 @@ pub const MessageHandler = struct {
         // Extract namespace, path, and value from message
         var namespace: ?[]const u8 = null;
         var path: ?[]const u8 = null;
+        var path_is_allocated = false;
+        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
+        
         var value: ?msgpack.Payload = null;
- 
+
         var it = parsed.map.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
@@ -302,8 +303,9 @@ pub const MessageHandler = struct {
                         namespace = val.str.value();
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (val == .str) {
-                        path = val.str.value();
+                    if (try self.parsePathFromPayload(val)) |p| {
+                        path = p.path;
+                        path_is_allocated = p.allocated;
                     }
                 } else if (std.mem.eql(u8, key_str, "value")) {
                     value = val;
@@ -342,6 +344,8 @@ pub const MessageHandler = struct {
         // Extract namespace and path from message
         var namespace: ?[]const u8 = null;
         var path: ?[]const u8 = null;
+        var path_is_allocated = false;
+        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
 
         var it = parsed.map.iterator();
         while (it.next()) |entry| {
@@ -354,8 +358,9 @@ pub const MessageHandler = struct {
                         namespace = val.str.value();
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (val == .str) {
-                        path = val.str.value();
+                    if (try self.parsePathFromPayload(val)) |p| {
+                        path = p.path;
+                        path_is_allocated = p.allocated;
                     }
                 }
             }
@@ -367,10 +372,27 @@ pub const MessageHandler = struct {
 
         // Get from database
         const value_bytes = try self.storage_engine.get(namespace.?, path.?);
-        defer if (value_bytes) |v| self.allocator.free(v);
+        if (value_bytes) |v| {
+            defer self.allocator.free(v);
+            return try self.buildValueResponse(msg_id, v);
+        }
 
-        // Build response with value
-        return try self.buildValueResponse(msg_id, value_bytes);
+        // Exact match not found, try collection query
+        const query_results = try self.storage_engine.query(namespace.?, path.?);
+        defer {
+            for (query_results) |result| {
+                self.allocator.free(result.path);
+                self.allocator.free(result.value);
+            }
+            self.allocator.free(query_results);
+        }
+
+        if (query_results.len > 0) {
+            return try self.buildQueryResponse(msg_id, query_results);
+        }
+
+        // Nothing found
+        return try self.buildValueResponse(msg_id, null);
     }
 
     /// Build success response for StoreSet
@@ -417,6 +439,36 @@ pub const MessageHandler = struct {
         return try aw.toOwnedSlice();
     }
 
+    /// Build query response for StoreGet (collections)
+    fn buildQueryResponse(
+        self: *MessageHandler,
+        msg_id: u64,
+        results: []const @import("storage_engine.zig").QueryResult,
+    ) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+
+        var value_map = msgpack.Payload.mapPayload(self.allocator);
+        errdefer value_map.free(self.allocator);
+        
+        for (results) |res| {
+            var reader: std.Io.Reader = .fixed(res.value);
+            const val_payload = try msgpack.decode(self.allocator, &reader);
+            try value_map.mapPut(res.path, val_payload);
+        }
+
+        try payload.mapPut("value", value_map);
+
+        try msgpack.encode(payload, &aw.writer);
+        return try aw.toOwnedSlice();
+    }
+
     /// Send error response to client
     /// Requirements: 6.7, 6.8
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
@@ -448,6 +500,22 @@ pub const MessageHandler = struct {
             => true,
             else => false,
         };
+    }
+
+    fn parsePathFromPayload(self: *MessageHandler, payload: msgpack.Payload) !?struct { path: []const u8, allocated: bool } {
+        if (payload == .str) {
+            return .{ .path = payload.str.value(), .allocated = false };
+        } else if (payload == .arr) {
+            var path_buf: std.ArrayList(u8) = .{};
+            errdefer path_buf.deinit(self.allocator);
+            for (payload.arr, 0..) |segment, i| {
+                if (segment != .str) return error.InvalidPathSegment;
+                if (i > 0) try path_buf.append(self.allocator, '/');
+                try path_buf.appendSlice(self.allocator, segment.str.value());
+            }
+            return .{ .path = try path_buf.toOwnedSlice(self.allocator), .allocated = true };
+        }
+        return null;
     }
 
 

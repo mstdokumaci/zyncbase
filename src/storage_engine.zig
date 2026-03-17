@@ -268,15 +268,18 @@ pub const StorageEngine = struct {
     }
 
     pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
+        var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .type = .set,
             .namespace = try self.allocator.dupe(u8, namespace),
             .path = try self.allocator.dupe(u8, path),
             .value = try self.allocator.dupe(u8, value),
+            .completion_signal = &signal,
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
+        return signal.wait();
     }
 
     pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
@@ -286,9 +289,9 @@ pub const StorageEngine = struct {
 
         // Execute query with inline parameters
         const row = reader.oneAlloc(
-            struct { value_json: []const u8 },
+            struct { value_blob: []const u8 },
             self.allocator,
-            "SELECT value_json FROM kv_store WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}",
+            "SELECT value_blob FROM kv_store WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}",
             .{},
             .{ .namespace = namespace, .path = path },
         ) catch |err| {
@@ -309,19 +312,22 @@ pub const StorageEngine = struct {
         } orelse return null;
 
         // The string is already allocated by oneAlloc, so we just return it
-        return row.value_json;
+        return row.value_blob;
     }
 
     pub fn delete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
+        var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .type = .delete,
             .namespace = try self.allocator.dupe(u8, namespace),
             .path = try self.allocator.dupe(u8, path),
             .value = null,
+            .completion_signal = &signal,
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
+        return signal.wait();
     }
 
     pub fn query(
@@ -339,7 +345,7 @@ pub const StorageEngine = struct {
         const pattern: []const u8 = pattern_buf;
 
         // Prepare statement
-        var stmt = reader.prepare("SELECT path, value_json FROM kv_store WHERE namespace = $namespace{[]const u8} AND path LIKE $pattern{[]const u8}") catch |err| {
+        var stmt = reader.prepare("SELECT path, value_blob FROM kv_store WHERE namespace = $namespace{[]const u8} AND path LIKE $pattern{[]const u8}") catch |err| {
             const classified_err = classifyError(err);
             logDatabaseError("query prepare", classified_err, path_prefix);
 
@@ -372,7 +378,7 @@ pub const StorageEngine = struct {
 
         var iter = stmt.iterator(struct {
             path: []const u8,
-            value_json: []const u8,
+            value_blob: []const u8,
         }, .{ .namespace = namespace, .pattern = pattern }) catch |err| {
             const classified_err = classifyError(err);
             logDatabaseError("query iterator", classified_err, path_prefix);
@@ -385,11 +391,11 @@ pub const StorageEngine = struct {
             return classified_err;
         }) |row| {
             defer self.allocator.free(row.path);
-            defer self.allocator.free(row.value_json);
+            defer self.allocator.free(row.value_blob);
 
             try results.append(self.allocator, .{
                 .path = try self.allocator.dupe(u8, row.path),
-                .value = try self.allocator.dupe(u8, row.value_json),
+                .value = try self.allocator.dupe(u8, row.value_blob),
             });
         }
 
@@ -565,6 +571,7 @@ pub const StorageEngine = struct {
                 if (self.write_queue.pop()) |op| {
                     switch (op.type) {
                         .set, .delete => {
+                            std.log.debug("Batching {s} op for path {?s}", .{ @tagName(op.type), op.path });
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
@@ -682,11 +689,21 @@ pub const StorageEngine = struct {
 
     fn flushBatch(self: *StorageEngine, batch: *std.ArrayListUnmanaged(WriteOp), last_batch_time: *i64) !void {
         const batch_len = batch.items.len;
-        self.executeBatch(batch.items) catch |err| {
-            std.log.debug("Failed to execute batch, transaction rolled back: {}", .{err});
-        };
-        for (batch.items) |op| {
-            op.deinit(self.allocator);
+        const result = self.executeBatch(batch.items);
+        if (result) |_| {
+            for (batch.items) |op| {
+                if (op.completion_signal) |sig| {
+                    sig.signal(null);
+                }
+                op.deinit(self.allocator);
+            }
+        } else |err| {
+            const classified_err = classifyError(err);
+            std.log.err("Failed to execute batch, transaction rolled back: {}", .{classified_err});
+            for (batch.items) |op| {
+                if (op.completion_signal) |sig| sig.signal(classified_err);
+                op.deinit(self.allocator);
+            }
         }
         batch.clearRetainingCapacity();
         _ = self.pending_writes_count.fetchSub(batch_len, .release);
@@ -747,11 +764,8 @@ pub const StorageEngine = struct {
 
     fn executeSet(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
         self.writer_conn.exec(
-            \\INSERT INTO kv_store (namespace, path, value_json, updated_at)
+            \\INSERT OR REPLACE INTO kv_store (namespace, path, value_blob, updated_at)
             \\VALUES ($namespace{[]const u8}, $path{[]const u8}, $value{[]const u8}, $timestamp{i64})
-            \\ON CONFLICT(namespace, path) DO UPDATE SET
-            \\  value_json = excluded.value_json,
-            \\  updated_at = excluded.updated_at
         , .{}, .{
             .namespace = namespace,
             .path = path,
@@ -838,7 +852,7 @@ pub const StorageEngine = struct {
             \\CREATE TABLE IF NOT EXISTS kv_store (
             \\  namespace TEXT NOT NULL,
             \\  path TEXT NOT NULL,
-            \\  value_json TEXT NOT NULL,
+            \\  value_blob BLOB NOT NULL,
             \\  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
             \\  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
             \\  PRIMARY KEY (namespace, path)
