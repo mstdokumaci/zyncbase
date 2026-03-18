@@ -51,74 +51,12 @@ pub fn build(b: *std.Build) void {
 
     // Setup Test Targets
     const test_step = b.step("test", "Run all tests");
-    const test_unit_step = b.step("test-unit", "Run unit tests");
-    const test_property_step = b.step("test-property", "Run property-based tests");
-    const test_integration_step = b.step("test-integration", "Run integration tests");
-
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
     const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
-
-    // 2. Unit Tests
-    const unit_tests = [_][]const u8{
-        "src/uwebsockets_wrapper_test.zig",
-        "src/subscription_manager_test.zig",
-        "src/hook_server_client_test.zig",
-        "src/storage_engine_test.zig",
-        "src/violation_tracker_test.zig",
-        "src/lock_free_cache_test.zig",
-        "src/memory_strategy_test.zig",
-        "src/checkpoint_manager_test.zig",
-        "src/config_loader_test.zig",
-        "src/request_handler_test.zig",
-        "src/message_handler_test.zig",
-        "src/subscription_manager_thread_safety_test.zig",
-    };
-    for (unit_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
-        const run_t = b.addRunArtifact(t);
-        test_unit_step.dependOn(&run_t.step);
-    }
-
-    // 3. Property Tests
-    const property_tests = [_][]const u8{
-        "src/message_handler_property_test.zig",
-        "src/hook_server_client_property_test.zig",
-        "src/config_loader_property_test.zig",
-        "src/checkpoint_manager_property_test.zig",
-        "src/subscription_manager_property_test.zig",
-        "src/message_buffer_property_test.zig",
-        "src/storage_engine_stability_property_test.zig",
-        "src/connection_state_property_test.zig",
-        "src/storage_engine_property_test.zig",
-        "src/server_init_property_test.zig",
-        "src/store_operations_property_test.zig",
-        "src/uwebsockets_wrapper_property_test.zig",
-        "src/storage_engine_error_property_test.zig",
-        "src/logging_property_test.zig",
-        "src/memory_safety_property_test.zig",
-        "src/msgpack_utils_property_test.zig",
-    };
-    for (property_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
-        const run_t = b.addRunArtifact(t);
-        test_property_step.dependOn(&run_t.step);
-    }
-
-    // 4. Integration Tests
-    const integration_tests = [_][]const u8{
-        "src/integration_wiring_test.zig",
-        "src/message_handler_verification_test.zig",
-        "src/storage_crud_test.zig",
-    };
-    for (integration_tests) |file| {
-        const t = setupTest(b, target, optimize, sqlite_module, msgpack_module, file, sanitize, test_filter, sysroot);
-        const run_t = b.addRunArtifact(t);
-        test_integration_step.dependOn(&run_t.step);
-    }
 }
 
 fn setupTest(
@@ -235,17 +173,19 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         .flags = uws_flags,
     });
 
-    const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
-        "-std=c11",
-        "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in bun-usockets
-        "-DUWS_NO_ZLIB",
-        "-DUWS_USE_LIBDEFLATE=0",
-        "-DLIBUS_USE_OPENSSL=1",
-        "-DLIBUS_USE_BORINGSSL=1",
-        "-DWITH_BORINGSSL=1",
-        "-Wno-nullability-completeness",
-        b.fmt("-I{s}", .{b_b_include}),
-    } }) catch unreachable;
+    const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{
+        linux_flags, sanitize_flags, &.{
+            "-std=c11",
+            "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in bun-usockets
+            "-DUWS_NO_ZLIB",
+            "-DUWS_USE_LIBDEFLATE=0",
+            "-DLIBUS_USE_OPENSSL=1",
+            "-DLIBUS_USE_BORINGSSL=1",
+            "-DWITH_BORINGSSL=1",
+            "-Wno-nullability-completeness",
+            b.fmt("-I{s}", .{b_b_include}),
+        },
+    }) catch unreachable;
 
     step.addCSourceFiles(.{
         .files = &.{

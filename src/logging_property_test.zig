@@ -153,7 +153,8 @@ test "logging: connection events" {
 
         // Verify connection was registered
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-        const conn_state = try handler.connection_registry.get(conn_id);
+        const conn_state = try handler.connection_registry.acquireConnection(conn_id);
+        defer conn_state.release(allocator);
         try testing.expectEqual(conn_id, conn_state.id);
 
         // Clean up
@@ -176,8 +177,13 @@ test "logging: connection events" {
         try handler.handleClose(&ws, 1000, "Normal closure");
 
         // Verify connection was removed
-        const result = handler.connection_registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = handler.connection_registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 
     // Test 3: Multiple connections log unique IDs
@@ -227,8 +233,13 @@ test "logging: connection events" {
         try handler.handleError(&ws);
 
         // Verify connection was cleaned up
-        const result = handler.connection_registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = handler.connection_registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 
     // Test 5: Concurrent connections all log

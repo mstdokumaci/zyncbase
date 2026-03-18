@@ -66,7 +66,8 @@ test "Verification: WebSocket connection lifecycle" {
     try testing.expect(conn_id > 0);
 
     // Verify connection exists in registry
-    const state = try handler.connection_registry.get(conn_id);
+    const state = try handler.connection_registry.acquireConnection(conn_id);
+    defer state.release(allocator);
     try testing.expectEqual(conn_id, state.id);
     try testing.expectEqualStrings("default", state.namespace);
 
@@ -74,8 +75,13 @@ test "Verification: WebSocket connection lifecycle" {
     try handler.handleClose(&ws, 1000, "Normal closure");
 
     // Verify connection was removed
-    const result = handler.connection_registry.get(conn_id);
-    try testing.expectError(error.ConnectionNotFound, result);
+    const result = handler.connection_registry.acquireConnection(conn_id);
+    if (result) |s| {
+        s.release(allocator);
+        return error.TestExpectedError;
+    } else |err| {
+        try testing.expectEqual(error.ConnectionNotFound, err);
+    }
 }
 
 // Task 14 Verification: StoreSet message processing
@@ -166,7 +172,7 @@ test "Verification: StoreSet message processing" {
     try testing.expect(found_type and found_id);
 
     // Wait for write to complete
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    try storage_engine.flushPendingWrites();
 
     // Verify data was stored
     const stored_value = try storage_engine.get("test_namespace", "/test/key");
@@ -222,7 +228,7 @@ test "Verification: StoreGet message processing" {
     const val_encoded = try msgpack.encodeString(allocator, "stored_value");
     defer allocator.free(val_encoded);
     try storage_engine.set("test_namespace", "/test/key", val_encoded);
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    try storage_engine.flushPendingWrites();
 
     // Create a proper MessagePack StoreGet message
     const message = try msgpack.createStoreGetMessage(
@@ -503,7 +509,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     }
 
     // Wait for writes to complete
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    try storage_engine.flushPendingWrites();
 
     // Retrieve all values
     for (test_data, 0..) |td, i| {

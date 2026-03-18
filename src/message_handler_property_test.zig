@@ -63,15 +63,21 @@ test "connection: open/close is inverse operation" {
 
         // Verify connection was added
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-        const state = try handler.connection_registry.get(conn_id);
+        const state = try handler.connection_registry.acquireConnection(conn_id);
+        defer state.release(allocator);
         try testing.expectEqual(conn_id, state.id);
 
         // Close connection
         try handler.handleClose(&ws, 1000, "Normal closure");
 
         // Verify connection was removed (inverse operation)
-        const result = handler.connection_registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = handler.connection_registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 
     // Test multiple connections open/close
@@ -86,7 +92,11 @@ test "connection: open/close is inverse operation" {
         }
 
         // Verify all connections exist
-        try testing.expectEqual(@as(usize, num_connections), handler.connection_registry.connections.count());
+        {
+            var snap = try handler.connection_registry.snapshot();
+            defer snap.deinit();
+            try testing.expectEqual(@as(usize, num_connections), snap.count());
+        }
 
         // Close all connections
         for (&websockets) |*ws| {
@@ -94,7 +104,11 @@ test "connection: open/close is inverse operation" {
         }
 
         // Verify all connections were removed (inverse operation)
-        try testing.expectEqual(@as(usize, 0), handler.connection_registry.connections.count());
+        {
+            var snap = try handler.connection_registry.snapshot();
+            defer snap.deinit();
+            try testing.expectEqual(@as(usize, 0), snap.count());
+        }
     }
 
     // Test connection with subscriptions
@@ -106,7 +120,8 @@ test "connection: open/close is inverse operation" {
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
 
         // Add some subscriptions to the connection state
-        const state = try handler.connection_registry.get(conn_id);
+        const state = try handler.connection_registry.acquireConnection(conn_id);
+        defer state.release(allocator);
         try state.subscription_ids.append(1);
         try state.subscription_ids.append(2);
         try state.subscription_ids.append(3);
@@ -118,8 +133,13 @@ test "connection: open/close is inverse operation" {
         try handler.handleClose(&ws, 1000, "Normal closure");
 
         // Verify connection and all associated state was removed (inverse operation)
-        const result = handler.connection_registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = handler.connection_registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 }
 
@@ -163,7 +183,9 @@ test "connection: thread-safe registry access" {
 
     // Verify no data races occurred (test passes if no crashes)
     // All connections should have been removed by their respective threads
-    try testing.expectEqual(@as(usize, 0), registry.connections.count());
+    var snap = try registry.snapshot();
+    defer snap.deinit();
+    try testing.expectEqual(@as(usize, 0), snap.count());
 }
 
 fn concurrentRegistryOps(
@@ -189,10 +211,12 @@ fn concurrentRegistryOps(
         };
 
         // Read connection
-        _ = registry.get(conn_id) catch {
+        if (registry.acquireConnection(conn_id)) |s| {
+            s.release(allocator);
+        } else |_| {
             std.log.debug("Failed to get connection\n", .{});
             return;
-        };
+        }
 
         // Remove connection
         registry.remove(conn_id) catch {
@@ -238,7 +262,9 @@ test "connection: concurrent reads are non-blocking" {
     }
 
     // Verify all connections still exist
-    try testing.expectEqual(@as(usize, num_connections), registry.connections.count());
+    var snap = try registry.snapshot();
+    defer snap.deinit();
+    try testing.expectEqual(@as(usize, num_connections), snap.count());
 }
 
 fn concurrentReads(
@@ -252,10 +278,12 @@ fn concurrentReads(
     var i: usize = 0;
     while (i < num_reads) : (i += 1) {
         const conn_id = random.intRangeAtMost(u64, 0, num_connections - 1);
-        _ = registry.get(conn_id) catch {
+        if (registry.acquireConnection(conn_id)) |s| {
+            s.release(registry.allocator);
+        } else |_| {
             std.log.debug("Failed to get connection {}\n", .{conn_id});
             return;
-        };
+        }
     }
 }
 
@@ -314,7 +342,9 @@ fn mixedConcurrentOps(
             },
             1 => {
                 // Get operation
-                _ = registry.get(conn_id) catch continue;
+                if (registry.acquireConnection(conn_id)) |s| {
+                    s.release(allocator);
+                } else |_| {}
             },
             2 => {
                 // Remove operation

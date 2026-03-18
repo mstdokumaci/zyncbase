@@ -9,6 +9,43 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
+/// Structured path parsed from a MessagePack array payload.
+pub const ParsedPath = union(enum) {
+    collection: struct { table: []const u8 },
+    document: struct { table: []const u8, id: []const u8 },
+    field: struct { table: []const u8, id: []const u8, fields: [][]const u8 },
+};
+
+/// Parse a MessagePack array payload into a structured ParsedPath.
+/// - If path_payload is not an array → error.InvalidPath
+/// - Length 0 → error.InvalidPath
+/// - Any non-string element → error.InvalidPath
+/// - Length 1 → .collection
+/// - Length 2 → .document
+/// - Length ≥ 3 → .field (allocates fields slice using allocator)
+pub fn parsePath(allocator: std.mem.Allocator, path_payload: msgpack.Payload) !ParsedPath {
+    if (path_payload != .arr) return error.InvalidPath;
+    const elems = path_payload.arr;
+    if (elems.len == 0) return error.InvalidPath;
+    for (elems) |elem| {
+        if (elem != .str) return error.InvalidPath;
+    }
+    const table = elems[0].str.value();
+    if (elems.len == 1) {
+        return .{ .collection = .{ .table = table } };
+    }
+    const id = elems[1].str.value();
+    if (elems.len == 2) {
+        return .{ .document = .{ .table = table, .id = id } };
+    }
+    // Length >= 3: allocate fields slice
+    const fields = try allocator.alloc([]const u8, elems.len - 2);
+    for (elems[2..], 0..) |elem, i| {
+        fields[i] = elem.str.value();
+    }
+    return .{ .field = .{ .table = table, .id = id, .fields = fields } };
+}
+
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
@@ -89,10 +126,24 @@ pub const MessageHandler = struct {
             return;
         }
 
-        // Parse MessagePack message
+        // Get connection state (increments refcount)
+        const conn_state = self.connection_registry.acquireConnection(conn_id) catch |err| {
+            std.log.warn("Connection {} not found in registry during message: {}", .{ conn_id, err });
+            return;
+        };
+        defer conn_state.release(self.allocator);
 
+        // Process message under connection mutex to protect arena and state
+        conn_state.mutex.lock();
+        defer conn_state.mutex.unlock();
+
+        // Use connection's local arena
+        const arena_allocator = conn_state.arena.allocator();
+        defer conn_state.arenaReset();
+
+        // Parse MessagePack message
         var reader: std.Io.Reader = .fixed(message);
-        const parsed = msgpack.decode(self.allocator, &reader) catch |err| {
+        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
 
             // Record violation if it was a security/limit error
@@ -107,7 +158,6 @@ pub const MessageHandler = struct {
             try self.sendError(ws, "INVALID_MESSAGE", "Failed to parse MessagePack");
             return;
         };
-        defer parsed.free(self.allocator);
 
         // Extract message type and correlation ID
         const msg_info = self.extractMessageInfo(parsed) catch |err| {
@@ -130,34 +180,36 @@ pub const MessageHandler = struct {
 
     /// Handle WebSocket connection close event
     /// Removes subscriptions and connection state
-    pub fn handleClose(
-        self: *MessageHandler,
-        ws: *WebSocket,
-        code: i32,
-        message: []const u8,
-    ) !void {
+    pub fn handleClose(self: *MessageHandler, ws: *WebSocket, code: i32, message: []const u8) !void {
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
 
-        std.log.info("WebSocket connection closed: id={}, code={}, message={s}", .{
+        std.log.debug("WebSocket closed: id={}, code={}, reason={s}", .{
             conn_id,
             code,
             message,
         });
 
-        // Get connection state
-        const conn_state = self.connection_registry.get(conn_id) catch |err| {
+        // Get connection state (increments refcount)
+        const conn_state = self.connection_registry.acquireConnection(conn_id) catch |err| {
             std.log.debug("Connection {} not found in registry during close: {}", .{ conn_id, err });
             return;
         };
+        defer conn_state.release(self.allocator);
 
-        // Remove all subscriptions for this connection
-        for (conn_state.subscription_ids.items) |sub_id| {
-            self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn_id, err });
-            };
+        // Cleanup under mutex
+        {
+            conn_state.mutex.lock();
+            defer conn_state.mutex.unlock();
+
+            // Remove all subscriptions for this connection
+            for (conn_state.subscription_ids.items) |sub_id| {
+                self.subscription_manager.unsubscribe(sub_id) catch |err| {
+                    std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn_id, err });
+                };
+            }
         }
 
-        // Remove from registry
+        // Remove from registry (decrements registry's refcount)
         try self.connection_registry.remove(conn_id);
     }
 
@@ -169,12 +221,20 @@ pub const MessageHandler = struct {
         std.log.debug("WebSocket error on connection: id={}", .{conn_id});
 
         // Clean up connection state if it exists
-        if (self.connection_registry.get(conn_id)) |conn_state| {
-            // Remove subscriptions
-            for (conn_state.subscription_ids.items) |sub_id| {
-                self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                    std.log.warn("Failed to unsubscribe {} during error cleanup: {}", .{ sub_id, err });
-                };
+        if (self.connection_registry.acquireConnection(conn_id)) |conn_state| {
+            defer conn_state.release(self.allocator);
+
+            // Cleanup under mutex
+            {
+                conn_state.mutex.lock();
+                defer conn_state.mutex.unlock();
+
+                // Remove subscriptions
+                for (conn_state.subscription_ids.items) |sub_id| {
+                    self.subscription_manager.unsubscribe(sub_id) catch |err| {
+                        std.log.warn("Failed to unsubscribe {} during error cleanup: {}", .{ sub_id, err });
+                    };
+                }
             }
 
             // Remove from registry
@@ -188,22 +248,30 @@ pub const MessageHandler = struct {
 
     /// Close all active connections for graceful shutdown
     pub fn closeAllConnections(self: *MessageHandler) !void {
-        var it = self.connection_registry.iterator();
-        while (it.next()) |entry| {
-            const conn_id = entry.key_ptr.*;
-            const conn_state = entry.value_ptr.*;
+        var snap = try self.connection_registry.snapshot();
+        defer snap.deinit();
 
-            // Remove subscriptions
-            for (conn_state.subscription_ids.items) |sub_id| {
-                self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                    std.log.warn("Failed to unsubscribe {} during shutdown: {}", .{ sub_id, err });
-                };
+        var it = snap.valueIterator();
+        while (it.next()) |state| {
+            const conn_state = state.*;
+
+            // Cleanup under mutex
+            {
+                conn_state.mutex.lock();
+                defer conn_state.mutex.unlock();
+
+                // Remove subscriptions
+                for (conn_state.subscription_ids.items) |sub_id| {
+                    self.subscription_manager.unsubscribe(sub_id) catch |err| {
+                        std.log.warn("Failed to unsubscribe {} during shutdown: {}", .{ sub_id, err });
+                    };
+                }
+
+                // Close the WebSocket connection
+                conn_state.ws.close();
             }
 
-            // Close the WebSocket connection
-            conn_state.ws.close();
-
-            std.log.info("Closed connection: id={}", .{conn_id});
+            std.log.info("Closed connection: id={}", .{conn_state.id});
         }
 
         self.connection_registry.clear();
@@ -258,9 +326,20 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
+            if (self.storage_engine.schema != null) {
+                return try self.handleStoreSetTyped(conn_id, msg_info.id, parsed);
+            }
             return try self.handleStoreSet(conn_id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreGet")) {
+            if (self.storage_engine.schema != null) {
+                return try self.handleStoreGetTyped(conn_id, msg_info.id, parsed);
+            }
             return try self.handleStoreGet(conn_id, msg_info.id, parsed);
+        } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
+            if (self.storage_engine.schema != null) {
+                return try self.handleStoreRemoveTyped(conn_id, msg_info.id, parsed);
+            }
+            return try self.handleStoreRemove(msg_info.id, parsed);
         } else {
             return error.UnknownMessageType;
         }
@@ -294,7 +373,14 @@ pub const MessageHandler = struct {
                         namespace = val.str.value();
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (try self.parsePathFromPayload(val)) |p| {
+                    if (val == .arr) {
+                        const parsed_path = parsePath(self.allocator, val) catch return error.InvalidPath;
+                        // Convert ParsedPath back to slash-joined string for backward compat with storage_engine.set/get
+                        path = try self.parsedPathToString(parsed_path);
+                        path_is_allocated = true;
+                        // Free fields slice if it was allocated (field variant)
+                        if (parsed_path == .field) self.allocator.free(parsed_path.field.fields);
+                    } else if (try self.parsePathFromPayload(val)) |p| {
                         path = p.path;
                         path_is_allocated = p.allocated;
                     }
@@ -348,7 +434,12 @@ pub const MessageHandler = struct {
                         namespace = val.str.value();
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (try self.parsePathFromPayload(val)) |p| {
+                    if (val == .arr) {
+                        const parsed_path = parsePath(self.allocator, val) catch return error.InvalidPath;
+                        path = try self.parsedPathToString(parsed_path);
+                        path_is_allocated = true;
+                        if (parsed_path == .field) self.allocator.free(parsed_path.field.fields);
+                    } else if (try self.parsePathFromPayload(val)) |p| {
                         path = p.path;
                         path_is_allocated = p.allocated;
                     }
@@ -383,6 +474,247 @@ pub const MessageHandler = struct {
 
         // Nothing found
         return try self.buildValueResponse(msg_id, null);
+    }
+
+    fn handleStoreRemove(
+        self: *MessageHandler,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        // Extract namespace and path
+        var namespace: ?[]const u8 = null;
+        var path: ?[]const u8 = null;
+        var path_is_allocated = false;
+        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
+
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const key_str = key.str.value();
+                if (std.mem.eql(u8, key_str, "namespace")) {
+                    if (val == .str) {
+                        namespace = val.str.value();
+                    }
+                } else if (std.mem.eql(u8, key_str, "path")) {
+                    if (try self.parsePathFromPayload(val)) |p| {
+                        path = p.path;
+                        path_is_allocated = p.allocated;
+                    }
+                }
+            }
+        }
+
+        if (namespace == null or path == null) {
+            return error.MissingRequiredFields;
+        }
+
+        // Delete from storage engine
+        try self.storage_engine.delete(namespace.?, path.?);
+
+        // Build success response
+        return try self.buildSuccessResponse(msg_id);
+    }
+
+    // ─── Typed handlers (schema-aware path) ──────────────────────────────────
+
+    /// Handle StoreSet using typed StorageEngine methods (schema must be loaded).
+    fn handleStoreSetTyped(
+        self: *MessageHandler,
+        conn_id: u64,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        _ = conn_id;
+
+        var namespace: ?[]const u8 = null;
+        var path_payload: ?msgpack.Payload = null;
+        var value_payload: ?msgpack.Payload = null;
+
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const k = key.str.value();
+                if (std.mem.eql(u8, k, "namespace")) {
+                    if (val == .str) namespace = val.str.value();
+                } else if (std.mem.eql(u8, k, "path")) {
+                    path_payload = val;
+                } else if (std.mem.eql(u8, k, "value")) {
+                    value_payload = val;
+                }
+            }
+        }
+
+        if (namespace == null or path_payload == null or value_payload == null) {
+            return error.MissingRequiredFields;
+        }
+
+        const pp = parsePath(self.allocator, path_payload.?) catch {
+            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
+        };
+        defer if (pp == .field) self.allocator.free(pp.field.fields);
+
+        switch (pp) {
+            .collection => return error.InvalidPath, // can't set a whole collection
+            .document => |d| {
+                // value must be a map; each key becomes a ColumnValue
+                if (value_payload.? != .map) return error.InvalidMessageFormat;
+                var cols = std.ArrayListUnmanaged(@import("storage_engine.zig").ColumnValue){};
+                defer cols.deinit(self.allocator);
+                var vit = value_payload.?.map.iterator();
+                while (vit.next()) |ve| {
+                    if (ve.key_ptr.* != .str) continue;
+                    try cols.append(self.allocator, .{ .name = ve.key_ptr.*.str.value(), .value = ve.value_ptr.* });
+                }
+                try self.storage_engine.insertOrReplace(d.table, d.id, namespace.?, cols.items);
+            },
+            .field => |f| {
+                // single field update
+                const field_name = f.fields[0];
+                try self.storage_engine.updateField(f.table, f.id, namespace.?, field_name, value_payload.?);
+            },
+        }
+
+        return try self.buildSuccessResponse(msg_id);
+    }
+
+    /// Handle StoreGet using typed StorageEngine methods (schema must be loaded).
+    fn handleStoreGetTyped(
+        self: *MessageHandler,
+        conn_id: u64,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        _ = conn_id;
+
+        var namespace: ?[]const u8 = null;
+        var path_payload: ?msgpack.Payload = null;
+
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const k = key.str.value();
+                if (std.mem.eql(u8, k, "namespace")) {
+                    if (val == .str) namespace = val.str.value();
+                } else if (std.mem.eql(u8, k, "path")) {
+                    path_payload = val;
+                }
+            }
+        }
+
+        if (namespace == null or path_payload == null) {
+            return error.MissingRequiredFields;
+        }
+
+        const pp = parsePath(self.allocator, path_payload.?) catch {
+            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
+        };
+        defer if (pp == .field) self.allocator.free(pp.field.fields);
+
+        switch (pp) {
+            .collection => |c| {
+                const result = try self.storage_engine.selectCollection(c.table, namespace.?);
+                // result ownership transferred to buildTypedValueResponse
+                return try self.buildTypedValueResponse(msg_id, result);
+            },
+            .document => |d| {
+                const result = try self.storage_engine.selectDocument(d.table, d.id, namespace.?);
+                if (result) |r| {
+                    return try self.buildTypedValueResponse(msg_id, r);
+                }
+                return try self.buildErrorResponse(msg_id, "NOT_FOUND");
+            },
+            .field => |f| {
+                const result = try self.storage_engine.selectField(f.table, f.id, namespace.?, f.fields[0]);
+                if (result) |r| {
+                    return try self.buildTypedValueResponse(msg_id, r);
+                }
+                return try self.buildErrorResponse(msg_id, "NOT_FOUND");
+            },
+        }
+    }
+
+    /// Handle StoreRemove using typed StorageEngine methods (schema must be loaded).
+    fn handleStoreRemoveTyped(
+        self: *MessageHandler,
+        conn_id: u64,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        _ = conn_id;
+
+        var namespace: ?[]const u8 = null;
+        var path_payload: ?msgpack.Payload = null;
+
+        var it = parsed.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+            if (key == .str) {
+                const k = key.str.value();
+                if (std.mem.eql(u8, k, "namespace")) {
+                    if (val == .str) namespace = val.str.value();
+                } else if (std.mem.eql(u8, k, "path")) {
+                    path_payload = val;
+                }
+            }
+        }
+
+        if (namespace == null or path_payload == null) {
+            return error.MissingRequiredFields;
+        }
+
+        const pp = parsePath(self.allocator, path_payload.?) catch {
+            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
+        };
+        defer if (pp == .field) self.allocator.free(pp.field.fields);
+
+        switch (pp) {
+            .collection => return error.InvalidPath, // can't delete a whole collection via this path
+            .document => |d| {
+                try self.storage_engine.deleteDocument(d.table, d.id, namespace.?);
+            },
+            .field => return error.InvalidPath, // field-level delete not supported
+        }
+
+        return try self.buildSuccessResponse(msg_id);
+    }
+
+    /// Build a typed value response (value is already a Payload).
+    fn buildTypedValueResponse(self: *MessageHandler, msg_id: u64, value: msgpack.Payload) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+        try payload.mapPut("value", value);
+
+        try msgpack.encode(payload, &aw.writer);
+        return try aw.toOwnedSlice();
+    }
+
+    /// Build an error response with a code string.
+    fn buildErrorResponse(self: *MessageHandler, msg_id: u64, code: []const u8) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+
+        var payload = msgpack.Payload.mapPayload(self.allocator);
+        defer payload.free(self.allocator);
+
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
+        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
+
+        try msgpack.encode(payload, &aw.writer);
+        return try aw.toOwnedSlice();
     }
 
     /// Build success response for StoreSet
@@ -505,6 +837,33 @@ pub const MessageHandler = struct {
         return null;
     }
 
+    /// Convert a ParsedPath back to a slash-joined string for backward compat with storage_engine.set/get.
+    /// Caller owns the returned slice.
+    fn parsedPathToString(self: *MessageHandler, pp: ParsedPath) ![]const u8 {
+        var buf: std.ArrayList(u8) = .{};
+        errdefer buf.deinit(self.allocator);
+        switch (pp) {
+            .collection => |c| {
+                try buf.appendSlice(self.allocator, c.table);
+            },
+            .document => |d| {
+                try buf.appendSlice(self.allocator, d.table);
+                try buf.append(self.allocator, '/');
+                try buf.appendSlice(self.allocator, d.id);
+            },
+            .field => |f| {
+                try buf.appendSlice(self.allocator, f.table);
+                try buf.append(self.allocator, '/');
+                try buf.appendSlice(self.allocator, f.id);
+                for (f.fields) |field| {
+                    try buf.append(self.allocator, '/');
+                    try buf.appendSlice(self.allocator, field);
+                }
+            },
+        }
+        return buf.toOwnedSlice(self.allocator);
+    }
+
     /// Message information extracted from parsed MessagePack
     const MessageInfo = struct {
         type: []const u8,
@@ -520,6 +879,9 @@ pub const ConnectionState = struct {
     ws: WebSocket,
     subscription_ids: std.array_list.Managed(u64),
     created_at: i64,
+    arena: std.heap.ArenaAllocator,
+    ref_count: std.atomic.Value(u32),
+    mutex: std.Thread.Mutex,
 
     pub fn init(allocator: Allocator, id: u64, ws: WebSocket) !*ConnectionState {
         const state = try allocator.create(ConnectionState);
@@ -530,76 +892,133 @@ pub const ConnectionState = struct {
             .namespace = "default",
             .subscription_ids = std.array_list.Managed(u64).init(allocator),
             .created_at = std.time.timestamp(),
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .ref_count = std.atomic.Value(u32).init(1),
+            .mutex = .{},
         };
         return state;
     }
 
     pub fn deinit(self: *ConnectionState, allocator: Allocator) void {
         self.subscription_ids.deinit();
+        self.arena.deinit();
         allocator.destroy(self);
+    }
+
+    pub fn acquire(self: *ConnectionState) void {
+        _ = self.ref_count.fetchAdd(1, .monotonic);
+    }
+
+    pub fn release(self: *ConnectionState, allocator: Allocator) void {
+        if (self.ref_count.fetchSub(1, .release) == 1) {
+            _ = self.ref_count.load(.acquire);
+            self.deinit(allocator);
+        }
+    }
+
+    pub fn arenaReset(self: *ConnectionState) void {
+        _ = self.arena.reset(.free_all);
     }
 };
 
-/// Thread-safe registry for tracking active WebSocket connections
+/// Thread-safe registry for tracking active WebSocket connections using COW
 pub const ConnectionRegistry = struct {
-    connections: std.AutoHashMap(u64, *ConnectionState),
+    const Map = std.AutoHashMap(u64, *ConnectionState);
+
+    map: Map,
     mutex: std.Thread.Mutex,
+    allocator: Allocator,
 
     pub fn init(allocator: Allocator) !ConnectionRegistry {
         return ConnectionRegistry{
-            .connections = std.AutoHashMap(u64, *ConnectionState).init(allocator),
+            .map = Map.init(allocator),
             .mutex = .{},
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *ConnectionRegistry) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        var it = self.connections.valueIterator();
+        var it = self.map.valueIterator();
         while (it.next()) |state| {
-            state.*.deinit(self.connections.allocator);
+            state.*.release(self.allocator);
         }
-
-        self.connections.deinit();
+        self.map.deinit();
     }
 
     pub fn add(self: *ConnectionRegistry, id: u64, state: *ConnectionState) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        try self.connections.put(id, state);
-    }
-
-    pub fn get(self: *ConnectionRegistry, id: u64) !*ConnectionState {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        return self.connections.get(id) orelse error.ConnectionNotFound;
+        try self.map.put(id, state);
     }
 
     pub fn remove(self: *ConnectionRegistry, id: u64) !void {
         self.mutex.lock();
-        defer self.mutex.unlock();
+        const maybe_state = self.map.fetchRemove(id);
+        self.mutex.unlock();
 
-        if (self.connections.fetchRemove(id)) |entry| {
-            entry.value.deinit(self.connections.allocator);
+        if (maybe_state) |entry| {
+            entry.value.release(self.allocator);
         }
+    }
+
+    pub fn acquireConnection(self: *ConnectionRegistry, id: u64) !*ConnectionState {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const state = self.map.get(id) orelse return error.ConnectionNotFound;
+        state.acquire();
+        return state;
     }
 
     pub fn clear(self: *ConnectionRegistry) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        var it = self.connections.valueIterator();
+        var it = self.map.valueIterator();
         while (it.next()) |state| {
-            state.*.deinit(self.connections.allocator);
+            state.*.release(self.allocator);
         }
-
-        self.connections.clearRetainingCapacity();
+        self.map.clearRetainingCapacity();
     }
 
-    pub fn iterator(self: *ConnectionRegistry) std.AutoHashMap(u64, *ConnectionState).Iterator {
-        return self.connections.iterator();
+    /// Note: Snapshot is now a bit more expensive as it must clone under lock
+    /// to remain thread-safe.
+    pub const Snapshot = struct {
+        map: Map,
+        allocator: Allocator,
+
+        pub fn deinit(self: *Snapshot) void {
+            var it = self.map.valueIterator();
+            while (it.next()) |state| {
+                state.*.release(self.allocator);
+            }
+            self.map.deinit();
+        }
+
+        pub fn count(self: Snapshot) usize {
+            return self.map.count();
+        }
+
+        pub fn iterator(self: *Snapshot) Map.Iterator {
+            return self.map.iterator();
+        }
+
+        pub fn valueIterator(self: *Snapshot) Map.ValueIterator {
+            return self.map.valueIterator();
+        }
+    };
+
+    pub fn snapshot(self: *ConnectionRegistry) !Snapshot {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var new_map = try self.map.clone();
+        var it = new_map.valueIterator();
+        while (it.next()) |state| {
+            state.*.acquire();
+        }
+        return Snapshot{
+            .map = new_map,
+            .allocator = self.allocator,
+        };
     }
 };

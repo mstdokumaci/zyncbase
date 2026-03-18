@@ -41,15 +41,21 @@ test "connection: state deallocation on close" {
         try registry.add(conn_id, state);
 
         // Verify connection is in registry
-        const retrieved = try registry.get(conn_id);
+        const retrieved = try registry.acquireConnection(conn_id);
+        defer retrieved.release(allocator);
         try testing.expectEqual(conn_id, retrieved.id);
 
-        // Remove connection - should deallocate state
+        // Remove connection - should deallocate state once all refs are gone
         try registry.remove(conn_id);
 
         // Verify connection is no longer in registry
-        const result = registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedSuccess;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 
     // Test 2: Multiple connections open and close
@@ -74,8 +80,13 @@ test "connection: state deallocation on close" {
         // Verify all connections are removed
         i = 0;
         while (i < num_connections) : (i += 1) {
-            const result = registry.get(i);
-            try testing.expectError(error.ConnectionNotFound, result);
+            const result = registry.acquireConnection(i);
+            if (result) |s| {
+                s.release(allocator);
+                return error.TestExpectedError;
+            } else |err| {
+                try testing.expectEqual(error.ConnectionNotFound, err);
+            }
         }
     }
 
@@ -99,8 +110,13 @@ test "connection: state deallocation on close" {
         try registry.remove(conn_id);
 
         // Verify connection is removed
-        const result = registry.get(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        const result = registry.acquireConnection(conn_id);
+        if (result) |s| {
+            s.release(allocator);
+            return error.TestExpectedError;
+        } else |err| {
+            try testing.expectEqual(error.ConnectionNotFound, err);
+        }
     }
 
     // Test 4: Clear all connections
@@ -122,8 +138,13 @@ test "connection: state deallocation on close" {
         // Verify all connections are removed
         i = 0;
         while (i < num_connections) : (i += 1) {
-            const result = registry.get(i);
-            try testing.expectError(error.ConnectionNotFound, result);
+            const result = registry.acquireConnection(i);
+            if (result) |s| {
+                s.release(allocator);
+                return error.TestExpectedError;
+            } else |err| {
+                try testing.expectEqual(error.ConnectionNotFound, err);
+            }
         }
     }
 

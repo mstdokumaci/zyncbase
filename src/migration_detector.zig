@@ -1,0 +1,224 @@
+const std = @import("std");
+const schema_parser = @import("schema_parser.zig");
+const sqlite = @import("sqlite");
+
+pub const ChangeKind = enum { create_table, add_column, change_type, remove_column };
+
+pub const Change = struct {
+    kind: ChangeKind,
+    table_name: []const u8,
+    field: ?schema_parser.Field,
+};
+
+pub const MigrationPlan = struct {
+    changes: []Change,
+    is_destructive: bool,
+};
+
+const system_columns = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
+
+fn isSystemColumn(name: []const u8) bool {
+    for (system_columns) |sc| {
+        if (std.mem.eql(u8, name, sc)) return true;
+    }
+    return false;
+}
+
+fn fieldTypeToSqlStr(ft: schema_parser.FieldType) []const u8 {
+    return switch (ft) {
+        .text => "TEXT",
+        .integer => "INTEGER",
+        .real => "REAL",
+        .boolean => "INTEGER",
+        .array => "TEXT",
+    };
+}
+
+fn dbTypeToFieldType(db_type: []const u8) schema_parser.FieldType {
+    if (std.mem.eql(u8, db_type, "TEXT")) return .text;
+    if (std.mem.eql(u8, db_type, "INTEGER")) return .integer;
+    if (std.mem.eql(u8, db_type, "REAL")) return .real;
+    return .text;
+}
+
+fn typesMatch(target: schema_parser.FieldType, db_type: []const u8) bool {
+    return std.mem.eql(u8, fieldTypeToSqlStr(target), db_type);
+}
+
+pub const MigrationDetector = struct {
+    allocator: std.mem.Allocator,
+    db: *sqlite.Db,
+
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db) MigrationDetector {
+        return .{ .allocator = allocator, .db = db };
+    }
+
+    pub fn detectChanges(self: *MigrationDetector, target: schema_parser.Schema) !MigrationPlan {
+        var changes: std.ArrayList(Change) = .{};
+        errdefer {
+            for (changes.items) |c| self.freeChange(c);
+            changes.deinit(self.allocator);
+        }
+
+        for (target.tables) |table| {
+            const pragma_sql = try std.fmt.allocPrint(
+                self.allocator,
+                "PRAGMA table_info({s})",
+                .{table.name},
+            );
+            defer self.allocator.free(pragma_sql);
+
+            var existing = std.StringHashMap([]const u8).init(self.allocator);
+            defer {
+                var it = existing.iterator();
+                while (it.next()) |entry| {
+                    self.allocator.free(entry.key_ptr.*);
+                    self.allocator.free(entry.value_ptr.*);
+                }
+                existing.deinit();
+            }
+
+            var stmt = try self.db.prepareDynamic(pragma_sql);
+            defer stmt.deinit();
+
+            const PragmaRow = struct {
+                cid: i64,
+                name: []const u8,
+                type: []const u8,
+                notnull: i64,
+                dflt_value: ?[]const u8,
+                pk: i64,
+            };
+
+            var iter = try stmt.iteratorAlloc(PragmaRow, self.allocator, .{});
+            var table_exists = false;
+
+            while (try iter.nextAlloc(self.allocator, .{})) |row| {
+                defer {
+                    self.allocator.free(row.name);
+                    self.allocator.free(row.type);
+                    if (row.dflt_value) |dv| self.allocator.free(dv);
+                }
+                table_exists = true;
+                if (!isSystemColumn(row.name)) {
+                    const owned_name = try self.allocator.dupe(u8, row.name);
+                    errdefer self.allocator.free(owned_name);
+                    const owned_type = try self.allocator.dupe(u8, row.type);
+                    errdefer self.allocator.free(owned_type);
+                    try existing.put(owned_name, owned_type);
+                }
+            }
+
+            if (!table_exists) {
+                const owned_name = try self.allocator.dupe(u8, table.name);
+                errdefer self.allocator.free(owned_name);
+                try changes.append(self.allocator, .{
+                    .kind = .create_table,
+                    .table_name = owned_name,
+                    .field = null,
+                });
+                continue;
+            }
+
+            for (table.fields) |field| {
+                if (isSystemColumn(field.name)) continue;
+                if (existing.get(field.name)) |db_type| {
+                    if (!typesMatch(field.sql_type, db_type)) {
+                        const owned_table = try self.allocator.dupe(u8, table.name);
+                        errdefer self.allocator.free(owned_table);
+                        const owned_field = try self.dupeField(field);
+                        errdefer self.freeFieldOwned(owned_field);
+                        try changes.append(self.allocator, .{
+                            .kind = .change_type,
+                            .table_name = owned_table,
+                            .field = owned_field,
+                        });
+                    }
+                } else {
+                    const owned_table = try self.allocator.dupe(u8, table.name);
+                    errdefer self.allocator.free(owned_table);
+                    const owned_field = try self.dupeField(field);
+                    errdefer self.freeFieldOwned(owned_field);
+                    try changes.append(self.allocator, .{
+                        .kind = .add_column,
+                        .table_name = owned_table,
+                        .field = owned_field,
+                    });
+                }
+            }
+
+            var ex_it = existing.iterator();
+            while (ex_it.next()) |entry| {
+                const col_name = entry.key_ptr.*;
+                var found_in_target = false;
+                for (table.fields) |field| {
+                    if (std.mem.eql(u8, field.name, col_name)) {
+                        found_in_target = true;
+                        break;
+                    }
+                }
+                if (!found_in_target) {
+                    const owned_table = try self.allocator.dupe(u8, table.name);
+                    errdefer self.allocator.free(owned_table);
+                    const owned_field_name = try self.allocator.dupe(u8, col_name);
+                    errdefer self.allocator.free(owned_field_name);
+                    const ft = dbTypeToFieldType(entry.value_ptr.*);
+                    try changes.append(self.allocator, .{
+                        .kind = .remove_column,
+                        .table_name = owned_table,
+                        .field = schema_parser.Field{
+                            .name = owned_field_name,
+                            .sql_type = ft,
+                            .required = false,
+                            .indexed = false,
+                            .references = null,
+                            .on_delete = null,
+                        },
+                    });
+                }
+            }
+        }
+
+        var is_destructive = false;
+        for (changes.items) |c| {
+            if (c.kind == .change_type or c.kind == .remove_column) {
+                is_destructive = true;
+                break;
+            }
+        }
+
+        return MigrationPlan{
+            .changes = try changes.toOwnedSlice(self.allocator),
+            .is_destructive = is_destructive,
+        };
+    }
+
+    pub fn deinit(self: *MigrationDetector, plan: MigrationPlan) void {
+        for (plan.changes) |c| self.freeChange(c);
+        self.allocator.free(plan.changes);
+    }
+
+    fn freeChange(self: *MigrationDetector, c: Change) void {
+        self.allocator.free(c.table_name);
+        if (c.field) |f| self.freeFieldOwned(f);
+    }
+
+    fn freeFieldOwned(self: *MigrationDetector, f: schema_parser.Field) void {
+        self.allocator.free(f.name);
+        if (f.references) |r| self.allocator.free(r);
+    }
+
+    fn dupeField(self: *MigrationDetector, f: schema_parser.Field) !schema_parser.Field {
+        const owned_name = try self.allocator.dupe(u8, f.name);
+        errdefer self.allocator.free(owned_name);
+        const owned_refs = if (f.references) |r| try self.allocator.dupe(u8, r) else null;
+        return schema_parser.Field{
+            .name = owned_name,
+            .sql_type = f.sql_type,
+            .required = f.required,
+            .indexed = f.indexed,
+            .references = owned_refs,
+            .on_delete = f.on_delete,
+        };
+    }
+};

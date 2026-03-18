@@ -40,7 +40,11 @@ test "ConnectionRegistry - init and deinit" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    try testing.expectEqual(@as(usize, 0), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 0), snap.count());
+    }
 }
 
 test "ConnectionRegistry - add and get connection" {
@@ -53,7 +57,8 @@ test "ConnectionRegistry - add and get connection" {
     const state = try ConnectionState.init(allocator, 1, dummy_ws);
     try registry.add(1, state);
 
-    const retrieved = try registry.get(1);
+    const retrieved = try registry.acquireConnection(1);
+    defer retrieved.release(allocator);
     try testing.expectEqual(@as(u64, 1), retrieved.id);
     try testing.expectEqualStrings("default", retrieved.namespace);
 }
@@ -64,7 +69,7 @@ test "ConnectionRegistry - get non-existent connection" {
     var registry = try ConnectionRegistry.init(allocator);
     defer registry.deinit();
 
-    const result = registry.get(999);
+    const result = registry.acquireConnection(999);
     try testing.expectError(error.ConnectionNotFound, result);
 }
 
@@ -78,12 +83,20 @@ test "ConnectionRegistry - remove connection" {
     const state = try ConnectionState.init(allocator, 1, dummy_ws);
     try registry.add(1, state);
 
-    try testing.expectEqual(@as(usize, 1), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 1), snap.count());
+    }
 
     try registry.remove(1);
 
-    try testing.expectEqual(@as(usize, 0), registry.connections.count());
-    const result = registry.get(1);
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 0), snap.count());
+    }
+    const result = registry.acquireConnection(1);
     try testing.expectError(error.ConnectionNotFound, result);
 }
 
@@ -102,11 +115,19 @@ test "ConnectionRegistry - clear all connections" {
     try registry.add(2, state2);
     try registry.add(3, state3);
 
-    try testing.expectEqual(@as(usize, 3), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 3), snap.count());
+    }
 
     registry.clear();
 
-    try testing.expectEqual(@as(usize, 0), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 0), snap.count());
+    }
 }
 
 test "ConnectionRegistry - multiple connections" {
@@ -122,11 +143,16 @@ test "ConnectionRegistry - multiple connections" {
         try registry.add(i, state);
     }
 
-    try testing.expectEqual(@as(usize, 10), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 10), snap.count());
+    }
 
     // Verify all connections can be retrieved
     for (1..11) |i| {
-        const retrieved = try registry.get(i);
+        const retrieved = try registry.acquireConnection(i);
+        defer retrieved.release(allocator);
         try testing.expectEqual(@as(u64, i), retrieved.id);
     }
 }
@@ -145,7 +171,9 @@ test "ConnectionRegistry - iterator" {
     try registry.add(2, state2);
 
     var count: usize = 0;
-    var it = registry.iterator();
+    var snap = try registry.snapshot();
+    defer snap.deinit();
+    var it = snap.iterator();
     while (it.next()) |_| {
         count += 1;
     }
@@ -168,7 +196,8 @@ test "ConnectionRegistry - thread safety simulation" {
 
     // Simulate concurrent access by doing multiple operations
     for (1..6) |i| {
-        const retrieved = try registry.get(i);
+        const retrieved = try registry.acquireConnection(i);
+        defer retrieved.release(allocator);
         try testing.expectEqual(@as(u64, i), retrieved.id);
     }
 
@@ -176,14 +205,23 @@ test "ConnectionRegistry - thread safety simulation" {
     try registry.remove(2);
     try registry.remove(4);
 
-    try testing.expectEqual(@as(usize, 3), registry.connections.count());
+    {
+        var snap = try registry.snapshot();
+        defer snap.deinit();
+        try testing.expectEqual(@as(usize, 3), snap.count());
+    }
 
     // Verify remaining connections
-    _ = try registry.get(1);
-    _ = try registry.get(3);
-    _ = try registry.get(5);
+    {
+        const r1 = try registry.acquireConnection(1);
+        r1.release(allocator);
+        const r3 = try registry.acquireConnection(3);
+        r3.release(allocator);
+        const r5 = try registry.acquireConnection(5);
+        r5.release(allocator);
+    }
 
     // Verify removed connections are gone
-    try testing.expectError(error.ConnectionNotFound, registry.get(2));
-    try testing.expectError(error.ConnectionNotFound, registry.get(4));
+    try testing.expectError(error.ConnectionNotFound, registry.acquireConnection(2));
+    try testing.expectError(error.ConnectionNotFound, registry.acquireConnection(4));
 }
