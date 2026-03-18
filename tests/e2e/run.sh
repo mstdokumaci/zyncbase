@@ -15,7 +15,7 @@ cleanup() {
     if [ -n "$SERVER_PID" ]; then
         kill $SERVER_PID 2>/dev/null || true
     fi
-    rm -f zyncbase-config.json zyncbase-server-sync.log
+    rm -f test-artifacts/zyncbase-config.json test-artifacts/zyncbase-server-sync.log
 }
 
 # Set trap early to catch any exit
@@ -39,10 +39,10 @@ wait_for_port() {
 # Initial Cleanup
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
-rm -f zyncbase-server-sync.log
+rm -f test-artifacts/zyncbase-config.json test-artifacts/zyncbase-server-sync.log
 
 # Create test config
-echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'"}' > zyncbase-config.json
+echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'"}' > test-artifacts/zyncbase-config.json
 
 # Build server
 echo "Building ZyncBase server (ReleaseFast)..."
@@ -50,14 +50,14 @@ zig build -Doptimize=ReleaseFast
 
 # 1. Bi-directional Sync Test
 echo "--- Scenario 1: Bi-directional Sync ---"
-$SERVER_BIN > zyncbase-server-sync.log 2>&1 &
+$SERVER_BIN > test-artifacts/zyncbase-server-sync.log 2>&1 &
 SERVER_PID=$!
 
 echo "Waiting for server to start on port $PORT..."
-wait_for_port $PORT || { echo "Server failed to start. Logs:"; cat zyncbase-server-sync.log; exit 1; }
+wait_for_port $PORT || { echo "Server failed to start. Logs:"; cat test-artifacts/zyncbase-server-sync.log; exit 1; }
 
 echo "Running sync test..."
-bun tests/e2e/src/test-sync.ts || { echo "Sync test failed! Server log follows:"; cat zyncbase-server-sync.log; exit 1; }
+bun tests/e2e/src/test-sync.ts || { echo "Sync test failed! Server log follows:"; cat test-artifacts/zyncbase-server-sync.log; exit 1; }
 
 echo "Stopping server for persistence phase..."
 kill $SERVER_PID
