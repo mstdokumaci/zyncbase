@@ -53,7 +53,7 @@ const StorageLayer = struct {
         return &self.read_pool[reader_idx];
     }
 };
-```Schema-to-DDL ZyncBase transforms JSON into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored 0 or 1 `object Flattened columns `address.city `address_city TEXT `array` Stored JSON blob Implementation Logic```zig
+```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer 64-bit float `boolean Stored as 0 or 1 `object Flattened columns `address.city_city TEXT `array` Stored as JSON blob Implementation Logic schema during `StorageEngine initialization ZyncBase strict-schema architecture valid JSON schema for server startup no invalid database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity```zig
 const SchemaParser = struct {
     allocator: Allocator,
     
