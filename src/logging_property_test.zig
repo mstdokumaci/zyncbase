@@ -87,7 +87,7 @@ test "logging: connection events" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const test_dir = "test_connection_logging";
+    const test_dir = "test-artifacts/test_connection_logging";
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
@@ -290,7 +290,7 @@ test "logging: error details" {
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const test_dir = "test_error_logging";
+    const test_dir = "test-artifacts/test_error_logging";
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
@@ -431,7 +431,7 @@ test "logging: level filtering" {
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
-        const test_dir = "test_log_level";
+        const test_dir = "test-artifacts/test_log_level";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
@@ -514,7 +514,7 @@ test "logging: message formatting" {
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
-        const test_dir = "test_log_format";
+        const test_dir = "test-artifacts/test_log_format";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
@@ -585,7 +585,7 @@ test "logging: message formatting" {
 
         var request_handler = RequestHandler.init(&memory_strategy);
 
-        const test_dir = "test_log_params";
+        const test_dir = "test-artifacts/test_log_params";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
