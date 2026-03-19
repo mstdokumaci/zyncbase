@@ -2,14 +2,23 @@ const std = @import("std");
 
 const testing = std.testing;
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // Test that verifies all components are properly wired together
 // Integration wiring and component interaction properties
 test "Integration: All components properly wired" {
     const allocator = testing.allocator;
 
-    // Initialize server with unique data directory
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_wiring");
+    const schema_path = "test-artifacts/integration/wiring/schema.json";
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+    try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
+    defer std.fs.cwd().deleteFile(schema_path) catch {};
+
+    // Initialize server with unique data directory and localized schema
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_wiring", schema_path);
     defer {
         server.deinit();
         std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_wiring") catch {};
@@ -40,24 +49,24 @@ test "Integration: All components properly wired" {
 test "Integration: Error propagation through layers" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_propagation");
+    const schema_path = "test-artifacts/integration/wiring/schema_prop.json";
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+    try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
+    defer std.fs.cwd().deleteFile(schema_path) catch {};
+
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_propagation", schema_path);
     defer {
         server.deinit();
         std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_propagation") catch {};
     }
 
     // Test that storage engine errors propagate correctly
-    // Try to get a non-existent key
-    const result = server.storage_engine.get("test_namespace", "nonexistent_key");
-
-    // Should either return null or an error, but not crash
-    if (result) |value| {
-        if (value) |v| {
-            server.memory_strategy.generalAllocator().free(v);
-        }
-    } else |_| {
-        // Error is expected and properly propagated
-    }
+    const doc = try server.storage_engine.selectDocument("test", "nonexistent_key", "test_namespace");
+    defer if (doc) |d| d.free(server.allocator);
+    try testing.expect(doc == null);
 
     // but we verify the error handling paths exist
     try testing.expect(@intFromPtr(server.message_handler.violation_tracker) != 0);
@@ -68,7 +77,15 @@ test "Integration: Error propagation through layers" {
 test "Integration: Graceful shutdown propagation" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_shutdown");
+    const schema_path = "test-artifacts/integration/wiring/schema_shutdown.json";
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+    try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
+    defer std.fs.cwd().deleteFile(schema_path) catch {};
+
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_shutdown", schema_path);
     defer {
         server.deinit();
         std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_shutdown") catch {};
@@ -91,7 +108,15 @@ test "Integration: Graceful shutdown propagation" {
 test "Integration: WebSocket callback wiring" {
     const allocator = testing.allocator;
 
-    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_callback");
+    const schema_path = "test-artifacts/integration/wiring/schema_callback.json";
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+    try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
+    defer std.fs.cwd().deleteFile(schema_path) catch {};
+
+    const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_callback", schema_path);
     defer {
         server.deinit();
         std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_callback") catch {};

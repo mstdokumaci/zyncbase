@@ -8,7 +8,7 @@ pub const Config = struct {
     logging: LoggingConfig,
     performance: PerformanceConfig,
     data_dir: []const u8,
-    schema_file: ?[]const u8,
+    schema_file: []const u8,
     authorization_file: ?[]const u8,
     allocator: Allocator,
 
@@ -75,9 +75,7 @@ pub const Config = struct {
         self.allocator.free(self.security.allowed_origins);
         self.allocator.free(self.server.host);
         self.allocator.free(self.data_dir);
-        if (self.schema_file) |file| {
-            self.allocator.free(file);
-        }
+        self.allocator.free(self.schema_file);
         if (self.authorization_file) |file| {
             self.allocator.free(file);
         }
@@ -135,7 +133,7 @@ pub const ConfigLoader = struct {
             .logging = .{},
             .performance = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
-            .schema_file = null,
+            .schema_file = try allocator.dupe(u8, "./schema.json"),
             .authorization_file = null,
             .allocator = allocator,
         };
@@ -193,7 +191,7 @@ pub const ConfigLoader = struct {
             .logging = .{},
             .performance = .{},
             .data_dir = try allocator.dupe(u8, "./data"),
-            .schema_file = null,
+            .schema_file = try allocator.dupe(u8, "./schema.json"),
             .authorization_file = null,
             .allocator = allocator,
         };
@@ -283,6 +281,7 @@ pub const ConfigLoader = struct {
         // Parse schema file
         if (obj.get("schema")) |schema| {
             if (schema == .string) {
+                allocator.free(config.schema_file);
                 config.schema_file = try allocator.dupe(u8, schema.string);
             }
         }
@@ -415,12 +414,13 @@ pub const ConfigLoader = struct {
             }
         };
 
-        // Validate schema file exists if specified
-        if (config.schema_file) |schema_file| {
-            std.fs.cwd().access(schema_file, .{}) catch {
-                return error.SchemaFileNotFound;
-            };
+        if (config.schema_file.len == 0) {
+            return error.InvalidSchemaFile;
         }
+
+        std.fs.cwd().access(config.schema_file, .{}) catch {
+            return error.SchemaFileNotFound;
+        };
 
         // Validate authorization rules file exists if specified
         if (config.authorization_file) |auth_file| {

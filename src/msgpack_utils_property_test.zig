@@ -24,7 +24,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
         }
         depth_bomb[20] = 0xc0; // nil at innermost level
 
-        var reader = std.Io.Reader.fixed(&depth_bomb);
+        var reader: std.Io.Reader = .fixed(&depth_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -51,7 +51,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             array_bomb[i] = 0xc0; // nil
         }
 
-        var reader = std.Io.Reader.fixed(&array_bomb);
+        var reader: std.Io.Reader = .fixed(&array_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -78,7 +78,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             map_bomb[i] = 0xc0; // nil (key and value both nil)
         }
 
-        var reader = std.Io.Reader.fixed(&map_bomb);
+        var reader: std.Io.Reader = .fixed(&map_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -106,7 +106,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
         string_bomb[4] = @intCast(str_len & 0xff);
         @memset(string_bomb[5..], 0); // zero bytes for string content
 
-        var reader = std.Io.Reader.fixed(string_bomb);
+        var reader: std.Io.Reader = .fixed(string_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -173,7 +173,7 @@ test "msgpack: round-trip encoding/decoding preservation" {
         defer allocator.free(encoded);
 
         // Decode using the project's standard fixed reader
-        var reader = std.Io.Reader.fixed(encoded);
+        var reader: std.Io.Reader = .fixed(encoded);
         const decoded = try msgpack_utils.decode(allocator, &reader);
         defer decoded.free(allocator);
 
@@ -203,7 +203,7 @@ test "msgpack: boundary success (15 depth, 1000 items, 64KB str)" {
         }
         depth15[15] = 0xc0; // nil at innermost level
 
-        var reader = std.Io.Reader.fixed(&depth15);
+        var reader: std.Io.Reader = .fixed(&depth15);
         const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
@@ -220,7 +220,7 @@ test "msgpack: boundary success (15 depth, 1000 items, 64KB str)" {
             array_exact[i] = 0xc0; // nil
         }
 
-        var reader = std.Io.Reader.fixed(&array_exact);
+        var reader: std.Io.Reader = .fixed(&array_exact);
         const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
@@ -240,7 +240,7 @@ test "msgpack: boundary success (15 depth, 1000 items, 64KB str)" {
         string_exact[4] = @intCast(str_len & 0xff);
         @memset(string_exact[5..], 0);
 
-        var reader = std.Io.Reader.fixed(string_exact);
+        var reader: std.Io.Reader = .fixed(string_exact);
         const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
@@ -267,7 +267,7 @@ test "msgpack: reject one-over-boundary payloads" {
         }
         depth16[16] = 0xc0; // nil at innermost level
 
-        var reader = std.Io.Reader.fixed(&depth16);
+        var reader: std.Io.Reader = .fixed(&depth16);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -290,7 +290,7 @@ test "msgpack: reject one-over-boundary payloads" {
             array_over[i] = 0xc0; // nil
         }
 
-        var reader = std.Io.Reader.fixed(&array_over);
+        var reader: std.Io.Reader = .fixed(&array_over);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -316,7 +316,7 @@ test "msgpack: reject one-over-boundary payloads" {
         string_over[4] = @intCast(str_len & 0xff);
         @memset(string_over[5..], 0);
 
-        var reader = std.Io.Reader.fixed(string_over);
+        var reader: std.Io.Reader = .fixed(string_over);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);

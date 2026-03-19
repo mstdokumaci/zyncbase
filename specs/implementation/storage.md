@@ -112,6 +112,15 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 
 ### Implementation Logic
 
+A schema must be provided during `StorageEngine` initialization. 
+
+> [!IMPORTANT]
+> **Mandatory Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
+> 1. A valid JSON schema file is **mandatory** for server startup.
+> 2. The server will fail to initialize if no schema is provided or if the schema is invalid.
+> 3. All database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
+> 4. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
+
 ```zig
 const SchemaParser = struct {
     allocator: Allocator,

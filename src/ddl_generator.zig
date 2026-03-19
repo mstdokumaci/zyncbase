@@ -21,9 +21,8 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, " (\n");
 
         // Fixed leading columns
-        try buf.appendSlice(self.allocator, "  id TEXT PRIMARY KEY,\n");
+        try buf.appendSlice(self.allocator, "  id TEXT,\n");
         try buf.appendSlice(self.allocator, "  namespace_id TEXT NOT NULL");
-
         // One column per field
         for (table.fields) |field| {
             try buf.appendSlice(self.allocator, ",\n  ");
@@ -38,6 +37,9 @@ pub const DDLGenerator = struct {
         // Fixed trailing columns
         try buf.appendSlice(self.allocator, ",\n  created_at INTEGER NOT NULL");
         try buf.appendSlice(self.allocator, ",\n  updated_at INTEGER NOT NULL");
+
+        // Primary key constraint
+        try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (id, namespace_id)");
 
         // FOREIGN KEY constraints
         for (table.fields) |field| {

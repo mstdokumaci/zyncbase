@@ -35,13 +35,17 @@ test "ConfigLoader parses valid JSON config" {
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
         \\    "batchTimeoutMs": 20
-        \\  }
+        \\  },
+        \\  "schema": "test-artifacts/test-config-schema.json"
         \\}
     ;
 
     const temp_file = "test-artifacts/test-config.json";
+    const schema_file = "test-artifacts/test-config-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
+    defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -65,13 +69,17 @@ test "ConfigLoader validates port range" {
         \\{
         \\  "server": {
         \\    "port": 70000
-        \\  }
+        \\  },
+        \\  "schema": "test-artifacts/invalid-port-schema.json"
         \\}
     ;
 
     const temp_file = "test-artifacts/test-config-invalid-port.json";
+    const schema_file = "test-artifacts/invalid-port-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
+    defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidPort, result);
@@ -84,13 +92,17 @@ test "ConfigLoader validates numeric ranges" {
         \\{
         \\  "performance": {
         \\    "messageBufferSize": 0
-        \\  }
+        \\  },
+        \\  "schema": "test-artifacts/invalid-buffer-schema.json"
         \\}
     ;
 
     const temp_file = "test-artifacts/test-config-invalid-buffer.json";
+    const schema_file = "test-artifacts/invalid-buffer-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
+    defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidBufferSize, result);
@@ -108,13 +120,17 @@ test "ConfigLoader parses auth config" {
         \\      "issuer": "zyncbase",
         \\      "audience": "api"
         \\    }
-        \\  }
+        \\  },
+        \\  "schema": "test-artifacts/auth-schema.json"
         \\}
     ;
 
     const temp_file = "test-artifacts/test-config-auth.json";
+    const schema_file = "test-artifacts/auth-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
+    defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -140,13 +156,17 @@ test "ConfigLoader parses security config" {
         \\    "rateLimitMessagesPerSecond": 200,
         \\    "rateLimitConnectionsPerIp": 20,
         \\    "maxMessageSize": 2097152
-        \\  }
+        \\  },
+        \\  "schema": "test-artifacts/security-schema.json"
         \\}
     ;
 
     const temp_file = "test-artifacts/test-config-security.json";
+    const schema_file = "test-artifacts/security-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
     defer std.fs.cwd().deleteFile(temp_file) catch {};
+    defer std.fs.cwd().deleteFile(schema_file) catch {};
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();

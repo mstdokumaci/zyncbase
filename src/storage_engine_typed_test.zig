@@ -21,7 +21,10 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
 }
 
 fn setupEngine(allocator: std.mem.Allocator, test_dir: []const u8, table: schema_parser.Table) !*StorageEngine {
-    const engine = try StorageEngine.init(allocator, test_dir);
+    var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+    var dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields }};
+    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables };
+    const engine = try StorageEngine.init(allocator, test_dir, &dummy_schema);
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
@@ -34,7 +37,6 @@ fn setupEngine(allocator: std.mem.Allocator, test_dir: []const u8, table: schema
 // Unit test 8.7: client writes blocked during migration
 // Simulate an active migration transaction and assert that insertOrReplace / updateField
 // return an error.
-// Validates: Requirements 4.9
 test "storage_engine_typed: unit 8.7 - client writes blocked during migration" {
     const allocator = testing.allocator;
 
@@ -47,9 +49,9 @@ test "storage_engine_typed: unit 8.7 - client writes blocked during migration" {
     const engine = try setupEngine(allocator, test_dir, table);
     defer engine.deinit();
 
-    // Simulate migration in progress by setting manual_transaction_active = true
-    engine.manual_transaction_active.store(true, .release);
-    defer engine.manual_transaction_active.store(false, .release);
+    // Simulate migration in progress by setting migration_active = true
+    engine.migration_active.store(true, .release);
+    defer engine.migration_active.store(false, .release);
 
     // insertOrReplace should be blocked
     const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};

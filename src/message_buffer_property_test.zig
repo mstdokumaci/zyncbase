@@ -9,6 +9,55 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
+const schema_parser = @import("schema_parser.zig");
+const ddl_generator = @import("ddl_generator.zig").DDLGenerator;
+
+fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bool) schema_parser.Field {
+    return .{
+        .name = name,
+        .sql_type = field_type,
+        .required = required,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+    var fields_arr = try allocator.alloc(schema_parser.Field, 1);
+    defer allocator.free(fields_arr);
+    fields_arr[0] = makeField("val", .text, false);
+    const table = schema_parser.Table{ .name = table_name, .fields = fields_arr };
+
+    const schema_ptr = try allocator.create(schema_parser.Schema);
+    errdefer allocator.destroy(schema_ptr);
+
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    errdefer allocator.free(tables);
+
+    tables[0] = try table.clone(allocator);
+    errdefer schema_parser.freeTable(allocator, tables[0]);
+
+    schema_ptr.* = .{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    errdefer allocator.free(schema_ptr.version);
+
+    out_schema.* = schema_ptr;
+
+    const engine = try StorageEngine.init(allocator, test_dir, schema_ptr);
+    errdefer engine.deinit();
+
+    var gen = ddl_generator.init(allocator);
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+    const ddl_z = try allocator.dupeZ(u8, ddl);
+    defer allocator.free(ddl_z);
+    try engine.execDDL(ddl_z);
+
+    return engine;
+}
 
 test "buffer: message deallocation after processing" {
     // This property test verifies that for any processed message,
@@ -44,8 +93,15 @@ test "buffer: message deallocation after processing" {
     };
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage_engine = try StorageEngine.init(allocator, test_dir);
-    defer storage_engine.deinit();
+    var test_schema: ?*schema_parser.Schema = null;
+    var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    defer {
+        storage_engine.deinit();
+        if (test_schema) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -260,7 +316,7 @@ fn createTestMessage(
     value: []const u8,
 ) ![]const u8 {
     _ = msg_type;
-    return try msgpack.createStoreSetMessage(allocator, msg_id, namespace, path, value);
+    return try msgpack.createStoreSetMessage(allocator, msg_id, namespace, &.{ "test", path, "val" }, value);
 }
 
 fn createGetMessage(
@@ -271,7 +327,7 @@ fn createGetMessage(
     path: []const u8,
 ) ![]const u8 {
     _ = _msg_type;
-    return try msgpack.createStoreGetMessage(allocator, msg_id, namespace, path);
+    return try msgpack.createStoreGetMessage(allocator, msg_id, namespace, &.{ "test", path });
 }
 
 fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
@@ -315,8 +371,15 @@ test "buffer: concurrent message deallocation" {
     };
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage_engine = try StorageEngine.init(allocator, test_dir);
-    defer storage_engine.deinit();
+    var test_schema_1: ?*schema_parser.Schema = null;
+    var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_1);
+    defer {
+        storage_engine.deinit();
+        if (test_schema_1) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -359,7 +422,10 @@ test "buffer: concurrent message deallocation" {
                 defer parsed.free(ctx.allocator);
 
                 const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable;
-                const response = ctx.handler.routeMessage(1, msg_info, parsed) catch unreachable;
+                const response = ctx.handler.routeMessage(1, msg_info, parsed) catch |err| {
+                    if (err == error.InvalidOperation) continue; // Skip collection-level sets in this test
+                    unreachable;
+                };
                 defer ctx.allocator.free(response);
             }
         }

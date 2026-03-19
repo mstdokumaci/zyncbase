@@ -1,9 +1,13 @@
 const std = @import("std");
+pub const std_options = struct {
+    pub const log_level = .debug;
+};
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const storage_mod = @import("storage_engine.zig");
+const StorageEngine = storage_mod.StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
@@ -56,7 +60,7 @@ pub const MessageHandler = struct {
     subscription_manager: *SubscriptionManager,
     cache: *LockFreeCache,
     connection_registry: ConnectionRegistry,
-    next_connection_id: std.atomic.Value(u64),
+    next_conn_id: std.atomic.Value(u64),
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -78,7 +82,7 @@ pub const MessageHandler = struct {
             .subscription_manager = subscription_manager,
             .cache = cache,
             .connection_registry = try ConnectionRegistry.init(allocator),
-            .next_connection_id = std.atomic.Value(u64).init(1),
+            .next_conn_id = std.atomic.Value(u64).init(1),
         };
 
         return self;
@@ -91,10 +95,11 @@ pub const MessageHandler = struct {
     }
 
     /// Handle WebSocket connection open event
-    /// Generates unique connection ID and adds to registry
+    /// Uses WebSocket pointer as unique connection ID and adds to registry
     pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
-        // Generate unique connection ID (atomic increment)
-        const conn_id = self.next_connection_id.fetchAdd(1, .monotonic);
+        // Generate a stable unique connection ID
+        const conn_id = self.next_conn_id.fetchAdd(1, .monotonic);
+        ws.setUserData(@ptrFromInt(conn_id));
 
         // Create connection state
         const conn_state = try ConnectionState.init(self.allocator, conn_id, ws.*);
@@ -102,9 +107,6 @@ pub const MessageHandler = struct {
 
         // Store in registry
         try self.connection_registry.add(conn_id, conn_state);
-
-        // Associate connection ID with WebSocket
-        ws.setUserData(@ptrFromInt(conn_id));
 
         std.log.info("WebSocket connection opened: id={}", .{conn_id});
     }
@@ -117,12 +119,11 @@ pub const MessageHandler = struct {
         message: []const u8,
         msg_type: MessageType,
     ) !void {
-        // Get connection ID from WebSocket user data
+        _ = msg_type;
+        // Get connection ID from userData (set in handleOpen)
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-
-        // Only handle binary messages (MessagePack)
-        if (msg_type != .binary) {
-            try self.sendError(ws, "TEXT_NOT_SUPPORTED", "Only binary MessagePack messages are supported");
+        if (conn_id == 0) {
+            std.log.warn("Received message on connection without ID", .{});
             return;
         }
 
@@ -182,6 +183,7 @@ pub const MessageHandler = struct {
     /// Removes subscriptions and connection state
     pub fn handleClose(self: *MessageHandler, ws: *WebSocket, code: i32, message: []const u8) !void {
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        if (conn_id == 0) return;
 
         std.log.debug("WebSocket closed: id={}, code={}, reason={s}", .{
             conn_id,
@@ -217,6 +219,7 @@ pub const MessageHandler = struct {
     /// Cleans up connection state
     pub fn handleError(self: *MessageHandler, ws: *WebSocket) !void {
         const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        if (conn_id == 0) return;
 
         std.log.debug("WebSocket error on connection: id={}", .{conn_id});
 
@@ -317,7 +320,6 @@ pub const MessageHandler = struct {
         };
     }
 
-    /// Route message to appropriate handler based on type
     pub fn routeMessage(
         self: *MessageHandler,
         conn_id: u64,
@@ -326,26 +328,16 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            if (self.storage_engine.schema != null) {
-                return try self.handleStoreSetTyped(conn_id, msg_info.id, parsed);
-            }
             return try self.handleStoreSet(conn_id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreGet")) {
-            if (self.storage_engine.schema != null) {
-                return try self.handleStoreGetTyped(conn_id, msg_info.id, parsed);
-            }
             return try self.handleStoreGet(conn_id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
-            if (self.storage_engine.schema != null) {
-                return try self.handleStoreRemoveTyped(conn_id, msg_info.id, parsed);
-            }
             return try self.handleStoreRemove(msg_info.id, parsed);
         } else {
             return error.UnknownMessageType;
         }
     }
 
-    /// Handle StoreSet message
     fn handleStoreSet(
         self: *MessageHandler,
         conn_id: u64,
@@ -356,10 +348,7 @@ pub const MessageHandler = struct {
 
         // Extract namespace, path, and value from message
         var namespace: ?[]const u8 = null;
-        var path: ?[]const u8 = null;
-        var path_is_allocated = false;
-        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
-
+        var parsed_path: ?ParsedPath = null;
         var value: ?msgpack.Payload = null;
 
         var it = parsed.map.iterator();
@@ -374,15 +363,7 @@ pub const MessageHandler = struct {
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
                     if (val == .arr) {
-                        const parsed_path = parsePath(self.allocator, val) catch return error.InvalidPath;
-                        // Convert ParsedPath back to slash-joined string for backward compat with storage_engine.set/get
-                        path = try self.parsedPathToString(parsed_path);
-                        path_is_allocated = true;
-                        // Free fields slice if it was allocated (field variant)
-                        if (parsed_path == .field) self.allocator.free(parsed_path.field.fields);
-                    } else if (try self.parsePathFromPayload(val)) |p| {
-                        path = p.path;
-                        path_is_allocated = p.allocated;
+                        parsed_path = try parsePath(self.allocator, val);
                     }
                 } else if (std.mem.eql(u8, key_str, "value")) {
                     value = val;
@@ -390,25 +371,51 @@ pub const MessageHandler = struct {
             }
         }
 
-        if (namespace == null or path == null or value == null) {
+        if (namespace == null or parsed_path == null or value == null) {
             return error.MissingRequiredFields;
         }
 
-        // Store in database
-        // NOTE: We need to serialize the Value to bytes for storage
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
-        try msgpack.encode(value.?, &aw.writer);
-        const serialized_value = try aw.toOwnedSlice();
-        defer self.allocator.free(serialized_value);
+        // Defer field slice cleanup if it was allocated
+        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
 
-        try self.storage_engine.set(namespace.?, path.?, serialized_value);
+        switch (parsed_path.?) {
+            .document => |doc| {
+                if (value.? != .map) return error.InvalidPayload;
+
+                // Convert map to ColumnValue array
+                var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
+                defer columns.deinit(self.allocator);
+
+                var val_it = value.?.map.iterator();
+                while (val_it.next()) |entry| {
+                    if (entry.key_ptr.* != .str) continue;
+                    try columns.append(self.allocator, .{
+                        .name = entry.key_ptr.*.str.str,
+                        .value = entry.value_ptr.*,
+                    });
+                }
+
+                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace.?, columns.items);
+            },
+            .field => |f| {
+                // If nested fields, we currently flatten them: field1/field2 -> field1_field2
+                // For now, only support single depth or simple join
+                if (f.fields.len == 1) {
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], value.?);
+                } else if (f.fields.len > 1) {
+                    // TODO: Implement deep flattening if needed, or join with _
+                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    defer self.allocator.free(flattened_field);
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, value.?);
+                }
+            },
+            .collection => return error.InvalidOperation, // Cannot set on a collection
+        }
 
         // Build success response
         return try self.buildSuccessResponse(msg_id);
     }
 
-    /// Handle StoreGet message
     fn handleStoreGet(
         self: *MessageHandler,
         conn_id: u64,
@@ -419,9 +426,7 @@ pub const MessageHandler = struct {
 
         // Extract namespace and path from message
         var namespace: ?[]const u8 = null;
-        var path: ?[]const u8 = null;
-        var path_is_allocated = false;
-        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
+        var parsed_path: ?ParsedPath = null;
 
         var it = parsed.map.iterator();
         while (it.next()) |entry| {
@@ -435,45 +440,55 @@ pub const MessageHandler = struct {
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
                     if (val == .arr) {
-                        const parsed_path = parsePath(self.allocator, val) catch return error.InvalidPath;
-                        path = try self.parsedPathToString(parsed_path);
-                        path_is_allocated = true;
-                        if (parsed_path == .field) self.allocator.free(parsed_path.field.fields);
-                    } else if (try self.parsePathFromPayload(val)) |p| {
-                        path = p.path;
-                        path_is_allocated = p.allocated;
+                        parsed_path = try parsePath(self.allocator, val);
                     }
                 }
             }
         }
 
-        if (namespace == null or path == null) {
+        if (namespace == null or parsed_path == null) {
             return error.MissingRequiredFields;
         }
 
-        // Get from database
-        const value_bytes = try self.storage_engine.get(namespace.?, path.?);
-        if (value_bytes) |v| {
-            defer self.allocator.free(v);
-            return try self.buildValueResponse(msg_id, v);
-        }
+        // Defer field slice cleanup if it was allocated
+        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
 
-        // Exact match not found, try collection query
-        const query_results = try self.storage_engine.query(namespace.?, path.?);
-        defer {
-            for (query_results) |result| {
-                self.allocator.free(result.path);
-                self.allocator.free(result.value);
-            }
-            self.allocator.free(query_results);
-        }
+        const result_payload: ?msgpack.Payload = switch (parsed_path.?) {
+            .document => |doc| blk: {
+                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace.?) catch |err| {
+                    std.log.err("handleStoreGet: selectDocument error: {}", .{err});
+                    return err;
+                };
 
-        if (query_results.len > 0) {
-            return try self.buildQueryResponse(msg_id, query_results);
-        }
+                if (stored_doc == null) {
+                    std.log.debug("handleStoreGet: selectDocument returned null for {s}:{s} in {s}", .{ doc.table, doc.id, namespace.? });
+                    break :blk null; // Return null to indicate not found, will be handled by buildDataResponse
+                }
+                std.log.debug("handleStoreGet: selectDocument returned document for {s}:{s}", .{ doc.table, doc.id });
+                break :blk stored_doc;
+            },
+            .field => |f| blk: {
+                if (f.fields.len == 1) {
+                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace.?, f.fields[0]);
+                } else if (f.fields.len > 1) {
+                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    defer self.allocator.free(flattened_field);
+                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace.?, flattened_field);
+                }
+                break :blk null;
+            },
+            .collection => |c| blk: {
+                // Return all documents in the collection
+                break :blk try self.storage_engine.selectCollection(c.table, namespace.?);
+            },
+        };
 
-        // Nothing found
-        return try self.buildValueResponse(msg_id, null);
+        // Build response
+        if (result_payload) |payload| {
+            return try self.buildDataResponse(msg_id, payload);
+        } else {
+            return try self.buildErrorResponse(msg_id, "NOT_FOUND");
+        }
     }
 
     fn handleStoreRemove(
@@ -483,9 +498,7 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         // Extract namespace and path
         var namespace: ?[]const u8 = null;
-        var path: ?[]const u8 = null;
-        var path_is_allocated = false;
-        defer if (path_is_allocated) if (path) |p| self.allocator.free(p);
+        var parsed_path: ?ParsedPath = null;
 
         var it = parsed.map.iterator();
         while (it.next()) |entry| {
@@ -498,195 +511,40 @@ pub const MessageHandler = struct {
                         namespace = val.str.value();
                     }
                 } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (try self.parsePathFromPayload(val)) |p| {
-                        path = p.path;
-                        path_is_allocated = p.allocated;
+                    if (val == .arr) {
+                        parsed_path = try parsePath(self.allocator, val);
                     }
                 }
             }
         }
 
-        if (namespace == null or path == null) {
+        if (namespace == null or parsed_path == null) {
             return error.MissingRequiredFields;
         }
 
-        // Delete from storage engine
-        try self.storage_engine.delete(namespace.?, path.?);
+        // Defer field slice cleanup if it was allocated
+        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
 
-        // Build success response
-        return try self.buildSuccessResponse(msg_id);
-    }
-
-    // ─── Typed handlers (schema-aware path) ──────────────────────────────────
-
-    /// Handle StoreSet using typed StorageEngine methods (schema must be loaded).
-    fn handleStoreSetTyped(
-        self: *MessageHandler,
-        conn_id: u64,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        _ = conn_id;
-
-        var namespace: ?[]const u8 = null;
-        var path_payload: ?msgpack.Payload = null;
-        var value_payload: ?msgpack.Payload = null;
-
-        var it = parsed.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            if (key == .str) {
-                const k = key.str.value();
-                if (std.mem.eql(u8, k, "namespace")) {
-                    if (val == .str) namespace = val.str.value();
-                } else if (std.mem.eql(u8, k, "path")) {
-                    path_payload = val;
-                } else if (std.mem.eql(u8, k, "value")) {
-                    value_payload = val;
-                }
-            }
-        }
-
-        if (namespace == null or path_payload == null or value_payload == null) {
-            return error.MissingRequiredFields;
-        }
-
-        const pp = parsePath(self.allocator, path_payload.?) catch {
-            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
-        };
-        defer if (pp == .field) self.allocator.free(pp.field.fields);
-
-        switch (pp) {
-            .collection => return error.InvalidPath, // can't set a whole collection
-            .document => |d| {
-                // value must be a map; each key becomes a ColumnValue
-                if (value_payload.? != .map) return error.InvalidMessageFormat;
-                var cols = std.ArrayListUnmanaged(@import("storage_engine.zig").ColumnValue){};
-                defer cols.deinit(self.allocator);
-                var vit = value_payload.?.map.iterator();
-                while (vit.next()) |ve| {
-                    if (ve.key_ptr.* != .str) continue;
-                    try cols.append(self.allocator, .{ .name = ve.key_ptr.*.str.value(), .value = ve.value_ptr.* });
-                }
-                try self.storage_engine.insertOrReplace(d.table, d.id, namespace.?, cols.items);
+        switch (parsed_path.?) {
+            .document => |doc| {
+                try self.storage_engine.deleteDocument(doc.table, doc.id, namespace.?);
             },
             .field => |f| {
-                // single field update
-                const field_name = f.fields[0];
-                try self.storage_engine.updateField(f.table, f.id, namespace.?, field_name, value_payload.?);
+                // If nested fields, we currently flatten them: field1/field2 -> field1_field2
+                if (f.fields.len == 1) {
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], .nil);
+                } else if (f.fields.len > 1) {
+                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    defer self.allocator.free(flattened_field);
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, .nil);
+                }
             },
+            .collection => return error.InvalidOperation, // Cannot remove a whole collection yet
         }
 
         return try self.buildSuccessResponse(msg_id);
     }
-
-    /// Handle StoreGet using typed StorageEngine methods (schema must be loaded).
-    fn handleStoreGetTyped(
-        self: *MessageHandler,
-        conn_id: u64,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        _ = conn_id;
-
-        var namespace: ?[]const u8 = null;
-        var path_payload: ?msgpack.Payload = null;
-
-        var it = parsed.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            if (key == .str) {
-                const k = key.str.value();
-                if (std.mem.eql(u8, k, "namespace")) {
-                    if (val == .str) namespace = val.str.value();
-                } else if (std.mem.eql(u8, k, "path")) {
-                    path_payload = val;
-                }
-            }
-        }
-
-        if (namespace == null or path_payload == null) {
-            return error.MissingRequiredFields;
-        }
-
-        const pp = parsePath(self.allocator, path_payload.?) catch {
-            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
-        };
-        defer if (pp == .field) self.allocator.free(pp.field.fields);
-
-        switch (pp) {
-            .collection => |c| {
-                const result = try self.storage_engine.selectCollection(c.table, namespace.?);
-                // result ownership transferred to buildTypedValueResponse
-                return try self.buildTypedValueResponse(msg_id, result);
-            },
-            .document => |d| {
-                const result = try self.storage_engine.selectDocument(d.table, d.id, namespace.?);
-                if (result) |r| {
-                    return try self.buildTypedValueResponse(msg_id, r);
-                }
-                return try self.buildErrorResponse(msg_id, "NOT_FOUND");
-            },
-            .field => |f| {
-                const result = try self.storage_engine.selectField(f.table, f.id, namespace.?, f.fields[0]);
-                if (result) |r| {
-                    return try self.buildTypedValueResponse(msg_id, r);
-                }
-                return try self.buildErrorResponse(msg_id, "NOT_FOUND");
-            },
-        }
-    }
-
-    /// Handle StoreRemove using typed StorageEngine methods (schema must be loaded).
-    fn handleStoreRemoveTyped(
-        self: *MessageHandler,
-        conn_id: u64,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        _ = conn_id;
-
-        var namespace: ?[]const u8 = null;
-        var path_payload: ?msgpack.Payload = null;
-
-        var it = parsed.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            if (key == .str) {
-                const k = key.str.value();
-                if (std.mem.eql(u8, k, "namespace")) {
-                    if (val == .str) namespace = val.str.value();
-                } else if (std.mem.eql(u8, k, "path")) {
-                    path_payload = val;
-                }
-            }
-        }
-
-        if (namespace == null or path_payload == null) {
-            return error.MissingRequiredFields;
-        }
-
-        const pp = parsePath(self.allocator, path_payload.?) catch {
-            return try self.buildErrorResponse(msg_id, "INVALID_PATH");
-        };
-        defer if (pp == .field) self.allocator.free(pp.field.fields);
-
-        switch (pp) {
-            .collection => return error.InvalidPath, // can't delete a whole collection via this path
-            .document => |d| {
-                try self.storage_engine.deleteDocument(d.table, d.id, namespace.?);
-            },
-            .field => return error.InvalidPath, // field-level delete not supported
-        }
-
-        return try self.buildSuccessResponse(msg_id);
-    }
-
-    /// Build a typed value response (value is already a Payload).
-    fn buildTypedValueResponse(self: *MessageHandler, msg_id: u64, value: msgpack.Payload) ![]const u8 {
+    fn buildDataResponse(self: *MessageHandler, msg_id: u64, result_payload: msgpack.Payload) ![]const u8 {
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
         defer aw.deinit();
 
@@ -695,10 +553,10 @@ pub const MessageHandler = struct {
 
         try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-        try payload.mapPut("value", value);
+        try payload.mapPut("value", result_payload); // Note: result_payload is now part of the map, deinit of payload will handle it
 
         try msgpack.encode(payload, &aw.writer);
-        return try aw.toOwnedSlice();
+        return aw.toOwnedSlice();
     }
 
     /// Build an error response with a code string.
@@ -819,49 +677,6 @@ pub const MessageHandler = struct {
             => true,
             else => false,
         };
-    }
-
-    fn parsePathFromPayload(self: *MessageHandler, payload: msgpack.Payload) !?struct { path: []const u8, allocated: bool } {
-        if (payload == .str) {
-            return .{ .path = payload.str.value(), .allocated = false };
-        } else if (payload == .arr) {
-            var path_buf: std.ArrayList(u8) = .{};
-            errdefer path_buf.deinit(self.allocator);
-            for (payload.arr, 0..) |segment, i| {
-                if (segment != .str) return error.InvalidPathSegment;
-                if (i > 0) try path_buf.append(self.allocator, '/');
-                try path_buf.appendSlice(self.allocator, segment.str.value());
-            }
-            return .{ .path = try path_buf.toOwnedSlice(self.allocator), .allocated = true };
-        }
-        return null;
-    }
-
-    /// Convert a ParsedPath back to a slash-joined string for backward compat with storage_engine.set/get.
-    /// Caller owns the returned slice.
-    fn parsedPathToString(self: *MessageHandler, pp: ParsedPath) ![]const u8 {
-        var buf: std.ArrayList(u8) = .{};
-        errdefer buf.deinit(self.allocator);
-        switch (pp) {
-            .collection => |c| {
-                try buf.appendSlice(self.allocator, c.table);
-            },
-            .document => |d| {
-                try buf.appendSlice(self.allocator, d.table);
-                try buf.append(self.allocator, '/');
-                try buf.appendSlice(self.allocator, d.id);
-            },
-            .field => |f| {
-                try buf.appendSlice(self.allocator, f.table);
-                try buf.append(self.allocator, '/');
-                try buf.appendSlice(self.allocator, f.id);
-                for (f.fields) |field| {
-                    try buf.append(self.allocator, '/');
-                    try buf.appendSlice(self.allocator, field);
-                }
-            },
-        }
-        return buf.toOwnedSlice(self.allocator);
     }
 
     /// Message information extracted from parsed MessagePack

@@ -57,6 +57,25 @@ pub fn build(b: *std.Build) void {
     const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
+
+    // 2. Check Step (for ZLS)
+    const check_step = b.step("check", "Check if the code compiles");
+
+    const exe_check = b.addExecutable(.{
+        .name = "zyncbase-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    exe_check.root_module.addImport("sqlite", sqlite_module);
+    exe_check.root_module.addImport("msgpack", msgpack_module);
+    linkUWS(b, exe_check, sysroot, sanitize);
+    check_step.dependOn(&exe_check.step);
+
+    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
+    check_step.dependOn(&test_check.step);
 }
 
 fn setupTest(

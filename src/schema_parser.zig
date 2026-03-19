@@ -14,11 +14,34 @@ pub const Field = struct {
     indexed: bool,
     references: ?[]const u8, // target table name, or null
     on_delete: ?OnDelete,
+
+    pub fn clone(self: Field, allocator: Allocator) !Field {
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .sql_type = self.sql_type,
+            .required = self.required,
+            .indexed = self.indexed,
+            .references = if (self.references) |ref| try allocator.dupe(u8, ref) else null,
+            .on_delete = self.on_delete,
+        };
+    }
 };
 
 pub const Table = struct {
     name: []const u8,
     fields: []Field,
+
+    pub fn clone(self: Table, allocator: Allocator) !Table {
+        const cloned_fields = try allocator.alloc(Field, self.fields.len);
+        errdefer allocator.free(cloned_fields);
+        for (self.fields, 0..) |f, i| {
+            cloned_fields[i] = try f.clone(allocator);
+        }
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .fields = cloned_fields,
+        };
+    }
 };
 
 pub const Schema = struct {
@@ -274,7 +297,7 @@ pub const SchemaParser = struct {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn mapType(type_str: []const u8) !FieldType {
+pub fn mapType(type_str: []const u8) !FieldType {
     if (std.mem.eql(u8, type_str, "string")) return .text;
     if (std.mem.eql(u8, type_str, "integer")) return .integer;
     if (std.mem.eql(u8, type_str, "number")) return .real;
@@ -283,7 +306,7 @@ fn mapType(type_str: []const u8) !FieldType {
     return error.UnknownFieldType;
 }
 
-fn fieldTypeName(ft: FieldType) []const u8 {
+pub fn fieldTypeName(ft: FieldType) []const u8 {
     return switch (ft) {
         .text => "string",
         .integer => "integer",
@@ -293,14 +316,14 @@ fn fieldTypeName(ft: FieldType) []const u8 {
     };
 }
 
-fn parseOnDelete(s: []const u8) ?OnDelete {
+pub fn parseOnDelete(s: []const u8) ?OnDelete {
     if (std.mem.eql(u8, s, "cascade")) return .cascade;
     if (std.mem.eql(u8, s, "restrict")) return .restrict;
     if (std.mem.eql(u8, s, "set_null")) return .set_null;
     return null;
 }
 
-fn onDeleteName(od: OnDelete) []const u8 {
+pub fn onDeleteName(od: OnDelete) []const u8 {
     return switch (od) {
         .cascade => "cascade",
         .restrict => "restrict",
@@ -323,13 +346,19 @@ fn writeJsonString(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []c
     try buf.append(allocator, '"');
 }
 
-fn freeField(allocator: Allocator, f: Field) void {
+pub fn freeField(allocator: Allocator, f: Field) void {
     allocator.free(f.name);
     if (f.references) |r| allocator.free(r);
 }
 
-fn freeTable(allocator: Allocator, t: Table) void {
+pub fn freeTable(allocator: Allocator, t: Table) void {
     allocator.free(t.name);
     for (t.fields) |f| freeField(allocator, f);
     allocator.free(t.fields);
+}
+
+pub fn freeSchema(allocator: Allocator, schema: Schema) void {
+    allocator.free(schema.version);
+    for (schema.tables) |t| freeTable(allocator, t);
+    allocator.free(schema.tables);
 }

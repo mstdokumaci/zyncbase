@@ -4,11 +4,16 @@ const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const it_storage_mod = @import("storage_engine.zig");
+const StorageEngine = it_storage_mod.StorageEngine;
+const storage_mod = it_storage_mod;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
+const schema_parser = @import("schema_parser.zig");
+const ddl_generator = @import("ddl_generator.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -31,16 +36,22 @@ test "Verification: WebSocket connection lifecycle" {
         allocator.destroy(violation_tracker);
     }
 
+    var context = try schema_helpers.TestContext.init(allocator, "verification-lifecycle");
+    defer context.deinit();
+
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_lifecycle");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_lifecycle") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer storage_engine.deinit(); // Note: context.deinit() handles directory cleanup
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -95,16 +106,22 @@ test "Verification: StoreSet message processing" {
         allocator.destroy(violation_tracker);
     }
 
+    var context = try schema_helpers.TestContext.init(allocator, "verification-storeset");
+    defer context.deinit();
+
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_storeset");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_storeset") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -127,7 +144,7 @@ test "Verification: StoreSet message processing" {
         allocator,
         1,
         "test_namespace",
-        "/test/key",
+        &[_][]const u8{ "data_table", "key" },
         "test_value",
     );
     defer allocator.free(message);
@@ -143,7 +160,10 @@ test "Verification: StoreSet message processing" {
     try testing.expectEqual(@as(u64, 1), msg_info.id);
 
     // Route and process the message
-    const response = try handler.routeMessage(1, msg_info, parsed);
+    var ws = createMockWebSocket();
+    try handler.handleOpen(&ws);
+    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    const response = try handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
 
     // Verify response indicates success
@@ -175,15 +195,16 @@ test "Verification: StoreSet message processing" {
     try storage_engine.flushPendingWrites();
 
     // Verify data was stored
-    const stored_value = try storage_engine.get("test_namespace", "/test/key");
-    defer if (stored_value) |v| allocator.free(v);
-    try testing.expect(stored_value != null);
+    const stored_doc = try storage_engine.selectDocument("data_table", "key", "test_namespace");
+    defer if (stored_doc) |d| d.free(std.testing.allocator);
 
-    // Value is stored as MessagePack-serialized
-    var stored_reader: std.Io.Reader = .fixed(stored_value.?);
-    const stored_parsed = try msgpack.decode(allocator, &stored_reader);
-    defer stored_parsed.free(allocator);
-    try testing.expectEqualStrings("test_value", stored_parsed.str.value());
+    // Value is stored as MessagePack-serialized, but selectDocument decodes it
+    if (stored_doc) |doc| {
+        const val_payload = (try doc.mapGet("val")) orelse return error.ValueNotFound;
+        try testing.expectEqualStrings("test_value", val_payload.str.value());
+    } else {
+        return error.DocumentNotFound;
+    }
 }
 
 // Task 14 Verification: StoreGet message processing
@@ -197,16 +218,21 @@ test "Verification: StoreGet message processing" {
         allocator.destroy(violation_tracker);
     }
 
+    var context = try schema_helpers.TestContext.init(allocator, "verification-storeget");
+    defer context.deinit();
+
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_storeget");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_storeget") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -224,18 +250,19 @@ test "Verification: StoreGet message processing" {
     );
     defer handler.deinit();
 
-    // First, store a value (encoded as MessagePack)
-    const val_encoded = try msgpack.encodeString(allocator, "stored_value");
-    defer allocator.free(val_encoded);
-    try storage_engine.set("test_namespace", "/test/key", val_encoded);
+    // First, store a value (typed storage)
+    const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
+    defer val_payload.free(allocator); // Fix leak
+    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+    try storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
     try storage_engine.flushPendingWrites();
 
-    // Create a proper MessagePack StoreGet message
+    // Create a proper MessagePack StoreGet message with array path
     const message = try msgpack.createStoreGetMessage(
         allocator,
         2,
         "test_namespace",
-        "/test/key",
+        &.{ "data_table", "key", "val" },
     );
     defer allocator.free(message);
 
@@ -250,7 +277,10 @@ test "Verification: StoreGet message processing" {
     try testing.expectEqual(@as(u64, 2), msg_info.id);
 
     // Route and process the message
-    const response = try handler.routeMessage(1, msg_info, parsed);
+    var ws = createMockWebSocket();
+    try handler.handleOpen(&ws);
+    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    const response = try handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
 
     // Verify response contains the value
@@ -296,16 +326,22 @@ test "Verification: Error handling for invalid messages" {
         allocator.destroy(violation_tracker);
     }
 
+    var context = try schema_helpers.TestContext.init(allocator, "verification-errors");
+    defer context.deinit();
+
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_errors");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_errors") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -327,8 +363,8 @@ test "Verification: Error handling for invalid messages" {
     {
         // Create truly invalid MessagePack (incomplete map)
         const invalid_message = &[_]u8{0x81}; // fixmap with 1 element but no elements follow
-        var reader: std.Io.Reader = .fixed(invalid_message);
-        const result = msgpack.decode(allocator, &reader);
+        var reader_invalid: std.Io.Reader = .fixed(invalid_message);
+        const result = msgpack.decode(allocator, &reader_invalid);
         try testing.expectError(error.EndOfStream, result);
     }
 
@@ -350,9 +386,8 @@ test "Verification: Error handling for invalid messages" {
         const message = try buf.toOwnedSlice(allocator);
         defer allocator.free(message);
 
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-
+        var reader_m: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_m);
         defer parsed.free(allocator);
 
         // Should fail to extract message info (missing id)
@@ -427,16 +462,21 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         allocator.destroy(violation_tracker);
     }
 
+    var context = try schema_helpers.TestContext.init(allocator, "verification-e2e");
+    defer context.deinit();
+
     var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/integration/verification/test_data_verification_e2e");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/verification/test_data_verification_e2e") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -477,13 +517,13 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             allocator,
             i + 1,
             td.namespace,
-            td.path,
+            &[_][]const u8{ "data_table", td.path },
             td.value,
         );
         defer allocator.free(set_message);
 
-        var reader: std.Io.Reader = .fixed(set_message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_set: std.Io.Reader = .fixed(set_message);
+        const parsed = try msgpack.decode(allocator, &reader_set);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -491,8 +531,8 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         defer allocator.free(response);
 
         // Verify success response
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var resp_reader_any: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &resp_reader_any);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_ok = false;
@@ -517,7 +557,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             allocator,
             i + 100,
             td.namespace,
-            td.path,
+            &.{ "data_table", td.path, "val" },
         );
         defer allocator.free(get_message);
 
@@ -546,7 +586,14 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         try testing.expectEqualStrings(td.value, val.?);
 
         // Also verify directly in storage engine
-        const stored = try storage_engine.get(td.namespace, td.path);
-        defer if (stored) |v| allocator.free(v);
+        const stored_doc = try storage_engine.selectDocument("data_table", td.path, td.namespace);
+        defer if (stored_doc) |d| d.free(allocator);
+        try testing.expect(stored_doc != null);
+
+        const k_payload = try msgpack.Payload.strToPayload("val", allocator);
+        defer k_payload.free(allocator);
+        const val_field = stored_doc.?.map.get(k_payload);
+        try testing.expect(val_field != null);
+        try testing.expectEqualStrings(td.value, val_field.?.str.value());
     }
 }

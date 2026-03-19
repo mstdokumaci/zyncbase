@@ -25,7 +25,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
 }
 
 /// Build a minimal Schema with one table containing the given fields.
-fn makeSchema(allocator: std.mem.Allocator, table_name: []const u8, fields: []const schema_parser.Field) !schema_parser.Schema {
+fn makeSchema(allocator: std.mem.Allocator, table_name: []const u8, fields: []const schema_parser.Field) !*schema_parser.Schema {
     const owned_fields = try allocator.dupe(schema_parser.Field, fields);
     for (owned_fields, 0..) |_, i| {
         owned_fields[i].name = try allocator.dupe(u8, fields[i].name);
@@ -35,13 +35,15 @@ fn makeSchema(allocator: std.mem.Allocator, table_name: []const u8, fields: []co
         .name = try allocator.dupe(u8, table_name),
         .fields = owned_fields,
     };
-    return schema_parser.Schema{
+    const schema = try allocator.create(schema_parser.Schema);
+    schema.* = .{
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = tables,
     };
+    return schema;
 }
 
-fn freeSchema(allocator: std.mem.Allocator, schema: schema_parser.Schema) void {
+fn freeSchema(allocator: std.mem.Allocator, schema: *schema_parser.Schema) void {
     allocator.free(schema.version);
     for (schema.tables) |t| {
         allocator.free(t.name);
@@ -49,11 +51,34 @@ fn freeSchema(allocator: std.mem.Allocator, schema: schema_parser.Schema) void {
         allocator.free(t.fields);
     }
     allocator.free(schema.tables);
+    allocator.destroy(schema);
 }
 
+const EngineTestContext = struct {
+    allocator: std.mem.Allocator,
+    engine: *StorageEngine,
+    schema: *schema_parser.Schema,
+    test_dir: []const u8,
+
+    pub fn deinit(self: EngineTestContext) void {
+        self.engine.deinit();
+        freeSchema(self.allocator, self.schema);
+        self.allocator.free(self.test_dir);
+        std.fs.cwd().deleteTree(self.test_dir) catch {};
+    }
+};
+
 /// Create a StorageEngine in a temp dir and apply DDL for the given table.
-fn setupEngine(allocator: std.mem.Allocator, test_dir: []const u8, table: schema_parser.Table) !*StorageEngine {
-    const engine = try StorageEngine.init(allocator, test_dir);
+fn setupEngine(allocator: std.mem.Allocator, test_dir_base: []const u8, table: schema_parser.Table) !EngineTestContext {
+    const test_dir = try allocator.dupe(u8, test_dir_base);
+    errdefer allocator.free(test_dir);
+
+    // Build a proper heap-allocated schema so it doesn't dangle
+    const schema = try makeSchema(allocator, table.name, table.fields);
+    errdefer freeSchema(allocator, schema);
+
+    const engine = try StorageEngine.init(allocator, test_dir, schema);
+    errdefer engine.deinit();
 
     // Apply DDL for the table using the writer connection
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -64,7 +89,12 @@ fn setupEngine(allocator: std.mem.Allocator, test_dir: []const u8, table: schema
     defer allocator.free(ddl_z);
     try engine.writer_conn.execMulti(ddl_z, .{});
 
-    return engine;
+    return EngineTestContext{
+        .allocator = allocator,
+        .engine = engine,
+        .schema = schema,
+        .test_dir = test_dir,
+    };
 }
 
 // ─── Property 13: Document set/get round-trip ────────────────────────────────
@@ -73,7 +103,6 @@ fn setupEngine(allocator: std.mem.Allocator, test_dir: []const u8, table: schema
 // For any table/id/namespace/object triple (keys are valid column names), performing
 // insertOrReplace followed by selectDocument SHALL return a map equal to the original
 // object (plus system columns id, namespace_id, created_at, updated_at).
-// Validates: Requirements 5.1, 5.3
 test "storage_engine_typed: property 13 - document set/get round-trip" {
     const allocator = testing.allocator;
 
@@ -94,8 +123,9 @@ test "storage_engine_typed: property 13 - document set/get round-trip" {
         };
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
 
         const id = "doc-001";
         const ns = "ns-test";
@@ -146,7 +176,6 @@ test "storage_engine_typed: property 13 - document set/get round-trip" {
 // Feature: schema-aware-storage, Property 14: Field set/get round-trip
 // For any table/id/namespace/field/scalar tuple, performing updateField followed by
 // selectField SHALL return the original scalar; all other columns unchanged.
-// Validates: Requirements 5.2, 5.4
 test "storage_engine_typed: property 14 - field set/get round-trip" {
     const allocator = testing.allocator;
 
@@ -165,8 +194,9 @@ test "storage_engine_typed: property 14 - field set/get round-trip" {
         };
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
 
         const id = "doc-001";
         const ns = "ns-test";
@@ -212,7 +242,6 @@ test "storage_engine_typed: property 14 - field set/get round-trip" {
 // Feature: schema-aware-storage, Property 15: Collection get is namespace-scoped
 // For any namespace ns and set of documents inserted under ns, selectCollection for ns
 // SHALL return exactly those documents and SHALL NOT return documents from another namespace.
-// Validates: Requirements 5.5
 test "storage_engine_typed: property 15 - collection get is namespace-scoped" {
     const allocator = testing.allocator;
 
@@ -228,8 +257,9 @@ test "storage_engine_typed: property 15 - collection get is namespace-scoped" {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
 
         const ns_a = "ns-alpha";
         const ns_b = "ns-beta";
@@ -273,7 +303,6 @@ test "storage_engine_typed: property 15 - collection get is namespace-scoped" {
 // Feature: schema-aware-storage, Property 16: Remove then get returns null
 // For any table/id/namespace triple, after insertOrReplace followed by deleteDocument,
 // selectDocument SHALL return null.
-// Validates: Requirements 5.6
 test "storage_engine_typed: property 16 - remove then get returns null" {
     const allocator = testing.allocator;
 
@@ -286,8 +315,9 @@ test "storage_engine_typed: property 16 - remove then get returns null" {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
 
         const id = "doc-001";
         const ns = "ns-test";
@@ -316,7 +346,6 @@ test "storage_engine_typed: property 16 - remove then get returns null" {
 // Feature: schema-aware-storage, Property 17: Schema validation rejects unknown tables and fields
 // For any storage operation referencing a table or field not in the loaded schema,
 // the StorageEngine SHALL return a SCHEMA_VALIDATION_FAILED error before any SQL is executed.
-// Validates: Requirements 5.7, 5.8, 5.9
 test "storage_engine_typed: property 17 - schema validation rejects unknown tables and fields" {
     const allocator = testing.allocator;
 
@@ -333,9 +362,10 @@ test "storage_engine_typed: property 17 - schema validation rejects unknown tabl
         var fields_arr2 = [_]schema_parser.Field{makeField("title", .text, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr2 };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
-        engine.schema = &schema;
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+        engine.schema = schema;
 
         // Unknown table → UnknownTable
         const cols = [_]ColumnValue{.{ .name = "title", .value = msgpack.Payload.intToPayload(1) }};
@@ -371,7 +401,6 @@ test "storage_engine_typed: property 17 - schema validation rejects unknown tabl
 // For any row, after any insertOrReplace or updateField operation, updated_at SHALL be
 // >= the Unix timestamp recorded immediately before the operation, and created_at SHALL
 // remain unchanged on subsequent updates.
-// Validates: Requirements 5.10, 5.11
 test "storage_engine_typed: property 18 - updated_at is always refreshed on write" {
     const allocator = testing.allocator;
 
@@ -384,8 +413,9 @@ test "storage_engine_typed: property 18 - updated_at is always refreshed on writ
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const engine = try setupEngine(allocator, test_dir, table);
-        defer engine.deinit();
+        const ctx = try setupEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
 
         const id = "doc-001";
         const ns = "ns-test";

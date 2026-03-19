@@ -106,6 +106,13 @@ ZyncBase generates SQLite tables from a declarative `schema.json`. This provides
 ### Path-to-Table Mapping
 The first segment of a path (e.g., `tasks`) maps to a database table. This simplifies indexing and query optimization.
 
+> [!IMPORTANT]
+> **Mandatory Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
+> 1. A valid JSON schema file is **mandatory** for server startup.
+> 2. The server will fail to initialize if no schema is provided or if the schema is invalid.
+> 3. All database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
+> 4. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
+
 ### Relational Patterns
 - **Flattening**: Simple nested objects are automatically flattened into relational columns.
     - **Example**: `address.city` → `address_city TEXT`.

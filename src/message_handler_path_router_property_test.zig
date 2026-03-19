@@ -9,7 +9,6 @@ const ParsedPath = message_handler.ParsedPath;
 // For any valid path array p of length >= 1 where every element is a string,
 // routing p through parsePath and then reconstructing the canonical array from
 // the resulting ParsedPath SHALL produce an array equal to p.
-// Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.8
 test "path round-trip: parsePath reconstructs original array" {
     const allocator = std.testing.allocator;
 
@@ -74,7 +73,6 @@ test "path round-trip: parsePath reconstructs original array" {
 // Feature: schema-aware-storage, Property 2: Invalid path elements are rejected
 // For any path array that contains at least one non-string element, or that is empty,
 // parsePath SHALL return an InvalidPath error.
-// Validates: Requirements 1.5, 1.6
 test "path invalid elements rejected: non-string or empty array returns error.InvalidPath" {
     const allocator = std.testing.allocator;
 

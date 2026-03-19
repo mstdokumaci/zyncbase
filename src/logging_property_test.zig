@@ -14,6 +14,19 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const schema_parser = @import("schema_parser.zig");
+const ddl_generator = @import("ddl_generator.zig");
+
+fn createTablesFromSchema(allocator: std.mem.Allocator, engine: *StorageEngine, schema: schema_parser.Schema) !void {
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+    for (schema.tables) |table| {
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+        const ddl_z = try allocator.dupeZ(u8, ddl);
+        defer allocator.free(ddl_z);
+        try engine.execDDL(ddl_z);
+    }
+}
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -117,8 +130,15 @@ test "logging: connection events" {
     };
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage_engine = try StorageEngine.init(allocator, test_dir);
+    var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+    var dummy_tables = [_]schema_parser.Table{
+        .{ .name = "_dummy", .fields = &dummy_fields },
+        .{ .name = "data_table", .fields = &dummy_fields },
+    };
+    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables };
+    var storage_engine = try StorageEngine.init(allocator, test_dir, &dummy_schema);
     defer storage_engine.deinit();
+    try createTablesFromSchema(allocator, storage_engine, dummy_schema);
 
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -143,10 +163,11 @@ test "logging: connection events" {
     {
         // Create a mock WebSocket (we'll use a stub)
         var ws = WebSocket{
-            .ws = undefined, // Not used in this test
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Handle open - this should log "WebSocket connection opened: id={}"
         try handler.handleOpen(&ws);
@@ -164,10 +185,11 @@ test "logging: connection events" {
     // Test 2: Connection close logs connection ID
     {
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Open connection first
         try handler.handleOpen(&ws);
@@ -194,10 +216,11 @@ test "logging: connection events" {
         // Open all connections
         for (&connections) |*ws| {
             ws.* = WebSocket{
-                .ws = undefined,
+                .ws = null,
                 .ssl = false,
-                .user_data = null,
+                .user_data = undefined,
             };
+            ws.user_data = ws;
             try handler.handleOpen(ws);
         }
 
@@ -220,10 +243,11 @@ test "logging: connection events" {
     // Test 4: Error handling logs connection ID
     {
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Open connection
         try handler.handleOpen(&ws);
@@ -254,10 +278,11 @@ test "logging: connection events" {
                 var i: usize = 0;
                 while (i < ctx.iterations) : (i += 1) {
                     var ws = WebSocket{
-                        .ws = undefined,
+                        .ws = null,
                         .ssl = false,
-                        .user_data = null,
+                        .user_data = undefined,
                     };
+                    ws.user_data = &ws;
 
                     // Open and close connection
                     ctx.handler.handleOpen(&ws) catch unreachable;
@@ -308,8 +333,15 @@ test "logging: error details" {
     };
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-    var storage_engine = try StorageEngine.init(allocator, test_dir);
+    var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+    var dummy_tables_1 = [_]schema_parser.Table{
+        .{ .name = "_dummy", .fields = &dummy_fields_1 },
+        .{ .name = "data_table", .fields = &dummy_fields_1 },
+    };
+    const dummy_schema_1 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_1 };
+    var storage_engine = try StorageEngine.init(allocator, test_dir, &dummy_schema_1);
     defer storage_engine.deinit();
+    try createTablesFromSchema(allocator, storage_engine, dummy_schema_1);
 
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -331,10 +363,11 @@ test "logging: error details" {
     // We can't easily intercept logs, but we can verify the error path is taken
     {
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Open connection
         try handler.handleOpen(&ws);
@@ -352,10 +385,11 @@ test "logging: error details" {
     // Test 2: Missing required fields logs error
     {
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         try handler.handleOpen(&ws);
 
@@ -378,17 +412,19 @@ test "logging: error details" {
     // Storage engine logs errors internally when operations fail
     {
         // Try to get from non-existent namespace/path
-        const result = try storage_engine.get("nonexistent", "/path");
+        const result = try storage_engine.selectDocument("data_table", "path", "nonexistent");
+        defer if (result) |r| r.free(std.testing.allocator);
         try testing.expect(result == null);
     }
 
     // Test 4: Multiple error types are logged
     {
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         try handler.handleOpen(&ws);
 
@@ -438,7 +474,13 @@ test "logging: level filtering" {
         };
         defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-        var storage_engine = try StorageEngine.init(allocator, test_dir);
+        var dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+        var dummy_tables_2 = [_]schema_parser.Table{
+            .{ .name = "_dummy", .fields = &dummy_fields_2 },
+            .{ .name = "table", .fields = &dummy_fields_2 },
+        };
+        const dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
+        var storage_engine = try StorageEngine.init(allocator, test_dir, &dummy_schema_2);
         defer storage_engine.deinit();
 
         var subscription_manager = try SubscriptionManager.init(allocator);
@@ -459,10 +501,11 @@ test "logging: level filtering" {
 
         // Trigger different log levels
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Info level: connection open
         try handler.handleOpen(&ws);
@@ -514,7 +557,13 @@ test "logging: message formatting" {
         };
         defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-        var storage_engine = try StorageEngine.init(allocator, test_dir);
+        var dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+        var dummy_tables_3 = [_]schema_parser.Table{
+            .{ .name = "_dummy", .fields = &dummy_fields_3 },
+            .{ .name = "table", .fields = &dummy_fields_3 },
+        };
+        const dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
+        var storage_engine = try StorageEngine.init(allocator, test_dir, &dummy_schema_3);
         defer storage_engine.deinit();
 
         var subscription_manager = try SubscriptionManager.init(allocator);
@@ -535,10 +584,11 @@ test "logging: message formatting" {
 
         // Trigger various log messages
         var ws = WebSocket{
-            .ws = undefined,
+            .ws = null,
             .ssl = false,
-            .user_data = null,
+            .user_data = undefined,
         };
+        ws.user_data = &ws;
 
         // Connection logging includes connection ID
         try handler.handleOpen(&ws);
@@ -578,7 +628,13 @@ test "logging: message formatting" {
         };
         defer std.fs.cwd().deleteTree(test_dir) catch {};
 
-        var storage_engine = try StorageEngine.init(allocator, test_dir);
+        var dummy_fields_4 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+        var dummy_tables_4 = [_]schema_parser.Table{
+            .{ .name = "_dummy", .fields = &dummy_fields_4 },
+            .{ .name = "table", .fields = &dummy_fields_4 },
+        };
+        const dummy_schema_4 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
+        var storage_engine = try StorageEngine.init(allocator, test_dir, &dummy_schema_4);
         defer storage_engine.deinit();
 
         var subscription_manager = try SubscriptionManager.init(allocator);
@@ -603,10 +659,11 @@ test "logging: message formatting" {
 
         for (&connections) |*ws| {
             ws.* = WebSocket{
-                .ws = undefined,
+                .ws = null,
                 .ssl = false,
-                .user_data = null,
+                .user_data = undefined,
             };
+            ws.user_data = ws;
             try handler.handleOpen(ws);
         }
 

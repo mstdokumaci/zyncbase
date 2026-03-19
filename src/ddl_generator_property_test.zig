@@ -13,7 +13,6 @@ const sqlite = @import("sqlite");
 // id TEXT PRIMARY KEY, namespace_id TEXT NOT NULL, one correctly-typed column per field in t.fields
 // (with NOT NULL for required fields, FOREIGN KEY for referenced fields),
 // created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, and a CREATE INDEX on namespace_id.
-// Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9
 test "ddl_generator: property 7 - DDL contains required columns and constraints" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
@@ -57,10 +56,11 @@ test "ddl_generator: property 7 - DDL contains required columns and constraints"
         defer allocator.free(ddl);
 
         // Assert required structural elements
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "id TEXT PRIMARY KEY") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "id TEXT,") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id, namespace_id)") != null);
 
         // Assert CREATE INDEX on namespace_id
         const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS idx_{s}_namespace_id ON {s}(namespace_id)", .{ table_name, table_name });
@@ -102,7 +102,6 @@ test "ddl_generator: property 7 - DDL contains required columns and constraints"
 // Feature: schema-aware-storage, Property 8: Generated DDL is executable
 // For any Table value t, executing the DDL produced by DDL_Generator.generateDDL(t)
 // against an empty in-memory SQLite database SHALL succeed without error.
-// Validates: Requirements 3.10
 test "ddl_generator: property 8 - generated DDL is executable" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);

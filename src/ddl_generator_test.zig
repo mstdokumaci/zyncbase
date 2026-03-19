@@ -47,13 +47,14 @@ test "ddl_generator: generate DDL for a known table" {
 
     const expected =
         \\CREATE TABLE IF NOT EXISTS tasks (
-        \\  id TEXT PRIMARY KEY,
+        \\  id TEXT,
         \\  namespace_id TEXT NOT NULL,
         \\  title TEXT NOT NULL,
         \\  status TEXT,
         \\  priority INTEGER,
         \\  created_at INTEGER NOT NULL,
-        \\  updated_at INTEGER NOT NULL
+        \\  updated_at INTEGER NOT NULL,
+        \\  PRIMARY KEY (id, namespace_id)
         \\);
         \\CREATE INDEX IF NOT EXISTS idx_tasks_namespace_id ON tasks(namespace_id);
         \\CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -86,7 +87,8 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ddl, "id TEXT PRIMARY KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "id TEXT,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id, namespace_id)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);

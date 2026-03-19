@@ -1,4 +1,7 @@
 const std = @import("std");
+pub const std_options = struct {
+    pub const log_level = .debug;
+};
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
@@ -32,6 +35,8 @@ pub const StorageError = error{
     NullNotAllowed,
     /// Write blocked because migration is in progress
     MigrationInProgress,
+    /// No schema is loaded but a typed operation was requested
+    NoSchemaLoaded,
 };
 
 /// A column name + msgpack value pair for typed inserts/updates.
@@ -50,6 +55,11 @@ pub const CheckpointMode = enum {
     restart,
     /// Truncate mode: checkpoint and truncate WAL to zero bytes
     truncate,
+};
+
+pub const ReaderNode = struct {
+    conn: sqlite.Db,
+    mutex: std.Thread.Mutex,
 };
 
 /// Statistics from a checkpoint operation
@@ -78,22 +88,22 @@ pub const StorageEngine = struct {
     allocator: Allocator,
     db_path: [:0]const u8,
     writer_conn: sqlite.Db,
-    reader_pool: []sqlite.Db,
+    reader_pool: []ReaderNode,
     write_queue: WriteQueue,
     write_thread: ?std.Thread = null,
     shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
     transaction_active: std.atomic.Value(bool),
     manual_transaction_active: std.atomic.Value(bool),
+    migration_active: std.atomic.Value(bool),
     pending_writes_count: std.atomic.Value(usize),
     reconnection_config: ReconnectionConfig,
     write_mutex: std.Thread.Mutex,
     write_cond: std.Thread.Condition,
     node_pool: NodePool,
-    /// Optional loaded schema for typed SQL operations. Not owned by StorageEngine.
-    schema: ?*const schema_parser.Schema = null,
+    schema: *const schema_parser.Schema,
 
-    pub fn init(allocator: Allocator, data_dir: []const u8) !*StorageEngine {
+    pub fn init(allocator: Allocator, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
 
@@ -104,9 +114,8 @@ pub const StorageEngine = struct {
 
         // Build database path (null-terminated for SQLite)
         const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
-        errdefer allocator.free(db_path_buf);
+        defer allocator.free(db_path_buf);
         const db_path = try allocator.dupeZ(u8, db_path_buf);
-        allocator.free(db_path_buf); // Free the non-null-terminated version
         errdefer allocator.free(db_path);
 
         // Open writer connection
@@ -122,28 +131,26 @@ pub const StorageEngine = struct {
         // Configure WAL mode and pragmas
         try configureDatabase(&writer_conn);
 
-        // Create schema
-        try createSchema(&writer_conn);
-
         // Create reader pool (one per CPU core)
         const num_readers = try std.Thread.getCpuCount();
-        const reader_pool = try allocator.alloc(sqlite.Db, num_readers);
+        const reader_pool = try allocator.alloc(ReaderNode, num_readers);
         errdefer allocator.free(reader_pool);
 
         var initialized_readers: usize = 0;
         errdefer {
-            for (reader_pool[0..initialized_readers]) |*reader| {
-                reader.deinit();
+            for (reader_pool[0..initialized_readers]) |*node| {
+                node.conn.deinit();
             }
         }
 
-        for (reader_pool) |*reader| {
-            reader.* = try sqlite.Db.init(.{
+        for (reader_pool) |*node| {
+            node.conn = try sqlite.Db.init(.{
                 .mode = sqlite.Db.Mode{ .File = db_path },
                 .open_flags = .{
                     .write = false,
                 },
             });
+            node.mutex = .{};
             initialized_readers += 1;
         }
 
@@ -158,17 +165,24 @@ pub const StorageEngine = struct {
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
             .manual_transaction_active = std.atomic.Value(bool).init(false),
+            .migration_active = std.atomic.Value(bool).init(false),
             .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
             .write_mutex = .{},
             .write_cond = .{},
-            .schema = null,
+            .schema = schema,
         };
 
         self.write_queue = try WriteQueue.init(allocator, &self.node_pool);
+        errdefer self.write_queue.deinit();
 
         // Start write thread
         self.write_thread = try std.Thread.spawn(.{}, writeThreadLoop, .{self});
+        errdefer {
+            self.shutdown_requested.store(true, .release);
+            self.write_cond.signal();
+            if (self.write_thread) |thread| thread.join();
+        }
 
         // Give the write thread a moment to initialize
         std.Thread.sleep(1 * std.time.ns_per_ms);
@@ -188,8 +202,8 @@ pub const StorageEngine = struct {
 
         // Close connections
         self.writer_conn.deinit();
-        for (self.reader_pool) |*reader| {
-            reader.deinit();
+        for (self.reader_pool) |*node| {
+            node.conn.deinit();
         }
 
         // Free resources
@@ -293,137 +307,6 @@ pub const StorageEngine = struct {
         return stat.size;
     }
 
-    pub fn set(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        const op = WriteOp{
-            .type = .set,
-            .namespace = try self.allocator.dupe(u8, namespace),
-            .path = try self.allocator.dupe(u8, path),
-            .value = try self.allocator.dupe(u8, value),
-            .completion_signal = null,
-        };
-
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-    }
-
-    pub fn get(self: *StorageEngine, namespace: []const u8, path: []const u8) !?[]const u8 {
-        // Get reader connection (round-robin)
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const reader = &self.reader_pool[reader_idx];
-
-        // Execute query with inline parameters
-        const row = reader.oneAlloc(
-            struct { value_blob: []const u8 },
-            self.allocator,
-            "SELECT value_blob FROM kv_store WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}",
-            .{},
-            .{ .namespace = namespace, .path = path },
-        ) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("get", classified_err, path);
-
-            // If connection lost, attempt reconnection
-            if (classified_err == StorageError.ConnectionLost) {
-                self.reconnectWithBackoff() catch |reconnect_err| {
-                    logDatabaseError("reconnect", reconnect_err, "get operation");
-                    return reconnect_err;
-                };
-                // Retry the operation after reconnection
-                return self.get(namespace, path);
-            }
-
-            return classified_err;
-        } orelse return null;
-
-        // The string is already allocated by oneAlloc, so we just return it
-        return row.value_blob;
-    }
-
-    pub fn delete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        const op = WriteOp{
-            .type = .delete,
-            .namespace = try self.allocator.dupe(u8, namespace),
-            .path = try self.allocator.dupe(u8, path),
-            .value = null,
-            .completion_signal = null,
-        };
-
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-    }
-
-    pub fn query(
-        self: *StorageEngine,
-        namespace: []const u8,
-        path_prefix: []const u8,
-    ) ![]QueryResult {
-        // Get reader connection
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const reader = &self.reader_pool[reader_idx];
-
-        // Build LIKE pattern
-        const pattern_buf = try std.fmt.allocPrint(self.allocator, "{s}%", .{path_prefix});
-        defer self.allocator.free(pattern_buf);
-        const pattern: []const u8 = pattern_buf;
-
-        // Prepare statement
-        var stmt = reader.prepare("SELECT path, value_blob FROM kv_store WHERE namespace = $namespace{[]const u8} AND path LIKE $pattern{[]const u8}") catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("query prepare", classified_err, path_prefix);
-
-            // If connection lost, attempt reconnection
-            if (classified_err == StorageError.ConnectionLost) {
-                self.reconnectWithBackoff() catch |reconnect_err| {
-                    logDatabaseError("reconnect", reconnect_err, "query operation");
-                    return reconnect_err;
-                };
-                // Retry the operation after reconnection
-                return self.query(namespace, path_prefix);
-            }
-
-            return classified_err;
-        };
-        defer stmt.deinit();
-
-        // Collect results
-        var results = std.ArrayList(QueryResult).initCapacity(self.allocator, 10) catch |err| {
-            std.log.err("Failed to initialize results: {}", .{err});
-            return err;
-        };
-        errdefer {
-            for (results.items) |result| {
-                self.allocator.free(result.path);
-                self.allocator.free(result.value);
-            }
-            results.deinit(self.allocator);
-        }
-
-        var iter = stmt.iterator(struct {
-            path: []const u8,
-            value_blob: []const u8,
-        }, .{ .namespace = namespace, .pattern = pattern }) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("query iterator", classified_err, path_prefix);
-            return classified_err;
-        };
-
-        while (iter.nextAlloc(self.allocator, .{}) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("query next", classified_err, path_prefix);
-            return classified_err;
-        }) |row| {
-            defer self.allocator.free(row.path);
-            defer self.allocator.free(row.value_blob);
-
-            try results.append(self.allocator, .{
-                .path = try self.allocator.dupe(u8, row.path),
-                .value = try self.allocator.dupe(u8, row.value_blob),
-            });
-        }
-
-        return results.toOwnedSlice(self.allocator);
-    }
-
     pub fn beginTransaction(self: *StorageEngine) !void {
         if (self.manual_transaction_active.load(.acquire)) {
             return StorageError.TransactionAlreadyActive;
@@ -459,6 +342,22 @@ pub const StorageEngine = struct {
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .type = .rollback_transaction,
+            .completion_signal = &signal,
+        };
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.pushWrite(op);
+        return signal.wait();
+    }
+
+    /// Execute DDL synchronously via the write thread.
+    pub fn execDDL(self: *StorageEngine, sql: []const u8) !void {
+        var signal = WriteOp.CompletionSignal{};
+        const sql_owned = try self.allocator.dupe(u8, sql);
+        // Ownership transferred to `op` immediately.
+
+        const op = WriteOp{
+            .type = .ddl,
+            .sql = sql_owned,
             .completion_signal = &signal,
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
@@ -560,32 +459,35 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        // Wait for write queue and currently processing batch to drain
+        std.debug.print("\n[DEBUG] flushPendingWrites: count={}\n", .{self.pending_writes_count.load(.acquire)});
+        // Wait for write queue and currently processing batch to drain.
+        // We use a small sleep to avoid spinning too hard, and check acquire load.
         while (self.pending_writes_count.load(.acquire) > 0) {
+            std.Thread.yield() catch {};
             std.Thread.sleep(1 * std.time.ns_per_ms);
         }
+        // Small extra buffer to ensure SQLite has finished its internal write
+        // and the reader connections can see it.
+        std.Thread.sleep(2 * std.time.ns_per_ms);
     }
 
     // ─── Schema validation helpers ────────────────────────────────────────────
 
-    /// Find a table in the loaded schema by name. Returns null if no schema loaded.
-    fn findTable(self: *StorageEngine, table_name: []const u8) ?schema_parser.Table {
-        const s = self.schema orelse return null;
-        for (s.tables) |t| {
+    /// Find a table in the loaded schema by name. Returns null if not found.
+    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.Table {
+        for (self.schema.tables) |t| {
             if (std.mem.eql(u8, t.name, table_name)) return t;
         }
         return null;
     }
 
-    /// Validate that a table exists in the schema (if schema is loaded).
-    fn validateTable(self: *StorageEngine, table_name: []const u8) !void {
-        if (self.schema == null) return; // no schema loaded → skip validation
+    /// Validate that a table exists
+    fn validateTable(self: *const StorageEngine, table_name: []const u8) !void {
         _ = self.findTable(table_name) orelse return StorageError.UnknownTable;
     }
 
-    /// Validate that a field exists in the given table (if schema is loaded).
-    fn validateField(self: *StorageEngine, table_name: []const u8, field_name: []const u8) !void {
-        if (self.schema == null) return;
+    /// Validate that a field exists in a table
+    fn validateField(self: *const StorageEngine, table_name: []const u8, field_name: []const u8) !void {
         const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
         for (table.fields) |f| {
             if (std.mem.eql(u8, f.name, field_name)) return;
@@ -595,8 +497,7 @@ pub const StorageEngine = struct {
 
     /// Validate columns for insertOrReplace: check table exists, each column exists,
     /// and required (NOT NULL) columns are not nil.
-    fn validateColumns(self: *StorageEngine, table_name: []const u8, columns: []const ColumnValue) !void {
-        if (self.schema == null) return;
+    fn validateColumns(self: *const StorageEngine, table_name: []const u8, columns: []const ColumnValue) !void {
         const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
         for (columns) |col| {
             var found = false;
@@ -622,7 +523,8 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         columns: []const ColumnValue,
     ) !void {
-        if (self.manual_transaction_active.load(.acquire)) return StorageError.MigrationInProgress;
+        std.debug.print("\n[DEBUG] insertOrReplace: table='{s}', id='{s}', namespace='{s}'\n", .{ table, id, namespace });
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateColumns(table, columns);
 
         // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, ..., created_at, updated_at)
@@ -697,7 +599,7 @@ pub const StorageEngine = struct {
         field: []const u8,
         value: msgpack.Payload,
     ) !void {
-        if (self.manual_transaction_active.load(.acquire)) return StorageError.MigrationInProgress;
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateField(table, field);
 
         var aw: std.Io.Writer.Allocating = .init(self.allocator);
@@ -706,7 +608,13 @@ pub const StorageEngine = struct {
         const val_bytes = try aw.toOwnedSlice();
         errdefer self.allocator.free(val_bytes);
 
-        const sql = try std.fmt.allocPrint(self.allocator, "UPDATE {s} SET {s}=?, updated_at=? WHERE id=? AND namespace_id=?", .{ table, field });
+        const sql = try std.fmt.allocPrint(self.allocator,
+            \\INSERT INTO {s} (id, namespace_id, {s}, created_at, updated_at)
+            \\VALUES (?, ?, ?, ?, ?)
+            \\ON CONFLICT(id, namespace_id) DO UPDATE SET
+            \\  {s} = excluded.{s},
+            \\  updated_at = excluded.updated_at
+        , .{ table, field, field, field });
         errdefer self.allocator.free(sql);
 
         const id_owned = try self.allocator.dupe(u8, id);
@@ -716,6 +624,9 @@ pub const StorageEngine = struct {
         const table_owned = try self.allocator.dupe(u8, table);
         errdefer self.allocator.free(table_owned);
 
+        const col_bytes_owned = try self.allocator.alloc([]const u8, 1);
+        col_bytes_owned[0] = val_bytes;
+
         const now = std.time.timestamp();
         const op = WriteOp{
             .type = .typed_update,
@@ -723,7 +634,8 @@ pub const StorageEngine = struct {
             .id = id_owned,
             .namespace = ns_owned,
             .sql = sql,
-            .value = val_bytes,
+            .col_bytes = col_bytes_owned,
+            .col_count = 1,
             .timestamp = now,
             .completion_signal = null,
         };
@@ -742,12 +654,14 @@ pub const StorageEngine = struct {
         try self.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const reader = &self.reader_pool[reader_idx];
+        const node = &self.reader_pool[reader_idx];
+        node.mutex.lock();
+        defer node.mutex.unlock();
 
         const sql = try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} WHERE id=? AND namespace_id=?", .{table});
         defer self.allocator.free(sql);
 
-        return self.execSelectDocument(reader, sql, id, namespace);
+        return self.execSelectDocument(&node.conn, sql, id, namespace);
     }
 
     /// SELECT a single field for a document. Returns null if not found.
@@ -762,12 +676,14 @@ pub const StorageEngine = struct {
         try self.validateField(table, field);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const reader = &self.reader_pool[reader_idx];
+        const node = &self.reader_pool[reader_idx];
+        node.mutex.lock();
+        defer node.mutex.unlock();
 
         const sql = try std.fmt.allocPrint(self.allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
         defer self.allocator.free(sql);
 
-        return self.execSelectScalar(reader, sql, id, namespace);
+        return self.execSelectScalar(&node.conn, sql, id, namespace);
     }
 
     /// SELECT * for all documents in a namespace. Returns a msgpack array of maps.
@@ -780,12 +696,14 @@ pub const StorageEngine = struct {
         try self.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const reader = &self.reader_pool[reader_idx];
+        const node = &self.reader_pool[reader_idx];
+        node.mutex.lock();
+        defer node.mutex.unlock();
 
         const sql = try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} WHERE namespace_id=?", .{table});
         defer self.allocator.free(sql);
 
-        return self.execSelectCollection(reader, sql, namespace);
+        return self.execSelectCollection(&node.conn, sql, namespace);
     }
 
     /// DELETE a document by id and namespace.
@@ -795,7 +713,7 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
     ) !void {
-        if (self.manual_transaction_active.load(.acquire)) return StorageError.MigrationInProgress;
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateTable(table);
 
         const sql = try std.fmt.allocPrint(self.allocator, "DELETE FROM {s} WHERE id=? AND namespace_id=?", .{table});
@@ -825,6 +743,7 @@ pub const StorageEngine = struct {
     /// Read a single column value from a prepared statement at column index i.
     fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
+        std.debug.print("\n[DEBUG] readColumnValue: col_type={}\n", .{col_type});
         return switch (col_type) {
             sqlite.c.SQLITE_INTEGER => msgpack.Payload.intToPayload(sqlite.c.sqlite3_column_int64(stmt.stmt, i)),
             sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt.stmt, i) },
@@ -838,8 +757,8 @@ pub const StorageEngine = struct {
                 const ptr = sqlite.c.sqlite3_column_blob(stmt.stmt, i);
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
                 const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
-                var r: std.Io.Reader = .fixed(b);
-                break :blk msgpack.decode(self.allocator, &r) catch
+                var any_reader: std.Io.Reader = .fixed(b);
+                break :blk msgpack.decode(self.allocator, &any_reader) catch
                     try msgpack.Payload.strToPayload(b, self.allocator);
             },
             else => .nil, // SQLITE_NULL
@@ -900,6 +819,8 @@ pub const StorageEngine = struct {
         const ns_z = try self.allocator.dupeZ(u8, namespace);
         defer self.allocator.free(ns_z);
 
+        std.debug.print("\n[DEBUG] execSelectScalar: sql='{s}', id='{s}', namespace='{s}'\n", .{ sql, id, namespace });
+
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
 
@@ -958,6 +879,7 @@ pub const StorageEngine = struct {
 
     fn executeTypedInsert(self: *StorageEngine, op: WriteOp) !void {
         const sql = op.sql.?;
+        std.debug.print("\n[DEBUG] executeTypedInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
@@ -1003,13 +925,14 @@ pub const StorageEngine = struct {
         defer self.allocator.free(id_z);
         const ns_z = try self.allocator.dupeZ(u8, op.namespace.?);
         defer self.allocator.free(ns_z);
-        const val = op.value.?;
+        const val = op.col_bytes.?[0];
 
-        // Bind: value, updated_at, id, namespace_id
-        _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, 1, val.ptr, @intCast(val.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 2, op.timestamp.?);
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 3, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 4, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        // Bind: 1: id, 2: namespace_id, 3: value, 4: created_at, 5: updated_at
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, 3, val.ptr, @intCast(val.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp.?);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp.?);
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
@@ -1058,8 +981,8 @@ pub const StorageEngine = struct {
             while (batch.items.len < batch_size) {
                 if (self.write_queue.pop()) |op| {
                     switch (op.type) {
-                        .set, .delete, .typed_insert, .typed_update, .typed_delete => {
-                            std.log.debug("Batching {s} op for path {?s}", .{ @tagName(op.type), op.path });
+                        .typed_insert, .typed_update, .typed_delete, .ddl => {
+                            std.log.debug("Batching {s} op for table {?s} id {?s}", .{ @tagName(op.type), op.table, op.id });
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
@@ -1159,7 +1082,7 @@ pub const StorageEngine = struct {
         // Drain any ops still in the queue that weren't popped before shutdown was signalled
         while (self.write_queue.pop()) |op| {
             switch (op.type) {
-                .set, .delete, .typed_insert, .typed_update, .typed_delete => {
+                .typed_insert, .typed_update, .typed_delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         _ = self.pending_writes_count.fetchSub(1, .release);
@@ -1182,6 +1105,7 @@ pub const StorageEngine = struct {
 
     fn flushBatch(self: *StorageEngine, batch: *std.ArrayListUnmanaged(WriteOp), last_batch_time: *i64) !void {
         const batch_len = batch.items.len;
+        std.log.debug("flushBatch: flushing {} ops", .{batch_len});
         const result = self.executeBatch(batch.items);
         if (result) |_| {
             for (batch.items) |op| {
@@ -1192,7 +1116,7 @@ pub const StorageEngine = struct {
             }
         } else |err| {
             const classified_err = classifyError(err);
-            std.log.err("Failed to execute batch, transaction rolled back: {}", .{classified_err});
+            std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
             for (batch.items) |op| {
                 if (op.completion_signal) |sig| sig.signal(classified_err);
                 op.deinit(self.allocator);
@@ -1230,16 +1154,6 @@ pub const StorageEngine = struct {
         // Execute all operations
         for (ops) |op| {
             switch (op.type) {
-                .set => self.executeSet(op.namespace.?, op.path.?, op.value.?) catch |err| {
-                    const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch SET", classified_err, op.path.?);
-                    return classified_err;
-                },
-                .delete => self.executeDelete(op.namespace.?, op.path.?) catch |err| {
-                    const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch DELETE", classified_err, op.path.?);
-                    return classified_err;
-                },
                 .typed_insert => self.executeTypedInsert(op) catch |err| {
                     const classified_err = classifyError(err);
                     logDatabaseError("executeBatch TYPED_INSERT", classified_err, op.table orelse "");
@@ -1255,6 +1169,21 @@ pub const StorageEngine = struct {
                     logDatabaseError("executeBatch TYPED_DELETE", classified_err, op.table orelse "");
                     return classified_err;
                 },
+                .ddl => {
+                    const sql = op.sql.?;
+                    var it = std.mem.splitScalar(u8, sql, ';');
+                    while (it.next()) |stmt_raw| {
+                        const stmt = std.mem.trim(u8, stmt_raw, " \r\n\t");
+                        if (stmt.len == 0) continue;
+
+                        self.writer_conn.execDynamic(stmt, .{}, .{}) catch |err| {
+                            std.debug.print("executeBatch DDL error: {}\nSQL:\n{s}\n", .{ err, stmt });
+                            const classified_err = classifyError(err);
+                            logDatabaseError("executeBatch DDL", classified_err, stmt);
+                            return classified_err;
+                        };
+                    }
+                },
                 .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable, // Non-batch ops filtered by loop
             }
         }
@@ -1266,60 +1195,9 @@ pub const StorageEngine = struct {
                 logDatabaseError("executeBatch COMMIT", classified_err, "");
                 return classified_err;
             };
+            std.debug.print("\n[DEBUG] executeBatch: COMMIT successful\n", .{});
             self.transaction_active.store(false, .release);
         }
-    }
-
-    fn executeSet(self: *StorageEngine, namespace: []const u8, path: []const u8, value: []const u8) !void {
-        self.writer_conn.exec(
-            \\INSERT OR REPLACE INTO kv_store (namespace, path, value_blob, updated_at)
-            \\VALUES ($namespace{[]const u8}, $path{[]const u8}, $value{[]const u8}, $timestamp{i64})
-        , .{}, .{
-            .namespace = namespace,
-            .path = path,
-            .value = value,
-            .timestamp = std.time.timestamp(),
-        }) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("executeSet", classified_err, path);
-
-            // If connection lost, attempt reconnection
-            if (classified_err == StorageError.ConnectionLost) {
-                self.reconnectWithBackoff() catch |reconnect_err| {
-                    logDatabaseError("reconnect", reconnect_err, "executeSet operation");
-                    return reconnect_err;
-                };
-                // Retry the operation after reconnection
-                return self.executeSet(namespace, path, value);
-            }
-
-            return classified_err;
-        };
-    }
-
-    fn executeDelete(self: *StorageEngine, namespace: []const u8, path: []const u8) !void {
-        self.writer_conn.exec(
-            \\DELETE FROM kv_store
-            \\WHERE namespace = $namespace{[]const u8} AND path = $path{[]const u8}
-        , .{}, .{
-            .namespace = namespace,
-            .path = path,
-        }) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("executeDelete", classified_err, path);
-
-            // If connection lost, attempt reconnection
-            if (classified_err == StorageError.ConnectionLost) {
-                self.reconnectWithBackoff() catch |reconnect_err| {
-                    logDatabaseError("reconnect", reconnect_err, "executeDelete operation");
-                    return reconnect_err;
-                };
-                // Retry the operation after reconnection
-                return self.executeDelete(namespace, path);
-            }
-
-            return classified_err;
-        };
     }
 
     fn configureDatabase(db: *sqlite.Db) !void {
@@ -1353,45 +1231,20 @@ pub const StorageEngine = struct {
             return classified_err;
         };
     }
-
-    fn createSchema(db: *sqlite.Db) !void {
-        // Create generic key-value table
-        const create_table =
-            \\CREATE TABLE IF NOT EXISTS kv_store (
-            \\  namespace TEXT NOT NULL,
-            \\  path TEXT NOT NULL,
-            \\  value_blob BLOB NOT NULL,
-            \\  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-            \\  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-            \\  PRIMARY KEY (namespace, path)
-            \\)
-        ;
-
-        db.exec(create_table, .{}, .{}) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("createSchema CREATE TABLE", classified_err, "");
-            return classified_err;
-        };
-
-        // Create indexes
-        db.exec("CREATE INDEX IF NOT EXISTS idx_kv_namespace ON kv_store(namespace)", .{}, .{}) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("createSchema CREATE INDEX namespace", classified_err, "");
-            return classified_err;
-        };
-        db.exec("CREATE INDEX IF NOT EXISTS idx_kv_path ON kv_store(path)", .{}, .{}) catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("createSchema CREATE INDEX path", classified_err, "");
-            return classified_err;
-        };
-    }
 };
 
 pub const WriteOp = struct {
-    type: enum { set, delete, begin_transaction, commit_transaction, rollback_transaction, checkpoint, typed_insert, typed_update, typed_delete },
+    type: enum {
+        begin_transaction,
+        commit_transaction,
+        rollback_transaction,
+        checkpoint,
+        typed_insert,
+        typed_update,
+        typed_delete,
+        ddl,
+    },
     namespace: ?[]const u8 = null,
-    path: ?[]const u8 = null,
-    value: ?[]const u8 = null,
     checkpoint_mode: ?CheckpointMode = null,
     completion_signal: ?*CompletionSignal = null,
     // Typed SQL op fields
@@ -1437,10 +1290,6 @@ pub const WriteOp = struct {
 
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
         if (self.namespace) |n| allocator.free(n);
-        if (self.path) |p| allocator.free(p);
-        if (self.value) |v| {
-            allocator.free(v);
-        }
         if (self.table) |t| allocator.free(t);
         if (self.id) |i| allocator.free(i);
         if (self.sql) |s| allocator.free(s);

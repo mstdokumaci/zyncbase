@@ -27,8 +27,11 @@ const WriterCtx = struct {
 const ReaderCtx = struct {
     reader: *std.Io.Reader,
 
-    fn read(self: ReaderCtx, buf: []u8) std.Io.Reader.Error!usize {
-        try self.reader.readSliceAll(buf);
+    fn read(self: ReaderCtx, buf: []u8) error{ EndOfStream, ReadFailed }!usize {
+        self.reader.readSliceAll(buf) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            else => return error.ReadFailed,
+        };
         return buf.len;
     }
 };
@@ -38,7 +41,7 @@ const TightPacker = msgpack.PackWithLimits(
     WriterCtx,
     ReaderCtx,
     std.Io.Writer.Error,
-    std.Io.Reader.Error,
+    error{ EndOfStream, ReadFailed },
     WriterCtx.write,
     ReaderCtx.read,
     TIGHT_LIMITS,
@@ -49,8 +52,9 @@ const TightPacker = msgpack.PackWithLimits(
 /// The returned Payload must be freed using `payload.free(allocator)`.
 pub fn decode(allocator: std.mem.Allocator, reader: *std.Io.Reader) !msgpack.Payload {
     var writer: std.Io.Writer = .failing;
+    const writer_ctx = WriterCtx{ .writer = &writer };
     var packer = TightPacker.init(
-        WriterCtx{ .writer = &writer },
+        writer_ctx,
         ReaderCtx{ .reader = reader },
     );
     return packer.read(allocator);

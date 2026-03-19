@@ -47,13 +47,22 @@ pub const ZyncBaseServer = struct {
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator) !*ZyncBaseServer {
-        return initDetailed(allocator, null, null);
+        return initDetailed(allocator, null, null, null);
     }
 
     /// Initialize the ZyncBase server with optional custom configuration and data directory
-    pub fn initDetailed(allocator: std.mem.Allocator, custom_config: ?Config, custom_data_dir: ?[]const u8) !*ZyncBaseServer {
+    pub fn initDetailed(
+        allocator: std.mem.Allocator,
+        custom_config: ?Config,
+        custom_data_dir: ?[]const u8,
+        custom_schema_file: ?[]const u8,
+    ) !*ZyncBaseServer {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
+        self.allocator = allocator;
+        self.checkpoint_thread = null;
+        self.loaded_schema = null;
+        self.schema_parser_instance = null;
 
         // Initialize memory strategy
         const memory_strategy = try allocator.create(MemoryStrategy);
@@ -77,6 +86,12 @@ pub const ZyncBaseServer = struct {
         if (custom_data_dir) |dir| {
             memory_strategy.generalAllocator().free(config.data_dir);
             config.data_dir = try memory_strategy.generalAllocator().dupe(u8, dir);
+        }
+
+        // Override schema_file if provided
+        if (custom_schema_file) |file| {
+            memory_strategy.generalAllocator().free(config.schema_file);
+            config.schema_file = try memory_strategy.generalAllocator().dupe(u8, file);
         }
 
         // Initialize LockFreeCache
@@ -103,18 +118,8 @@ pub const ZyncBaseServer = struct {
         );
         errdefer subscription_manager.deinit();
 
-        // Initialize storage engine
-        std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
-        const storage_engine = try StorageEngine.init(
-            memory_strategy.generalAllocator(),
-            config.data_dir,
-        );
-        errdefer storage_engine.deinit();
-
-        // Load schema and run migrations if schema_file is configured
-        var loaded_schema: ?schema_parser.Schema = null;
-        var schema_parser_instance: ?SchemaParser = null;
-        if (config.schema_file) |schema_path| {
+        const schema_path = config.schema_file;
+        {
             std.log.info("Loading schema from: {s}", .{schema_path});
             const json_text = std.fs.cwd().readFileAlloc(
                 memory_strategy.generalAllocator(),
@@ -131,12 +136,26 @@ pub const ZyncBaseServer = struct {
                 std.log.err("Failed to parse schema file '{s}': {}", .{ schema_path, err });
                 return err;
             };
-            loaded_schema = schema;
-            schema_parser_instance = parser;
+            errdefer parser.deinit(schema);
+            self.loaded_schema = schema;
+            self.schema_parser_instance = parser;
+        }
 
+        // Initialize storage engine, which now requires a schema
+        std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
+        const storage_engine = try StorageEngine.init(
+            memory_strategy.generalAllocator(),
+            config.data_dir,
+            &self.loaded_schema.?,
+        );
+        errdefer storage_engine.deinit();
+
+        // Run migrations and DDL
+        {
+            const schema_ptr = &self.loaded_schema.?;
             // Apply DDL for each table
             var gen = DDLGenerator.init(memory_strategy.generalAllocator());
-            for (schema.tables) |table| {
+            for (schema_ptr.tables) |table| {
                 const ddl = try gen.generateDDL(table);
                 defer memory_strategy.generalAllocator().free(ddl);
                 const ddl_z = try memory_strategy.generalAllocator().dupeZ(u8, ddl);
@@ -149,7 +168,7 @@ pub const ZyncBaseServer = struct {
 
             // Detect and execute migrations
             var detector = MigrationDetector.init(memory_strategy.generalAllocator(), &storage_engine.writer_conn);
-            const plan = try detector.detectChanges(schema);
+            const plan = try detector.detectChanges(schema_ptr.*);
             defer detector.deinit(plan);
 
             if (plan.changes.len > 0) {
@@ -160,14 +179,11 @@ pub const ZyncBaseServer = struct {
                     &gen,
                     .{},
                 );
-                executor.execute(plan, schema) catch |err| {
+                executor.execute(plan, schema_ptr.*) catch |err| {
                     std.log.err("Schema migration failed: {}", .{err});
                     return err;
                 };
             }
-
-            // Pass schema into storage engine for typed validation
-            // (pointer will be set after self is initialized, below)
         }
 
         // Get storage layer for checkpoint manager
@@ -213,28 +229,21 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Setting up ZyncBaseServer struct", .{});
 
-        self.* = .{
-            .allocator = allocator,
-            .config = config,
-            .memory_strategy = memory_strategy,
-            .cache = cache,
-            .violation_tracker = violation_tracker,
-            .subscription_manager = subscription_manager,
-            .checkpoint_manager = checkpoint_manager,
-            .storage_layer = storage_layer,
-            .request_handler = request_handler,
-            .storage_engine = storage_engine,
-            .websocket_server = websocket_server,
-            .message_handler = message_handler,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
-            .loaded_schema = loaded_schema,
-            .schema_parser_instance = schema_parser_instance,
-        };
+        self.config = config;
+        self.memory_strategy = memory_strategy;
+        self.cache = cache;
+        self.violation_tracker = violation_tracker;
+        self.subscription_manager = subscription_manager;
+        self.checkpoint_manager = checkpoint_manager;
+        self.storage_layer = storage_layer;
+        self.request_handler = request_handler;
+        self.storage_engine = storage_engine;
+        self.websocket_server = websocket_server;
+        self.message_handler = message_handler;
+        self.shutdown_requested = std.atomic.Value(bool).init(false);
 
-        // Now that self is stable, wire schema pointer into storage engine
-        if (self.loaded_schema != null) {
-            self.storage_engine.schema = &self.loaded_schema.?;
-        }
+        // Wire request_handler pointer into message_handler since it was passed from our stack
+        self.message_handler.request_handler = &self.request_handler;
 
         return self;
     }
@@ -358,18 +367,18 @@ pub const ZyncBaseServer = struct {
         config_ptr.deinit();
         std.log.debug("config deinitialized", .{});
 
-        std.log.debug("Deinitializing memory_strategy", .{});
-        self.memory_strategy.deinit();
-        std.log.debug("About to destroy memory_strategy", .{});
-        self.allocator.destroy(self.memory_strategy);
-        std.log.debug("memory_strategy destroyed", .{});
-
-        // Free loaded schema if present
+        // Free loaded schema if present before destroying the allocator it uses
         if (self.loaded_schema) |s| {
             if (self.schema_parser_instance) |*p| {
                 p.deinit(s);
             }
         }
+
+        std.log.debug("Deinitializing memory_strategy", .{});
+        self.memory_strategy.deinit();
+        std.log.debug("About to destroy memory_strategy", .{});
+        self.allocator.destroy(self.memory_strategy);
+        std.log.debug("memory_strategy destroyed", .{});
 
         std.log.debug("About to destroy self", .{});
         self.allocator.destroy(self);

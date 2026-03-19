@@ -1,13 +1,19 @@
 const std = @import("std");
 const testing = std.testing;
-const MessageHandler = @import("message_handler.zig").MessageHandler;
+const message_handler = @import("message_handler.zig");
+const MessageHandler = message_handler.MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const storage_mod = @import("storage_engine.zig");
+const StorageEngine = storage_mod.StorageEngine;
+const ColumnValue = storage_mod.ColumnValue;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
+const schema_parser = @import("schema_parser.zig");
+const ddl_generator = @import("ddl_generator.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -29,12 +35,16 @@ test "store: set field extraction" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-set-field");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property25");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property25") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -46,7 +56,7 @@ test "store: set field extraction" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -54,7 +64,7 @@ test "store: set field extraction" {
 
     // Test 1: Basic StoreSet message field extraction
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", "/test/path", "test_value");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "id1" }, "test_value");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -74,13 +84,13 @@ test "store: set field extraction" {
     {
         const test_cases = [_]struct {
             namespace: []const u8,
-            path: []const u8,
+            path: []const []const u8,
             value: []const u8,
         }{
-            .{ .namespace = "ns1", .path = "/p1", .value = "v1" },
-            .{ .namespace = "namespace_with_underscores", .path = "/long/nested/path", .value = "complex value" },
-            .{ .namespace = "a", .path = "/", .value = "" },
-            .{ .namespace = "test", .path = "/key", .value = "value with spaces" },
+            .{ .namespace = "ns1", .path = &.{ "test", "p1" }, .value = "v1" },
+            .{ .namespace = "namespace_with_underscores", .path = &.{ "test", "long" }, .value = "complex value" },
+            .{ .namespace = "a", .path = &.{ "test", "id2" }, .value = "" },
+            .{ .namespace = "test", .path = &.{ "test", "key" }, .value = "value with spaces" },
         };
 
         for (test_cases, 0..) |tc, i| {
@@ -111,7 +121,10 @@ test "store: set field extraction" {
         try msgpack.writeString(allocator, &buf, "id");
         try buf.append(allocator, 0x01);
         try msgpack.writeString(allocator, &buf, "path");
-        try msgpack.writeString(allocator, &buf, "/test");
+        // fixarray(2)
+        try buf.append(allocator, 0x92);
+        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeString(allocator, &buf, "id1");
         try msgpack.writeString(allocator, &buf, "value");
         try msgpack.writeString(allocator, &buf, "val");
 
@@ -128,7 +141,7 @@ test "store: set field extraction" {
 
     // Test 4: StoreSet missing path should fail
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/path", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test", "path" }, "val");
         defer allocator.free(message);
         // Corrupt it manually by removing a field or using a shorter map
         message[0] = 0x83; // Change fixmap(4) to fixmap(3) - effectively "missing" one field during parse if we only read 3
@@ -147,8 +160,8 @@ test "store: set field extraction" {
         // Missing "path" and "value"
 
         const msg_buf = buf.items;
-        var reader: std.Io.Reader = .fixed(msg_buf);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var fbs_reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &fbs_reader);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -170,8 +183,8 @@ test "store: set field extraction" {
         try msgpack.writeString(allocator, &buf, "test");
 
         const msg_buf = buf.items;
-        var reader: std.Io.Reader = .fixed(msg_buf);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var fbs_reader: std.Io.Reader = .fixed(msg_buf);
+        const parsed = try msgpack.decode(allocator, &fbs_reader);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -191,12 +204,16 @@ test "store: engine set integration" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-engine-set");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property26");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property26") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -208,7 +225,7 @@ test "store: engine set integration" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -216,7 +233,7 @@ test "store: engine set integration" {
 
     // Test 1: StoreSet should call storage engine and persist data
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key1", "value1");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test", "key1" }, "value1");
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -227,30 +244,31 @@ test "store: engine set integration" {
         defer allocator.free(response);
 
         // Wait for write to complete
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        try engine.flushPendingWrites();
 
         // Verify data was stored by retrieving it
-        const stored_value = try storage_engine.get("test", "/key1");
-        defer if (stored_value) |v| allocator.free(v);
-        try testing.expect(stored_value != null);
+        const stored_doc = try engine.selectDocument("test", "key1", "test");
+        defer if (stored_doc) |d| d.free(allocator);
+        try testing.expect(stored_doc != null);
 
-        // Value is stored as MessagePack-serialized
-        var stored_reader: std.Io.Reader = .fixed(stored_value.?);
-        const stored_parsed = try msgpack.decode(allocator, &stored_reader);
-        defer stored_parsed.free(allocator);
-        try testing.expectEqualStrings("value1", stored_parsed.str.value());
+        // Value is stored in the document fields
+        const v_payload = try msgpack.Payload.strToPayload("val", allocator);
+        defer v_payload.free(allocator);
+        const val_field = stored_doc.?.map.get(v_payload);
+        try testing.expect(val_field != null);
+        try testing.expectEqualStrings("value1", val_field.?.str.value());
     }
 
     // Test 2: Multiple StoreSet calls should all persist
     {
         const test_data = [_]struct {
             namespace: []const u8,
-            path: []const u8,
+            path: []const []const u8,
             value: []const u8,
         }{
-            .{ .namespace = "ns1", .path = "/k1", .value = "v1" },
-            .{ .namespace = "ns1", .path = "/k2", .value = "v2" },
-            .{ .namespace = "ns2", .path = "/k1", .value = "v3" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k1" }, .value = "v1" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k2" }, .value = "v2" },
+            .{ .namespace = "ns2", .path = &.{ "test", "k1" }, .value = "v3" },
         };
 
         for (test_data, 0..) |td, i| {
@@ -267,31 +285,33 @@ test "store: engine set integration" {
         }
 
         // Wait for writes to complete
-        std.Thread.sleep(200 * std.time.ns_per_ms);
+        try engine.flushPendingWrites();
 
         // Verify all data was stored
         for (test_data) |td| {
-            const stored_value = try storage_engine.get(td.namespace, td.path);
-            defer if (stored_value) |v| allocator.free(v);
-            try testing.expect(stored_value != null);
+            const table = td.path[0];
+            const id = td.path[1];
+            const stored_doc = try engine.selectDocument(table, id, td.namespace);
+            defer if (stored_doc) |d| d.free(allocator);
+            try testing.expect(stored_doc != null);
 
-            var stored_reader: std.Io.Reader = .fixed(stored_value.?);
-            const stored_parsed = try msgpack.decode(allocator, &stored_reader);
-            defer stored_parsed.free(allocator);
-            try testing.expectEqualStrings(td.value, stored_parsed.str.value());
+            const k_payload = try msgpack.Payload.strToPayload("val", allocator);
+            defer k_payload.free(allocator);
+            const val_field = stored_doc.?.map.get(k_payload);
+            try testing.expect(val_field != null);
+            try testing.expectEqualStrings(td.value, val_field.?.str.value());
         }
     }
 
-    // Test 3: StoreSet should update existing values
     {
         const namespace = "update_test";
-        const path = "/update_key";
+        const path = &.{ "test", "update_key" };
         // Set initial value
         const message1 = try msgpack.createStoreSetMessage(allocator, 1, namespace, path, "initial");
         defer allocator.free(message1);
 
-        var reader1: std.Io.Reader = .fixed(message1);
-        const parsed1 = try msgpack.decode(allocator, &reader1);
+        var reader1_any: std.Io.Reader = .fixed(message1);
+        const parsed1 = try msgpack.decode(allocator, &reader1_any);
         defer parsed1.free(allocator);
         const info1 = try handler.extractMessageInfo(parsed1);
         const response1 = try handler.routeMessage(1, info1, parsed1);
@@ -303,24 +323,25 @@ test "store: engine set integration" {
         const message2 = try msgpack.createStoreSetMessage(allocator, 2, namespace, path, "updated");
         defer allocator.free(message2);
 
-        var reader2: std.Io.Reader = .fixed(message2);
-        const parsed2 = try msgpack.decode(allocator, &reader2);
+        var reader2_any: std.Io.Reader = .fixed(message2);
+        const parsed2 = try msgpack.decode(allocator, &reader2_any);
         defer parsed2.free(allocator);
         const info2 = try handler.extractMessageInfo(parsed2);
         const response2 = try handler.routeMessage(1, info2, parsed2);
         defer allocator.free(response2);
 
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        try engine.flushPendingWrites();
 
         // Verify value was updated
-        const stored_value = try storage_engine.get(namespace, path);
-        defer if (stored_value) |v| allocator.free(v);
-        try testing.expect(stored_value != null);
+        const stored_doc = try engine.selectDocument("test", "update_key", namespace);
+        defer if (stored_doc) |d| d.free(allocator);
+        try testing.expect(stored_doc != null);
 
-        var stored_reader: std.Io.Reader = .fixed(stored_value.?);
-        const stored_parsed = try msgpack.decode(allocator, &stored_reader);
-        defer stored_parsed.free(allocator);
-        try testing.expectEqualStrings("updated", stored_parsed.str.value());
+        const v_payload = try msgpack.Payload.strToPayload("val", allocator);
+        defer v_payload.free(allocator);
+        const val_field = stored_doc.?.map.get(v_payload);
+        try testing.expect(val_field != null);
+        try testing.expectEqualStrings("updated", val_field.?.str.value());
     }
 }
 
@@ -334,12 +355,16 @@ test "store: set success response format" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-set-resp");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property27");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property27") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -351,7 +376,7 @@ test "store: set success response format" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -359,10 +384,10 @@ test "store: set success response format" {
 
     // Test 1: Successful StoreSet should return success response
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", "/key", "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test", "key" }, "val");
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_msg: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -370,8 +395,8 @@ test "store: set success response format" {
         defer allocator.free(response);
 
         // Response should indicate success
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var reader_resp: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &reader_resp);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_ok = false;
@@ -392,25 +417,28 @@ test "store: set success response format" {
     // Test 2: Multiple successful StoreSet operations
     {
         for (0..10) |i| {
-            const path_str = try std.fmt.allocPrint(allocator, "/key{}", .{i});
-            defer allocator.free(path_str);
+            var id_buf: [32]u8 = undefined;
+            const id = try std.fmt.bufPrint(&id_buf, "key{}", .{i});
+            const path = [_][]const u8{ "test", id };
+
             const val_str = try std.fmt.allocPrint(allocator, "val{}", .{i});
             defer allocator.free(val_str);
 
-            const msg = try msgpack.createStoreSetMessage(allocator, i, "test", path_str, val_str);
+            const msg = try msgpack.createStoreSetMessage(allocator, i, "test", &path, val_str);
             defer allocator.free(msg);
 
-            var reader: std.Io.Reader = .fixed(msg);
-            const parsed = try msgpack.decode(allocator, &reader);
+            var reader_msg: std.Io.Reader = .fixed(msg);
+            const parsed = try msgpack.decode(allocator, &reader_msg);
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
             const response = try handler.routeMessage(1, msg_info, parsed);
             defer allocator.free(response);
 
+            try engine.flushPendingWrites();
             // Each should return success
-            var resp_reader: std.Io.Reader = .fixed(response);
-            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            var reader_resp: std.Io.Reader = .fixed(response);
+            const resp_parsed = try msgpack.decode(allocator, &reader_resp);
             defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
             var found_ok = false;
@@ -427,10 +455,10 @@ test "store: set success response format" {
 
     // Test 3: Success response format should be consistent
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 999, "ns", "/p", "v");
+        const message = try msgpack.createStoreSetMessage(allocator, 999, "ns", &.{ "test", "p" }, "v");
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_msg: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -438,8 +466,8 @@ test "store: set success response format" {
         defer allocator.free(response);
 
         // Response should have expected format
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var reader_resp: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &reader_resp);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;
@@ -463,12 +491,16 @@ test "store: get field extraction" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-get-field");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property28");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property28") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -480,7 +512,7 @@ test "store: get field extraction" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -488,7 +520,7 @@ test "store: get field extraction" {
 
     // Test 1: Basic StoreGet message field extraction
     {
-        const message = try msgpack.createStoreGetMessage(allocator, 1, "test_ns", "/test/path");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test_ns", &.{ "test", "id1" });
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -508,12 +540,12 @@ test "store: get field extraction" {
     {
         const test_cases = [_]struct {
             namespace: []const u8,
-            path: []const u8,
+            path: []const []const u8,
         }{
-            .{ .namespace = "ns1", .path = "/p1" },
-            .{ .namespace = "namespace_with_underscores", .path = "/long/nested/path" },
-            .{ .namespace = "a", .path = "/" },
-            .{ .namespace = "test", .path = "/key" },
+            .{ .namespace = "ns1", .path = &.{ "test", "p1" } },
+            .{ .namespace = "namespace_with_underscores", .path = &.{ "test", "nested" } },
+            .{ .namespace = "a", .path = &.{ "test", "id2" } },
+            .{ .namespace = "test", .path = &.{ "test", "key" } },
         };
 
         for (test_cases, 0..) |tc, i| {
@@ -589,12 +621,16 @@ test "store: engine get integration" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-engine-get");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property29");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property29") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -606,7 +642,7 @@ test "store: engine get integration" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -615,16 +651,17 @@ test "store: engine get integration" {
     // Test 1: StoreGet should call storage engine get
     {
         // First store a value
-        const val_encoded = try msgpack.encodeString(allocator, "value1");
-        defer allocator.free(val_encoded);
-        try storage_engine.set("test", "/key1", val_encoded);
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
+        defer val_payload.free(allocator);
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+        try engine.insertOrReplace("test", "key1", "test", &cols);
+        try engine.flushPendingWrites();
 
         // Now get it via message handler
-        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/key1");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", &.{ "test", "key1" });
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_set: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_set);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -632,15 +669,26 @@ test "store: engine get integration" {
         defer allocator.free(response);
 
         // Response should contain the value (proving storage engine was called)
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var fbs_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &fbs_reader);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var val: ?[]const u8 = null;
         var it = resp_parsed.map.iterator();
         while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                val = entry.value_ptr.*.str.value();
+            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                if (entry.value_ptr.* == .str) {
+                    val = entry.value_ptr.*.str.value();
+                } else if (entry.value_ptr.* == .map) {
+                    var doc_it = entry.value_ptr.*.map.iterator();
+                    while (doc_it.next()) |doc_entry| {
+                        if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
+                            if (doc_entry.value_ptr.* == .str) {
+                                val = doc_entry.value_ptr.*.str.value();
+                            }
+                        }
+                    }
+                }
             }
         }
         try testing.expect(val != null);
@@ -652,20 +700,21 @@ test "store: engine get integration" {
         // Store multiple values
         const test_data = [_]struct {
             namespace: []const u8,
-            path: []const u8,
+            path: []const []const u8,
             value: []const u8,
         }{
-            .{ .namespace = "ns1", .path = "/k1", .value = "v1" },
-            .{ .namespace = "ns1", .path = "/k2", .value = "v2" },
-            .{ .namespace = "ns2", .path = "/k1", .value = "v3" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k1" }, .value = "v1" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k2" }, .value = "v2" },
+            .{ .namespace = "ns2", .path = &.{ "test", "k1" }, .value = "v3" },
         };
 
         for (test_data) |td| {
-            const encoded = try msgpack.encodeString(allocator, td.value);
-            defer allocator.free(encoded);
-            try storage_engine.set(td.namespace, td.path, encoded);
+            const val_payload = try msgpack.Payload.strToPayload(td.value, allocator);
+            defer val_payload.free(allocator);
+            const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+            try engine.insertOrReplace("test", td.path[1], td.namespace, &cols);
         }
-        std.Thread.sleep(200 * std.time.ns_per_ms);
+        try engine.flushPendingWrites();
 
         // Get each value via message handler
         for (test_data, 0..) |td, i| {
@@ -688,8 +737,19 @@ test "store: engine get integration" {
             var val: ?[]const u8 = null;
             var it = resp_parsed.map.iterator();
             while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                    val = entry.value_ptr.*.str.value();
+                if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                    if (entry.value_ptr.* == .str) {
+                        val = entry.value_ptr.*.str.value();
+                    } else if (entry.value_ptr.* == .map) {
+                        var doc_it = entry.value_ptr.*.map.iterator();
+                        while (doc_it.next()) |doc_entry| {
+                            if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
+                                if (doc_entry.value_ptr.* == .str) {
+                                    val = doc_entry.value_ptr.*.str.value();
+                                }
+                            }
+                        }
+                    }
                 }
             }
             try testing.expect(val != null);
@@ -699,7 +759,7 @@ test "store: engine get integration" {
 
     // Test 3: StoreGet for nonexistent key should call storage engine
     {
-        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/nonexistent");
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", &.{ "test", "nonexistent" });
         defer allocator.free(message);
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -710,8 +770,8 @@ test "store: engine get integration" {
         defer allocator.free(response);
 
         // Should get a NOT_FOUND response
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var fbs_reader: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &fbs_reader);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_not_found = false;
@@ -736,12 +796,17 @@ test "store: get value response format" {
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "store-get-resp");
+    defer context.deinit();
 
-    const storage_engine = try StorageEngine.init(allocator, "test-artifacts/store_operations/test_data_property30");
-    defer {
-        storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/store_operations/test_data_property30") catch {};
-    }
+    const schema = try schema_helpers.createTestSchema(allocator, &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer schema_helpers.freeTestSchema(allocator, schema);
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
@@ -753,7 +818,7 @@ test "store: get value response format" {
         allocator,
         &tracker,
         &request_handler,
-        storage_engine,
+        engine,
         subscription_manager,
         cache,
     );
@@ -762,16 +827,18 @@ test "store: get value response format" {
     // Test 1: StoreGet should return value in response
     {
         // Store a value
-        const val_encoded = try msgpack.encodeString(allocator, "test_value_123");
-        defer allocator.free(val_encoded);
-        try storage_engine.set("test", "/key1", val_encoded);
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        const val_payload = try msgpack.Payload.strToPayload("test_value_123", allocator);
+        defer val_payload.free(allocator);
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+        try engine.insertOrReplace("data_table", "key1", "test", &cols);
+        try engine.flushPendingWrites();
 
         // Get it
-        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", "/key1");
+        try engine.flushPendingWrites();
+        const message = try msgpack.createStoreGetMessage(allocator, 1, "test", &.{ "data_table", "key1" });
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_msg: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -779,8 +846,8 @@ test "store: get value response format" {
         defer allocator.free(response);
 
         // Response should contain the value
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var reader_get_resp: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &reader_get_resp);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;
@@ -795,7 +862,18 @@ test "store: get value response format" {
                 try testing.expectEqual(@as(u64, 1), entry.value_ptr.*.uint);
                 found_id = true;
             } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                val = entry.value_ptr.*.str.value();
+                if (entry.value_ptr.* == .str) {
+                    val = entry.value_ptr.*.str.value();
+                } else if (entry.value_ptr.* == .map) {
+                    var doc_it = entry.value_ptr.*.map.iterator();
+                    while (doc_it.next()) |doc_entry| {
+                        if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
+                            if (doc_entry.value_ptr.* == .str) {
+                                val = doc_entry.value_ptr.*.str.value();
+                            }
+                        }
+                    }
+                }
             }
         }
         try testing.expect(found_type and found_id);
@@ -808,44 +886,63 @@ test "store: get value response format" {
         // Store multiple values
         const test_data = [_]struct {
             namespace: []const u8,
-            path: []const u8,
+            path: []const []const u8,
             value: []const u8,
         }{
-            .{ .namespace = "ns1", .path = "/k1", .value = "value_one" },
-            .{ .namespace = "ns1", .path = "/k2", .value = "value_two" },
-            .{ .namespace = "ns2", .path = "/k1", .value = "value_three" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k1" }, .value = "value_one" },
+            .{ .namespace = "ns1", .path = &.{ "test", "k2" }, .value = "value_two" },
+            .{ .namespace = "ns2", .path = &.{ "test", "k1" }, .value = "value_three" },
         };
 
-        for (test_data) |td| {
-            const encoded = try msgpack.encodeString(allocator, td.value);
-            defer allocator.free(encoded);
-            try storage_engine.set(td.namespace, td.path, encoded);
-        }
-        std.Thread.sleep(200 * std.time.ns_per_ms);
-
-        // Get each value and verify response contains it
         for (test_data, 0..) |td, i| {
-            const message = try msgpack.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
-            defer allocator.free(message);
+            const val_payload = try msgpack.Payload.strToPayload(td.value, allocator);
+            defer val_payload.free(allocator);
 
-            var reader: std.Io.Reader = .fixed(message);
-            const parsed = try msgpack.decode(allocator, &reader);
-            defer parsed.free(allocator);
+            const set_msg = try msgpack.createStoreSetMessage(allocator, @intCast(i), td.namespace, td.path, td.value);
+            defer allocator.free(set_msg);
 
-            const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(1, msg_info, parsed);
-            defer allocator.free(response);
+            var reader_set: std.Io.Reader = .fixed(set_msg);
+            const parsed_set = try msgpack.decode(allocator, &reader_set);
+            defer parsed_set.free(allocator);
 
-            // Response should contain the specific value
-            var resp_reader: std.Io.Reader = .fixed(response);
-            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            const set_info = try handler.extractMessageInfo(parsed_set);
+            const set_resp = try handler.routeMessage(1, set_info, parsed_set);
+            defer allocator.free(set_resp);
+
+            try engine.flushPendingWrites();
+
+            const get_msg = try msgpack.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
+            defer allocator.free(get_msg);
+
+            var reader_get: std.Io.Reader = .fixed(get_msg);
+            const parsed_get = try msgpack.decode(allocator, &reader_get);
+            defer parsed_get.free(allocator);
+
+            const get_info = try handler.extractMessageInfo(parsed_get);
+            const get_resp = try handler.routeMessage(1, get_info, parsed_get);
+            defer allocator.free(get_resp);
+
+            var reader_resp: std.Io.Reader = .fixed(get_resp);
+            const resp_parsed = try msgpack.decode(allocator, &reader_resp);
             defer resp_parsed.free(allocator);
+
             try testing.expect(resp_parsed == .map);
             var val: ?[]const u8 = null;
             var it = resp_parsed.map.iterator();
             while (it.next()) |entry| {
                 if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                    val = entry.value_ptr.*.str.value();
+                    if (entry.value_ptr.* == .str) {
+                        val = entry.value_ptr.*.str.value();
+                    } else if (entry.value_ptr.* == .map) {
+                        var doc_it = entry.value_ptr.*.map.iterator();
+                        while (doc_it.next()) |doc_entry| {
+                            if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
+                                if (doc_entry.value_ptr.* == .str) {
+                                    val = doc_entry.value_ptr.*.str.value();
+                                }
+                            }
+                        }
+                    }
                 }
             }
             try testing.expect(val != null);
@@ -855,10 +952,10 @@ test "store: get value response format" {
 
     // Test 3: StoreGet for nonexistent key should return not found response
     {
-        const message = try msgpack.createStoreGetMessage(allocator, 999, "test", "/does_not_exist");
+        const message = try msgpack.createStoreGetMessage(allocator, 999, "test", &.{ "test", "does_not_exist" });
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_msg_get: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_msg_get);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -866,8 +963,8 @@ test "store: get value response format" {
         defer allocator.free(response);
 
         // Response should indicate not found
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var reader_resp_get: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &reader_resp_get);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var is_error = false;
@@ -883,15 +980,16 @@ test "store: get value response format" {
     // Test 4: Response format should be consistent
     {
         // Store a value
-        const val_encoded = try msgpack.encodeString(allocator, "format_value");
-        defer allocator.free(val_encoded);
-        try storage_engine.set("format_test", "/key", val_encoded);
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        const val_payload = try msgpack.Payload.strToPayload("format_value", allocator);
+        defer val_payload.free(allocator);
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+        try engine.insertOrReplace("test", "key", "format_test", &cols);
+        try engine.flushPendingWrites();
 
-        const message = try msgpack.createStoreGetMessage(allocator, 777, "format_test", "/key");
+        const message = try msgpack.createStoreGetMessage(allocator, 777, "format_test", &.{ "test", "key" });
         defer allocator.free(message);
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
+        var reader_msg_final: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader_msg_final);
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
@@ -899,8 +997,8 @@ test "store: get value response format" {
         defer allocator.free(response);
 
         // Response should have expected format
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+        var reader_resp_final: std.Io.Reader = .fixed(response);
+        const resp_parsed = try msgpack.decode(allocator, &reader_resp_final);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
         var found_type = false;

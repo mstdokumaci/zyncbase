@@ -26,13 +26,23 @@ test "server: initialization is idempotent" {
     std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
     defer std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
 
+    // Create a valid test fixture in the test artifacts directory
+    const schema_dir = "test-artifacts/server_init";
+    try std.fs.cwd().makePath(schema_dir);
+    const schema_file_path = "test-artifacts/server_init/schema.json";
+    try std.fs.cwd().writeFile(.{
+        .sub_path = schema_file_path,
+        .data = "{\"version\":\"1.0.0\",\"store\":{\"test\":{\"fields\":{\"val\":{\"type\":\"string\"}}}}}",
+    });
+    defer std.fs.cwd().deleteFile(schema_file_path) catch {};
+
     // Property: Multiple init/deinit cycles should not leak memory
     // Test with 1 cycle first to debug leaks
     const num_cycles = 1;
     var i: usize = 0;
     while (i < num_cycles) : (i += 1) {
-        // Initialize server with unique data directory
-        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence");
+        // Initialize server with unique data directory and custom schema path
+        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence", schema_file_path);
         std.log.debug("Server initialized", .{});
         defer {
             std.log.debug("About to call server.deinit()", .{});

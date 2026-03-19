@@ -6,7 +6,6 @@ const SchemaParser = schema_parser.SchemaParser;
 // For any schema field definition of type "object" with N properties,
 // parse SHALL produce exactly N Field values named <parent>_<property>,
 // none with type object.
-// Validates: Requirements 2.3
 test "schema_parser: property 3 - object field flattening" {
     const allocator = std.testing.allocator;
     var parser = SchemaParser.init(allocator);
@@ -52,7 +51,6 @@ test "schema_parser: property 3 - object field flattening" {
 // Feature: schema-aware-storage, Property 4: Unknown table-definition keys are tolerated
 // For any schema JSON with extra unknown keys inside a table definition,
 // parse SHALL succeed and produce the same Schema as without those keys.
-// Validates: Requirements 2.7
 test "schema_parser: property 4 - unknown keys tolerated" {
     const allocator = std.testing.allocator;
     var parser = SchemaParser.init(allocator);
@@ -101,7 +99,6 @@ test "schema_parser: property 4 - unknown keys tolerated" {
 // Feature: schema-aware-storage, Property 5: Missing field type is rejected
 // For any schema JSON with a field definition missing "type",
 // parse SHALL return an error.
-// Validates: Requirements 2.6
 test "schema_parser: property 5 - missing type rejected" {
     const allocator = std.testing.allocator;
     var parser = SchemaParser.init(allocator);
@@ -131,7 +128,6 @@ test "schema_parser: property 5 - missing type rejected" {
 // Feature: schema-aware-storage, Property 6: Schema parse/print round-trip
 // For any valid schema JSON string s,
 // parse(print(parse(s))) SHALL produce a Schema structurally equivalent to parse(s).
-// Validates: Requirements 2.2, 2.8, 2.9
 test "schema_parser: property 6 - parse/print round-trip" {
     const allocator = std.testing.allocator;
     var parser = SchemaParser.init(allocator);

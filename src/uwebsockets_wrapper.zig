@@ -169,12 +169,23 @@ pub const WebSocket = struct {
         return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws.?);
     }
 
+    /// Returns a unique identifier for the connection.
+    /// For real WebSockets, this is the memory address of the C object.
+    /// For mock WebSockets, this is the value stored in user_data.
+    pub fn getConnId(self: WebSocket) u64 {
+        if (self.ws) |ws_ptr| {
+            return @intFromPtr(ws_ptr);
+        }
+        return @as(u64, @intFromPtr(self.user_data));
+    }
+
     pub fn setUserData(self: *WebSocket, user_data: ?*anyopaque) void {
         if (self.ws == null) {
             self.user_data = user_data;
             return;
         }
-        // Note: uws_ws_set_user_data is not exposed. User data is set during upgrade.
+        // Note: uws_ws_set_user_data is not exposed in this wrapper.
+        // If needed, we would need to add it to the C wrapper.
     }
 };
 

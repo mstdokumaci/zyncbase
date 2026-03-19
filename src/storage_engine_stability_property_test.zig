@@ -1,7 +1,11 @@
 const std = @import("std");
-
 const testing = std.testing;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const storage_engine = @import("storage_engine.zig");
+const StorageEngine = storage_engine.StorageEngine;
+const ColumnValue = storage_engine.ColumnValue;
+const schema_parser = @import("schema_parser.zig");
+const ddl_generator = @import("ddl_generator.zig");
+const msgpack = @import("msgpack_utils.zig");
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -15,6 +19,46 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 // - Error recovery and retry logic
 // - Resource cleanup after errors
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
+    return .{
+        .name = name,
+        .sql_type = sql_type,
+        .required = required,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
+    const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
+
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    tables[0] = try table.clone(allocator);
+
+    const schema = try allocator.create(schema_parser.Schema);
+    schema.* = .{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+
+    out_schema.* = schema;
+
+    const engine = try StorageEngine.init(allocator, test_dir, schema);
+
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+    const ddl_z = try allocator.dupeZ(u8, ddl);
+    defer allocator.free(ddl_z);
+    try engine.execDDL(ddl_z);
+
+    return engine;
+}
+
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
@@ -22,7 +66,10 @@ test "storage: stability no crashes on concurrent errors" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
+    var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
+    var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
+    const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
+    var storage = try StorageEngine.init(allocator, tmp_path, &raw_dummy_schema);
     defer storage.deinit();
 
     // Property: Server should not crash when multiple threads encounter errors simultaneously
@@ -46,18 +93,21 @@ test "storage: stability no crashes on concurrent errors" {
                 defer ctx.allocator.free(key);
 
                 // Try to set a value
-                ctx.storage.set("test", key, "value") catch {
+                const val_payload = msgpack.Payload.strToPayload(key, ctx.allocator) catch continue;
+                defer val_payload.free(ctx.allocator);
+                const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+                ctx.storage.insertOrReplace("test", key, "test", &cols) catch {
                     continue;
                 };
 
                 // Try to get the value
-                const value = ctx.storage.get("test", key) catch {
+                const doc = ctx.storage.selectDocument("test", key, "test") catch {
                     continue;
                 };
-                if (value) |v| ctx.allocator.free(v);
+                if (doc) |d| d.free(ctx.allocator);
 
                 // Try to delete the value
-                ctx.storage.delete("test", key) catch {
+                ctx.storage.deleteDocument("test", key, "test") catch {
                     continue;
                 };
             }
@@ -89,8 +139,15 @@ test "storage: stability continues after transaction errors" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema);
+    defer {
+        storage.deinit();
+        if (test_schema) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Server should continue operating after transaction errors
 
@@ -100,12 +157,15 @@ test "storage: stability continues after transaction errors" {
     };
 
     // Server should still be operational - try normal operations
-    try storage.set("test", "key1", "value1");
+    const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
+    defer val_payload.free(allocator);
+    const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+    try storage.insertOrReplace("test", "key1", "test", &cols);
     try storage.flushPendingWrites();
 
-    const value = try storage.get("test", "key1");
-    try testing.expect(value != null);
-    defer if (value) |v| allocator.free(v);
+    const doc = try storage.selectDocument("test", "key1", "test");
+    try testing.expect(doc != null);
+    if (doc) |d| d.free(allocator);
 
     // Cause another transaction error
     _ = storage.rollbackTransaction() catch |err| {
@@ -113,12 +173,15 @@ test "storage: stability continues after transaction errors" {
     };
 
     // Server should still be operational
-    try storage.set("test", "key2", "value2");
+    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
+    defer val_payload2.free(allocator);
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
 
-    const value2 = try storage.get("test", "key2");
-    try testing.expect(value2 != null);
-    defer if (value2) |v| allocator.free(v);
+    const doc2 = try storage.selectDocument("test", "key2", "test");
+    try testing.expect(doc2 != null);
+    if (doc2) |d| d.free(allocator);
 }
 
 test "storage: stability handles rapid error conditions" {
@@ -128,8 +191,15 @@ test "storage: stability handles rapid error conditions" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema_1: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_1);
+    defer {
+        storage.deinit();
+        if (test_schema_1) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Server should handle rapid succession of errors without crashing
 
@@ -142,12 +212,15 @@ test "storage: stability handles rapid error conditions" {
     }
 
     // Server should still be operational
-    try storage.set("test", "key", "value");
+    const val_payload = try msgpack.Payload.strToPayload("value", allocator);
+    defer val_payload.free(allocator);
+    const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+    try storage.insertOrReplace("test", "key", "test", &cols);
     try storage.flushPendingWrites();
 
-    const value = try storage.get("test", "key");
-    try testing.expect(value != null);
-    defer if (value) |v| allocator.free(v);
+    const doc = try storage.selectDocument("test", "key", "test");
+    try testing.expect(doc != null);
+    if (doc) |d| d.free(allocator);
 }
 
 test "storage: stability error recovery with valid operations" {
@@ -157,8 +230,15 @@ test "storage: stability error recovery with valid operations" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema_2: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_2);
+    defer {
+        storage.deinit();
+        if (test_schema_2) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Server should recover from errors and continue with valid operations
 
@@ -169,7 +249,10 @@ test "storage: stability error recovery with valid operations" {
         const key = try std.fmt.allocPrint(allocator, "key{}", .{i});
         defer allocator.free(key);
 
-        try storage.set("test", key, "value");
+        const val_payload = try msgpack.Payload.strToPayload("value", allocator);
+        defer val_payload.free(allocator);
+        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+        try storage.insertOrReplace("test", key, "test", &cols);
 
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
@@ -177,17 +260,17 @@ test "storage: stability error recovery with valid operations" {
         };
 
         // Another valid operation
-        const value = try storage.get("test", key);
-        if (value) |v| allocator.free(v);
+        const doc = try storage.selectDocument("test", key, "test");
+        if (doc) |d| d.free(allocator);
     }
 
     // Flush and verify server is still operational
     try storage.flushPendingWrites();
 
     // Verify some data was persisted
-    const value = try storage.get("test", "key0");
-    try testing.expect(value != null);
-    defer if (value) |v| allocator.free(v);
+    const doc = try storage.selectDocument("test", "key0", "test");
+    try testing.expect(doc != null);
+    if (doc) |d| d.free(allocator);
 }
 
 test "storage: stability resource cleanup after errors" {
@@ -197,8 +280,15 @@ test "storage: stability resource cleanup after errors" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema_3: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_3);
+    defer {
+        storage.deinit();
+        if (test_schema_3) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Resources should be properly cleaned up after errors
 
@@ -206,8 +296,15 @@ test "storage: stability resource cleanup after errors" {
     try storage.beginTransaction();
 
     // Add some operations
-    try storage.set("test", "key1", "value1");
-    try storage.set("test", "key2", "value2");
+    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
+    defer val_payload1.free(allocator);
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
+
+    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
+    defer val_payload2.free(allocator);
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
 
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
@@ -217,13 +314,16 @@ test "storage: stability resource cleanup after errors" {
 
     // Verify we can start a new transaction
     try storage.beginTransaction();
-    try storage.set("test", "key3", "value3");
+    const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
+    defer val_payload3.free(allocator);
+    const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
+    try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.commitTransaction();
 
     // Verify the committed data is there
-    const value = try storage.get("test", "key3");
-    try testing.expect(value != null);
-    defer if (value) |v| allocator.free(v);
+    const doc = try storage.selectDocument("test", "key3", "test");
+    try testing.expect(doc != null);
+    if (doc) |d| d.free(allocator);
 }
 
 test "storage: stability mixed error and success scenarios" {
@@ -233,19 +333,32 @@ test "storage: stability mixed error and success scenarios" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema_4: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_4);
+    defer {
+        storage.deinit();
+        if (test_schema_4) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Server should handle mixed scenarios of errors and successes
 
     // Successful transaction
     try storage.beginTransaction();
-    try storage.set("test", "key1", "value1");
+    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
+    defer val_payload1.free(allocator);
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
     try storage.commitTransaction();
 
     // Failed transaction (rollback)
     try storage.beginTransaction();
-    try storage.set("test", "key2", "value2");
+    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
+    defer val_payload2.free(allocator);
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.rollbackTransaction();
 
     // Error (no active transaction)
@@ -254,22 +367,25 @@ test "storage: stability mixed error and success scenarios" {
     };
 
     // Successful operation without transaction
-    try storage.set("test", "key3", "value3");
+    const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
+    defer val_payload3.free(allocator);
+    const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
+    try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.flushPendingWrites();
 
     // Verify first transaction succeeded
-    const value1 = try storage.get("test", "key1");
-    try testing.expect(value1 != null);
-    defer if (value1) |v| allocator.free(v);
+    const doc1 = try storage.selectDocument("test", "key1", "test");
+    try testing.expect(doc1 != null);
+    defer doc1.?.free(allocator);
 
     // Verify second transaction was rolled back
-    const value2 = try storage.get("test", "key2");
-    try testing.expect(value2 == null);
+    const doc2 = try storage.selectDocument("test", "key2", "test");
+    try testing.expect(doc2 == null);
 
     // Verify third operation succeeded
-    const value3 = try storage.get("test", "key3");
-    try testing.expect(value3 != null);
-    defer if (value3) |v| allocator.free(v);
+    const doc3 = try storage.selectDocument("test", "key3", "test");
+    try testing.expect(doc3 != null);
+    if (doc3) |d| d.free(allocator);
 }
 
 test "storage: stability concurrent reads during write errors" {
@@ -279,14 +395,28 @@ test "storage: stability concurrent reads during write errors" {
     std.fs.cwd().makePath(tmp_path) catch {};
     defer std.fs.cwd().deleteTree(tmp_path) catch {};
 
-    var storage = try StorageEngine.init(allocator, tmp_path);
-    defer storage.deinit();
+    var test_schema_5: ?*schema_parser.Schema = null;
+    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_5);
+    defer {
+        storage.deinit();
+        if (test_schema_5) |s| {
+            schema_parser.freeSchema(allocator, s.*);
+            allocator.destroy(s);
+        }
+    }
 
     // Property: Reads should continue working even when writes encounter errors
 
     // Set up some initial data
-    try storage.set("test", "key1", "value1");
-    try storage.set("test", "key2", "value2");
+    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
+    defer val_payload1.free(allocator);
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
+
+    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
+    defer val_payload2.free(allocator);
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
 
     const num_reader_threads = 4;
@@ -302,11 +432,11 @@ test "storage: stability concurrent reads during write errors" {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                const value1 = ctx.storage.get("test", "key1") catch continue;
-                defer if (value1) |v| ctx.allocator.free(v);
+                const doc1 = ctx.storage.selectDocument("test", "key1", "test") catch continue;
+                if (doc1) |d| d.free(ctx.allocator);
 
-                const value2 = ctx.storage.get("test", "key2") catch continue;
-                defer if (value2) |v| ctx.allocator.free(v);
+                const doc2 = ctx.storage.selectDocument("test", "key2", "test") catch continue;
+                if (doc2) |d| d.free(ctx.allocator);
 
                 // Small delay
                 std.Thread.sleep(1 * std.time.ns_per_ms);
@@ -337,7 +467,7 @@ test "storage: stability concurrent reads during write errors" {
     }
 
     // Verify data is still intact
-    const value1 = try storage.get("test", "key1");
-    try testing.expect(value1 != null);
-    defer if (value1) |v| allocator.free(v);
+    const doc1 = try storage.selectDocument("test", "key1", "test");
+    try testing.expect(doc1 != null);
+    defer doc1.?.free(allocator);
 }
