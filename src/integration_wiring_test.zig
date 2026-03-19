@@ -15,13 +15,13 @@ test "Integration: All components properly wired" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
     try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
-    defer std.fs.cwd().deleteFile(schema_path) catch {};
+    defer std.fs.cwd().deleteFile(schema_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Initialize server with unique data directory and localized schema
     const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_wiring", schema_path);
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_wiring") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_wiring") catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // Verify all components are initialized and connected (pointers are non-null)
@@ -55,12 +55,12 @@ test "Integration: Error propagation through layers" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
     try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
-    defer std.fs.cwd().deleteFile(schema_path) catch {};
+    defer std.fs.cwd().deleteFile(schema_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_propagation", schema_path);
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_propagation") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_propagation") catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // Test that storage engine errors propagate correctly
@@ -83,12 +83,12 @@ test "Integration: Graceful shutdown propagation" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
     try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
-    defer std.fs.cwd().deleteFile(schema_path) catch {};
+    defer std.fs.cwd().deleteFile(schema_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_shutdown", schema_path);
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_shutdown") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_shutdown") catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // Initiate shutdown
@@ -114,12 +114,12 @@ test "Integration: WebSocket callback wiring" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
     try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
-    defer std.fs.cwd().deleteFile(schema_path) catch {};
+    defer std.fs.cwd().deleteFile(schema_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/integration/wiring/test_data_callback", schema_path);
     defer {
         server.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_callback") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/integration/wiring/test_data_callback") catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // Verify WebSocket server is initialized

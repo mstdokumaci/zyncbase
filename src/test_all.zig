@@ -1,4 +1,3 @@
-const std = @import("std");
 
 pub const std_options = struct {
     pub const log_level = .debug;

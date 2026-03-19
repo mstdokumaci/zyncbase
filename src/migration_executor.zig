@@ -79,14 +79,14 @@ pub const MigrationExecutor = struct {
         // Apply each change
         for (plan.changes) |change| {
             self.applyChange(change, target_schema) catch |err| {
-                self.db.exec("ROLLBACK", .{}, .{}) catch {};
+                self.db.exec("ROLLBACK", .{}, .{}) catch {}; // zwanzig-disable-line: empty-catch-engine
                 return err;
             };
         }
 
         // Commit
         self.db.exec("COMMIT", .{}, .{}) catch |err| {
-            self.db.exec("ROLLBACK", .{}, .{}) catch {};
+            self.db.exec("ROLLBACK", .{}, .{}) catch {}; // zwanzig-disable-line: empty-catch-engine
             return err;
         };
 

@@ -146,13 +146,13 @@ pub const ZyncBaseServer = struct {
         const storage_engine = try StorageEngine.init(
             memory_strategy.generalAllocator(),
             config.data_dir,
-            &self.loaded_schema.?,
+            &self.loaded_schema.?, // zwanzig-disable-line: optional-unwrap
         );
         errdefer storage_engine.deinit();
 
         // Run migrations and DDL
         {
-            const schema_ptr = &self.loaded_schema.?;
+            const schema_ptr = &self.loaded_schema.?; // zwanzig-disable-line: optional-unwrap
             // Apply DDL for each table
             var gen = DDLGenerator.init(memory_strategy.generalAllocator());
             for (schema_ptr.tables) |table| {

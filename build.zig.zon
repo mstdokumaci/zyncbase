@@ -11,6 +11,10 @@
             .url = "https://github.com/zigcc/zig-msgpack/archive/73b174dbf95cd0d670cf5259f9cefe264fabba39.tar.gz",
             .hash = "zig_msgpack-0.0.14-evvueIkqBQA7F_-8hpmPYvAjmg9MOWJLm6p8sb0HnGem",
         },
+        .zwanzig = .{
+            .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.11.0.tar.gz",
+            .hash = "zwanzig-0.11.0-oiXZlqj7FgDQVjcn0XkxcmayLn6WPUCl2DHWZNkHQ4rm",
+        },
     },
     .paths = .{
         "build.zig",

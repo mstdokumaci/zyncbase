@@ -64,7 +64,7 @@ test "storage: engine initialization errors" {
 
     // Test 2: Path that is a file, not a directory
     const test_file = "test_file_not_dir.txt";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.fs.cwd().deleteFile(test_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Create a file
     const file = try std.fs.cwd().createFile(test_file, .{});
@@ -79,7 +79,8 @@ test "storage: engine initialization errors" {
 
     // Test 3: Valid initialization should succeed
     const test_dir = "test-artifacts/storage_engine/test_data_init_valid";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var raw_dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_3 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_3 }};
@@ -100,7 +101,8 @@ test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_thread_safe";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -193,7 +195,8 @@ test "storage: connection pool reuse and release" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_conn_release";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -236,7 +239,8 @@ test "storage: persistence round-trip (various types)" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_roundtrip";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -287,7 +291,8 @@ test "storage: insert/delete inverse consistency" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_inverse";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -335,7 +340,8 @@ test "storage: transaction isolation and consistency" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_transaction_isolation";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -450,7 +456,8 @@ test "storage: automatic transaction rollback on failure" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/storage_engine/test_data_auto_rollback";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
     const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
     defer {
@@ -607,13 +614,13 @@ const PropTestContext = struct {
         self.engine.deinit();
         freeSchema(self.allocator, self.schema);
         self.allocator.free(self.test_dir);
-        std.fs.cwd().deleteTree(self.test_dir) catch {};
+        std.fs.cwd().deleteTree(self.test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 };
 
 fn setupPropTestEngine(allocator: std.mem.Allocator, test_dir_base: []const u8, table: schema_parser.Table) !PropTestContext {
     const test_dir = try allocator.dupe(u8, test_dir_base);
-    errdefer allocator.free(test_dir);
+    errdefer allocator.free(test_dir); // zwanzig-disable-line: deinit-lifecycle
 
     const schema = try makeSchema(allocator, table.name, table.fields);
     errdefer freeSchema(allocator, schema);
@@ -651,7 +658,8 @@ test "storage: property 13 - document set/get round-trip" {
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p13_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
@@ -711,7 +719,8 @@ test "storage: property 14 - field set/get round-trip" {
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p14_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
@@ -763,7 +772,8 @@ test "storage: property 15 - collection get is namespace-scoped" {
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p15_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -814,7 +824,8 @@ test "storage: property 16 - remove then get returns null" {
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p16_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -847,7 +858,8 @@ test "storage: property 17 - schema validation rejects unknown tables and fields
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p17_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("title", .text, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -875,7 +887,8 @@ test "storage: property 18 - updated_at is always refreshed on write" {
     while (iter < 20) : (iter += 1) {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p18_{}", .{iter});
         defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -896,7 +909,7 @@ test "storage: property 18 - updated_at is always refreshed on write" {
         try testing.expect(doc1 != null);
         defer doc1.?.free(allocator);
 
-        const updated_at_1_payload = (try doc1.?.mapGet("updated_at")).?;
+        const updated_at_1_payload = (try doc1.?.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
         const updated_at_1: i64 = switch (updated_at_1_payload) {
             .int => |v| v,
             .uint => |v| @intCast(v),
@@ -914,7 +927,7 @@ test "storage: property 18 - updated_at is always refreshed on write" {
         try testing.expect(doc2 != null);
         defer doc2.?.free(allocator);
 
-        const updated_at_2_payload = (try doc2.?.mapGet("updated_at")).?;
+        const updated_at_2_payload = (try doc2.?.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
         const updated_at_2: i64 = switch (updated_at_2_payload) {
             .int => |v| v,
             .uint => |v| @intCast(v),

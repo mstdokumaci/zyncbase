@@ -40,7 +40,7 @@ test "cache: concurrent reads never block" {
                 };
 
                 // Verify we got a valid state tree
-                testing.expect(handle.state().root.key.len > 0) catch unreachable;
+                testing.expect(handle.state().root.key.len > 0) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                 // Release the reference
                 handle.release();
@@ -74,7 +74,7 @@ test "cache: concurrent reads never block" {
 
     // Verify ref_count is back to zero after all releases
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace).?;
+    const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const final_ref_count = entry.ref_count.load(.acquire);
     try testing.expectEqual(@as(u32, 0), final_ref_count);
 }
@@ -96,7 +96,7 @@ test "cache: ref_count never negative" {
 
         // Check ref_count is positive
         const entries = cache.entries.load(.acquire);
-        const entry = entries.get(namespace).?;
+        const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
         const ref_count = entry.ref_count.load(.acquire);
         try testing.expect(ref_count > 0);
 
@@ -120,7 +120,7 @@ test "cache: ref_count overflow protection" {
 
     // Manually set ref_count to near maximum
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace).?;
+    const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     entry.ref_count.store(std.math.maxInt(u32) - 1, .release);
 
     // Try to get - should fail with overflow
@@ -170,7 +170,7 @@ test "cache: concurrent reads multi-namespace" {
                 const ns = ctx.namespaces[ns_idx];
 
                 // Perform read
-                const handle = ctx.cache.get(ns) catch continue;
+                const handle = ctx.cache.get(ns) catch continue; // zwanzig-disable-line: swallowed-error
 
                 // Release
                 handle.release();
@@ -197,7 +197,7 @@ test "cache: concurrent reads multi-namespace" {
     // Verify all ref_counts are zero
     for (namespaces) |ns| {
         const entries = cache.entries.load(.acquire);
-        const entry = entries.get(ns).?;
+        const entry = entries.get(ns).?; // zwanzig-disable-line: optional-unwrap
         const ref_count = entry.ref_count.load(.acquire);
         try testing.expectEqual(@as(u32, 0), ref_count);
     }
@@ -229,7 +229,7 @@ test "cache: memory ordering updates" {
                 // Prevent aggressive LLVM dead-code loop hoisting and give CPU a hint
                 std.atomic.spinLoopHint();
 
-                const handle = ctx.cache.get(ctx.namespace) catch continue;
+                const handle = ctx.cache.get(ctx.namespace) catch continue; // zwanzig-disable-line: swallowed-error
                 handle.release();
             }
         }
@@ -245,10 +245,10 @@ test "cache: memory ordering updates" {
             var i: usize = 0;
             while (i < ctx.updates) : (i += 1) {
                 // Create new state
-                const new_state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable;
+                const new_state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                 // Update cache
-                ctx.cache.update(ctx.namespace, new_state) catch unreachable;
+                ctx.cache.update(ctx.namespace, new_state) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                 // Small delay
                 std.Thread.sleep(1 * std.time.ns_per_ms);
@@ -288,7 +288,7 @@ test "cache: memory ordering updates" {
 
     // Verify version was incremented
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace).?;
+    const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const version = entry.version.load(.acquire);
     try testing.expectEqual(@as(u64, num_updates), version);
 }
@@ -374,7 +374,7 @@ test "cache: version increments" {
 
     // Get initial version
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace).?;
+    const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const initial_version = entry.version.load(.acquire);
     try testing.expectEqual(@as(u64, 0), initial_version);
 
@@ -388,7 +388,7 @@ test "cache: version increments" {
 
     // Verify version incremented
     const final_entries = cache.entries.load(.acquire);
-    const final_entry = final_entries.get(namespace).?;
+    const final_entry = final_entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const final_version = final_entry.version.load(.acquire);
     try testing.expectEqual(@as(u64, num_updates), final_version);
 }
@@ -405,7 +405,7 @@ test "cache: timestamp updates" {
 
     // Get initial timestamp
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace).?;
+    const entry = entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const initial_timestamp = entry.timestamp.load(.acquire);
 
     // Wait enough time to ensure timestamp changes
@@ -417,7 +417,7 @@ test "cache: timestamp updates" {
 
     // Verify timestamp changed
     const final_entries = cache.entries.load(.acquire);
-    const final_entry = final_entries.get(namespace).?;
+    const final_entry = final_entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const final_timestamp = final_entry.timestamp.load(.acquire);
     try testing.expect(final_timestamp >= initial_timestamp);
 }
@@ -516,8 +516,8 @@ test "cache: deferred cleanup" {
         fn run(ctx: @This()) void {
             var i: usize = 0;
             while (i < ctx.updates) : (i += 1) {
-                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable;
-                ctx.cache.update(ctx.namespace, state) catch unreachable;
+                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable; // zwanzig-disable-line: swallowed-error
+                ctx.cache.update(ctx.namespace, state) catch unreachable; // zwanzig-disable-line: swallowed-error
             }
         }
     };
@@ -535,7 +535,7 @@ test "cache: deferred cleanup" {
 
     // Verify final version is correct
     const final_entries = cache.entries.load(.acquire);
-    const final_entry = final_entries.get(namespace).?;
+    const final_entry = final_entries.get(namespace).?; // zwanzig-disable-line: optional-unwrap
     const final_version = final_entry.version.load(.acquire);
     try testing.expectEqual(@as(u64, num_threads * updates_per_thread), final_version);
 
@@ -568,7 +568,7 @@ test "cache: consistency during updates" {
                 // Prevent aggressive LLVM dead-code loop hoisting and give CPU a hint
                 std.atomic.spinLoopHint();
 
-                const handle = ctx.cache.get(ctx.namespace) catch continue;
+                const handle = ctx.cache.get(ctx.namespace) catch continue; // zwanzig-disable-line: swallowed-error
                 defer handle.release();
 
                 const version = handle.entry.version.load(.acquire);
@@ -595,8 +595,8 @@ test "cache: consistency during updates" {
         fn run(ctx: @This()) void {
             var i: usize = 0;
             while (i < ctx.updates) : (i += 1) {
-                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable;
-                ctx.cache.update(ctx.namespace, state) catch unreachable;
+                const state = LockFreeCache.StateTree.init(ctx.cache.allocator) catch unreachable; // zwanzig-disable-line: swallowed-error
+                ctx.cache.update(ctx.namespace, state) catch unreachable; // zwanzig-disable-line: swallowed-error
                 std.Thread.sleep(1 * std.time.ns_per_ms);
             }
         }

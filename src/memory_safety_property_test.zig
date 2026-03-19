@@ -228,17 +228,17 @@ test "memory: concurrent pool access" {
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
                 // Acquire and release messages
-                const msg = ctx.strategy.acquireMessage() catch unreachable;
+                const msg = ctx.strategy.acquireMessage() catch unreachable; // zwanzig-disable-line: swallowed-error
                 msg.len = i;
                 ctx.strategy.releaseMessage(msg);
 
                 // Acquire and release buffers
-                const buf = ctx.strategy.acquireBuffer() catch unreachable;
+                const buf = ctx.strategy.acquireBuffer() catch unreachable; // zwanzig-disable-line: swallowed-error
                 buf[0] = @intCast(i % 256);
                 ctx.strategy.releaseBuffer(buf);
 
                 // Acquire and release connections
-                const conn = ctx.strategy.acquireConnection() catch unreachable;
+                const conn = ctx.strategy.acquireConnection() catch unreachable; // zwanzig-disable-line: swallowed-error
                 conn.id = i;
                 ctx.strategy.releaseConnection(conn);
             }

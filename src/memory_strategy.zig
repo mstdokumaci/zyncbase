@@ -98,7 +98,7 @@ pub const MemoryStrategy = struct {
 
 /// Generic object pool for reusing fixed-size objects.
 /// Uses a lock-free atomic stack to avoid mutex contention.
-pub fn Pool(comptime T: type) type {
+pub fn Pool(comptime T: type) type { // zwanzig-disable-line: unused-parameter
     return struct {
         const Self = @This();
 
@@ -155,7 +155,7 @@ pub fn Pool(comptime T: type) type {
                 if (self.state.cmpxchgStrong(current_raw, @bitCast(next_state), .acq_rel, .acquire)) |actual| {
                     current_raw = actual;
                 } else {
-                    return &node.data;
+                    return &node.data; // zwanzig-disable-line: stack-escape-engine
                 }
             }
 
@@ -169,7 +169,7 @@ pub fn Pool(comptime T: type) type {
                 node.data = T.init();
             }
 
-            return &node.data;
+            return &node.data; // zwanzig-disable-line: stack-escape-engine
         }
 
         /// Release an object back to the pool

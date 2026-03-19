@@ -4,7 +4,6 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const Subscription = @import("subscription_manager.zig").Subscription;
 const QueryFilter = @import("subscription_manager.zig").QueryFilter;
 const Condition = @import("subscription_manager.zig").Condition;
-const SortSpec = @import("subscription_manager.zig").SortSpec;
 const Row = @import("subscription_manager.zig").Row;
 const RowChange = @import("subscription_manager.zig").RowChange;
 

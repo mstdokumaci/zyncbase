@@ -82,8 +82,8 @@ test "circuit-breaker: transitions to half-open after timeout" {
     };
 
     // Cause 2 failures to open circuit
-    _ = client.authorize(req) catch {};
-    _ = client.authorize(req) catch {};
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Circuit should be open
     try testing.expectEqual(ConnectionState.circuit_open, client.getState());
@@ -122,8 +122,8 @@ test "circuit-breaker: resets on successful authorization" {
     };
 
     // Cause some failures
-    _ = client.authorize(req) catch {};
-    _ = client.authorize(req) catch {};
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Verify failures recorded
     try testing.expect(client.getFailureCount() > 0);
@@ -169,8 +169,8 @@ test "circuit-breaker: fail-fast latency when circuit open" {
     };
 
     // Open the circuit
-    _ = client.authorize(req) catch {};
-    _ = client.authorize(req) catch {};
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
+    _ = client.authorize(req) catch {}; // zwanzig-disable-line: empty-catch-engine
     try testing.expectEqual(ConnectionState.circuit_open, client.getState());
 
     // Measure time for fail-fast response

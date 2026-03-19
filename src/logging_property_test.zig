@@ -4,7 +4,6 @@ const testing = std.testing;
 pub var global_capture: ?*LogCapture = null;
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
@@ -12,7 +11,6 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack = @import("msgpack");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
@@ -57,18 +55,6 @@ const LogCapture = struct {
         self.messages.deinit();
     }
 
-    fn capture(self: *LogCapture, level: std.log.Level, message: []const u8, allocator: std.mem.Allocator) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const msg_copy = try allocator.dupe(u8, message);
-        try self.messages.append(.{
-            .level = level,
-            .message = msg_copy,
-            .allocator = allocator,
-        });
-    }
-
     fn contains(self: *LogCapture, needle: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -79,29 +65,6 @@ const LogCapture = struct {
             }
         }
         return false;
-    }
-
-    fn countLevel(self: *LogCapture, level: std.log.Level) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var count: usize = 0;
-        for (self.messages.items) |msg| {
-            if (msg.level == level) {
-                count += 1;
-            }
-        }
-        return count;
-    }
-
-    fn clear(self: *LogCapture) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        for (self.messages.items) |*msg| {
-            msg.deinit();
-        }
-        self.messages.clearRetainingCapacity();
     }
 };
 
@@ -128,7 +91,7 @@ test "logging: connection events" {
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables = [_]schema_parser.Table{
@@ -285,8 +248,8 @@ test "logging: connection events" {
                     ws.user_data = &ws;
 
                     // Open and close connection
-                    ctx.handler.handleOpen(&ws) catch unreachable;
-                    ctx.handler.handleClose(&ws, 1000, "Test") catch unreachable;
+                    ctx.handler.handleOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    ctx.handler.handleClose(&ws, 1000, "Test") catch unreachable; // zwanzig-disable-line: swallowed-error
                 }
             }
         }.run;
@@ -331,7 +294,7 @@ test "logging: error details" {
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables_1 = [_]schema_parser.Table{
@@ -472,7 +435,7 @@ test "logging: level filtering" {
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_2 = [_]schema_parser.Table{
@@ -555,7 +518,7 @@ test "logging: message formatting" {
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_3 = [_]schema_parser.Table{
@@ -626,7 +589,7 @@ test "logging: message formatting" {
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
-        defer std.fs.cwd().deleteTree(test_dir) catch {};
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var dummy_fields_4 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_4 = [_]schema_parser.Table{

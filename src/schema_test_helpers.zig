@@ -86,7 +86,7 @@ pub const TestContext = struct {
     }
 
     pub fn deinit(self: *TestContext) void {
-        std.fs.cwd().deleteTree(self.test_dir) catch {};
+        std.fs.cwd().deleteTree(self.test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
         self.allocator.free(self.test_dir);
     }
 };

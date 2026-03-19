@@ -4,7 +4,6 @@ const testing = std.testing;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
@@ -12,7 +11,6 @@ const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const ArrayList = std.ArrayList;
 
 // **Property: Connection open/close is inverse operation**
 // Connection properties
@@ -78,7 +76,7 @@ test "connection: open/close is inverse operation" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property4", "test", &test_schema);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property4") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property4") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -384,7 +382,7 @@ fn mixedConcurrentOps(
             0 => {
                 // Add operation
                 const dummy_ws = createMockWebSocket();
-                const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue;
+                const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
                 registry.add(conn_id, state) catch {
                     state.deinit(allocator);
                     continue;
@@ -398,7 +396,7 @@ fn mixedConcurrentOps(
             },
             2 => {
                 // Remove operation
-                registry.remove(conn_id) catch continue;
+                registry.remove(conn_id) catch continue; // zwanzig-disable-line: swallowed-error
             },
             else => unreachable,
         }
@@ -455,7 +453,7 @@ fn addConnections(
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
         const dummy_ws = createMockWebSocket();
-        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue;
+        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
         registry.add(conn_id, state) catch {
             state.deinit(allocator);
             continue;
@@ -480,7 +478,7 @@ test "connection: unique monotonically increasing IDs" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property5", "test", &test_schema_1);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property5") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property5") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_1) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -680,7 +678,7 @@ test "message: all valid frames are parsed" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property7", "test", &test_schema_2);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property7") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property7") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_2) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -708,7 +706,7 @@ test "message: all valid frames are parsed" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         // Create a valid MessagePack message
         const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "table", "key1", "val" }, "value1");
@@ -722,7 +720,7 @@ test "message: all valid frames are parsed" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const message = try msgpack.createStoreGetMessage(allocator, 2, "test", &.{"key1"});
         defer allocator.free(message);
@@ -736,7 +734,7 @@ test "message: all valid frames are parsed" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "table", "p", "val" }, "v");
         defer allocator.free(message);
@@ -750,7 +748,7 @@ test "message: all valid frames are parsed" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const messages = [_]struct { ns: []const u8, p: []const u8, v: []const u8 }{
             .{ .ns = "a", .p = "/b", .v = "c" },
@@ -787,7 +785,7 @@ test "message: type extraction" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property8", "test", &test_schema_3);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property8") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property8") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_3) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -935,7 +933,7 @@ test "message: request routing to handlers" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/test_data_property9", "test_table", &test_schema_4);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/test_data_property9") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/test_data_property9") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_4) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -1076,7 +1074,7 @@ test "message: response correlation by ID" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property10", "test_table", &test_schema_5);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property10") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property10") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_5) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -1269,7 +1267,7 @@ test "message: error responses for invalid types/fields" {
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property11", "test", &test_schema_6);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property11") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property11") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_6) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -1296,7 +1294,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         // 0xc1 is never used in MessagePack
         const invalid_message = "\xc1\xc1\xc1";
@@ -1313,7 +1311,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         // Create map with 2 elements: type and id
         var buf = std.ArrayList(u8){};
@@ -1335,7 +1333,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const message = "some text message";
 
@@ -1349,7 +1347,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
@@ -1374,7 +1372,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const message = "";
 
@@ -1387,7 +1385,7 @@ test "message: error responses for invalid types/fields" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);

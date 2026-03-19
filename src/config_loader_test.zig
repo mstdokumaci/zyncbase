@@ -44,8 +44,8 @@ test "ConfigLoader parses valid JSON config" {
     const schema_file = "test-artifacts/test-config-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {};
-    defer std.fs.cwd().deleteFile(schema_file) catch {};
+    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -78,8 +78,8 @@ test "ConfigLoader validates port range" {
     const schema_file = "test-artifacts/invalid-port-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {};
-    defer std.fs.cwd().deleteFile(schema_file) catch {};
+    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidPort, result);
@@ -101,8 +101,8 @@ test "ConfigLoader validates numeric ranges" {
     const schema_file = "test-artifacts/invalid-buffer-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {};
-    defer std.fs.cwd().deleteFile(schema_file) catch {};
+    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidBufferSize, result);
@@ -129,8 +129,8 @@ test "ConfigLoader parses auth config" {
     const schema_file = "test-artifacts/auth-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {};
-    defer std.fs.cwd().deleteFile(schema_file) catch {};
+    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -165,8 +165,8 @@ test "ConfigLoader parses security config" {
     const schema_file = "test-artifacts/security-schema.json";
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {};
-    defer std.fs.cwd().deleteFile(schema_file) catch {};
+    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();

@@ -4,7 +4,6 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const Subscription = @import("subscription_manager.zig").Subscription;
-const SubscriptionId = @import("subscription_manager.zig").SubscriptionId;
 const QueryFilter = @import("subscription_manager.zig").QueryFilter;
 const Condition = @import("subscription_manager.zig").Condition;
 const SortSpec = @import("subscription_manager.zig").SortSpec;

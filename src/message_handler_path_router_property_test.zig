@@ -1,9 +1,7 @@
 const std = @import("std");
 const msgpack_lib = @import("msgpack");
-const msgpack_utils = @import("msgpack_utils.zig");
 const message_handler = @import("message_handler.zig");
 const parsePath = message_handler.parsePath;
-const ParsedPath = message_handler.ParsedPath;
 
 // Feature: schema-aware-storage, Property 1: Path round-trip
 // For any valid path array p of length >= 1 where every element is a string,

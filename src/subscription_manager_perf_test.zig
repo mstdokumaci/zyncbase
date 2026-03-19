@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const Subscription = @import("subscription_manager.zig").Subscription;
@@ -128,7 +129,7 @@ test "performance: subscription matching < 1ms for 10k subscriptions" {
 
     // Verify performance requirement: < 10ms for 10k subscriptions
     // Relax for TSan
-    const target_ms: f64 = if (@import("builtin").sanitize_thread) 100.0 else 10.0;
+    const target_ms: f64 = if (builtin.sanitize_thread) 100.0 else 10.0;
     try testing.expect(duration_ms < target_ms);
 
     // Verify we found the expected matches
@@ -322,6 +323,6 @@ test "performance: efficient namespace+collection indexing" {
 
     // Should be very fast since we only check 100 subscriptions
     // Relax for TSan
-    const target_us: f64 = if (@import("builtin").sanitize_thread) 5000.0 else 1000.0;
+    const target_us: f64 = if (builtin.sanitize_thread) 5000.0 else 1000.0;
     try testing.expect(duration_us < target_us); // < 1 millisecond (un-sanitized)
 }

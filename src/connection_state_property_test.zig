@@ -1,14 +1,8 @@
 const std = @import("std");
 
 const testing = std.testing;
-const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionState = @import("message_handler.zig").ConnectionState;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "connection: state deallocation on close" {
@@ -189,16 +183,16 @@ test "connection: state deallocation on close" {
                 while (i < ctx.count) : (i += 1) {
                     const conn_id = ctx.start_id + i;
                     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-                    const state = ConnectionState.init(ctx.allocator, conn_id, dummy_ws) catch unreachable;
+                    const state = ConnectionState.init(ctx.allocator, conn_id, dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                     // Add subscriptions
-                    state.subscription_ids.append(conn_id * 100) catch unreachable;
-                    state.subscription_ids.append(conn_id * 100 + 1) catch unreachable;
+                    state.subscription_ids.append(conn_id * 100) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    state.subscription_ids.append(conn_id * 100 + 1) catch unreachable; // zwanzig-disable-line: swallowed-error
 
-                    ctx.registry.add(conn_id, state) catch unreachable;
+                    ctx.registry.add(conn_id, state) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                     // Remove immediately
-                    ctx.registry.remove(conn_id) catch unreachable;
+                    ctx.registry.remove(conn_id) catch unreachable; // zwanzig-disable-line: swallowed-error
                 }
             }
         }.run;

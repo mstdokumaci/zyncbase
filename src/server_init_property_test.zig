@@ -23,8 +23,8 @@ test "server: initialization is idempotent" {
     const allocator = gpa.allocator();
 
     // Ensure test data directory is clean
-    std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
-    defer std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
+    std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Create a valid test fixture in the test artifacts directory
     const schema_dir = "test-artifacts/server_init";
@@ -34,7 +34,7 @@ test "server: initialization is idempotent" {
         .sub_path = schema_file_path,
         .data = "{\"version\":\"1.0.0\",\"store\":{\"test\":{\"fields\":{\"val\":{\"type\":\"string\"}}}}}",
     });
-    defer std.fs.cwd().deleteFile(schema_file_path) catch {};
+    defer std.fs.cwd().deleteFile(schema_file_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Property: Multiple init/deinit cycles should not leak memory
     // Test with 1 cycle first to debug leaks
@@ -64,7 +64,7 @@ test "server: initialization is idempotent" {
         try testing.expect(!server.shutdown_requested.load(.acquire));
 
         // Clean up database file between cycles
-        std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {};
+        std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // If we reach here without panicking, the property holds

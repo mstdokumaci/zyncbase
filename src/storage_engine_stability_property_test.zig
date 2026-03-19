@@ -63,8 +63,8 @@ test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/concurrent_errors";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
@@ -89,27 +89,26 @@ test "storage: stability no crashes on concurrent errors" {
             var i: usize = 0;
             while (i < operations_per_thread) : (i += 1) {
                 // Mix of operations that might fail
-                const key = std.fmt.allocPrint(ctx.allocator, "thread{}_key{}", .{ ctx.thread_id, i }) catch continue;
+                // zwanzig-disable-next-line: swallowed-error
+                const key = std.fmt.allocPrint(ctx.allocator, "thread{}_key{}", .{ ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
                 defer ctx.allocator.free(key);
 
                 // Try to set a value
-                const val_payload = msgpack.Payload.strToPayload(key, ctx.allocator) catch continue;
+                // zwanzig-disable-next-line: swallowed-error
+                const val_payload = msgpack.Payload.strToPayload(key, ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
                 defer val_payload.free(ctx.allocator);
                 const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-                ctx.storage.insertOrReplace("test", key, "test", &cols) catch {
-                    continue;
-                };
+                // zwanzig-disable-next-line: swallowed-error
+                ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
 
                 // Try to get the value
-                const doc = ctx.storage.selectDocument("test", key, "test") catch {
-                    continue;
-                };
+                // zwanzig-disable-next-line: swallowed-error
+                const doc = ctx.storage.selectDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc) |d| d.free(ctx.allocator);
 
                 // Try to delete the value
-                ctx.storage.deleteDocument("test", key, "test") catch {
-                    continue;
-                };
+                // zwanzig-disable-next-line: swallowed-error
+                ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
@@ -136,8 +135,10 @@ test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/transaction_errors";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema);
@@ -188,8 +189,10 @@ test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/rapid_errors";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_1: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_1);
@@ -227,8 +230,10 @@ test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/recovery";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_2: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_2);
@@ -277,8 +282,10 @@ test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/resource_cleanup";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_3: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_3);
@@ -330,8 +337,10 @@ test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/mixed_scenarios";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_4: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_4);
@@ -392,8 +401,10 @@ test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/stability/concurrent_reads";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    // zwanzig-disable-next-line
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    // zwanzig-disable-next-line
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_5: ?*schema_parser.Schema = null;
     var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_5);
@@ -432,10 +443,12 @@ test "storage: stability concurrent reads during write errors" {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                const doc1 = ctx.storage.selectDocument("test", "key1", "test") catch continue;
+                // zwanzig-disable-next-line: swallowed-error
+                const doc1 = ctx.storage.selectDocument("test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc1) |d| d.free(ctx.allocator);
 
-                const doc2 = ctx.storage.selectDocument("test", "key2", "test") catch continue;
+                // zwanzig-disable-next-line: swallowed-error
+                const doc2 = ctx.storage.selectDocument("test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc2) |d| d.free(ctx.allocator);
 
                 // Small delay

@@ -24,8 +24,8 @@ test "Storage: CRUD operations" {
     const allocator = testing.allocator;
 
     const tmp_path = "test-artifacts/storage_crud";
-    std.fs.cwd().makePath(tmp_path) catch {};
-    defer std.fs.cwd().deleteTree(tmp_path) catch {};
+    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Setup schema
     var fields = try allocator.alloc(schema_parser.Field, 2);

@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Message = @import("memory_strategy.zig").Message;
-const Buffer = @import("memory_strategy.zig").Buffer;
 const Connection = @import("memory_strategy.zig").Connection;
 const Pool = @import("memory_strategy.zig").Pool;
 
@@ -185,7 +184,7 @@ test "Pool: concurrent access" {
         fn run(ctx: *ThreadContext) void {
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                const item = ctx.pool.acquire() catch unreachable;
+                const item = ctx.pool.acquire() catch unreachable; // zwanzig-disable-line: swallowed-error;
                 item.* = i;
                 ctx.pool.release(item);
             }

@@ -5,24 +5,13 @@ const MessageHandler = message_handler.MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const storage_mod = @import("storage_engine.zig");
-const StorageEngine = storage_mod.StorageEngine;
-const ColumnValue = storage_mod.ColumnValue;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack = @import("msgpack_test_helpers.zig");
-const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
+const msgpack = @import("msgpack_test_helpers.zig");
 
-// Helper function to create a mock WebSocket for testing
-fn createMockWebSocket() WebSocket {
-    return WebSocket{
-        .ws = null, // Mock WebSocket
-        .ssl = false,
-        .user_data = null,
-    };
-}
+
 
 // **Property: StoreSet field extraction**
 test "store: set field extraction" {
@@ -31,7 +20,7 @@ test "store: set field extraction" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -200,7 +189,7 @@ test "store: engine set integration" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -351,7 +340,7 @@ test "store: set success response format" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -487,7 +476,7 @@ test "store: get field extraction" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -617,7 +606,7 @@ test "store: engine get integration" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -792,7 +781,7 @@ test "store: get value response format" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);

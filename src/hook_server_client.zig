@@ -286,7 +286,7 @@ pub const HookServerClient = struct {
         }
 
         // Attempt to connect
-        self.connection.?.connect() catch |err| {
+        self.connection.?.connect() catch |err| { // zwanzig-disable-line: optional-unwrap
             self.state.store(.disconnected, .release);
             return err;
         };
@@ -400,7 +400,7 @@ pub const HookServerClient = struct {
 
         // Cache the response
         if (self.auth_cache) |cache| {
-            cache.put(req, result) catch {}; // Ignore cache errors
+            cache.put(req, result) catch {}; // zwanzig-disable-line: empty-catch-engine // Ignore cache errors
         }
 
         return result;
@@ -598,7 +598,7 @@ pub const AuthCache = struct {
         var it = self.cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.isExpired()) {
-                to_remove.append(entry.key_ptr.*) catch continue;
+                to_remove.append(entry.key_ptr.*) catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
 

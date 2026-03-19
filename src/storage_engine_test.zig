@@ -56,7 +56,8 @@ test "StorageEngine: init and deinit" {
 
     // Create temporary directory for test
     const test_dir = "test-artifacts/unit/storage_engine/test_data_init";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields }};
@@ -76,7 +77,8 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_set_get";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -108,7 +110,8 @@ test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_get_nonexistent";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -125,7 +128,8 @@ test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_update";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -162,7 +166,8 @@ test "StorageEngine: delete document" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_delete";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -196,7 +201,8 @@ test "StorageEngine: query collection" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_query";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("name", .text, false)};
     const table = schema_parser.Table{ .name = "users", .fields = &fields_arr };
@@ -228,7 +234,8 @@ test "StorageEngine: multiple namespaces" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_namespaces";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -267,7 +274,8 @@ test "StorageEngine: transaction support" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_transaction";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables_1 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields_1 }};
@@ -306,7 +314,8 @@ test "StorageEngine: automatic rollback in batch operations" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_auto_rollback";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -342,7 +351,8 @@ test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_concurrent";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -389,7 +399,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_data_deinit_flush";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const num_keys = 50;
 
@@ -432,7 +443,8 @@ test "StorageEngine: client writes blocked during migration" {
     const allocator = testing.allocator;
 
     const test_dir = "test-artifacts/unit/storage_engine/test_8_7_migration_block";
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };

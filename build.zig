@@ -30,6 +30,19 @@ pub fn build(b: *std.Build) void {
     });
     const msgpack_module = msgpack_dep.module("msgpack");
 
+    // Add zwanzig dependency
+    const zw = b.dependency("zwanzig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zw_exe = zw.artifact("zwanzig");
+
+    const run_zw = b.addRunArtifact(zw_exe);
+    run_zw.addArgs(&.{ "--format", "text", "src" });
+
+    const lint_step = b.step("lint", "Run zwanzig code quality check");
+    lint_step.dependOn(&run_zw.step);
+
     // Create the main executable
     const exe = b.addExecutable(.{
         .name = "zyncbase",

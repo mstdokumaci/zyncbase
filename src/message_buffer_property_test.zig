@@ -10,7 +10,7 @@ const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig").DDLGenerator;
+const ddl_generator = @import("ddl_generator.zig");
 
 fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bool) schema_parser.Field {
     return .{
@@ -33,7 +33,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
     errdefer allocator.destroy(schema_ptr);
 
     const tables = try allocator.alloc(schema_parser.Table, 1);
-    errdefer allocator.free(tables);
+    errdefer allocator.free(tables); // zwanzig-disable-line: deinit-lifecycle
 
     tables[0] = try table.clone(allocator);
     errdefer schema_parser.freeTable(allocator, tables[0]);
@@ -49,7 +49,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
     const engine = try StorageEngine.init(allocator, test_dir, schema_ptr);
     errdefer engine.deinit();
 
-    var gen = ddl_generator.init(allocator);
+    var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     const ddl_z = try allocator.dupeZ(u8, ddl);
@@ -91,7 +91,7 @@ test "buffer: message deallocation after processing" {
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema: ?*schema_parser.Schema = null;
     var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
@@ -369,7 +369,7 @@ test "buffer: concurrent message deallocation" {
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_1: ?*schema_parser.Schema = null;
     var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_1);
@@ -414,14 +414,14 @@ test "buffer: concurrent message deallocation" {
                     "test_ns",
                     "/path",
                     "value",
-                ) catch unreachable;
+                ) catch unreachable; // zwanzig-disable-line: swallowed-error
                 defer ctx.allocator.free(message);
 
                 var reader: std.Io.Reader = .fixed(message);
-                const parsed = msgpack.decode(ctx.allocator, &reader) catch unreachable;
+                const parsed = msgpack.decode(ctx.allocator, &reader) catch unreachable; // zwanzig-disable-line: swallowed-error
                 defer parsed.free(ctx.allocator);
 
-                const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable;
+                const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable; // zwanzig-disable-line: swallowed-error
                 const response = ctx.handler.routeMessage(1, msg_info, parsed) catch |err| {
                     if (err == error.InvalidOperation) continue; // Skip collection-level sets in this test
                     unreachable;

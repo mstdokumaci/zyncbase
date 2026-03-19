@@ -30,7 +30,8 @@ test "WebSocketServer: init with SSL config" {
     std.fs.cwd().makePath(tmp_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(tmp_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const cert_path = tmp_dir ++ "/cert.pem";
     const key_path = tmp_dir ++ "/key.pem";
@@ -121,7 +122,8 @@ test "WebSocketServer: full server lifecycle with SSL" {
     std.fs.cwd().makePath(tmp_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
-    defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+    // zwanzig-disable-next-line: empty-catch-engine
+    defer std.fs.cwd().deleteTree(tmp_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const cert_path = tmp_dir ++ "/cert.pem";
     const key_path = tmp_dir ++ "/key.pem";
@@ -251,8 +253,10 @@ fn runFullLifecycleTest(
     child.stderr_behavior = .Pipe;
     try child.spawn();
 
+    // zwanzig-disable-next-line: optional-unwrap
     const stdout = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024);
     defer allocator.free(stdout);
+    // zwanzig-disable-next-line: optional-unwrap
     const stderr = try child.stderr.?.readToEndAlloc(allocator, 10 * 1024);
     defer allocator.free(stderr);
 
@@ -265,6 +269,7 @@ fn runFullLifecycleTest(
     server_thread.join();
 
     // Now it's safe to deinit
+    // zwanzig-disable-next-line: store-violations-engine
     server.deinit();
 
     switch (term) {

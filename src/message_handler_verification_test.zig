@@ -1,19 +1,17 @@
 const std = @import("std");
-
 const testing = std.testing;
+
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const it_storage_mod = @import("storage_engine.zig");
-const StorageEngine = it_storage_mod.StorageEngine;
 const storage_mod = it_storage_mod;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
-const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
@@ -39,7 +37,7 @@ test "Verification: WebSocket connection lifecycle" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-lifecycle");
     defer context.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -109,7 +107,7 @@ test "Verification: StoreSet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeset");
     defer context.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -221,7 +219,7 @@ test "Verification: StoreGet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeget");
     defer context.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -329,7 +327,7 @@ test "Verification: Error handling for invalid messages" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-errors");
     defer context.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -399,12 +397,12 @@ test "Verification: Error handling for invalid messages" {
     {
         var ws = createMockWebSocket();
         try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
         const text_message = "text message";
 
         // Should handle error gracefully (not crash)
-        handler.handleMessage(&ws, text_message, .text) catch {};
+        handler.handleMessage(&ws, text_message, .text) catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // Test 4: Unknown message type should fail routing
@@ -465,7 +463,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-e2e");
     defer context.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init();
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -497,7 +495,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     // Open a connection
     var ws = createMockWebSocket();
     try handler.handleOpen(&ws);
-    defer handler.handleClose(&ws, 1000, "Normal closure") catch {};
+    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
 

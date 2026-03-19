@@ -3,7 +3,6 @@ const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
 const Field = schema_parser.Field;
-const FieldType = schema_parser.FieldType;
 const Table = schema_parser.Table;
 
 test "ddl_generator: generate DDL for a known table" {

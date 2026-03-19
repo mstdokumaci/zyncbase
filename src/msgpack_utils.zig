@@ -4,7 +4,7 @@ const msgpack = @import("msgpack");
 /// Security-appropriate parse limits for WebSocket message handling.
 /// These are much tighter than zig-msgpack's DEFAULT_LIMITS to prevent
 /// stack overflow and OOM attacks from crafted payloads.
-pub const TIGHT_LIMITS: msgpack.ParseLimits = .{
+pub const tight_limits: msgpack.ParseLimits = .{
     .max_depth = 16,
     .max_array_length = 1_000,
     .max_map_size = 1_000,
@@ -37,23 +37,23 @@ const ReaderCtx = struct {
 };
 
 /// Packer type with tight security limits.
-const TightPacker = msgpack.PackWithLimits(
+const tight_packer = msgpack.PackWithLimits(
     WriterCtx,
     ReaderCtx,
     std.Io.Writer.Error,
     error{ EndOfStream, ReadFailed },
     WriterCtx.write,
     ReaderCtx.read,
-    TIGHT_LIMITS,
+    tight_limits,
 );
 
 /// Standard wrapper for decoding MsgPack payloads with tight security limits.
-/// Rejects payloads that exceed TIGHT_LIMITS (depth, array/map size, string/bin/ext length).
+/// Rejects payloads that exceed tight_limits (depth, array/map size, string/bin/ext length).
 /// The returned Payload must be freed using `payload.free(allocator)`.
 pub fn decode(allocator: std.mem.Allocator, reader: *std.Io.Reader) !msgpack.Payload {
     var writer: std.Io.Writer = .failing;
     const writer_ctx = WriterCtx{ .writer = &writer };
-    var packer = TightPacker.init(
+    var packer = tight_packer.init(
         writer_ctx,
         ReaderCtx{ .reader = reader },
     );

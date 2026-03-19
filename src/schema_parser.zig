@@ -153,7 +153,7 @@ pub const SchemaParser = struct {
                                     if (prop_def == .object) {
                                         if (prop_def.object.get("type")) |pt| {
                                             if (pt == .string) {
-                                                prop_sql_type = mapType(pt.string) catch .text;
+                                                prop_sql_type = mapType(pt.string) catch .text; // zwanzig-disable-line: swallowed-error
                                             }
                                         }
                                     }

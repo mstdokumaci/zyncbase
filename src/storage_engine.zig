@@ -114,7 +114,7 @@ pub const StorageEngine = struct {
         const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
         defer allocator.free(db_path_buf);
         const db_path = try allocator.dupeZ(u8, db_path_buf);
-        errdefer allocator.free(db_path);
+        errdefer allocator.free(db_path); // zwanzig-disable-line: deinit-lifecycle
 
         // Open writer connection
         var writer_conn = try sqlite.Db.init(.{
@@ -214,8 +214,8 @@ pub const StorageEngine = struct {
 
     /// Get a StorageLayer interface for the CheckpointManager
     pub fn getStorageLayer(self: *StorageEngine) !*@import("checkpoint_manager.zig").CheckpointManager.StorageLayer {
-        const CheckpointManagerModule = @import("checkpoint_manager.zig");
-        const storage_layer = try CheckpointManagerModule.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
+        const checkpoint_manager_mod = @import("checkpoint_manager.zig");
+        const storage_layer = try checkpoint_manager_mod.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
 
         // Store a reference to self for checkpoint execution
         storage_layer.storage_engine = self;
@@ -461,7 +461,7 @@ pub const StorageEngine = struct {
         // Wait for write queue and currently processing batch to drain.
         // We use a small sleep to avoid spinning too hard, and check acquire load.
         while (self.pending_writes_count.load(.acquire) > 0) {
-            std.Thread.yield() catch {};
+            std.Thread.yield() catch {}; // zwanzig-disable-line: empty-catch-engine
             std.Thread.sleep(1 * std.time.ns_per_ms);
         }
         // Small extra buffer to ensure SQLite has finished its internal write
@@ -876,14 +876,14 @@ pub const StorageEngine = struct {
     // ─── Internal write helpers ───────────────────────────────────────────────
 
     fn executeInsert(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?;
-        std.debug.print("\n[DEBUG] executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
+        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
+        std.debug.print("\n[DEBUG] executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? }); // zwanzig-disable-line: optional-unwrap
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?);
+        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?);
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(ns_z);
 
         // Bind: id, namespace_id, col1..colN, id (COALESCE), namespace_id (COALESCE), created_at, updated_at
@@ -905,45 +905,45 @@ pub const StorageEngine = struct {
         bind_idx += 1;
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
         bind_idx += 1;
         // updated_at
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
     fn executeUpdate(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?;
+        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?);
+        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?);
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(ns_z);
-        const val = op.col_bytes.?[0];
+        const val = op.col_bytes.?[0]; // zwanzig-disable-line: optional-unwrap
 
         // Bind: 1: id, 2: namespace_id, 3: value, 4: created_at, 5: updated_at
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, 3, val.ptr, @intCast(val.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp.?);
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp.?);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
     fn executeDelete(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?;
+        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?);
+        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?);
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
         defer self.allocator.free(ns_z);
 
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
@@ -996,9 +996,9 @@ pub const StorageEngine = struct {
                             if (self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
                                 self.transaction_active.store(true, .release);
                                 self.manual_transaction_active.store(true, .release);
-                                op.completion_signal.?.signal(null);
+                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
                             } else |err| {
-                                op.completion_signal.?.signal(classifyError(err));
+                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
@@ -1007,18 +1007,18 @@ pub const StorageEngine = struct {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
                             if (!self.transaction_active.load(.acquire)) {
-                                op.completion_signal.?.signal(StorageError.NoActiveTransaction);
+                                op.completion_signal.?.signal(StorageError.NoActiveTransaction); // zwanzig-disable-line: optional-unwrap
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             }
                             if (self.writer_conn.exec("COMMIT", .{}, .{})) |_| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(null);
+                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
                             } else |err| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(classifyError(err));
+                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
@@ -1027,18 +1027,18 @@ pub const StorageEngine = struct {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
                             if (!self.transaction_active.load(.acquire)) {
-                                op.completion_signal.?.signal(StorageError.NoActiveTransaction);
+                                op.completion_signal.?.signal(StorageError.NoActiveTransaction); // zwanzig-disable-line: optional-unwrap
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             }
                             if (self.writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(null);
+                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
                             } else |err| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(classifyError(err));
+                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
@@ -1046,12 +1046,12 @@ pub const StorageEngine = struct {
                             if (batch.items.len > 0) {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
-                            const stats = self.internalExecuteCheckpoint(op.checkpoint_mode.?) catch |err| {
-                                op.completion_signal.?.signal(err);
+                            const stats = self.internalExecuteCheckpoint(op.checkpoint_mode.?) catch |err| { // zwanzig-disable-line: optional-unwrap
+                                op.completion_signal.?.signal(err); // zwanzig-disable-line: optional-unwrap
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             };
-                            op.completion_signal.?.signalWithResult(stats);
+                            op.completion_signal.?.signalWithResult(stats); // zwanzig-disable-line: optional-unwrap
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
                     }
@@ -1073,7 +1073,7 @@ pub const StorageEngine = struct {
                 // Wait for new work or timeout (for batch flushing), instead of busy-sleeping
                 self.write_mutex.lock();
                 defer self.write_mutex.unlock();
-                self.write_cond.timedWait(&self.write_mutex, 1 * std.time.ns_per_ms) catch {};
+                self.write_cond.timedWait(&self.write_mutex, 1 * std.time.ns_per_ms) catch {}; // zwanzig-disable-line: empty-catch-engine
             }
         }
 
@@ -1168,7 +1168,7 @@ pub const StorageEngine = struct {
                     return classified_err;
                 },
                 .ddl => {
-                    const sql = op.sql.?;
+                    const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
                     var it = std.mem.splitScalar(u8, sql, ';');
                     while (it.next()) |stmt_raw| {
                         const stmt = std.mem.trim(u8, stmt_raw, " \r\n\t");

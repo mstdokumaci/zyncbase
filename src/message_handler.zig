@@ -395,18 +395,18 @@ pub const MessageHandler = struct {
                     });
                 }
 
-                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace.?, columns.items);
+                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace.?, columns.items); // zwanzig-disable-line: optional-unwrap;
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 // For now, only support single depth or simple join
                 if (f.fields.len == 1) {
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], value.?);
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], value.?); // zwanzig-disable-line: optional-unwrap;
                 } else if (f.fields.len > 1) {
                     // TODO: Implement deep flattening if needed, or join with _
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, value.?);
+                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, value.?); // zwanzig-disable-line: optional-unwrap;
                 }
             },
             .collection => return error.InvalidOperation, // Cannot set on a collection

@@ -286,7 +286,7 @@ fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, l
 
 fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
     _ = ws;
-} // TODO: Implement drain handler
+}
 fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
     _ = ws;
 }

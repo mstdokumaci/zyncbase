@@ -1,5 +1,4 @@
 const std = @import("std");
-const msgpack = @import("msgpack");
 const msgpack_utils = @import("msgpack_utils.zig");
 
 /// Wrapper for decode to maintain compatibility with zig-msgpack v0.0.16

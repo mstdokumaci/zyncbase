@@ -203,7 +203,7 @@ pub const LockFreeCache = struct {
     }
     fn deferFree(self: *LockFreeCache, resource: anytype) void {
         const T = @TypeOf(resource);
-        const node = self.allocator.create(DeferNode) catch return;
+        const node = self.allocator.create(DeferNode) catch return; // zwanzig-disable-line: swallowed-error
 
         if (T == *std.StringHashMap(*CacheEntry)) {
             node.resource = .{ .map = resource };
@@ -283,7 +283,7 @@ pub const LockFreeCache = struct {
                 self.allocator.destroy(new_entries);
             }
 
-            const kv = new_entries.fetchRemove(namespace).?;
+            const kv = new_entries.fetchRemove(namespace).?; // zwanzig-disable-line: optional-unwrap
 
             if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                 new_entries.deinit();

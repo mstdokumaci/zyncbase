@@ -1,4 +1,5 @@
 const std = @import("std");
+const storage_mod = @import("storage_engine.zig");
 const Allocator = std.mem.Allocator;
 
 /// CheckpointManager manages SQLite WAL checkpointing to prevent unbounded WAL growth
@@ -98,7 +99,7 @@ pub const CheckpointManager = struct {
     pub const StorageLayer = struct {
         allocator: Allocator,
         db_path: []const u8,
-        storage_engine: ?*@import("storage_engine.zig").StorageEngine = null,
+        storage_engine: ?*storage_mod.StorageEngine = null,
 
         pub fn init(allocator: Allocator, db_path: []const u8) !*StorageLayer {
             const storage = try allocator.create(StorageLayer);
@@ -119,15 +120,15 @@ pub const CheckpointManager = struct {
             if (self.storage_engine) |engine| {
                 // Parse the checkpoint mode from the SQL
                 const mode = if (std.mem.indexOf(u8, sql, "PASSIVE") != null)
-                    @import("storage_engine.zig").CheckpointMode.passive
+                    storage_mod.CheckpointMode.passive
                 else if (std.mem.indexOf(u8, sql, "FULL") != null)
-                    @import("storage_engine.zig").CheckpointMode.full
+                    storage_mod.CheckpointMode.full
                 else if (std.mem.indexOf(u8, sql, "RESTART") != null)
-                    @import("storage_engine.zig").CheckpointMode.restart
+                    storage_mod.CheckpointMode.restart
                 else if (std.mem.indexOf(u8, sql, "TRUNCATE") != null)
-                    @import("storage_engine.zig").CheckpointMode.truncate
+                    storage_mod.CheckpointMode.truncate
                 else
-                    @import("storage_engine.zig").CheckpointMode.passive;
+                    storage_mod.CheckpointMode.passive;
 
                 // Execute checkpoint through storage engine
                 _ = try engine.executeCheckpoint(mode);

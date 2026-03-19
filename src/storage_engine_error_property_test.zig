@@ -3,9 +3,7 @@ const testing = std.testing;
 const storage_engine_mod = @import("storage_engine.zig");
 const StorageEngine = storage_engine_mod.StorageEngine;
 const ColumnValue = storage_engine_mod.ColumnValue;
-const schema_parser = @import("schema_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
-const ddl_generator = @import("ddl_generator.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 
 // This property test verifies that database operations handle errors gracefully:
@@ -178,7 +176,7 @@ test "storage: error handling concurrent access safety" {
 
     const runRead = struct {
         fn run(ctx: ThreadContext) void {
-            const doc = ctx.storage.selectDocument("data_table", "key1", "data_table") catch return;
+            const doc = ctx.storage.selectDocument("data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
             defer if (doc) |d| d.free(ctx.allocator);
         }
     }.run;

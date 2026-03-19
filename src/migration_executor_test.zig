@@ -4,7 +4,6 @@ const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
-const MigrationConfig = migration_executor.MigrationConfig;
 const sqlite = @import("sqlite");
 
 fn openMemDb() !sqlite.Db {
