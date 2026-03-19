@@ -565,3 +565,362 @@ test "storage: automatic transaction rollback on failure" {
         try testing.expect(doc != null);
     }
 }
+
+// ─── Property Test Helpers ──────────────────────────────────────────────────
+
+fn makeSchema(allocator: std.mem.Allocator, table_name: []const u8, fields: []const schema_parser.Field) !*schema_parser.Schema {
+    const owned_fields = try allocator.dupe(schema_parser.Field, fields);
+    for (owned_fields, 0..) |_, i| {
+        owned_fields[i].name = try allocator.dupe(u8, fields[i].name);
+    }
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    tables[0] = .{
+        .name = try allocator.dupe(u8, table_name),
+        .fields = owned_fields,
+    };
+    const schema = try allocator.create(schema_parser.Schema);
+    schema.* = .{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    return schema;
+}
+
+fn freeSchema(allocator: std.mem.Allocator, schema: *schema_parser.Schema) void {
+    allocator.free(schema.version);
+    for (schema.tables) |t| {
+        allocator.free(t.name);
+        for (t.fields) |f| allocator.free(f.name);
+        allocator.free(t.fields);
+    }
+    allocator.free(schema.tables);
+    allocator.destroy(schema);
+}
+
+const PropTestContext = struct {
+    allocator: std.mem.Allocator,
+    engine: *StorageEngine,
+    schema: *schema_parser.Schema,
+    test_dir: []const u8,
+
+    pub fn deinit(self: PropTestContext) void {
+        self.engine.deinit();
+        freeSchema(self.allocator, self.schema);
+        self.allocator.free(self.test_dir);
+        std.fs.cwd().deleteTree(self.test_dir) catch {};
+    }
+};
+
+fn setupPropTestEngine(allocator: std.mem.Allocator, test_dir_base: []const u8, table: schema_parser.Table) !PropTestContext {
+    const test_dir = try allocator.dupe(u8, test_dir_base);
+    errdefer allocator.free(test_dir);
+
+    const schema = try makeSchema(allocator, table.name, table.fields);
+    errdefer freeSchema(allocator, schema);
+
+    const engine = try StorageEngine.init(allocator, test_dir, schema);
+    errdefer engine.deinit();
+
+    var gen = ddl_generator.DDLGenerator.init(allocator);
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+
+    const ddl_z = try allocator.dupeZ(u8, ddl);
+    defer allocator.free(ddl_z);
+    try engine.writer_conn.execMulti(ddl_z, .{});
+
+    return PropTestContext{
+        .allocator = allocator,
+        .engine = engine,
+        .schema = schema,
+        .test_dir = test_dir,
+    };
+}
+
+// ─── Property 13: Document set/get round-trip ────────────────────────────────
+
+test "storage: property 13 - document set/get round-trip" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
+    const rand = prng.random();
+
+    const scalar_values = [_][]const u8{ "hello", "world", "foo", "bar", "baz" };
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p13_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{
+            makeField("title", .text, false),
+            makeField("score", .integer, false),
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+        const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
+        const title_str = scalar_values[title_idx];
+        const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
+
+        const title_payload = try msgpack.Payload.strToPayload(title_str, allocator);
+        defer title_payload.free(allocator);
+
+        const cols = [_]ColumnValue{
+            .{ .name = "title", .value = title_payload },
+            .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
+        };
+
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        const result = try engine.selectDocument("items", id, ns);
+        try testing.expect(result != null);
+        defer result.?.free(allocator);
+
+        const got_title = try result.?.mapGet("title");
+        try testing.expect(got_title != null);
+        try testing.expectEqualStrings(title_str, got_title.?.str.value());
+
+        const got_score = try result.?.mapGet("score");
+        try testing.expect(got_score != null);
+        const got_score_val: i64 = switch (got_score.?) {
+            .int => |v| v,
+            .uint => |v| @intCast(v),
+            else => return error.UnexpectedType,
+        };
+        try testing.expectEqual(score_val, got_score_val);
+    }
+}
+
+// ─── Property 14: Field set/get round-trip ───────────────────────────────────
+
+test "storage: property 14 - field set/get round-trip" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
+    const rand = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p14_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{
+            makeField("title", .text, false),
+            makeField("score", .integer, false),
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        const initial_title = try msgpack.Payload.strToPayload("initial", allocator);
+        defer initial_title.free(allocator);
+        const initial_cols = [_]ColumnValue{
+            .{ .name = "title", .value = initial_title },
+            .{ .name = "score", .value = msgpack.Payload.intToPayload(0) },
+        };
+        try engine.insertOrReplace("items", id, ns, &initial_cols);
+        try engine.flushPendingWrites();
+
+        const new_score: i64 = rand.intRangeAtMost(i64, 1, 9999);
+        try engine.updateField("items", id, ns, "score", msgpack.Payload.intToPayload(new_score));
+        try engine.flushPendingWrites();
+
+        const got = try engine.selectField("items", id, ns, "score");
+        try testing.expect(got != null);
+        defer got.?.free(allocator);
+        const got_score_val: i64 = switch (got.?) {
+            .int => |v| v,
+            .uint => |v| @intCast(v),
+            else => return error.UnexpectedType,
+        };
+        try testing.expectEqual(new_score, got_score_val);
+    }
+}
+
+// ─── Property 15: Collection get is namespace-scoped ─────────────────────────
+
+test "storage: property 15 - collection get is namespace-scoped" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
+    const rand = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p15_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const ns_a = "ns-alpha";
+        const ns_b = "ns-beta";
+        const count_a = rand.intRangeAtMost(usize, 1, 5);
+        const count_b = rand.intRangeAtMost(usize, 1, 5);
+
+        var i: usize = 0;
+        while (i < count_a) : (i += 1) {
+            const id = try std.fmt.allocPrint(allocator, "a-{}", .{i});
+            defer allocator.free(id);
+            const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i)) }};
+            try engine.insertOrReplace("items", id, ns_a, &cols);
+        }
+
+        i = 0;
+        while (i < count_b) : (i += 1) {
+            const id = try std.fmt.allocPrint(allocator, "b-{}", .{i});
+            defer allocator.free(id);
+            const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i + 100)) }};
+            try engine.insertOrReplace("items", id, ns_b, &cols);
+        }
+
+        try engine.flushPendingWrites();
+
+        const coll_a = try engine.selectCollection("items", ns_a);
+        defer coll_a.free(allocator);
+        try testing.expectEqual(count_a, coll_a.arr.len);
+
+        const coll_b = try engine.selectCollection("items", ns_b);
+        defer coll_b.free(allocator);
+        try testing.expectEqual(count_b, coll_b.arr.len);
+    }
+}
+
+// ─── Property 16: Remove then get returns null ────────────────────────────────
+
+test "storage: property 16 - remove then get returns null" {
+    const allocator = testing.allocator;
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p16_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(42) }};
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        try engine.deleteDocument("items", id, ns);
+        try engine.flushPendingWrites();
+
+        const after = try engine.selectDocument("items", id, ns);
+        try testing.expect(after == null);
+    }
+}
+
+// ─── Property 17: Schema validation rejects unknown tables and fields ─────────
+
+test "storage: property 17 - schema validation rejects unknown tables and fields" {
+    const allocator = testing.allocator;
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p17_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{makeField("title", .text, false)};
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const cols = [_]ColumnValue{.{ .name = "title", .value = msgpack.Payload.intToPayload(1) }};
+        const err1 = engine.insertOrReplace("nonexistent_table", "id1", "ns", &cols);
+        try testing.expectError(storage_engine.StorageError.UnknownTable, err1);
+
+        const bad_cols = [_]ColumnValue{.{ .name = "nonexistent_field", .value = msgpack.Payload.intToPayload(1) }};
+        const err2 = engine.insertOrReplace("items", "id1", "ns", &bad_cols);
+        try testing.expectError(storage_engine.StorageError.UnknownField, err2);
+    }
+}
+
+// ─── Property 18: updated_at is always refreshed on write ────────────────────
+
+test "storage: property 18 - updated_at is always refreshed on write" {
+    const allocator = testing.allocator;
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p18_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+        var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        const t_before_insert = std.time.timestamp();
+        const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        const doc1 = try engine.selectDocument("items", id, ns);
+        try testing.expect(doc1 != null);
+        defer doc1.?.free(allocator);
+
+        const updated_at_1_payload = (try doc1.?.mapGet("updated_at")).?;
+        const updated_at_1: i64 = switch (updated_at_1_payload) {
+            .int => |v| v,
+            .uint => |v| @intCast(v),
+            else => return error.UnexpectedType,
+        };
+        try testing.expect(updated_at_1 >= t_before_insert);
+
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+
+        const t_before_update = std.time.timestamp();
+        try engine.updateField("items", id, ns, "val", msgpack.Payload.intToPayload(2));
+        try engine.flushPendingWrites();
+
+        const doc2 = try engine.selectDocument("items", id, ns);
+        try testing.expect(doc2 != null);
+        defer doc2.?.free(allocator);
+
+        const updated_at_2_payload = (try doc2.?.mapGet("updated_at")).?;
+        const updated_at_2: i64 = switch (updated_at_2_payload) {
+            .int => |v| v,
+            .uint => |v| @intCast(v),
+            else => return error.UnexpectedType,
+        };
+
+        try testing.expect(updated_at_2 >= t_before_update);
+    }
+}

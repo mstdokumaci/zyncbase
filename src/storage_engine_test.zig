@@ -424,3 +424,38 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         try testing.expect(result != null);
     }
 }
+
+// Unit test 8.7: client writes blocked during migration
+// Simulate an active migration transaction and assert that insertOrReplace / updateField
+// return an error.
+test "StorageEngine: client writes blocked during migration" {
+    const allocator = testing.allocator;
+
+    const test_dir = "test-artifacts/unit/storage_engine/test_8_7_migration_block";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
+    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+    const ctx = try setupEngine(allocator, test_dir, table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
+    // Simulate migration in progress by setting migration_active = true
+    engine.migration_active.store(true, .release);
+    defer engine.migration_active.store(false, .release);
+
+    // insertOrReplace should be blocked
+    const val_p = msgpack.Payload.intToPayload(1);
+    const cols = [_]ColumnValue{.{ .name = "val", .value = val_p }};
+    const err1 = engine.insertOrReplace("items", "id1", "ns", &cols);
+    try testing.expectError(storage_engine.StorageError.MigrationInProgress, err1);
+
+    // updateField should be blocked
+    const err2 = engine.updateField("items", "id1", "ns", "val", val_p);
+    try testing.expectError(storage_engine.StorageError.MigrationInProgress, err2);
+
+    // deleteDocument should be blocked
+    const err3 = engine.deleteDocument("items", "id1", "ns");
+    try testing.expectError(storage_engine.StorageError.MigrationInProgress, err3);
+}

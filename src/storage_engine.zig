@@ -35,11 +35,9 @@ pub const StorageError = error{
     NullNotAllowed,
     /// Write blocked because migration is in progress
     MigrationInProgress,
-    /// No schema is loaded but a typed operation was requested
-    NoSchemaLoaded,
 };
 
-/// A column name + msgpack value pair for typed inserts/updates.
+/// A column name + msgpack value pair for storage inserts/updates.
 pub const ColumnValue = struct {
     name: []const u8,
     value: msgpack.Payload,
@@ -512,9 +510,9 @@ pub const StorageEngine = struct {
         }
     }
 
-    // ─── Typed SQL methods ────────────────────────────────────────────────────
+    // ─── Storage methods ──────────────────────────────────────────────────
 
-    /// INSERT OR REPLACE a document into a typed table.
+    /// INSERT OR REPLACE a document into a table.
     /// Schema validation happens synchronously before enqueueing.
     pub fn insertOrReplace(
         self: *StorageEngine,
@@ -574,9 +572,9 @@ pub const StorageEngine = struct {
         const table_owned = try self.allocator.dupe(u8, table);
         errdefer self.allocator.free(table_owned);
 
-        // Build a typed write op using the raw SQL path
+        // Build a write op using the raw SQL path
         const op = WriteOp{
-            .type = .typed_insert,
+            .type = .insert,
             .table = table_owned,
             .id = id_owned,
             .namespace = ns_owned,
@@ -590,7 +588,7 @@ pub const StorageEngine = struct {
         try self.pushWrite(op);
     }
 
-    /// UPDATE a single field in a typed table.
+    /// UPDATE a single field in a table.
     pub fn updateField(
         self: *StorageEngine,
         table: []const u8,
@@ -629,7 +627,7 @@ pub const StorageEngine = struct {
 
         const now = std.time.timestamp();
         const op = WriteOp{
-            .type = .typed_update,
+            .type = .update,
             .table = table_owned,
             .id = id_owned,
             .namespace = ns_owned,
@@ -727,7 +725,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(table_owned);
 
         const op = WriteOp{
-            .type = .typed_delete,
+            .type = .delete,
             .table = table_owned,
             .id = id_owned,
             .namespace = ns_owned,
@@ -875,11 +873,11 @@ pub const StorageEngine = struct {
         return msgpack.Payload{ .arr = try arr.toOwnedSlice(self.allocator) };
     }
 
-    // ─── Internal write helpers for typed ops ─────────────────────────────────
+    // ─── Internal write helpers ───────────────────────────────────────────────
 
-    fn executeTypedInsert(self: *StorageEngine, op: WriteOp) !void {
+    fn executeInsert(self: *StorageEngine, op: WriteOp) !void {
         const sql = op.sql.?;
-        std.debug.print("\n[DEBUG] executeTypedInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
+        std.debug.print("\n[DEBUG] executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
@@ -916,7 +914,7 @@ pub const StorageEngine = struct {
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
-    fn executeTypedUpdate(self: *StorageEngine, op: WriteOp) !void {
+    fn executeUpdate(self: *StorageEngine, op: WriteOp) !void {
         const sql = op.sql.?;
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -938,7 +936,7 @@ pub const StorageEngine = struct {
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
-    fn executeTypedDelete(self: *StorageEngine, op: WriteOp) !void {
+    fn executeDelete(self: *StorageEngine, op: WriteOp) !void {
         const sql = op.sql.?;
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -981,7 +979,7 @@ pub const StorageEngine = struct {
             while (batch.items.len < batch_size) {
                 if (self.write_queue.pop()) |op| {
                     switch (op.type) {
-                        .typed_insert, .typed_update, .typed_delete, .ddl => {
+                        .insert, .update, .delete, .ddl => {
                             std.log.debug("Batching {s} op for table {?s} id {?s}", .{ @tagName(op.type), op.table, op.id });
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
@@ -1082,7 +1080,7 @@ pub const StorageEngine = struct {
         // Drain any ops still in the queue that weren't popped before shutdown was signalled
         while (self.write_queue.pop()) |op| {
             switch (op.type) {
-                .typed_insert, .typed_update, .typed_delete => {
+                .insert, .update, .delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         _ = self.pending_writes_count.fetchSub(1, .release);
@@ -1154,19 +1152,19 @@ pub const StorageEngine = struct {
         // Execute all operations
         for (ops) |op| {
             switch (op.type) {
-                .typed_insert => self.executeTypedInsert(op) catch |err| {
+                .insert => self.executeInsert(op) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch TYPED_INSERT", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch INSERT", classified_err, op.table orelse "");
                     return classified_err;
                 },
-                .typed_update => self.executeTypedUpdate(op) catch |err| {
+                .update => self.executeUpdate(op) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch TYPED_UPDATE", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch UPDATE", classified_err, op.table orelse "");
                     return classified_err;
                 },
-                .typed_delete => self.executeTypedDelete(op) catch |err| {
+                .delete => self.executeDelete(op) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch TYPED_DELETE", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch DELETE", classified_err, op.table orelse "");
                     return classified_err;
                 },
                 .ddl => {
@@ -1239,15 +1237,15 @@ pub const WriteOp = struct {
         commit_transaction,
         rollback_transaction,
         checkpoint,
-        typed_insert,
-        typed_update,
-        typed_delete,
+        insert,
+        update,
+        delete,
         ddl,
     },
     namespace: ?[]const u8 = null,
     checkpoint_mode: ?CheckpointMode = null,
     completion_signal: ?*CompletionSignal = null,
-    // Typed SQL op fields
+    // Storage op fields
     table: ?[]const u8 = null,
     id: ?[]const u8 = null,
     sql: ?[]const u8 = null,
@@ -1298,11 +1296,6 @@ pub const WriteOp = struct {
             allocator.free(col_bytes);
         }
     }
-};
-
-pub const QueryResult = struct {
-    path: []const u8,
-    value: []const u8,
 };
 
 pub const WriteQueue = struct {

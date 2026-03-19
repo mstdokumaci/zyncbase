@@ -22,7 +22,6 @@ test {
     _ = @import("schema_parser_test.zig");
     _ = @import("ddl_generator_test.zig");
     _ = @import("migration_executor_test.zig");
-    _ = @import("storage_engine_typed_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");
@@ -46,7 +45,6 @@ test {
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
     _ = @import("message_handler_path_router_property_test.zig");
-    _ = @import("storage_engine_typed_property_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_manager_thread_safety_test.zig");
