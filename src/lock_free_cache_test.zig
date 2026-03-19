@@ -9,7 +9,7 @@ const testing = std.testing;
 test "cache: concurrent reads never block" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Create a test namespace
@@ -83,7 +83,7 @@ test "cache: concurrent reads never block" {
 test "cache: ref_count never negative" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -112,7 +112,7 @@ test "cache: ref_count never negative" {
 test "cache: ref_count overflow protection" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -136,7 +136,7 @@ test "cache: ref_count overflow protection" {
 test "cache: concurrent reads multi-namespace" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Create multiple namespaces
@@ -207,7 +207,7 @@ test "cache: concurrent reads multi-namespace" {
 test "cache: memory ordering updates" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -300,7 +300,7 @@ test "cache: memory ordering updates" {
 test "cache: miss returns NotFound" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Try to get non-existent namespace
@@ -312,7 +312,7 @@ test "cache: miss returns NotFound" {
 test "cache: eviction fails on active refs" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -338,7 +338,7 @@ test "cache: eviction fails on active refs" {
 test "cache: update non-existent fails" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const new_state = try LockFreeCache.StateTree.init(allocator);
@@ -355,7 +355,7 @@ test "cache: update non-existent fails" {
 test "cache: eviction non-existent fails" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const result = cache.evict("non-existent");
@@ -366,7 +366,7 @@ test "cache: eviction non-existent fails" {
 test "cache: version increments" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -397,7 +397,7 @@ test "cache: version increments" {
 test "cache: timestamp updates" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -426,7 +426,7 @@ test "cache: timestamp updates" {
 test "cache: idempotent create" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -444,7 +444,7 @@ test "cache: idempotent create" {
 test "cache: empty namespace key" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "";
@@ -459,7 +459,7 @@ test "cache: empty namespace key" {
 test "cache: long namespace key" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Create a very long namespace name
@@ -499,7 +499,7 @@ test "cache: StateTree node lifecycle" {
 test "cache: deferred cleanup" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test";
@@ -548,7 +548,7 @@ test "cache: deferred cleanup" {
 test "cache: consistency during updates" {
     const allocator = testing.allocator;
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test";

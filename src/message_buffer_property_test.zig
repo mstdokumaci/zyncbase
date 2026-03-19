@@ -106,7 +106,7 @@ test "buffer: message deallocation after processing" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Test 1: Single message processing
@@ -384,7 +384,7 @@ test "buffer: concurrent message deallocation" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     var handler = try MessageHandler.init(

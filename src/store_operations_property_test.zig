@@ -38,7 +38,7 @@ test "store: set field extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -207,7 +207,7 @@ test "store: engine set integration" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -358,7 +358,7 @@ test "store: set success response format" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -494,7 +494,7 @@ test "store: get field extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -624,7 +624,7 @@ test "store: engine get integration" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -800,7 +800,7 @@ test "store: get value response format" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(

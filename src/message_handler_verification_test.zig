@@ -54,7 +54,7 @@ test "Verification: WebSocket connection lifecycle" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -124,7 +124,7 @@ test "Verification: StoreSet message processing" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -235,7 +235,7 @@ test "Verification: StoreGet message processing" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -344,7 +344,7 @@ test "Verification: Error handling for invalid messages" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -479,7 +479,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(

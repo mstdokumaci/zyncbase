@@ -98,6 +98,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Initializing LockFreeCache", .{});
         const cache = try LockFreeCache.init(
             memory_strategy.generalAllocator(),
+            .{},
         );
         errdefer cache.deinit();
 

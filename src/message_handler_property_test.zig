@@ -86,7 +86,7 @@ test "connection: open/close is inverse operation" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Initialize message handler
@@ -488,7 +488,7 @@ test "connection: unique monotonically increasing IDs" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Initialize message handler
@@ -688,7 +688,7 @@ test "message: all valid frames are parsed" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     // Initialize message handler
@@ -795,7 +795,7 @@ test "message: type extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -943,7 +943,7 @@ test "message: request routing to handlers" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -1084,7 +1084,7 @@ test "message: response correlation by ID" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(
@@ -1277,7 +1277,7 @@ test "message: error responses for invalid types/fields" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator);
+    const cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     const handler = try MessageHandler.init(

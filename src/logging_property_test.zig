@@ -106,7 +106,7 @@ test "logging: connection events" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     var handler = try MessageHandler.init(
@@ -309,7 +309,7 @@ test "logging: error details" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator);
+    var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
     var handler = try MessageHandler.init(
@@ -449,7 +449,7 @@ test "logging: level filtering" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator);
+        var cache = try LockFreeCache.init(allocator, .{});
         defer cache.deinit();
 
         var handler = try MessageHandler.init(
@@ -532,7 +532,7 @@ test "logging: message formatting" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator);
+        var cache = try LockFreeCache.init(allocator, .{});
         defer cache.deinit();
 
         var handler = try MessageHandler.init(
@@ -603,7 +603,7 @@ test "logging: message formatting" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator);
+        var cache = try LockFreeCache.init(allocator, .{});
         defer cache.deinit();
 
         var handler = try MessageHandler.init(

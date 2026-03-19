@@ -11,6 +11,7 @@ test {
     _ = @import("storage_engine_test.zig");
     _ = @import("violation_tracker_test.zig");
     _ = @import("lock_free_cache_test.zig");
+    _ = @import("lock_free_cache_leak_test.zig");
     _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_manager_test.zig");
     _ = @import("config_loader_test.zig");
