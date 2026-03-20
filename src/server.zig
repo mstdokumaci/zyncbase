@@ -40,10 +40,11 @@ pub const ZyncBaseServer = struct {
     message_handler: *MessageHandler,
     checkpoint_thread: ?std.Thread = null,
     shutdown_requested: std.atomic.Value(bool),
-    /// Loaded schema (owned). Null when no schema_file is configured.
-    loaded_schema: ?schema_parser.Schema = null,
+    /// Loaded schema (owned).
+    loaded_schema: schema_parser.Schema = undefined,
     /// Parser used to free loaded_schema on deinit.
-    schema_parser_instance: ?SchemaParser = null,
+    schema_parser_instance: SchemaParser = undefined,
+    schema_loaded: bool = false,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator) !*ZyncBaseServer {
@@ -61,8 +62,7 @@ pub const ZyncBaseServer = struct {
         errdefer allocator.destroy(self);
         self.allocator = allocator;
         self.checkpoint_thread = null;
-        self.loaded_schema = null;
-        self.schema_parser_instance = null;
+        self.schema_loaded = false;
 
         // Initialize memory strategy
         const memory_strategy = try allocator.create(MemoryStrategy);
@@ -140,6 +140,7 @@ pub const ZyncBaseServer = struct {
             errdefer parser.deinit(schema);
             self.loaded_schema = schema;
             self.schema_parser_instance = parser;
+            self.schema_loaded = true;
         }
 
         // Initialize storage engine, which now requires a schema
@@ -147,13 +148,13 @@ pub const ZyncBaseServer = struct {
         const storage_engine = try StorageEngine.init(
             memory_strategy.generalAllocator(),
             config.data_dir,
-            &self.loaded_schema.?, // zwanzig-disable-line: optional-unwrap
+            &self.loaded_schema,
         );
         errdefer storage_engine.deinit();
 
         // Run migrations and DDL
         {
-            const schema_ptr = &self.loaded_schema.?; // zwanzig-disable-line: optional-unwrap
+            const schema_ptr = &self.loaded_schema;
             // Apply DDL for each table
             var gen = DDLGenerator.init(memory_strategy.generalAllocator());
             for (schema_ptr.tables) |table| {
@@ -369,10 +370,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("config deinitialized", .{});
 
         // Free loaded schema if present before destroying the allocator it uses
-        if (self.loaded_schema) |s| {
-            if (self.schema_parser_instance) |*p| {
-                p.deinit(s);
-            }
+        if (self.schema_loaded) {
+            self.schema_parser_instance.deinit(self.loaded_schema);
         }
 
         std.log.debug("Deinitializing memory_strategy", .{});
