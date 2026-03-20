@@ -195,7 +195,7 @@ test "HookServerClient: circuit breaker state management" {
 test "HookServerClient: authorization cache operations" {
     const allocator = testing.allocator;
 
-    var cache = try hook_server.AuthCache.init(allocator);
+    var cache = try hook_server.AuthCache.init(allocator, 100);
     defer cache.deinit();
 
     const req = AuthRequest{
@@ -321,4 +321,40 @@ test "WebSocketConnection: send and receive require connection" {
     // Receive should fail when not connected
     const recv_result = conn.tryReceive();
     try testing.expectError(error.NotConnected, recv_result);
+}
+test "AuthCache: enforce max_size" {
+    const allocator = testing.allocator;
+
+    // Create a small cache
+    var cache = try hook_server.AuthCache.init(allocator, 10);
+    defer cache.deinit();
+
+    // Fill the cache
+    var i: u32 = 0;
+    while (i < 15) : (i += 1) {
+        const user_id = try std.fmt.allocPrint(allocator, "user-{}", .{i});
+        defer allocator.free(user_id);
+        
+        const req = AuthRequest{
+            .user_id = user_id,
+            .namespace = "test-namespace",
+            .operation = .read,
+            .resource = "test-resource",
+            .timestamp = std.time.timestamp(),
+        };
+
+        const response = hook_server.AuthResponse{
+            .allowed = true,
+            .reason = null,
+            .cache_ttl_sec = 300,
+        };
+
+        try cache.put(req, response);
+    }
+
+    // Cache size should be limited to max_size (or slightly less due to batch eviction)
+    try testing.expect(cache.size() <= 10);
+    
+    // Verify it's still alive and functional
+    try testing.expect(cache.size() > 0);
 }

@@ -229,7 +229,7 @@ pub const HookServerClient = struct {
             .state = std.atomic.Value(ConnectionState).init(.disconnected),
             .circuit_breaker = CircuitBreaker.init(),
             .url_owned = url_owned,
-            .auth_cache = try AuthCache.init(allocator),
+            .auth_cache = try AuthCache.init(allocator, 1000),
         };
 
         return client;
@@ -488,13 +488,15 @@ pub const AuthCache = struct {
     allocator: Allocator,
     cache: std.StringHashMap(CacheEntry),
     mutex: std.Thread.Mutex,
+    max_size: usize,
 
-    pub fn init(allocator: Allocator) !*AuthCache {
+    pub fn init(allocator: Allocator, max_size: usize) !*AuthCache {
         const cache_ptr = try allocator.create(AuthCache);
         cache_ptr.* = .{
             .allocator = allocator,
             .cache = std.StringHashMap(CacheEntry).init(allocator),
             .mutex = std.Thread.Mutex{},
+            .max_size = max_size,
         };
         return cache_ptr;
     }
@@ -529,7 +531,7 @@ pub const AuthCache = struct {
         if (self.cache.get(key)) |entry| {
             if (entry.isExpired()) {
                 // Entry expired, remove it
-                _ = self.remove(req);
+                _ = self.removeInternal(req);
                 return null;
             }
             return entry.response;
@@ -542,6 +544,57 @@ pub const AuthCache = struct {
     pub fn put(self: *AuthCache, req: AuthRequest, response: AuthResponse) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
+
+        // Enforce max size
+        if (self.cache.count() >= self.max_size) {
+            // First, try to evict expired entries
+            self.evictExpiredInternal();
+
+            // If still full/near capacity, perform batch random eviction
+            // We use 95% threshold to ensure some breathing room
+            if (self.cache.count() >= (self.max_size * 19 / 20)) {
+                // Evict a small batch of random entries (up to 5% of capacity, min 1)
+                var evicted: usize = 0;
+                const to_evict = @max(@as(usize, 1), self.max_size / 20);
+                    
+                    var it = self.cache.iterator();
+                    while (it.next()) |entry| {
+                        const key = entry.key_ptr.*;
+
+                        
+                        // We must remove by key to be safe with the iterator if we break immediately
+                        // Actually, in Zig HashMap, removing while iterating is only safe if you stop.
+                        // So we collect a few keys in a stack buffer.
+                        var batch_buf: [8][]const u8 = undefined;
+                        var batch_count: usize = 0;
+                        
+                        batch_buf[batch_count] = key;
+                        batch_count += 1;
+                        
+                        // Try to fill the batch buffer
+                        while (batch_count < batch_buf.len and evicted + batch_count < to_evict) {
+                            if (it.next()) |next_entry| {
+                                batch_buf[batch_count] = next_entry.key_ptr.*;
+                                batch_count += 1;
+                            } else break;
+                        }
+                        
+                        // Remove the collected batch
+                        for (batch_buf[0..batch_count]) |k| {
+                            if (self.cache.fetchRemove(k)) |removed| {
+                                self.allocator.free(removed.key);
+                                removed.value.deinit(self.allocator);
+                                evicted += 1;
+                            }
+                        }
+                        
+                        if (evicted >= to_evict) break;
+                        
+                        // Restart iterator after removal to be safe
+                        it = self.cache.iterator();
+                    }
+            }
+        }
 
         const key = try buildKey(self.allocator, req);
         errdefer self.allocator.free(key);
@@ -575,6 +628,12 @@ pub const AuthCache = struct {
 
     /// Remove entry from cache
     pub fn remove(self: *AuthCache, req: AuthRequest) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.removeInternal(req);
+    }
+
+    fn removeInternal(self: *AuthCache, req: AuthRequest) bool {
         const key = buildKey(self.allocator, req) catch return false;
         defer self.allocator.free(key);
 
@@ -591,22 +650,33 @@ pub const AuthCache = struct {
     pub fn evictExpired(self: *AuthCache) void {
         self.mutex.lock();
         defer self.mutex.unlock();
+        self.evictExpiredInternal();
+    }
 
-        var to_remove = std.ArrayList([]const u8).init(self.allocator);
-        defer to_remove.deinit();
+    fn evictExpiredInternal(self: *AuthCache) void {
+        while (true) {
+            var to_remove_buf: [16][]const u8 = undefined;
+            var count: usize = 0;
 
-        var it = self.cache.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.isExpired()) {
-                to_remove.append(entry.key_ptr.*) catch continue; // zwanzig-disable-line: swallowed-error
+            var it = self.cache.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.isExpired()) {
+                    to_remove_buf[count] = entry.key_ptr.*;
+                    count += 1;
+                    if (count == to_remove_buf.len) break;
+                }
             }
-        }
 
-        for (to_remove.items) |key| {
-            if (self.cache.fetchRemove(key)) |entry| {
-                self.allocator.free(entry.key);
-                entry.value.deinit(self.allocator);
+            if (count == 0) break;
+
+            for (to_remove_buf[0..count]) |key| {
+                if (self.cache.fetchRemove(key)) |entry| {
+                    self.allocator.free(entry.key);
+                    entry.value.deinit(self.allocator);
+                }
             }
+            // Repeat until no more expired entries are found in a single pass
+            // This is safer than continuing with a potentially invalidated iterator
         }
     }
 
