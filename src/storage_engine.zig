@@ -228,9 +228,10 @@ pub const StorageEngine = struct {
     pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
-            .type = .checkpoint,
-            .checkpoint_mode = mode,
-            .completion_signal = &signal,
+            .checkpoint = .{
+                .mode = mode,
+                .completion_signal = &signal,
+            },
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
@@ -311,8 +312,9 @@ pub const StorageEngine = struct {
         }
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
-            .type = .begin_transaction,
-            .completion_signal = &signal,
+            .begin_transaction = .{
+                .completion_signal = &signal,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -325,8 +327,9 @@ pub const StorageEngine = struct {
         }
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
-            .type = .commit_transaction,
-            .completion_signal = &signal,
+            .commit_transaction = .{
+                .completion_signal = &signal,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -339,8 +342,9 @@ pub const StorageEngine = struct {
         }
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
-            .type = .rollback_transaction,
-            .completion_signal = &signal,
+            .rollback_transaction = .{
+                .completion_signal = &signal,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -354,9 +358,10 @@ pub const StorageEngine = struct {
         // Ownership transferred to `op` immediately.
 
         const op = WriteOp{
-            .type = .ddl,
-            .sql = sql_owned,
-            .completion_signal = &signal,
+            .ddl = .{
+                .sql = sql_owned,
+                .completion_signal = &signal,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -574,15 +579,16 @@ pub const StorageEngine = struct {
 
         // Build a write op using the raw SQL path
         const op = WriteOp{
-            .type = .insert,
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
-            .sql = sql,
-            .col_bytes = col_bytes,
-            .col_count = columns.len,
-            .timestamp = now,
-            .completion_signal = null,
+            .insert = .{
+                .table = table_owned,
+                .id = id_owned,
+                .namespace = ns_owned,
+                .sql = sql,
+                .col_bytes = col_bytes,
+                .col_count = columns.len,
+                .timestamp = now,
+                .completion_signal = null,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -627,15 +633,16 @@ pub const StorageEngine = struct {
 
         const now = std.time.timestamp();
         const op = WriteOp{
-            .type = .update,
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
-            .sql = sql,
-            .col_bytes = col_bytes_owned,
-            .col_count = 1,
-            .timestamp = now,
-            .completion_signal = null,
+            .update = .{
+                .table = table_owned,
+                .id = id_owned,
+                .namespace = ns_owned,
+                .sql = sql,
+                .col_bytes = col_bytes_owned,
+                .col_count = 1,
+                .timestamp = now,
+                .completion_signal = null,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -725,12 +732,13 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(table_owned);
 
         const op = WriteOp{
-            .type = .delete,
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
-            .sql = sql,
-            .completion_signal = null,
+            .delete = .{
+                .table = table_owned,
+                .id = id_owned,
+                .namespace = ns_owned,
+                .sql = sql,
+                .completion_signal = null,
+            },
         };
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
@@ -874,79 +882,77 @@ pub const StorageEngine = struct {
 
     // ─── Internal write helpers ───────────────────────────────────────────────
 
-    fn executeInsert(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
-        std.log.debug("executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
+    fn executeInsert(self: *StorageEngine, op: anytype) !void {
+        const sql = op.sql;
+        std.log.debug("executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}", .{ sql, op.id, op.namespace, op.timestamp });
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
+        const id_z = try self.allocator.dupeZ(u8, op.id);
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace);
         defer self.allocator.free(ns_z);
 
         // Bind: id, namespace_id, col1..colN, id (COALESCE), namespace_id (COALESCE), created_at, updated_at
         var bind_idx: c_int = 1;
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
 
-        if (op.col_bytes) |col_bytes| {
-            for (col_bytes[0..op.col_count]) |b| {
-                _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, bind_idx, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC);
-                bind_idx += 1;
-            }
+        for (op.col_bytes[0..op.col_count]) |b| {
+            _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, bind_idx, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC);
+            bind_idx += 1;
         }
 
         // COALESCE: id, namespace_id, fallback created_at
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
         bind_idx += 1;
         // updated_at
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
-    fn executeUpdate(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
+    fn executeUpdate(self: *StorageEngine, op: anytype) !void {
+        const sql = op.sql;
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
+        const id_z = try self.allocator.dupeZ(u8, op.id);
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace);
         defer self.allocator.free(ns_z);
-        const val = op.col_bytes.?[0]; // zwanzig-disable-line: optional-unwrap
+        const val = op.col_bytes[0];
 
         // Bind: 1: id, 2: namespace_id, 3: value, 4: created_at, 5: updated_at
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, 3, val.ptr, @intCast(val.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
-        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp.?); // zwanzig-disable-line: optional-unwrap
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp);
+        _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp);
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
     }
 
-    fn executeDelete(self: *StorageEngine, op: WriteOp) !void {
-        const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
+    fn executeDelete(self: *StorageEngine, op: anytype) !void {
+        const sql = op.sql;
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, op.id.?); // zwanzig-disable-line: optional-unwrap
+        const id_z = try self.allocator.dupeZ(u8, op.id);
         defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, op.namespace.?); // zwanzig-disable-line: optional-unwrap
+        const ns_z = try self.allocator.dupeZ(u8, op.namespace);
         defer self.allocator.free(ns_z);
 
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.?.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.?.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
+        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
@@ -977,9 +983,8 @@ pub const StorageEngine = struct {
             // Collect operations for batch
             while (batch.items.len < batch_size) {
                 if (self.write_queue.pop()) |op| {
-                    switch (op.type) {
+                    switch (op) {
                         .insert, .update, .delete, .ddl => {
-                            std.log.debug("Batching {s} op for table {?s} id {?s}", .{ @tagName(op.type), op.table, op.id });
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
@@ -987,7 +992,7 @@ pub const StorageEngine = struct {
                                 continue;
                             };
                         },
-                        .begin_transaction => {
+                        .begin_transaction => |top| {
                             // Flush current batch first
                             if (batch.items.len > 0) {
                                 try self.flushBatch(&batch, &last_batch_time);
@@ -995,62 +1000,62 @@ pub const StorageEngine = struct {
                             if (self.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
                                 self.transaction_active.store(true, .release);
                                 self.manual_transaction_active.store(true, .release);
-                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(null);
                             } else |err| {
-                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
-                        .commit_transaction => {
+                        .commit_transaction => |top| {
                             if (batch.items.len > 0) {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
                             if (!self.transaction_active.load(.acquire)) {
-                                op.completion_signal.?.signal(StorageError.NoActiveTransaction); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             }
                             if (self.writer_conn.exec("COMMIT", .{}, .{})) |_| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(null);
                             } else |err| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
-                        .rollback_transaction => {
+                        .rollback_transaction => |top| {
                             if (batch.items.len > 0) {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
                             if (!self.transaction_active.load(.acquire)) {
-                                op.completion_signal.?.signal(StorageError.NoActiveTransaction); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             }
                             if (self.writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(null); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(null);
                             } else |err| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
-                                op.completion_signal.?.signal(classifyError(err)); // zwanzig-disable-line: optional-unwrap
+                                if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
-                        .checkpoint => {
+                        .checkpoint => |cop| {
                             if (batch.items.len > 0) {
                                 try self.flushBatch(&batch, &last_batch_time);
                             }
-                            const stats = self.internalExecuteCheckpoint(op.checkpoint_mode.?) catch |err| { // zwanzig-disable-line: optional-unwrap
-                                op.completion_signal.?.signal(err); // zwanzig-disable-line: optional-unwrap
+                            const stats = self.internalExecuteCheckpoint(cop.mode) catch |err| {
+                                cop.completion_signal.signal(err);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
                                 continue;
                             };
-                            op.completion_signal.?.signalWithResult(stats); // zwanzig-disable-line: optional-unwrap
+                            cop.completion_signal.signalWithResult(stats);
                             _ = self.pending_writes_count.fetchSub(1, .release);
                         },
                     }
@@ -1078,7 +1083,7 @@ pub const StorageEngine = struct {
 
         // Drain any ops still in the queue that weren't popped before shutdown was signalled
         while (self.write_queue.pop()) |op| {
-            switch (op.type) {
+            switch (op) {
                 .insert, .update, .delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
@@ -1087,7 +1092,7 @@ pub const StorageEngine = struct {
                 },
                 else => {
                     // Signal waiting callers so they don't hang forever
-                    if (op.completion_signal) |sig| sig.signal(StorageError.InvalidOperation);
+                    if (op.getCompletionSignal()) |sig| sig.signal(StorageError.InvalidOperation);
                     op.deinit(self.allocator);
                     _ = self.pending_writes_count.fetchSub(1, .release);
                 },
@@ -1106,7 +1111,7 @@ pub const StorageEngine = struct {
         const result = self.executeBatch(batch.items);
         if (result) |_| {
             for (batch.items) |op| {
-                if (op.completion_signal) |sig| {
+                if (op.getCompletionSignal()) |sig| {
                     sig.signal(null);
                 }
                 op.deinit(self.allocator);
@@ -1115,7 +1120,7 @@ pub const StorageEngine = struct {
             const classified_err = classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
             for (batch.items) |op| {
-                if (op.completion_signal) |sig| sig.signal(classified_err);
+                if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
                 op.deinit(self.allocator);
             }
         }
@@ -1150,24 +1155,24 @@ pub const StorageEngine = struct {
 
         // Execute all operations
         for (ops) |op| {
-            switch (op.type) {
-                .insert => self.executeInsert(op) catch |err| {
+            switch (op) {
+                .insert => |iop| self.executeInsert(iop) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch INSERT", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch INSERT", classified_err, iop.table);
                     return classified_err;
                 },
-                .update => self.executeUpdate(op) catch |err| {
+                .update => |uop| self.executeUpdate(uop) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch UPDATE", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
                     return classified_err;
                 },
-                .delete => self.executeDelete(op) catch |err| {
+                .delete => |dop| self.executeDelete(dop) catch |err| {
                     const classified_err = classifyError(err);
-                    logDatabaseError("executeBatch DELETE", classified_err, op.table orelse "");
+                    logDatabaseError("executeBatch DELETE", classified_err, dop.table);
                     return classified_err;
                 },
-                .ddl => {
-                    const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
+                .ddl => |dop| {
+                    const sql = dop.sql;
                     var it = std.mem.splitScalar(u8, sql, ';');
                     while (it.next()) |stmt_raw| {
                         const stmt = std.mem.trim(u8, stmt_raw, " \r\n\t");
@@ -1230,27 +1235,42 @@ pub const StorageEngine = struct {
     }
 };
 
-pub const WriteOp = struct {
-    type: enum {
-        begin_transaction,
-        commit_transaction,
-        rollback_transaction,
-        checkpoint,
-        insert,
-        update,
-        delete,
-        ddl,
+pub const WriteOp = union(enum) {
+    begin_transaction: struct { completion_signal: ?*CompletionSignal },
+    commit_transaction: struct { completion_signal: ?*CompletionSignal },
+    rollback_transaction: struct { completion_signal: ?*CompletionSignal },
+    checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
+    insert: struct {
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        sql: []const u8,
+        col_bytes: [][]const u8,
+        col_count: usize,
+        timestamp: i64,
+        completion_signal: ?*CompletionSignal = null,
     },
-    namespace: ?[]const u8 = null,
-    checkpoint_mode: ?CheckpointMode = null,
-    completion_signal: ?*CompletionSignal = null,
-    // Storage op fields
-    table: ?[]const u8 = null,
-    id: ?[]const u8 = null,
-    sql: ?[]const u8 = null,
-    col_bytes: ?[][]const u8 = null,
-    col_count: usize = 0,
-    timestamp: ?i64 = null,
+    update: struct {
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        sql: []const u8,
+        col_bytes: [][]const u8,
+        col_count: usize,
+        timestamp: i64,
+        completion_signal: ?*CompletionSignal = null,
+    },
+    delete: struct {
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        sql: []const u8,
+        completion_signal: ?*CompletionSignal = null,
+    },
+    ddl: struct {
+        sql: []const u8,
+        completion_signal: ?*CompletionSignal,
+    },
 
     pub const CompletionSignal = struct {
         mutex: std.Thread.Mutex = .{},
@@ -1285,14 +1305,47 @@ pub const WriteOp = struct {
         }
     };
 
+    pub fn getCompletionSignal(self: WriteOp) ?*CompletionSignal {
+        return switch (self) {
+            .begin_transaction => |op| op.completion_signal,
+            .commit_transaction => |op| op.completion_signal,
+            .rollback_transaction => |op| op.completion_signal,
+            .checkpoint => |op| op.completion_signal,
+            .insert => |op| op.completion_signal,
+            .update => |op| op.completion_signal,
+            .delete => |op| op.completion_signal,
+            .ddl => |op| op.completion_signal,
+        };
+    }
+
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
-        if (self.namespace) |n| allocator.free(n);
-        if (self.table) |t| allocator.free(t);
-        if (self.id) |i| allocator.free(i);
-        if (self.sql) |s| allocator.free(s);
-        if (self.col_bytes) |col_bytes| {
-            for (col_bytes[0..self.col_count]) |b| allocator.free(b);
-            allocator.free(col_bytes);
+        switch (self) {
+            .insert => |op| {
+                allocator.free(op.namespace);
+                allocator.free(op.table);
+                allocator.free(op.id);
+                allocator.free(op.sql);
+                for (op.col_bytes[0..op.col_count]) |b| allocator.free(b);
+                allocator.free(op.col_bytes);
+            },
+            .update => |op| {
+                allocator.free(op.namespace);
+                allocator.free(op.table);
+                allocator.free(op.id);
+                allocator.free(op.sql);
+                for (op.col_bytes[0..op.col_count]) |b| allocator.free(b);
+                allocator.free(op.col_bytes);
+            },
+            .delete => |op| {
+                allocator.free(op.namespace);
+                allocator.free(op.table);
+                allocator.free(op.id);
+                allocator.free(op.sql);
+            },
+            .ddl => |op| {
+                allocator.free(op.sql);
+            },
+            else => {},
         }
     }
 };
