@@ -471,7 +471,8 @@ pub const LockFreeCache = struct {
             new_entry.timestamp.store(std.time.timestamp(), .release);
 
             // Find the actual key string owned by the map to reuse it (avoiding dangling pointers/extra dupes)
-            const map_key = old_entries.getEntry(namespace).?.key_ptr.*;
+            // The key is guaranteed to exist because we just confirmed it with old_entries.get() above.
+            const map_key = (old_entries.getEntry(namespace) orelse unreachable).key_ptr.*;
 
             // Replace in new map (it's a pointer to our pre-allocated entry)
             try new_entries.put(map_key, new_entry);
@@ -521,7 +522,8 @@ pub const LockFreeCache = struct {
                 self.allocator.destroy(new_entries);
             }
 
-            const kv = new_entries.fetchRemove(namespace).?; // zwanzig-disable-line: optional-unwrap
+            // Key exists in old_entries, so must exist in the clone
+            const kv = new_entries.fetchRemove(namespace) orelse unreachable;
 
             if (self.entries.cmpxchgStrong(old_entries, new_entries, .acq_rel, .acquire)) |_| {
                 // Failure, cleanup loop-local map copy and retry
