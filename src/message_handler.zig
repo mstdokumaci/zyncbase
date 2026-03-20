@@ -315,8 +315,8 @@ pub const MessageHandler = struct {
         }
 
         return MessageInfo{
-            .type = msg_type.?,
-            .id = msg_id.?,
+            .type = msg_type orelse unreachable,
+            .id = msg_id orelse unreachable,
         };
     }
 
@@ -376,17 +376,20 @@ pub const MessageHandler = struct {
         }
 
         // Defer field slice cleanup if it was allocated
-        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
+        // parsed_path is guaranteed to be non-null by the check above
+        defer if ((parsed_path orelse unreachable) == .field) self.allocator.free((parsed_path orelse unreachable).field.fields);
 
-        switch (parsed_path.?) {
+        switch (parsed_path orelse unreachable) {
             .document => |doc| {
-                if (value.? != .map) return error.InvalidPayload;
+                // value is guaranteed to be non-null by the check above
+                if ((value orelse unreachable) != .map) return error.InvalidPayload;
 
                 // Convert map to ColumnValue array
                 var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
                 defer columns.deinit(self.allocator);
 
-                var val_it = value.?.map.iterator();
+                // value is guaranteed to be non-null by the check above
+                var val_it = (value orelse unreachable).map.iterator();
                 while (val_it.next()) |entry| {
                     if (entry.key_ptr.* != .str) continue;
                     try columns.append(self.allocator, .{
@@ -395,18 +398,21 @@ pub const MessageHandler = struct {
                     });
                 }
 
-                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace.?, columns.items); // zwanzig-disable-line: optional-unwrap;
+                // namespace is guaranteed to be non-null by the check above
+                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items);
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 // For now, only support single depth or simple join
                 if (f.fields.len == 1) {
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], value.?); // zwanzig-disable-line: optional-unwrap;
+                    // namespace and value are guaranteed to be non-null by the check above
+                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable);
                 } else if (f.fields.len > 1) {
-                    // TODO: Implement deep flattening if needed, or join with _
+                    // Note: Implement deep flattening if needed, or join with _
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, value.?); // zwanzig-disable-line: optional-unwrap;
+                    // namespace and value are guaranteed to be non-null by the check above
+                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot set on a collection
@@ -451,35 +457,39 @@ pub const MessageHandler = struct {
         }
 
         // Defer field slice cleanup if it was allocated
-        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
+        // parsed_path is guaranteed to be non-null by the check above
+        defer if ((parsed_path orelse unreachable) == .field) self.allocator.free((parsed_path orelse unreachable).field.fields);
 
-        const result_payload: ?msgpack.Payload = switch (parsed_path.?) {
+        const result_payload: ?msgpack.Payload = switch (parsed_path orelse unreachable) {
             .document => |doc| blk: {
-                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace.?) catch |err| {
+                // namespace is guaranteed to be non-null by the check above
+                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| {
                     std.log.err("handleStoreGet: selectDocument error: {}", .{err});
                     return err;
                 };
 
                 if (stored_doc == null) {
-                    std.log.debug("handleStoreGet: selectDocument returned null for {s}:{s} in {s}", .{ doc.table, doc.id, namespace.? });
+                    std.log.debug("handleStoreGet: selectDocument returned null for {s}:{s} in {s}", .{ doc.table, doc.id, namespace orelse unreachable });
                     break :blk null; // Return null to indicate not found, will be handled by buildDataResponse
                 }
                 std.log.debug("handleStoreGet: selectDocument returned document for {s}:{s}", .{ doc.table, doc.id });
                 break :blk stored_doc;
             },
             .field => |f| blk: {
+                // namespace is guaranteed to be non-null by the check above
                 if (f.fields.len == 1) {
-                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace.?, f.fields[0]);
+                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
-                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace.?, flattened_field);
+                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field);
                 }
                 break :blk null;
             },
             .collection => |c| blk: {
+                // namespace is guaranteed to be non-null by the check above
                 // Return all documents in the collection
-                break :blk try self.storage_engine.selectCollection(c.table, namespace.?);
+                break :blk try self.storage_engine.selectCollection(c.table, namespace orelse unreachable);
             },
         };
 
@@ -523,20 +533,24 @@ pub const MessageHandler = struct {
         }
 
         // Defer field slice cleanup if it was allocated
-        defer if (parsed_path.? == .field) self.allocator.free(parsed_path.?.field.fields);
+        // parsed_path is guaranteed to be non-null by the check above
+        defer if ((parsed_path orelse unreachable) == .field) self.allocator.free((parsed_path orelse unreachable).field.fields);
 
-        switch (parsed_path.?) {
+        switch (parsed_path orelse unreachable) {
             .document => |doc| {
-                try self.storage_engine.deleteDocument(doc.table, doc.id, namespace.?);
+                // namespace is guaranteed to be non-null by the check above
+                try self.storage_engine.deleteDocument(doc.table, doc.id, namespace orelse unreachable);
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 if (f.fields.len == 1) {
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, f.fields[0], .nil);
+                    // namespace is guaranteed to be non-null by the check above
+                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
-                    try self.storage_engine.updateField(f.table, f.id, namespace.?, flattened_field, .nil);
+                    // namespace is guaranteed to be non-null by the check above
+                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot remove a whole collection yet
@@ -590,62 +604,6 @@ pub const MessageHandler = struct {
         return try aw.toOwnedSlice();
     }
 
-    /// Build value response for StoreGet
-    fn buildValueResponse(self: *MessageHandler, msg_id: u64, value_bytes: ?[]const u8) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
-
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
-
-        if (value_bytes) |v| {
-            try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
-            try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-
-            // For the value, we can decode it first or send it as binary
-            // Since it's already MessagePack, decoding it into a Payload is safest
-            var reader: std.Io.Reader = .fixed(v);
-            const val_payload = try msgpack.decode(self.allocator, &reader);
-            try payload.mapPut("value", val_payload);
-        } else {
-            try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
-            try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-            try payload.mapPut("code", try msgpack.Payload.strToPayload("NOT_FOUND", self.allocator));
-        }
-
-        try msgpack.encode(payload, &aw.writer);
-        return try aw.toOwnedSlice();
-    }
-
-    /// Build query response for StoreGet (collections)
-    fn buildQueryResponse(
-        self: *MessageHandler,
-        msg_id: u64,
-        results: []const @import("storage_engine.zig").QueryResult,
-    ) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
-
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
-
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
-        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-
-        var value_map = msgpack.Payload.mapPayload(self.allocator);
-        errdefer value_map.free(self.allocator);
-
-        for (results) |res| {
-            var reader: std.Io.Reader = .fixed(res.value);
-            const val_payload = try msgpack.decode(self.allocator, &reader);
-            try value_map.mapPut(res.path, val_payload);
-        }
-
-        try payload.mapPut("value", value_map);
-
-        try msgpack.encode(payload, &aw.writer);
-        return try aw.toOwnedSlice();
-    }
 
     /// Send error response to client
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
