@@ -94,3 +94,47 @@ test "schema_parser: missing file path returns error" {
     const result = std.fs.cwd().openFile("nonexistent-schema.json", .{});
     try std.testing.expectError(error.FileNotFound, result);
 }
+
+test "schema_parser: unknown field types produce hard error" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    // 1. Top-level unknown type
+    const json_top =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": {
+        \\        "external_id": { "type": "uuid" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result_top = parser.parse(json_top);
+    try std.testing.expectError(error.UnknownFieldType, result_top);
+
+    // 2. Flattened unknown type
+    const json_flat =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": {
+        \\        "metadata": {
+        \\          "type": "object",
+        \\          "properties": {
+        \\            "legacy_type": { "type": "custom" }
+        \\          }
+        \\        }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const result_flat = parser.parse(json_flat);
+    try std.testing.expectError(error.UnknownFieldType, result_flat);
+}

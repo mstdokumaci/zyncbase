@@ -153,7 +153,12 @@ pub const SchemaParser = struct {
                                     if (prop_def == .object) {
                                         if (prop_def.object.get("type")) |pt| {
                                             if (pt == .string) {
-                                                prop_sql_type = mapType(pt.string) catch .text; // zwanzig-disable-line: swallowed-error
+                                                prop_sql_type = mapType(pt.string) catch |err| {
+                                                    if (err == error.UnknownFieldType) {
+                                                        std.log.warn("schema: unknown type \"{s}\" for field \"{s}_{s}\"", .{ pt.string, field_name, prop_name });
+                                                    }
+                                                    return err;
+                                                };
                                             }
                                         }
                                     }
@@ -194,7 +199,12 @@ pub const SchemaParser = struct {
                         }
                         // object fields without properties produce no columns
                     } else {
-                        const sql_type = try mapType(type_str);
+                        const sql_type = mapType(type_str) catch |err| {
+                            if (err == error.UnknownFieldType) {
+                                std.log.warn("schema: unknown type \"{s}\" for field \"{s}\"", .{ type_str, field_name });
+                            }
+                            return err;
+                        };
                         const is_required = required_set.contains(field_name);
                         const is_indexed = if (field_def.object.get("indexed")) |iv|
                             iv == .bool and iv.bool
