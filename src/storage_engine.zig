@@ -457,7 +457,7 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        std.debug.print("\n[DEBUG] flushPendingWrites: count={}\n", .{self.pending_writes_count.load(.acquire)});
+        std.log.debug("flushPendingWrites: count={}", .{self.pending_writes_count.load(.acquire)});
         // Wait for write queue and currently processing batch to drain.
         // We use a small sleep to avoid spinning too hard, and check acquire load.
         while (self.pending_writes_count.load(.acquire) > 0) {
@@ -521,7 +521,7 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         columns: []const ColumnValue,
     ) !void {
-        std.debug.print("\n[DEBUG] insertOrReplace: table='{s}', id='{s}', namespace='{s}'\n", .{ table, id, namespace });
+        std.log.debug("insertOrReplace: table='{s}', id='{s}', namespace='{s}'", .{ table, id, namespace });
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateColumns(table, columns);
 
@@ -741,7 +741,6 @@ pub const StorageEngine = struct {
     /// Read a single column value from a prepared statement at column index i.
     fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
-        std.debug.print("\n[DEBUG] readColumnValue: col_type={}\n", .{col_type});
         return switch (col_type) {
             sqlite.c.SQLITE_INTEGER => msgpack.Payload.intToPayload(sqlite.c.sqlite3_column_int64(stmt.stmt, i)),
             sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt.stmt, i) },
@@ -817,7 +816,7 @@ pub const StorageEngine = struct {
         const ns_z = try self.allocator.dupeZ(u8, namespace);
         defer self.allocator.free(ns_z);
 
-        std.debug.print("\n[DEBUG] execSelectScalar: sql='{s}', id='{s}', namespace='{s}'\n", .{ sql, id, namespace });
+        std.log.debug("execSelectScalar: sql='{s}', id='{s}', namespace='{s}'", .{ sql, id, namespace });
 
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
@@ -877,7 +876,7 @@ pub const StorageEngine = struct {
 
     fn executeInsert(self: *StorageEngine, op: WriteOp) !void {
         const sql = op.sql.?; // zwanzig-disable-line: optional-unwrap
-        std.debug.print("\n[DEBUG] executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}\n", .{ sql, op.id.?, op.namespace.?, op.timestamp.? }); // zwanzig-disable-line: optional-unwrap
+        std.log.debug("executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}", .{ sql, op.id.?, op.namespace.?, op.timestamp.? });
         var stmt = self.writer_conn.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
@@ -1175,7 +1174,7 @@ pub const StorageEngine = struct {
                         if (stmt.len == 0) continue;
 
                         self.writer_conn.execDynamic(stmt, .{}, .{}) catch |err| {
-                            std.debug.print("executeBatch DDL error: {}\nSQL:\n{s}\n", .{ err, stmt });
+                            std.log.err("executeBatch DDL error: {}\nSQL:\n{s}", .{ err, stmt });
                             const classified_err = classifyError(err);
                             logDatabaseError("executeBatch DDL", classified_err, stmt);
                             return classified_err;
@@ -1193,7 +1192,7 @@ pub const StorageEngine = struct {
                 logDatabaseError("executeBatch COMMIT", classified_err, "");
                 return classified_err;
             };
-            std.debug.print("\n[DEBUG] executeBatch: COMMIT successful\n", .{});
+            std.log.debug("executeBatch: COMMIT successful", .{});
             self.transaction_active.store(false, .release);
         }
     }
