@@ -16,6 +16,8 @@ pub const CheckpointManager = struct {
     last_checkpoint_duration_ms: std.atomic.Value(u64),
     background_thread: ?std.Thread,
     shutdown_requested: std.atomic.Value(bool),
+    shutdown_cond: std.Thread.Condition,
+    shutdown_mutex: std.Thread.Mutex,
 
     /// Configuration for checkpoint behavior
     pub const Config = struct {
@@ -162,6 +164,8 @@ pub const CheckpointManager = struct {
             .last_checkpoint_duration_ms = std.atomic.Value(u64).init(0),
             .background_thread = null,
             .shutdown_requested = std.atomic.Value(bool).init(false),
+            .shutdown_cond = .{},
+            .shutdown_mutex = .{},
         };
 
         // Query initial WAL size
@@ -177,6 +181,7 @@ pub const CheckpointManager = struct {
         if (self.background_thread) |thread| {
             self.stop();
             thread.join();
+            self.background_thread = null;
         }
         self.allocator.destroy(self);
     }
@@ -364,10 +369,12 @@ pub const CheckpointManager = struct {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
         while (!self.shutdown_requested.load(.acquire)) {
-            // Sleep for configured interval
-            std.Thread.sleep(self.config.check_interval_sec * std.time.ns_per_s);
+            // Wait for configured interval or shutdown signal
+            self.shutdown_mutex.lock();
+            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch {};
+            self.shutdown_mutex.unlock();
 
-            if (self.shutdown_requested.load(.acquire)) break; // Check again after sleep
+            if (self.shutdown_requested.load(.acquire)) break;
 
             // Check if checkpoint is needed
             if (self.shouldCheckpoint()) {
@@ -396,6 +403,7 @@ pub const CheckpointManager = struct {
     /// Stop the background checkpoint loop
     pub fn stop(self: *CheckpointManager) void {
         self.shutdown_requested.store(true, .release);
+        self.shutdown_cond.signal();
     }
 
     /// Start background checkpoint loop in a separate thread
@@ -405,7 +413,8 @@ pub const CheckpointManager = struct {
     ///
     /// Spawns a new thread that runs the background checkpoint loop.
     /// Returns the thread handle for later joining if needed.
-    pub fn startBackgroundLoop(self: *CheckpointManager) !std.Thread {
-        return try std.Thread.spawn(.{}, backgroundCheckpointLoop, .{self});
+    pub fn startBackgroundLoop(self: *CheckpointManager) !void {
+        const thread = try std.Thread.spawn(.{}, backgroundCheckpointLoop, .{self});
+        self.background_thread = thread;
     }
 };

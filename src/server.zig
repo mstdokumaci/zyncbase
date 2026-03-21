@@ -38,7 +38,6 @@ pub const ZyncBaseServer = struct {
     storage_engine: *StorageEngine,
     websocket_server: *WebSocketServer,
     message_handler: *MessageHandler,
-    checkpoint_thread: ?std.Thread = null,
     shutdown_requested: std.atomic.Value(bool),
     /// Loaded schema (owned).
     loaded_schema: schema_parser.Schema = undefined,
@@ -62,7 +61,6 @@ pub const ZyncBaseServer = struct {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
         self.allocator = allocator;
-        self.checkpoint_thread = null;
         self.schema_loaded = false;
 
         // Initialize memory strategy
@@ -270,7 +268,7 @@ pub const ZyncBaseServer = struct {
         );
 
         // Start checkpoint manager background thread
-        self.checkpoint_thread = try self.checkpoint_manager.startBackgroundLoop();
+        try self.checkpoint_manager.startBackgroundLoop();
 
         // Setup signal handlers for graceful shutdown
         try self.setupSignalHandlers();
@@ -340,11 +338,6 @@ pub const ZyncBaseServer = struct {
     /// Deinitialize the server and free all resources
     pub fn deinit(self: *ZyncBaseServer) void {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
-
-        // Stop checkpoint thread if running
-        if (self.checkpoint_thread) |thread| {
-            thread.join();
-        }
 
         // Deinitialize components in reverse order
         std.log.debug("Deinitializing message_handler", .{});

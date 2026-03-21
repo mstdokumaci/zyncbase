@@ -264,3 +264,27 @@ test "CheckpointManager: CheckpointResult structure" {
     try testing.expect(result.wal_size_after == 1000);
     try testing.expect(result.success);
 }
+
+test "CheckpointManager: fast shutdown" {
+    const allocator = testing.allocator;
+    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
+    defer storage.deinit();
+
+    var manager = try CheckpointManager.init(allocator, storage, .{
+        .check_interval_sec = 60, // Long interval
+    });
+    // No defer here, we control it manually
+
+    const start_time = std.time.milliTimestamp();
+    try manager.startBackgroundLoop();
+    
+    // Signal shutdown immediately
+    manager.stop();
+    manager.deinit(); // This will join and destroy the manager
+    
+    const end_time = std.time.milliTimestamp();
+    const duration = end_time - start_time;
+    
+    // Should be much faster than 60s
+    try testing.expect(duration < 2000);
+}
