@@ -42,7 +42,7 @@ test "server: initialization is idempotent" {
     var i: usize = 0;
     while (i < num_cycles) : (i += 1) {
         // Initialize server with unique data directory and custom schema path
-        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence", schema_file_path);
+        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence", schema_file_path, null);
         std.log.debug("Server initialized", .{});
         defer {
             std.log.debug("About to call server.deinit()", .{});

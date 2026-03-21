@@ -13,12 +13,14 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
+var next_mock_ws_id = std.atomic.Value(u64).init(1);
+
 // Helper function to create a mock WebSocket for testing
 fn createMockWebSocket() WebSocket {
     return WebSocket{
         .ws = null,
         .ssl = false,
-        .user_data = null,
+        .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
     };
 }
 
@@ -71,7 +73,7 @@ test "Verification: WebSocket connection lifecycle" {
     var ws = createMockWebSocket();
     try handler.handleOpen(&ws);
 
-    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
 
     // Verify connection exists in registry
@@ -160,7 +162,9 @@ test "Verification: StoreSet message processing" {
     // Route and process the message
     var ws = createMockWebSocket();
     try handler.handleOpen(&ws);
-    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+
+    const conn_id = ws.getConnId();
     const response = try handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
 
@@ -277,7 +281,9 @@ test "Verification: StoreGet message processing" {
     // Route and process the message
     var ws = createMockWebSocket();
     try handler.handleOpen(&ws);
-    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+
+    const conn_id = ws.getConnId();
     const response = try handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
 
@@ -497,7 +503,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     try handler.handleOpen(&ws);
     defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
-    const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+    const conn_id = ws.getConnId();
 
     // Store multiple values
     const test_data = [_]struct {
