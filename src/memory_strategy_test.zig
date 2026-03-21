@@ -89,7 +89,7 @@ test "MemoryStrategy: buffer pool acquire and release" {
 test "Pool: basic acquire and release" {
     const allocator = testing.allocator;
     // Test standalone Pool if exported, but here it's inside MemoryStrategy
-    var pool = try MemoryStrategy.Pool(u64).init(allocator, 10, null);
+    var pool = try MemoryStrategy.Pool(u64).init(allocator, 10, null, null);
     defer pool.deinit();
 
     // Acquire an item
@@ -128,7 +128,7 @@ test "Pool: capacity bounding and discarding" {
         }
     };
 
-    var pool = try TestPool.init(allocator, 2, context.deinitData);
+    var pool = try TestPool.init(allocator, 2, context.deinitData, null);
     defer pool.deinit();
 
     const item1 = try pool.acquire();
@@ -144,7 +144,10 @@ test "Pool: capacity bounding and discarding" {
 
 test "MemoryStrategy: arena pool thread safety stress test" {
     const allocator = testing.allocator;
-    var strategy = try MemoryStrategy.init(allocator);
+    const config = MemoryStrategy.Config{
+        .arena_pool = .{ .pre_allocate = 1024, .max_capacity = 1024 },
+    };
+    var strategy = try MemoryStrategy.initWithConfig(allocator, config);
     defer strategy.deinit();
 
     const num_threads = 8;

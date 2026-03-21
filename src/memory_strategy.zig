@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
@@ -21,8 +22,36 @@ pub const MemoryStrategy = struct {
     buffer_pool: Pool(Buffer),
     connection_pool: Pool(Connection),
 
-    /// Initialize the memory strategy with all allocators and pools
+    /// Memory Strategy configuration for pools
+    pub const Config = struct {
+        arena_pool: PoolConfig = .{ .pre_allocate = 1024, .max_capacity = 1024 },
+        message_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 1024 },
+        buffer_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 16 },
+        connection_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 100_000 },
+
+        pub const PoolConfig = struct {
+            pre_allocate: u32,
+            max_capacity: u32,
+        };
+
+        /// Standard production configuration
+        pub const default_config = Config{};
+
+        /// Minimal configuration for tests to reduce overhead
+        pub const minimal_config = Config{
+            .arena_pool = .{ .pre_allocate = 16, .max_capacity = 1024 },
+        };
+    };
+
+    /// Initialize the memory strategy with standard defaults.
+    /// Automatically optimizes for tests if builtin.is_test is true.
     pub fn init(allocator: Allocator) !MemoryStrategy {
+        const current_config = if (builtin.is_test) Config.minimal_config else Config.default_config;
+        return initWithConfig(allocator, current_config);
+    }
+
+    /// Initialize the memory strategy with specific configuration.
+    pub fn initWithConfig(allocator: Allocator, config: Config) !MemoryStrategy {
         const gpa_ptr = try allocator.create(std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }));
         errdefer allocator.destroy(gpa_ptr);
         gpa_ptr.* = .{};
@@ -31,18 +60,43 @@ pub const MemoryStrategy = struct {
         var self = MemoryStrategy{
             .parent_allocator = allocator,
             .gpa = gpa_ptr,
-            .arena_pool = try Pool(std.heap.ArenaAllocator).init(gpa_alloc, 1024, deinitArena),
-            .message_pool = try Pool(Message).init(gpa_alloc, 1024, deinitMessage),
-            .buffer_pool = try Pool(Buffer).init(gpa_alloc, 16, null),
-            .connection_pool = try Pool(Connection).init(gpa_alloc, 100_000, deinitConnection),
+            .arena_pool = try Pool(std.heap.ArenaAllocator).init(
+                gpa_alloc,
+                config.arena_pool.max_capacity,
+                deinitArena,
+                initArena,
+            ),
+            .message_pool = try Pool(Message).init(
+                gpa_alloc,
+                config.message_pool.max_capacity,
+                deinitMessage,
+                null,
+            ),
+            .buffer_pool = try Pool(Buffer).init(
+                gpa_alloc,
+                config.buffer_pool.max_capacity,
+                null,
+                null,
+            ),
+            .connection_pool = try Pool(Connection).init(
+                gpa_alloc,
+                config.connection_pool.max_capacity,
+                deinitConnection,
+                null,
+            ),
         };
 
         // Once 'self' and its pools are initialized, we can use deinit() for cleanup
         errdefer self.deinit();
 
-        // Pre-allocate arenas and push them into the pool
-        for (0..1024) |_| {
+        // Pre-allocate arenas based on configuration
+        for (0..config.arena_pool.pre_allocate) |_| {
             try self.arena_pool.pushInitial(std.heap.ArenaAllocator.init(gpa_alloc));
+        }
+
+        // Handle other possible pre-allocations if needed by the config
+        for (0..config.message_pool.pre_allocate) |_| {
+            try self.message_pool.pushInitial(Message.init(gpa_alloc));
         }
 
         return self;
@@ -71,6 +125,10 @@ pub const MemoryStrategy = struct {
 
         _ = self.gpa.deinit();
         self.parent_allocator.destroy(self.gpa);
+    }
+
+    fn initArena(alloc: Allocator) std.heap.ArenaAllocator {
+        return std.heap.ArenaAllocator.init(alloc);
     }
 
     fn deinitArena(_: Allocator, arena: *std.heap.ArenaAllocator) void {
@@ -168,14 +226,21 @@ pub const MemoryStrategy = struct {
             allocator: Allocator,
             maxCapacity: u32,
             deinitData: ?*const fn (Allocator, *T) void,
+            initData: ?*const fn (Allocator) T,
 
             /// Initialize the pool
-            pub fn init(allocator: Allocator, maxCapacity: u32, deinitData: ?*const fn (Allocator, *T) void) !Self {
+            pub fn init(
+                allocator: Allocator,
+                maxCapacity: u32,
+                deinitData: ?*const fn (Allocator, *T) void,
+                initData: ?*const fn (Allocator) T,
+            ) !Self {
                 return Self{
                     .head = std.atomic.Value(u128).init(0),
                     .allocator = allocator,
                     .maxCapacity = maxCapacity,
                     .deinitData = deinitData,
+                    .initData = initData,
                 };
             }
 
@@ -245,12 +310,17 @@ pub const MemoryStrategy = struct {
                         // Pool empty, allocate new node
                         const node = try self.allocator.create(Node);
                         node.next = std.atomic.Value(?*Node).init(null);
-                        // For pointers/handles, we might need a default init
-                        if (comptime @typeInfo(T) == .pointer) {
-                            node.data = undefined;
+
+                        // Initialize data using callback or default
+                        if (self.initData) |initData| {
+                            node.data = initData(self.allocator);
                         } else {
-                            @memset(@as([*]u8, @ptrCast(&node.data))[0..@sizeOf(T)], 0);
+                            node.data = undefined;
+                            if (comptime @typeInfo(T) != .pointer) {
+                                @memset(std.mem.asBytes(&node.data), 0);
+                            }
                         }
+
                         return &node.data;
                     }
                 }
