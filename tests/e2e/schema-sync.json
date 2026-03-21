@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "store": {
+    "tasks": {
+      "fields": {
+        "title": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
