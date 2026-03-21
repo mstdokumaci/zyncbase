@@ -11,8 +11,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
 
-
-
 // **Property: StoreSet field extraction**
 test "store: set field extraction" {
     const allocator = testing.allocator;

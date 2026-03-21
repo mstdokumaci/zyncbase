@@ -556,43 +556,42 @@ pub const AuthCache = struct {
                 // Evict a small batch of random entries (up to 5% of capacity, min 1)
                 var evicted: usize = 0;
                 const to_evict = @max(@as(usize, 1), self.max_size / 20);
-                    
-                    var it = self.cache.iterator();
-                    while (it.next()) |entry| {
-                        const key = entry.key_ptr.*;
 
-                        
-                        // We must remove by key to be safe with the iterator if we break immediately
-                        // Actually, in Zig HashMap, removing while iterating is only safe if you stop.
-                        // So we collect a few keys in a stack buffer.
-                        var batch_buf: [8][]const u8 = undefined;
-                        var batch_count: usize = 0;
-                        
-                        batch_buf[batch_count] = key;
-                        batch_count += 1;
-                        
-                        // Try to fill the batch buffer
-                        while (batch_count < batch_buf.len and evicted + batch_count < to_evict) {
-                            if (it.next()) |next_entry| {
-                                batch_buf[batch_count] = next_entry.key_ptr.*;
-                                batch_count += 1;
-                            } else break;
-                        }
-                        
-                        // Remove the collected batch
-                        for (batch_buf[0..batch_count]) |k| {
-                            if (self.cache.fetchRemove(k)) |removed| {
-                                self.allocator.free(removed.key);
-                                removed.value.deinit(self.allocator);
-                                evicted += 1;
-                            }
-                        }
-                        
-                        if (evicted >= to_evict) break;
-                        
-                        // Restart iterator after removal to be safe
-                        it = self.cache.iterator();
+                var it = self.cache.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+
+                    // We must remove by key to be safe with the iterator if we break immediately
+                    // Actually, in Zig HashMap, removing while iterating is only safe if you stop.
+                    // So we collect a few keys in a stack buffer.
+                    var batch_buf: [8][]const u8 = undefined;
+                    var batch_count: usize = 0;
+
+                    batch_buf[batch_count] = key;
+                    batch_count += 1;
+
+                    // Try to fill the batch buffer
+                    while (batch_count < batch_buf.len and evicted + batch_count < to_evict) {
+                        if (it.next()) |next_entry| {
+                            batch_buf[batch_count] = next_entry.key_ptr.*;
+                            batch_count += 1;
+                        } else break;
                     }
+
+                    // Remove the collected batch
+                    for (batch_buf[0..batch_count]) |k| {
+                        if (self.cache.fetchRemove(k)) |removed| {
+                            self.allocator.free(removed.key);
+                            removed.value.deinit(self.allocator);
+                            evicted += 1;
+                        }
+                    }
+
+                    if (evicted >= to_evict) break;
+
+                    // Restart iterator after removal to be safe
+                    it = self.cache.iterator();
+                }
             }
         }
 

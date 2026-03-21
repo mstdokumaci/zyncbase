@@ -47,8 +47,8 @@ pub const ZyncBaseServer = struct {
     schema_loaded: bool = false,
 
     /// Initialize the ZyncBase server with all components
-    pub fn init(allocator: std.mem.Allocator) !*ZyncBaseServer {
-        return initDetailed(allocator, null, null, null);
+    pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
+        return initDetailed(allocator, null, null, null, custom_config_path);
     }
 
     /// Initialize the ZyncBase server with optional custom configuration and data directory
@@ -57,6 +57,7 @@ pub const ZyncBaseServer = struct {
         custom_config: ?Config,
         custom_data_dir: ?[]const u8,
         custom_schema_file: ?[]const u8,
+        custom_config_path: ?[]const u8,
     ) !*ZyncBaseServer {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
@@ -72,9 +73,9 @@ pub const ZyncBaseServer = struct {
 
         // Load configuration or use provided one
         var config = if (custom_config) |c| c else blk: {
-            const path = "zyncbase-config.json";
+            const path = custom_config_path orelse "zyncbase-config.json";
             break :blk ConfigLoader.load(memory_strategy.generalAllocator(), path) catch |err| {
-                std.log.warn("Failed to load config, using defaults: {}", .{err});
+                std.log.warn("Failed to load config from {s}, using defaults: {}", .{ path, err });
                 break :blk try ConfigLoader.loadDefaults(memory_strategy.generalAllocator());
             };
         };

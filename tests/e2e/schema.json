@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "store": {
+    "persistence": {
+      "fields": {
+        "status": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "number"
+        }
+      }
+    },
+    "tasks": {
+      "fields": {
+        "title": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

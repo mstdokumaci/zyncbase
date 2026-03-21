@@ -33,21 +33,18 @@ async function main() {
     });
     console.log("Client A received task 2:", task2);
 
-    // 5. Both Client A and Client B get ["tasks"] and verify the collection contains both entries
-    console.log("Verifying collection get for Client A...");
-    const tasksA = await clientA.get(namespace, ["tasks"]);
-    console.log("Client A received tasks collection:", tasksA);
-    if (!tasksA || typeof tasksA !== 'object') throw new Error("Collection get failed for Client A");
-    if (!tasksA["tasks/1"] || !tasksA["tasks/2"]) throw new Error("Collection missing entries for Client A");
+    // 5. Verify both clients see the same deterministic state (ignoring dynamic timestamps)
+    const getSnapshot = (tasks: any[]) => JSON.stringify(tasks.map(t => ({ id: t.id, title: t.title })).sort((a, b) => a.id.localeCompare(b.id)));
+    const expected = JSON.stringify([{ id: "1", title: "A's Task" }, { id: "2", title: "B's Task" }]);
 
-    console.log("Verifying collection get for Client B...");
-    const tasksB = await clientB.get(namespace, ["tasks"]);
-    console.log("Client B received tasks collection:", tasksB);
-    if (!tasksB || typeof tasksB !== 'object') throw new Error("Collection get failed for Client B");
-    if (!tasksB["tasks/1"] || !tasksB["tasks/2"]) throw new Error("Collection missing entries for Client B");
+    const tasksA = await clientA.get(namespace, ["tasks"]) as any[];
+    if (getSnapshot(tasksA) !== expected) throw new Error(`Client A mismatch. Got: ${getSnapshot(tasksA)}`);
+
+    const tasksB = await clientB.get(namespace, ["tasks"]) as any[];
+    if (getSnapshot(tasksB) !== expected) throw new Error(`Client B mismatch. Got: ${getSnapshot(tasksB)}`);
 
     console.log("Collection verification passed.");
-    
+
     console.log("E2E Sync test passed successfully!");
   } catch (err) {
     console.error("Test failed:", err);

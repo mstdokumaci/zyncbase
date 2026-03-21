@@ -60,7 +60,6 @@ pub const MessageHandler = struct {
     subscription_manager: *SubscriptionManager,
     cache: *LockFreeCache,
     connection_registry: ConnectionRegistry,
-    next_conn_id: std.atomic.Value(u64),
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -82,7 +81,6 @@ pub const MessageHandler = struct {
             .subscription_manager = subscription_manager,
             .cache = cache,
             .connection_registry = try ConnectionRegistry.init(allocator),
-            .next_conn_id = std.atomic.Value(u64).init(1),
         };
 
         return self;
@@ -97,9 +95,7 @@ pub const MessageHandler = struct {
     /// Handle WebSocket connection open event
     /// Uses WebSocket pointer as unique connection ID and adds to registry
     pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
-        // Generate a stable unique connection ID
-        const conn_id = self.next_conn_id.fetchAdd(1, .monotonic);
-        ws.setUserData(@ptrFromInt(conn_id));
+        const conn_id = ws.getConnId();
 
         // Create connection state
         const conn_state = try ConnectionState.init(self.allocator, conn_id, ws.*);
@@ -120,12 +116,8 @@ pub const MessageHandler = struct {
         msg_type: MessageType,
     ) !void {
         _ = msg_type;
-        // Get connection ID from userData (set in handleOpen)
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-        if (conn_id == 0) {
-            std.log.warn("Received message on connection without ID", .{});
-            return;
-        }
+        // Get stable unique connection ID
+        const conn_id = ws.getConnId();
 
         // Get connection state (increments refcount)
         const conn_state = self.connection_registry.acquireConnection(conn_id) catch |err| {
@@ -182,8 +174,7 @@ pub const MessageHandler = struct {
     /// Handle WebSocket connection close event
     /// Removes subscriptions and connection state
     pub fn handleClose(self: *MessageHandler, ws: *WebSocket, code: i32, message: []const u8) !void {
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-        if (conn_id == 0) return;
+        const conn_id = ws.getConnId();
 
         std.log.debug("WebSocket closed: id={}, code={}, reason={s}", .{
             conn_id,
@@ -218,8 +209,7 @@ pub const MessageHandler = struct {
     /// Handle WebSocket error event
     /// Cleans up connection state
     pub fn handleError(self: *MessageHandler, ws: *WebSocket) !void {
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
-        if (conn_id == 0) return;
+        const conn_id = ws.getConnId();
 
         std.log.debug("WebSocket error on connection: id={}", .{conn_id});
 
@@ -603,7 +593,6 @@ pub const MessageHandler = struct {
         try msgpack.encode(payload, &aw.writer);
         return try aw.toOwnedSlice();
     }
-
 
     /// Send error response to client
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {

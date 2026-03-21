@@ -334,7 +334,7 @@ test "AuthCache: enforce max_size" {
     while (i < 15) : (i += 1) {
         const user_id = try std.fmt.allocPrint(allocator, "user-{}", .{i});
         defer allocator.free(user_id);
-        
+
         const req = AuthRequest{
             .user_id = user_id,
             .namespace = "test-namespace",
@@ -354,7 +354,7 @@ test "AuthCache: enforce max_size" {
 
     // Cache size should be limited to max_size (or slightly less due to batch eviction)
     try testing.expect(cache.size() <= 10);
-    
+
     // Verify it's still alive and functional
     try testing.expect(cache.size() > 0);
 }

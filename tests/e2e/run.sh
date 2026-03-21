@@ -41,8 +41,8 @@ rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"
 rm -f test-artifacts/zyncbase-config.json test-artifacts/zyncbase-server-sync.log
 
-# Create test config
-echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'"}' > test-artifacts/zyncbase-config.json
+# Create test config with mandatory schema
+echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'", "schema": "tests/e2e/schema.json"}' > test-artifacts/zyncbase-config.json
 
 # Build server
 echo "Building ZyncBase server (ReleaseFast)..."
@@ -50,7 +50,7 @@ zig build -Doptimize=ReleaseFast
 
 # 1. Bi-directional Sync Test
 echo "--- Scenario 1: Bi-directional Sync ---"
-$SERVER_BIN > test-artifacts/zyncbase-server-sync.log 2>&1 &
+$SERVER_BIN --config test-artifacts/zyncbase-config.json > test-artifacts/zyncbase-server-sync.log 2>&1 &
 SERVER_PID=$!
 
 echo "Waiting for server to start on port $PORT..."
@@ -68,7 +68,7 @@ sleep 0.5
 echo "--- Scenario 2: Persistence ---"
 # Set data
 echo "Starting server to set data..."
-$SERVER_BIN > /dev/null 2>&1 &
+$SERVER_BIN --config test-artifacts/zyncbase-config.json > /dev/null 2>&1 &
 SERVER_PID=$!
 wait_for_port $PORT
 
@@ -79,7 +79,7 @@ sleep 0.5
 
 # Verify data after restart
 echo "Restarting for verification..."
-$SERVER_BIN > /dev/null 2>&1 &
+$SERVER_BIN --config test-artifacts/zyncbase-config.json > /dev/null 2>&1 &
 SERVER_PID=$!
 wait_for_port $PORT
 

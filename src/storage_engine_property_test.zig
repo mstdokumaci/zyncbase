@@ -659,7 +659,7 @@ test "storage: property 13 - document set/get round-trip" {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p13_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
@@ -720,7 +720,7 @@ test "storage: property 14 - field set/get round-trip" {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p14_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
@@ -773,7 +773,7 @@ test "storage: property 15 - collection get is namespace-scoped" {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p15_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -825,7 +825,7 @@ test "storage: property 16 - remove then get returns null" {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p16_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -859,7 +859,7 @@ test "storage: property 17 - schema validation rejects unknown tables and fields
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p17_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("title", .text, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
@@ -888,7 +888,7 @@ test "storage: property 18 - updated_at is always refreshed on write" {
         const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p18_{}", .{iter});
         defer allocator.free(test_dir);
         // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
