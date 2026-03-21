@@ -277,14 +277,14 @@ test "CheckpointManager: fast shutdown" {
 
     const start_time = std.time.milliTimestamp();
     try manager.startBackgroundLoop();
-    
+
     // Signal shutdown immediately
     manager.stop();
     manager.deinit(); // This will join and destroy the manager
-    
+
     const end_time = std.time.milliTimestamp();
     const duration = end_time - start_time;
-    
+
     // Should be much faster than 60s
     try testing.expect(duration < 2000);
 }

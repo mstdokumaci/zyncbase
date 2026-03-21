@@ -18,7 +18,7 @@ test "store: set field extraction" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -30,7 +30,7 @@ test "store: set field extraction" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -41,6 +41,7 @@ test "store: set field extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,
@@ -187,7 +188,7 @@ test "store: engine set integration" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -199,7 +200,7 @@ test "store: engine set integration" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -210,6 +211,7 @@ test "store: engine set integration" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,
@@ -338,7 +340,7 @@ test "store: set success response format" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -350,7 +352,7 @@ test "store: set success response format" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -361,6 +363,7 @@ test "store: set success response format" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,
@@ -474,7 +477,7 @@ test "store: get field extraction" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -486,7 +489,7 @@ test "store: get field extraction" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -497,6 +500,7 @@ test "store: get field extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,
@@ -604,7 +608,7 @@ test "store: engine get integration" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -616,7 +620,7 @@ test "store: engine get integration" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -627,6 +631,7 @@ test "store: engine get integration" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,
@@ -779,7 +784,7 @@ test "store: get value response format" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -792,7 +797,7 @@ test "store: get value response format" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -803,6 +808,7 @@ test "store: get value response format" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         engine,

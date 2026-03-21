@@ -6,6 +6,7 @@ const ColumnValue = storage_engine.ColumnValue;
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -32,7 +33,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
     };
 }
 
-fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
 
@@ -47,7 +48,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
     out_schema.* = schema;
 
-    const engine = try StorageEngine.init(allocator, test_dir, schema);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema);
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -69,7 +70,9 @@ test "storage: stability no crashes on concurrent errors" {
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
     const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    var storage = try StorageEngine.init(allocator, tmp_path, &raw_dummy_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema);
     defer storage.deinit();
 
     // Property: Server should not crash when multiple threads encounter errors simultaneously
@@ -141,7 +144,9 @@ test "storage: stability continues after transaction errors" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema);
     defer {
         storage.deinit();
         if (test_schema) |s| {
@@ -195,7 +200,9 @@ test "storage: stability handles rapid error conditions" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_1: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_1);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_1);
     defer {
         storage.deinit();
         if (test_schema_1) |s| {
@@ -236,7 +243,9 @@ test "storage: stability error recovery with valid operations" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_2: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_2);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_2);
     defer {
         storage.deinit();
         if (test_schema_2) |s| {
@@ -288,7 +297,9 @@ test "storage: stability resource cleanup after errors" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_3: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_3);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_3);
     defer {
         storage.deinit();
         if (test_schema_3) |s| {
@@ -343,7 +354,9 @@ test "storage: stability mixed error and success scenarios" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_4: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_4);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_4);
     defer {
         storage.deinit();
         if (test_schema_4) |s| {
@@ -407,7 +420,9 @@ test "storage: stability concurrent reads during write errors" {
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_5: ?*schema_parser.Schema = null;
-    var storage = try setupEngineWithSchema(allocator, tmp_path, "test", &test_schema_5);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_5);
     defer {
         storage.deinit();
         if (test_schema_5) |s| {

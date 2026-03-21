@@ -38,7 +38,11 @@ test "Storage: CRUD operations" {
     tables[0] = try table.clone(allocator);
     schema_ptr.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 
-    var storage = try StorageEngine.init(allocator, tmp_path, schema_ptr);
+    // Initialize memory strategy
+    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr);
     defer {
         storage.deinit();
         schema_parser.freeSchema(allocator, schema_ptr.*);

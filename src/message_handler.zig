@@ -12,6 +12,8 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const Connection = @import("memory_strategy.zig").Connection;
 
 /// Structured path parsed from a MessagePack array payload.
 pub const ParsedPath = union(enum) {
@@ -54,6 +56,7 @@ pub fn parsePath(allocator: std.mem.Allocator, path_payload: msgpack.Payload) !P
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
     allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     request_handler: *RequestHandler,
     storage_engine: *StorageEngine,
@@ -64,6 +67,7 @@ pub const MessageHandler = struct {
     /// Initialize message handler with all required components
     pub fn init(
         allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
         request_handler: *RequestHandler,
         storage_engine: *StorageEngine,
@@ -75,12 +79,13 @@ pub const MessageHandler = struct {
 
         self.* = .{
             .allocator = allocator,
+            .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
             .request_handler = request_handler,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
             .cache = cache,
-            .connection_registry = try ConnectionRegistry.init(allocator),
+            .connection_registry = ConnectionRegistry.init(memory_strategy),
         };
 
         return self;
@@ -97,12 +102,11 @@ pub const MessageHandler = struct {
     pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
         const conn_id = ws.getConnId();
 
-        // Create connection state
-        const conn_state = try ConnectionState.init(self.allocator, conn_id, ws.*);
-        errdefer conn_state.deinit(self.allocator);
+        // Acquire connection state strongly initialized from the pool
+        const conn = try self.memory_strategy.createConnection(conn_id, ws.*);
 
         // Store in registry
-        try self.connection_registry.add(conn_id, conn_state);
+        try self.connection_registry.add(conn_id, conn);
 
         std.log.info("WebSocket connection opened: id={}", .{conn_id});
     }
@@ -120,19 +124,20 @@ pub const MessageHandler = struct {
         const conn_id = ws.getConnId();
 
         // Get connection state (increments refcount)
-        const conn_state = self.connection_registry.acquireConnection(conn_id) catch |err| {
+        const conn = self.connection_registry.acquireConnection(conn_id) catch |err| {
             std.log.warn("Connection {} not found in registry during message: {}", .{ conn_id, err });
             return;
         };
-        defer conn_state.release(self.allocator);
+        defer conn.release(self.allocator);
 
-        // Process message under connection mutex to protect arena and state
-        conn_state.mutex.lock();
-        defer conn_state.mutex.unlock();
+        // Process message under connection mutex
+        conn.mutex.lock();
+        defer conn.mutex.unlock();
 
-        // Use connection's local arena
-        const arena_allocator = conn_state.arena.allocator();
-        defer conn_state.arenaReset();
+        // Acquire dynamic parsing arena from the pool
+        const arena = try self.memory_strategy.acquireArena();
+        defer self.memory_strategy.releaseArena(arena);
+        const arena_allocator = arena.allocator();
 
         // Parse MessagePack message
         var reader: std.Io.Reader = .fixed(message);
@@ -203,7 +208,7 @@ pub const MessageHandler = struct {
         }
 
         // Remove from registry (decrements registry's refcount)
-        try self.connection_registry.remove(conn_id);
+        self.connection_registry.remove(conn_id);
     }
 
     /// Handle WebSocket error event
@@ -231,9 +236,7 @@ pub const MessageHandler = struct {
             }
 
             // Remove from registry
-            self.connection_registry.remove(conn_id) catch |err| {
-                std.log.warn("Failed to remove connection {} from registry: {}", .{ conn_id, err });
-            };
+            self.connection_registry.remove(conn_id);
         } else |_| {
             // Connection not in registry, nothing to clean up
         }
@@ -633,69 +636,19 @@ pub const MessageHandler = struct {
     };
 };
 
-/// Per-connection state tracking
-pub const ConnectionState = struct {
-    id: u64,
-    user_id: ?[]const u8,
-    namespace: []const u8,
-    ws: WebSocket,
-    subscription_ids: std.array_list.Managed(u64),
-    created_at: i64,
-    arena: std.heap.ArenaAllocator,
-    ref_count: std.atomic.Value(u32),
-    mutex: std.Thread.Mutex,
-
-    pub fn init(allocator: Allocator, id: u64, ws: WebSocket) !*ConnectionState {
-        const state = try allocator.create(ConnectionState);
-        state.* = .{
-            .id = id,
-            .ws = ws,
-            .user_id = null,
-            .namespace = "default",
-            .subscription_ids = std.array_list.Managed(u64).init(allocator),
-            .created_at = std.time.timestamp(),
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-            .ref_count = std.atomic.Value(u32).init(1),
-            .mutex = .{},
-        };
-        return state;
-    }
-
-    pub fn deinit(self: *ConnectionState, allocator: Allocator) void {
-        self.subscription_ids.deinit();
-        self.arena.deinit();
-        allocator.destroy(self);
-    }
-
-    pub fn acquire(self: *ConnectionState) void {
-        _ = self.ref_count.fetchAdd(1, .monotonic);
-    }
-
-    pub fn release(self: *ConnectionState, allocator: Allocator) void {
-        if (self.ref_count.fetchSub(1, .release) == 1) {
-            _ = self.ref_count.load(.acquire);
-            self.deinit(allocator);
-        }
-    }
-
-    pub fn arenaReset(self: *ConnectionState) void {
-        _ = self.arena.reset(.free_all);
-    }
-};
-
-/// Thread-safe registry for tracking active WebSocket connections using COW
+/// Thread-safe registry for tracking active WebSocket connections.
 pub const ConnectionRegistry = struct {
-    const Map = std.AutoHashMap(u64, *ConnectionState);
+    const Map = std.AutoHashMap(u64, *Connection);
 
     map: Map,
     mutex: std.Thread.Mutex,
-    allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
 
-    pub fn init(allocator: Allocator) !ConnectionRegistry {
+    pub fn init(memory_strategy: *MemoryStrategy) ConnectionRegistry {
         return ConnectionRegistry{
-            .map = Map.init(allocator),
+            .map = Map.init(memory_strategy.generalAllocator()),
             .mutex = .{},
-            .allocator = allocator,
+            .memory_strategy = memory_strategy,
         };
     }
 
@@ -703,56 +656,59 @@ pub const ConnectionRegistry = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         var it = self.map.valueIterator();
-        while (it.next()) |state| {
-            state.*.release(self.allocator);
+        while (it.next()) |conn| {
+            conn.*.release(self.memory_strategy.generalAllocator());
         }
         self.map.deinit();
     }
 
-    pub fn add(self: *ConnectionRegistry, id: u64, state: *ConnectionState) !void {
+    pub fn add(self: *ConnectionRegistry, id: u64, conn: *Connection) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        try self.map.put(id, state);
+        try self.map.put(id, conn);
     }
 
-    pub fn remove(self: *ConnectionRegistry, id: u64) !void {
+    pub fn remove(self: *ConnectionRegistry, id: u64) void {
         self.mutex.lock();
-        const maybe_state = self.map.fetchRemove(id);
+        const maybe_conn = self.map.fetchRemove(id);
         self.mutex.unlock();
 
-        if (maybe_state) |entry| {
-            entry.value.release(self.allocator);
+        if (maybe_conn) |entry| {
+            entry.value.release(self.memory_strategy.generalAllocator());
         }
     }
 
-    pub fn acquireConnection(self: *ConnectionRegistry, id: u64) !*ConnectionState {
+    pub fn acquireConnection(self: *ConnectionRegistry, id: u64) !*Connection {
         self.mutex.lock();
         defer self.mutex.unlock();
-        const state = self.map.get(id) orelse return error.ConnectionNotFound;
-        state.acquire();
-        return state;
+        const conn = self.map.get(id) orelse {
+            return error.ConnectionNotFound;
+        };
+        _ = conn.ref_count.fetchAdd(1, .monotonic);
+        return conn;
     }
 
     pub fn clear(self: *ConnectionRegistry) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         var it = self.map.valueIterator();
-        while (it.next()) |state| {
-            state.*.release(self.allocator);
+        while (it.next()) |conn| {
+            conn.*.release(self.memory_strategy.generalAllocator());
         }
         self.map.clearRetainingCapacity();
     }
 
-    /// Note: Snapshot is now a bit more expensive as it must clone under lock
-    /// to remain thread-safe.
     pub const Snapshot = struct {
         map: Map,
-        allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
 
         pub fn deinit(self: *Snapshot) void {
             var it = self.map.valueIterator();
-            while (it.next()) |state| {
-                state.*.release(self.allocator);
+            while (it.next()) |conn| {
+                if (conn.*.ref_count.fetchSub(1, .release) == 1) {
+                    _ = conn.*.ref_count.load(.acquire);
+                    self.memory_strategy.releaseConnection(conn.*);
+                }
             }
             self.map.deinit();
         }
@@ -775,12 +731,12 @@ pub const ConnectionRegistry = struct {
         defer self.mutex.unlock();
         var new_map = try self.map.clone();
         var it = new_map.valueIterator();
-        while (it.next()) |state| {
-            state.*.acquire();
+        while (it.next()) |conn| {
+            _ = conn.*.ref_count.fetchAdd(1, .monotonic);
         }
         return Snapshot{
             .map = new_map,
-            .allocator = self.allocator,
+            .memory_strategy = self.memory_strategy,
         };
     }
 };

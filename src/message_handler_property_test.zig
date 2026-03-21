@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const testing = std.testing;
-const ConnectionState = @import("message_handler.zig").ConnectionState;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
@@ -31,7 +31,7 @@ fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bo
     };
 }
 
-fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema, memory_strategy: *MemoryStrategy) !*StorageEngine {
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
 
@@ -46,7 +46,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
     out_schema.* = schema;
 
-    const engine = try @import("storage_engine.zig").StorageEngine.init(allocator, test_dir, schema);
+    const engine = try @import("storage_engine.zig").StorageEngine.init(allocator, memory_strategy, test_dir, schema);
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -62,18 +62,17 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
 test "connection: open/close is inverse operation" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property4", "test", &test_schema);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property4", "test", &test_schema, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property4") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -92,6 +91,7 @@ test "connection: open/close is inverse operation" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -170,9 +170,9 @@ test "connection: open/close is inverse operation" {
         // Add some subscriptions to the connection state
         const state = try handler.connection_registry.acquireConnection(conn_id);
         defer state.release(allocator);
-        try state.subscription_ids.append(1);
-        try state.subscription_ids.append(2);
-        try state.subscription_ids.append(3);
+        try state.subscription_ids.append(state.allocator, 1);
+        try state.subscription_ids.append(state.allocator, 2);
+        try state.subscription_ids.append(state.allocator, 3);
 
         // Verify subscriptions exist
         try testing.expectEqual(@as(usize, 3), state.subscription_ids.items.len);
@@ -205,8 +205,10 @@ fn createMockWebSocket() WebSocket {
 // no data races should occur and all operations should complete successfully.
 test "connection: thread-safe registry access" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     // Spawn multiple threads performing concurrent operations
@@ -248,7 +250,7 @@ fn concurrentRegistryOps(
 
         // Add connection
         const dummy_ws = createMockWebSocket();
-        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch {
+        const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch {
             std.log.debug("Failed to init connection state\n", .{});
             return;
         };
@@ -267,18 +269,17 @@ fn concurrentRegistryOps(
         }
 
         // Remove connection
-        registry.remove(conn_id) catch {
-            std.log.debug("Failed to remove connection\n", .{});
-            return;
-        };
+        registry.remove(conn_id);
     }
 }
 
 // Additional property test: Concurrent reads should not block each other
 test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     // Pre-populate registry with connections
@@ -286,7 +287,7 @@ test "connection: concurrent reads are non-blocking" {
     var i: usize = 0;
     while (i < num_connections) : (i += 1) {
         const dummy_ws = createMockWebSocket();
-        const state = try ConnectionState.init(allocator, i, dummy_ws);
+        const state = try memory_strategy.createConnection(i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -299,6 +300,7 @@ test "connection: concurrent reads are non-blocking" {
     for (&threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, concurrentReads, .{
             &registry,
+            allocator,
             num_connections,
             reads_per_thread,
         });
@@ -317,6 +319,7 @@ test "connection: concurrent reads are non-blocking" {
 
 fn concurrentReads(
     registry: *ConnectionRegistry,
+    allocator: std.mem.Allocator,
     num_connections: usize,
     num_reads: usize,
 ) void {
@@ -327,7 +330,7 @@ fn concurrentReads(
     while (i < num_reads) : (i += 1) {
         const conn_id = random.intRangeAtMost(u64, 0, num_connections - 1);
         if (registry.acquireConnection(conn_id)) |s| {
-            s.release(registry.allocator);
+            s.release(allocator);
         } else |_| {
             std.log.debug("Failed to get connection {}\n", .{conn_id});
             return;
@@ -338,8 +341,10 @@ fn concurrentReads(
 // Additional property test: Mixed concurrent operations
 test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const num_threads = 8;
@@ -382,7 +387,7 @@ fn mixedConcurrentOps(
             0 => {
                 // Add operation
                 const dummy_ws = createMockWebSocket();
-                const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
+                const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
                 registry.add(conn_id, state) catch {
                     state.deinit(allocator);
                     continue;
@@ -396,7 +401,7 @@ fn mixedConcurrentOps(
             },
             2 => {
                 // Remove operation
-                registry.remove(conn_id) catch continue; // zwanzig-disable-line: swallowed-error
+                registry.remove(conn_id);
             },
             else => unreachable,
         }
@@ -406,15 +411,17 @@ fn mixedConcurrentOps(
 // Property test: Clear operation is thread-safe
 test "connection: clear is thread-safe" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add some initial connections
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const dummy_ws = createMockWebSocket();
-        const state = try ConnectionState.init(allocator, i, dummy_ws);
+        const state = try memory_strategy.createConnection(i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -453,7 +460,7 @@ fn addConnections(
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
         const dummy_ws = createMockWebSocket();
-        const state = ConnectionState.init(allocator, conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
+        const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
         registry.add(conn_id, state) catch {
             state.deinit(allocator);
             continue;
@@ -464,18 +471,17 @@ fn addConnections(
 
 test "connection: unique monotonically increasing IDs" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_1: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property5", "test", &test_schema_1);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property5", "test", &test_schema_1, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property5") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -494,6 +500,7 @@ test "connection: unique monotonically increasing IDs" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -599,6 +606,7 @@ test "connection: unique monotonically increasing IDs" {
         // Create a second handler instance
         const handler2 = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -664,18 +672,17 @@ fn openConnectionsConcurrently(
 
 test "message: all valid frames are parsed" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_2: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property7", "test", &test_schema_2);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property7", "test", &test_schema_2, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property7") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -694,6 +701,7 @@ test "message: all valid frames are parsed" {
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -773,16 +781,15 @@ test "message: all valid frames are parsed" {
 test "message: type extraction" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
-
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_3: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property8", "test", &test_schema_3);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property8", "test", &test_schema_3, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property8") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -800,6 +807,7 @@ test "message: type extraction" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -921,16 +929,15 @@ test "message: type extraction" {
 test "message: request routing to handlers" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
-
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_4: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/test_data_property9", "test_table", &test_schema_4);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/test_data_property9", "test_table", &test_schema_4, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/test_data_property9") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -948,6 +955,7 @@ test "message: request routing to handlers" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -1062,16 +1070,15 @@ test "message: request routing to handlers" {
 test "message: response correlation by ID" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
-
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_5: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property10", "test_table", &test_schema_5);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property10", "test_table", &test_schema_5, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property10") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -1089,6 +1096,7 @@ test "message: response correlation by ID" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,
@@ -1253,18 +1261,17 @@ test "message: response correlation by ID" {
 // should be sent to the client.
 test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init();
-    defer memory_strategy.deinit();
-
     var request_handler = RequestHandler.init(&memory_strategy);
 
     var test_schema_6: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property11", "test", &test_schema_6);
+    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property11", "test", &test_schema_6, &memory_strategy);
     defer {
         storage_engine.deinit();
         std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property11") catch {}; // zwanzig-disable-line: empty-catch-engine
@@ -1282,6 +1289,7 @@ test "message: error responses for invalid types/fields" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         &tracker,
         &request_handler,
         storage_engine,

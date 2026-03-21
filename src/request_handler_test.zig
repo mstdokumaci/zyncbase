@@ -4,7 +4,7 @@ const RequestHandler = @import("request_handler.zig").RequestHandler;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 test "RequestHandler: basic request handling" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -18,7 +18,7 @@ test "RequestHandler: basic request handling" {
 }
 
 test "RequestHandler: arena reset after request" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -45,7 +45,7 @@ test "RequestHandler: arena reset after request" {
 }
 
 test "RequestHandler: arena reset on error" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -69,7 +69,7 @@ test "RequestHandler: arena reset on error" {
 }
 
 test "RequestHandler: memory isolation between requests" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -94,7 +94,7 @@ test "RequestHandler: memory isolation between requests" {
 }
 
 test "RequestHandler: bulk memory deallocation" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -115,7 +115,7 @@ test "RequestHandler: bulk memory deallocation" {
 }
 
 test "RequestHandler: concurrent request handling" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);
@@ -137,7 +137,7 @@ test "RequestHandler: concurrent request handling" {
 }
 
 test "RequestHandler: large request handling" {
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
     var handler = RequestHandler.init(&memory_strategy);

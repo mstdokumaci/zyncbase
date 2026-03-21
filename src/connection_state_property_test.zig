@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const testing = std.testing;
-const ConnectionState = @import("message_handler.zig").ConnectionState;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
@@ -25,12 +25,15 @@ test "connection: state deallocation on close" {
 
     // Test 1: Single connection open and close
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
+        const state = try memory_strategy.createConnection(conn_id, dummy_ws);
 
         try registry.add(conn_id, state);
 
@@ -40,7 +43,7 @@ test "connection: state deallocation on close" {
         try testing.expectEqual(conn_id, retrieved.id);
 
         // Remove connection - should deallocate state once all refs are gone
-        try registry.remove(conn_id);
+        registry.remove(conn_id);
 
         // Verify connection is no longer in registry
         const result = registry.acquireConnection(conn_id);
@@ -54,21 +57,24 @@ test "connection: state deallocation on close" {
 
     // Test 2: Multiple connections open and close
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const num_connections = 100;
         var i: u64 = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i, dummy_ws);
+            const state = try memory_strategy.createConnection(i, dummy_ws);
             try registry.add(i, state);
         }
 
         // Close all connections
         i = 0;
         while (i < num_connections) : (i += 1) {
-            try registry.remove(i);
+            registry.remove(i);
         }
 
         // Verify all connections are removed
@@ -86,22 +92,25 @@ test "connection: state deallocation on close" {
 
     // Test 3: Connection with subscriptions
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
+        const state = try memory_strategy.createConnection(conn_id, dummy_ws);
 
         // Add some subscription IDs
-        try state.subscription_ids.append(100);
-        try state.subscription_ids.append(200);
-        try state.subscription_ids.append(300);
+        try state.subscription_ids.append(state.allocator, 100);
+        try state.subscription_ids.append(state.allocator, 200);
+        try state.subscription_ids.append(state.allocator, 300);
 
         try registry.add(conn_id, state);
 
         // Remove connection - should deallocate state including subscription list
-        try registry.remove(conn_id);
+        registry.remove(conn_id);
 
         // Verify connection is removed
         const result = registry.acquireConnection(conn_id);
@@ -115,14 +124,17 @@ test "connection: state deallocation on close" {
 
     // Test 4: Clear all connections
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const num_connections = 50;
         var i: u64 = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i, dummy_ws);
+            const state = try memory_strategy.createConnection(i, dummy_ws);
             try registry.add(i, state);
         }
 
@@ -144,7 +156,10 @@ test "connection: state deallocation on close" {
 
     // Test 5: Stress test with many connections
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const iterations = 1000;
@@ -152,22 +167,25 @@ test "connection: state deallocation on close" {
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (iter < iterations) : (iter += 1) {
             const conn_id = @as(u64, iter);
-            const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
+            const state = try memory_strategy.createConnection(conn_id, dummy_ws);
 
             // Add some subscriptions
-            try state.subscription_ids.append(conn_id * 10);
-            try state.subscription_ids.append(conn_id * 10 + 1);
+            try state.subscription_ids.append(state.allocator, conn_id * 10);
+            try state.subscription_ids.append(state.allocator, conn_id * 10 + 1);
 
             try registry.add(conn_id, state);
 
             // Immediately remove
-            try registry.remove(conn_id);
+            registry.remove(conn_id);
         }
     }
 
     // Test 6: Concurrent connection state deallocation
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const ThreadContext = struct {
@@ -175,6 +193,7 @@ test "connection: state deallocation on close" {
             allocator: std.mem.Allocator,
             start_id: u64,
             count: u64,
+            memory_strategy: *MemoryStrategy,
         };
 
         const worker = struct {
@@ -183,16 +202,16 @@ test "connection: state deallocation on close" {
                 while (i < ctx.count) : (i += 1) {
                     const conn_id = ctx.start_id + i;
                     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-                    const state = ConnectionState.init(ctx.allocator, conn_id, dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    const state = ctx.memory_strategy.createConnection(conn_id, dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                     // Add subscriptions
-                    state.subscription_ids.append(conn_id * 100) catch unreachable; // zwanzig-disable-line: swallowed-error
-                    state.subscription_ids.append(conn_id * 100 + 1) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    state.subscription_ids.append(state.allocator, conn_id * 100) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    state.subscription_ids.append(state.allocator, conn_id * 100 + 1) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                     ctx.registry.add(conn_id, state) catch unreachable; // zwanzig-disable-line: swallowed-error
 
                     // Remove immediately
-                    ctx.registry.remove(conn_id) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    ctx.registry.remove(conn_id);
                 }
             }
         }.run;
@@ -207,6 +226,7 @@ test "connection: state deallocation on close" {
                 .allocator = allocator,
                 .start_id = @as(u64, idx) * 100,
                 .count = 100,
+                .memory_strategy = &memory_strategy,
             };
             threads[idx] = try std.Thread.spawn(.{}, worker, .{ctx});
         }
@@ -219,14 +239,17 @@ test "connection: state deallocation on close" {
 
     // Test 7: Registry deinit deallocates all remaining connections
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
 
         const num_connections = 20;
         var i: u64 = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (i < num_connections) : (i += 1) {
-            const state = try ConnectionState.init(allocator, i, dummy_ws);
-            try state.subscription_ids.append(i * 10);
+            const state = try memory_strategy.createConnection(i, dummy_ws);
+            try state.subscription_ids.append(state.allocator, i * 10);
             try registry.add(i, state);
         }
 
@@ -250,43 +273,52 @@ test "connection: state deallocation edge cases" {
 
     // Test: Remove non-existent connection (should not crash)
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         // Try to remove a connection that doesn't exist
-        try registry.remove(999);
+        registry.remove(999);
     }
 
     // Test: Connection with empty subscription list
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
+        const state = try memory_strategy.createConnection(conn_id, dummy_ws);
         // Don't add any subscriptions
 
         try registry.add(conn_id, state);
-        try registry.remove(conn_id);
+        registry.remove(conn_id);
     }
 
     // Test: Connection with large subscription list
     {
-        var registry = try ConnectionRegistry.init(allocator);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+
+        var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-        const state = try ConnectionState.init(allocator, conn_id, dummy_ws);
+        const state = try memory_strategy.createConnection(conn_id, dummy_ws);
 
         // Add many subscriptions
         var i: u64 = 0;
         while (i < 1000) : (i += 1) {
-            try state.subscription_ids.append(i);
+            try state.subscription_ids.append(state.allocator, i);
         }
 
         try registry.add(conn_id, state);
-        try registry.remove(conn_id);
+        registry.remove(conn_id);
     }
 }

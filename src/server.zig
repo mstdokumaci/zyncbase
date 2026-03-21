@@ -66,7 +66,7 @@ pub const ZyncBaseServer = struct {
         // Initialize memory strategy
         const memory_strategy = try allocator.create(MemoryStrategy);
         errdefer allocator.destroy(memory_strategy);
-        memory_strategy.* = try MemoryStrategy.init();
+        memory_strategy.* = try MemoryStrategy.init(allocator);
         errdefer memory_strategy.deinit();
 
         // Load configuration or use provided one
@@ -146,6 +146,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         const storage_engine = try StorageEngine.init(
             memory_strategy.generalAllocator(),
+            memory_strategy,
             config.data_dir,
             &self.loaded_schema,
         );
@@ -220,6 +221,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Initializing message handler", .{});
         const message_handler = try MessageHandler.init(
             memory_strategy.generalAllocator(),
+            memory_strategy,
             violation_tracker,
             &request_handler,
             storage_engine,

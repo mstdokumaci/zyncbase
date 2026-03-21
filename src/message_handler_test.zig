@@ -1,15 +1,18 @@
 const std = @import("std");
 const testing = std.testing;
-const ConnectionState = @import("message_handler.zig").ConnectionState;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
-test "ConnectionState - init and deinit" {
+test "Connection - init and deinit" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state = try ConnectionState.init(allocator, 1, dummy_ws);
-    defer state.deinit(allocator);
+    const state = try memory_strategy.createConnection(1, dummy_ws);
+    // Let pool handle memory free when ref_count goes to 0 by releasing it:
+    defer state.release(allocator);
 
     try testing.expectEqual(@as(u64, 1), state.id);
     try testing.expectEqual(@as(?[]const u8, null), state.user_id);
@@ -17,16 +20,18 @@ test "ConnectionState - init and deinit" {
     try testing.expectEqual(@as(usize, 0), state.subscription_ids.items.len);
 }
 
-test "ConnectionState - add subscription IDs" {
+test "Connection - add subscription IDs" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state = try ConnectionState.init(allocator, 1, dummy_ws);
-    defer state.deinit(allocator);
+    const state = try memory_strategy.createConnection(1, dummy_ws);
+    defer state.release(allocator);
 
-    try state.subscription_ids.append(100);
-    try state.subscription_ids.append(200);
-    try state.subscription_ids.append(300);
+    try state.subscription_ids.append(state.allocator, 100);
+    try state.subscription_ids.append(state.allocator, 200);
+    try state.subscription_ids.append(state.allocator, 300);
 
     try testing.expectEqual(@as(usize, 3), state.subscription_ids.items.len);
     try testing.expectEqual(@as(u64, 100), state.subscription_ids.items[0]);
@@ -37,7 +42,10 @@ test "ConnectionState - add subscription IDs" {
 test "ConnectionRegistry - init and deinit" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     {
@@ -50,11 +58,14 @@ test "ConnectionRegistry - init and deinit" {
 test "ConnectionRegistry - add and get connection" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state = try ConnectionState.init(allocator, 1, dummy_ws);
+    const state = try memory_strategy.createConnection(1, dummy_ws);
     try registry.add(1, state);
 
     const retrieved = try registry.acquireConnection(1);
@@ -66,7 +77,10 @@ test "ConnectionRegistry - add and get connection" {
 test "ConnectionRegistry - get non-existent connection" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const result = registry.acquireConnection(999);
@@ -76,11 +90,14 @@ test "ConnectionRegistry - get non-existent connection" {
 test "ConnectionRegistry - remove connection" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state = try ConnectionState.init(allocator, 1, dummy_ws);
+    const state = try memory_strategy.createConnection(1, dummy_ws);
     try registry.add(1, state);
 
     {
@@ -89,7 +106,7 @@ test "ConnectionRegistry - remove connection" {
         try testing.expectEqual(@as(usize, 1), snap.count());
     }
 
-    try registry.remove(1);
+    registry.remove(1);
 
     {
         var snap = try registry.snapshot();
@@ -103,13 +120,16 @@ test "ConnectionRegistry - remove connection" {
 test "ConnectionRegistry - clear all connections" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state1 = try ConnectionState.init(allocator, 1, dummy_ws);
-    const state2 = try ConnectionState.init(allocator, 2, dummy_ws);
-    const state3 = try ConnectionState.init(allocator, 3, dummy_ws);
+    const state1 = try memory_strategy.createConnection(1, dummy_ws);
+    const state2 = try memory_strategy.createConnection(2, dummy_ws);
+    const state3 = try memory_strategy.createConnection(3, dummy_ws);
 
     try registry.add(1, state1);
     try registry.add(2, state2);
@@ -133,13 +153,16 @@ test "ConnectionRegistry - clear all connections" {
 test "ConnectionRegistry - multiple connections" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add multiple connections
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     for (1..11) |i| {
-        const state = try ConnectionState.init(allocator, i, dummy_ws);
+        const state = try memory_strategy.createConnection(i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -160,12 +183,15 @@ test "ConnectionRegistry - multiple connections" {
 test "ConnectionRegistry - iterator" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
-    const state1 = try ConnectionState.init(allocator, 1, dummy_ws);
-    const state2 = try ConnectionState.init(allocator, 2, dummy_ws);
+    const state1 = try memory_strategy.createConnection(1, dummy_ws);
+    const state2 = try memory_strategy.createConnection(2, dummy_ws);
 
     try registry.add(1, state1);
     try registry.add(2, state2);
@@ -184,13 +210,16 @@ test "ConnectionRegistry - iterator" {
 test "ConnectionRegistry - thread safety simulation" {
     const allocator = testing.allocator;
 
-    var registry = try ConnectionRegistry.init(allocator);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var registry = ConnectionRegistry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add connections
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
     for (1..6) |i| {
-        const state = try ConnectionState.init(allocator, i, dummy_ws);
+        const state = try memory_strategy.createConnection(i, dummy_ws);
         try registry.add(i, state);
     }
 
@@ -202,8 +231,8 @@ test "ConnectionRegistry - thread safety simulation" {
     }
 
     // Remove some connections
-    try registry.remove(2);
-    try registry.remove(4);
+    registry.remove(2);
+    registry.remove(4);
 
     {
         var snap = try registry.snapshot();

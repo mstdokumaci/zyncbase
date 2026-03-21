@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -98,10 +99,10 @@ pub const StorageEngine = struct {
     reconnection_config: ReconnectionConfig,
     write_mutex: std.Thread.Mutex,
     write_cond: std.Thread.Condition,
-    node_pool: NodePool,
+    node_pool: MemoryStrategy.Pool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
 
-    pub fn init(allocator: Allocator, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
+    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
 
@@ -157,7 +158,7 @@ pub const StorageEngine = struct {
             .db_path = db_path,
             .writer_conn = writer_conn,
             .reader_pool = reader_pool,
-            .node_pool = NodePool.init(allocator, 2000),
+            .node_pool = try MemoryStrategy.Pool(WriteQueue.Node).init(memory_strategy.generalAllocator(), 1024, null),
             .write_queue = undefined, // Initialized below
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
@@ -189,27 +190,31 @@ pub const StorageEngine = struct {
     }
 
     pub fn deinit(self: *StorageEngine) void {
-        // Signal shutdown and wake the write thread immediately
+        const gpa = self.allocator; // Assuming allocator is the general purpose allocator
+
+        // 1. Signal shutdown to the thread
         self.shutdown_requested.store(true, .release);
         self.write_cond.signal();
 
-        // Wait for write thread
+        // 2. Wait for the thread to exit cleanly
         if (self.write_thread) |thread| {
             thread.join();
         }
 
-        // Close connections
         self.writer_conn.deinit();
+
+        // 3. Clean up readers
         for (self.reader_pool) |*node| {
             node.conn.deinit();
         }
+        gpa.free(self.reader_pool);
+        gpa.free(self.db_path);
 
-        // Free resources
-        self.allocator.free(self.reader_pool);
-        self.allocator.free(self.db_path);
+        // 4. Clean up the queues and objects
         self.write_queue.deinit();
         self.node_pool.deinit();
-        self.allocator.destroy(self);
+
+        gpa.destroy(self);
     }
 
     /// Get a StorageLayer interface for the CheckpointManager
@@ -429,7 +434,7 @@ pub const StorageEngine = struct {
         // Close existing connections
         self.writer_conn.deinit();
         for (self.reader_pool) |*reader| {
-            reader.deinit();
+            reader.conn.deinit(); // Corrected: reader.deinit() -> reader.conn.deinit()
         }
 
         // Try to reopen writer connection
@@ -446,7 +451,7 @@ pub const StorageEngine = struct {
 
         // Reopen reader connections
         for (self.reader_pool) |*reader| {
-            reader.* = try sqlite.Db.init(.{
+            reader.conn = try sqlite.Db.init(.{ // Corrected: reader.* = try -> reader.conn = try
                 .mode = sqlite.Db.Mode{ .File = self.db_path },
                 .open_flags = .{
                     .write = false,
@@ -1359,9 +1364,9 @@ pub const WriteQueue = struct {
     head: *Node,
     tail: std.atomic.Value(*Node),
     allocator: Allocator,
-    pool: *NodePool,
+    pool: *MemoryStrategy.Pool(Node),
 
-    pub fn init(allocator: Allocator, pool: *NodePool) !WriteQueue {
+    pub fn init(allocator: Allocator, pool: *MemoryStrategy.Pool(Node)) !WriteQueue {
         const stub = try pool.acquire();
         stub.next = std.atomic.Value(?*Node).init(null);
         return WriteQueue{
@@ -1395,78 +1400,5 @@ pub const WriteQueue = struct {
         const op = next.op;
         self.pool.release(head);
         return op;
-    }
-};
-
-pub const NodePool = struct {
-    const Node = WriteQueue.Node;
-    const CombinedState = packed struct {
-        ptr: ?*Node,
-        gen: u32,
-        count: u32,
-    };
-
-    allocator: Allocator,
-    state: std.atomic.Value(u128) align(16),
-    capacity: usize,
-
-    pub fn init(allocator: Allocator, capacity: usize) NodePool {
-        const initial_state = CombinedState{ .ptr = null, .gen = 0, .count = 0 };
-        return NodePool{
-            .allocator = allocator,
-            .state = std.atomic.Value(u128).init(@bitCast(initial_state)),
-            .capacity = capacity,
-        };
-    }
-
-    pub fn deinit(self: *NodePool) void {
-        const current_raw = self.state.swap(0, .acquire);
-        var ptr = @as(CombinedState, @bitCast(current_raw)).ptr;
-        while (ptr) |node| {
-            const next = node.next.load(.monotonic);
-            self.allocator.destroy(node);
-            ptr = next;
-        }
-    }
-
-    pub fn acquire(self: *NodePool) !*Node {
-        var current_raw = self.state.load(.acquire);
-        while (true) {
-            const current: CombinedState = @bitCast(current_raw);
-            const node = current.ptr orelse break;
-            const next_node = node.next.load(.acquire);
-            const next_state = CombinedState{
-                .ptr = next_node,
-                .gen = current.gen +% 1,
-                .count = current.count - 1,
-            };
-            if (self.state.cmpxchgStrong(current_raw, @bitCast(next_state), .acq_rel, .acquire)) |actual| {
-                current_raw = actual;
-            } else {
-                return node;
-            }
-        }
-        return try self.allocator.create(Node);
-    }
-
-    pub fn release(self: *NodePool, node: *Node) void {
-        var current_raw = self.state.load(.acquire);
-        while (true) {
-            const current: CombinedState = @bitCast(current_raw);
-            if (current.count >= self.capacity) break;
-
-            node.next.store(current.ptr, .release);
-            const next_state = CombinedState{
-                .ptr = node,
-                .gen = current.gen +% 1,
-                .count = current.count + 1,
-            };
-            if (self.state.cmpxchgStrong(current_raw, @bitCast(next_state), .acq_rel, .acquire)) |actual| {
-                current_raw = actual;
-            } else {
-                return;
-            }
-        }
-        self.allocator.destroy(node);
     }
 };

@@ -6,6 +6,7 @@ const ColumnValue = storage_engine.ColumnValue;
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
     return .{
@@ -18,7 +19,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
     };
 }
 
-fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
 
@@ -33,7 +34,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
     out_schema.* = schema;
 
-    const engine = try StorageEngine.init(allocator, test_dir, schema);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema);
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -47,6 +48,8 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
 test "storage: engine initialization errors" {
     const allocator = testing.allocator;
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
 
     // Test 1: Invalid directory path (read-only filesystem simulation)
     // We can't easily simulate a read-only filesystem in a portable way,
@@ -55,7 +58,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
     const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    const result1 = StorageEngine.init(allocator, invalid_dir, &raw_dummy_schema);
+    const result1 = StorageEngine.init(allocator, &memory_strategy, invalid_dir, &raw_dummy_schema);
     if (result1) |_| {
         try testing.expect(false); // Should have failed
     } else |_| {
@@ -74,7 +77,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_2 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_2 }};
     const raw_dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_2 };
-    const result2 = StorageEngine.init(allocator, test_file, &raw_dummy_schema_2);
+    const result2 = StorageEngine.init(allocator, &memory_strategy, test_file, &raw_dummy_schema_2);
     try testing.expectError(error.NotDir, result2);
 
     // Test 3: Valid initialization should succeed
@@ -85,7 +88,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_3 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_3 }};
     const raw_dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_3 };
-    const engine = try StorageEngine.init(allocator, test_dir, &raw_dummy_schema_3);
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &raw_dummy_schema_3);
     defer engine.deinit();
 
     // Verify database file was created
@@ -104,7 +107,9 @@ test "storage: thread-safe engine access" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -198,7 +203,9 @@ test "storage: connection pool reuse and release" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -242,7 +249,9 @@ test "storage: persistence round-trip (various types)" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -294,7 +303,9 @@ test "storage: insert/delete inverse consistency" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -343,7 +354,9 @@ test "storage: transaction isolation and consistency" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -459,7 +472,9 @@ test "storage: automatic transaction rollback on failure" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    const engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         engine.deinit();
         if (test_schema) |s| {
@@ -618,14 +633,14 @@ const PropTestContext = struct {
     }
 };
 
-fn setupPropTestEngine(allocator: std.mem.Allocator, test_dir_base: []const u8, table: schema_parser.Table) !PropTestContext {
+fn setupPropTestEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir_base: []const u8, table: schema_parser.Table) !PropTestContext {
     const test_dir = try allocator.dupe(u8, test_dir_base);
     errdefer allocator.free(test_dir); // zwanzig-disable-line: deinit-lifecycle
 
     const schema = try makeSchema(allocator, table.name, table.fields);
     errdefer freeSchema(allocator, schema);
 
-    const engine = try StorageEngine.init(allocator, test_dir, schema);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -667,7 +682,9 @@ test "storage: property 13 - document set/get round-trip" {
         };
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 
@@ -728,7 +745,9 @@ test "storage: property 14 - field set/get round-trip" {
         };
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 
@@ -778,7 +797,9 @@ test "storage: property 15 - collection get is namespace-scoped" {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 
@@ -830,7 +851,9 @@ test "storage: property 16 - remove then get returns null" {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 
@@ -864,7 +887,9 @@ test "storage: property 17 - schema validation rejects unknown tables and fields
         var fields_arr = [_]schema_parser.Field{makeField("title", .text, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 
@@ -893,7 +918,9 @@ test "storage: property 18 - updated_at is always refreshed on write" {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
-        const ctx = try setupPropTestEngine(allocator, test_dir, table);
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
         defer ctx.deinit();
         const engine = ctx.engine;
 

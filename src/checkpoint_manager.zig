@@ -371,7 +371,7 @@ pub const CheckpointManager = struct {
         while (!self.shutdown_requested.load(.acquire)) {
             // Wait for configured interval or shutdown signal
             self.shutdown_mutex.lock();
-            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch {};
+            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch {}; // zwanzig-disable-line: swallowed-error empty-catch-engine
             self.shutdown_mutex.unlock();
 
             if (self.shutdown_requested.load(.acquire)) break;

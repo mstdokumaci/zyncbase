@@ -39,7 +39,7 @@ test "Verification: WebSocket connection lifecycle" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-lifecycle");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -50,7 +50,7 @@ test "Verification: WebSocket connection lifecycle" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit(); // Note: context.deinit() handles directory cleanup
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -61,6 +61,7 @@ test "Verification: WebSocket connection lifecycle" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         violation_tracker,
         &request_handler,
         storage_engine,
@@ -109,7 +110,7 @@ test "Verification: StoreSet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeset");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -120,7 +121,7 @@ test "Verification: StoreSet message processing" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -131,6 +132,7 @@ test "Verification: StoreSet message processing" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         violation_tracker,
         &request_handler,
         storage_engine,
@@ -223,7 +225,7 @@ test "Verification: StoreGet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeget");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -233,7 +235,7 @@ test "Verification: StoreGet message processing" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -244,6 +246,7 @@ test "Verification: StoreGet message processing" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         violation_tracker,
         &request_handler,
         storage_engine,
@@ -333,7 +336,7 @@ test "Verification: Error handling for invalid messages" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-errors");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -344,7 +347,7 @@ test "Verification: Error handling for invalid messages" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -355,6 +358,7 @@ test "Verification: Error handling for invalid messages" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         violation_tracker,
         &request_handler,
         storage_engine,
@@ -469,7 +473,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-e2e");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var request_handler = RequestHandler.init(&memory_strategy);
@@ -479,7 +483,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     });
     defer schema_helpers.freeTestSchema(allocator, schema);
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &context, schema);
+    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
 
     const subscription_manager = try SubscriptionManager.init(allocator);
@@ -490,6 +494,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     const handler = try MessageHandler.init(
         allocator,
+        &memory_strategy,
         violation_tracker,
         &request_handler,
         storage_engine,

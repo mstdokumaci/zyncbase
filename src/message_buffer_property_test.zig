@@ -23,7 +23,7 @@ fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bo
     };
 }
 
-fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
+fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
     var fields_arr = try allocator.alloc(schema_parser.Field, 1);
     defer allocator.free(fields_arr);
     fields_arr[0] = makeField("val", .text, false);
@@ -46,7 +46,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
     out_schema.* = schema_ptr;
 
-    const engine = try StorageEngine.init(allocator, test_dir, schema_ptr);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema_ptr);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -78,7 +78,7 @@ test "buffer: message deallocation after processing" {
     const allocator = gpa.allocator();
 
     // Initialize components needed for message handler
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -94,7 +94,7 @@ test "buffer: message deallocation after processing" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema: ?*schema_parser.Schema = null;
-    var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema);
+    var storage_engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
     defer {
         storage_engine.deinit();
         if (test_schema) |s| {
@@ -113,6 +113,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -147,6 +148,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -177,6 +179,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -208,6 +211,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -233,6 +237,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -268,6 +273,7 @@ test "buffer: message deallocation after processing" {
     {
         var handler = try MessageHandler.init(
             allocator,
+            &memory_strategy,
             &tracker,
             &request_handler,
             storage_engine,
@@ -357,7 +363,7 @@ test "buffer: concurrent message deallocation" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var memory_strategy = try MemoryStrategy.init();
+    var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
     var tracker = ViolationTracker.init(allocator, 10);
@@ -372,7 +378,7 @@ test "buffer: concurrent message deallocation" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var test_schema_1: ?*schema_parser.Schema = null;
-    var storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_1);
+    var storage_engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema_1);
     defer {
         storage_engine.deinit();
         if (test_schema_1) |s| {
@@ -387,14 +393,7 @@ test "buffer: concurrent message deallocation" {
     var cache = try LockFreeCache.init(allocator, .{});
     defer cache.deinit();
 
-    var handler = try MessageHandler.init(
-        allocator,
-        &tracker,
-        &request_handler,
-        storage_engine,
-        subscription_manager,
-        cache,
-    );
+    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, &request_handler, storage_engine, subscription_manager, cache);
     defer handler.deinit();
 
     const ThreadContext = struct {

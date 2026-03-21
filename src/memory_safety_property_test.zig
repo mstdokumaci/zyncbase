@@ -4,6 +4,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Message = @import("memory_strategy.zig").Message;
 const Buffer = @import("memory_strategy.zig").Buffer;
 const Connection = @import("memory_strategy.zig").Connection;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "memory: safety and pool invariants" {
     // This property test verifies that the memory management strategy:
@@ -24,10 +25,11 @@ test "memory: safety and pool invariants" {
             @panic("Memory leak in memory safety property test");
         }
     }
+    _ = gpa.allocator();
 
     // Test 1: GeneralPurposeAllocator for long-lived allocations
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
         const gpa_alloc = strategy.generalAllocator();
@@ -43,27 +45,28 @@ test "memory: safety and pool invariants" {
 
     // Test 2: ArenaAllocator for per-request temporary allocations
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
-
-        const arena = strategy.arenaAllocator();
 
         // Simulate multiple requests
         var request_num: usize = 0;
         while (request_num < 50) : (request_num += 1) {
+            const arena_ptr = try strategy.acquireArena();
+            const arena = arena_ptr.allocator();
+
             // Allocate memory for this request
             _ = try arena.alloc(u8, 512);
             _ = try arena.alloc(u8, 1024);
             _ = try arena.alloc(u8, 2048);
 
-            // Reset arena - all memory freed in bulk
-            strategy.resetArena();
+            // Release arena back to pool (resets it)
+            strategy.releaseArena(arena_ptr);
         }
     }
 
     // Test 3: Object pools for high-churn objects
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
         // Test message pool
@@ -101,24 +104,24 @@ test "memory: safety and pool invariants" {
 
         // Test connection pool
         var connections: [20]*Connection = undefined;
-        for (&connections) |*conn| {
-            conn.* = try strategy.acquireConnection();
-            conn.*.id = 123;
-            conn.*.active = true;
+        for (&connections, 0..) |*conn, i| {
+            const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+            conn.* = try strategy.createConnection(@intCast(i), dummy_ws);
         }
 
         for (connections) |conn| {
-            strategy.releaseConnection(conn);
+            conn.release(testing.allocator);
         }
     }
 
     // Test 4: Mixed allocator usage
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
         const gpa_alloc = strategy.generalAllocator();
-        const arena = strategy.arenaAllocator();
+        const arena_ptr = try strategy.acquireArena();
+        const arena = arena_ptr.allocator();
 
         // Long-lived allocation
         const long_lived = try gpa_alloc.alloc(u8, 100);
@@ -127,7 +130,7 @@ test "memory: safety and pool invariants" {
         // Temporary allocations
         _ = try arena.alloc(u8, 200);
         _ = try arena.alloc(u8, 300);
-        strategy.resetArena();
+        strategy.releaseArena(arena_ptr);
 
         // Pool allocations
         const msg = try strategy.acquireMessage();
@@ -136,18 +139,20 @@ test "memory: safety and pool invariants" {
         const buf = try strategy.acquireBuffer();
         strategy.releaseBuffer(buf);
 
-        const conn = try strategy.acquireConnection();
+        const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+        const conn = try strategy.createConnection(1, dummy_ws);
         strategy.releaseConnection(conn);
     }
 
     // Test 5: Stress test with many allocations
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
         var iteration: usize = 0;
         while (iteration < 1000) : (iteration += 1) {
-            const arena = strategy.arenaAllocator();
+            const arena_ptr = try strategy.acquireArena();
+            const arena = arena_ptr.allocator();
 
             // Allocate various sizes
             _ = try arena.alloc(u8, 64);
@@ -158,38 +163,41 @@ test "memory: safety and pool invariants" {
             const msg = try strategy.acquireMessage();
             strategy.releaseMessage(msg);
 
-            // Reset arena
-            strategy.resetArena();
+            // Release arena
+            strategy.releaseArena(arena_ptr);
         }
     }
 
     // Test 6: Verify no use-after-free with arena
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
-        const arena = strategy.arenaAllocator();
+        const arena_ptr = try strategy.acquireArena();
+        const arena = arena_ptr.allocator();
 
         // Allocate memory
         const ptr1 = try arena.alloc(u8, 100);
         @memset(ptr1, 42);
 
-        // Reset arena - ptr1 is now invalid
-        strategy.resetArena();
+        // Release arena - ptr1 is now invalid
+        strategy.releaseArena(arena_ptr);
 
         // Allocate new memory - should not reuse ptr1's memory in a way that causes issues
-        const ptr2 = try arena.alloc(u8, 100);
+        const arena_ptr2 = try strategy.acquireArena();
+        const arena2 = arena_ptr2.allocator();
+        const ptr2 = try arena2.alloc(u8, 100);
         @memset(ptr2, 99);
 
         // Verify ptr2 is valid
         try testing.expect(ptr2[0] == 99);
 
-        strategy.resetArena();
+        strategy.releaseArena(arena_ptr2);
     }
 
     // Test 7: Pool capacity limits
     {
-        var strategy = try MemoryStrategy.init();
+        var strategy = try MemoryStrategy.init(testing.allocator);
         defer strategy.deinit();
 
         // Acquire more messages than pool capacity
@@ -215,7 +223,7 @@ test "memory: safety and pool invariants" {
 }
 
 test "memory: concurrent pool access" {
-    var strategy = try MemoryStrategy.init();
+    var strategy = try MemoryStrategy.init(testing.allocator);
     defer strategy.deinit();
 
     const ThreadContext = struct {
@@ -238,8 +246,8 @@ test "memory: concurrent pool access" {
                 ctx.strategy.releaseBuffer(buf);
 
                 // Acquire and release connections
-                const conn = ctx.strategy.acquireConnection() catch unreachable; // zwanzig-disable-line: swallowed-error
-                conn.id = i;
+                const dummy_ws = WebSocket{ .ws = null, .ssl = false };
+                const conn = ctx.strategy.createConnection(@intCast(i), dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
                 ctx.strategy.releaseConnection(conn);
             }
         }
@@ -261,35 +269,40 @@ test "memory: concurrent pool access" {
 }
 
 test "memory: arena isolation between requests" {
-    var strategy = try MemoryStrategy.init();
+    var strategy = try MemoryStrategy.init(testing.allocator);
     defer strategy.deinit();
 
-    const arena = strategy.arenaAllocator();
+    const arena_ptr = try strategy.acquireArena();
+    const arena = arena_ptr.allocator();
 
     // Request 1
     const req1_data = try arena.alloc(u8, 100);
     @memset(req1_data, 1);
     try testing.expect(req1_data[0] == 1);
 
-    strategy.resetArena();
+    strategy.releaseArena(arena_ptr);
 
     // Request 2 - should not see request 1's data
-    const req2_data = try arena.alloc(u8, 100);
+    const arena_ptr2 = try strategy.acquireArena();
+    const arena2 = arena_ptr2.allocator();
+    const req2_data = try arena2.alloc(u8, 100);
     @memset(req2_data, 2);
     try testing.expect(req2_data[0] == 2);
 
-    strategy.resetArena();
+    strategy.releaseArena(arena_ptr2);
 
     // Request 3
-    const req3_data = try arena.alloc(u8, 100);
+    const arena_ptr3 = try strategy.acquireArena();
+    const arena3 = arena_ptr3.allocator();
+    const req3_data = try arena3.alloc(u8, 100);
     @memset(req3_data, 3);
     try testing.expect(req3_data[0] == 3);
 
-    strategy.resetArena();
+    strategy.releaseArena(arena_ptr3);
 }
 
 test "memory: GPA allocation tracking" {
-    var strategy = try MemoryStrategy.init();
+    var strategy = try MemoryStrategy.init(testing.allocator);
     defer strategy.deinit();
 
     const gpa = strategy.generalAllocator();
@@ -313,7 +326,7 @@ test "memory: GPA allocation tracking" {
 }
 
 test "memory: subscription pool reuse" {
-    var strategy = try MemoryStrategy.init();
+    var strategy = try MemoryStrategy.init(testing.allocator);
     defer strategy.deinit();
 
     // Acquire a message and mark it
@@ -326,6 +339,7 @@ test "memory: subscription pool reuse" {
 
     // Acquire again - should get the same message from pool
     const msg2 = try strategy.acquireMessage();
+    defer strategy.releaseMessage(msg2);
     const msg2_addr = @intFromPtr(msg2);
 
     // Verify it's the same object (reused from pool)
@@ -335,7 +349,5 @@ test "memory: subscription pool reuse" {
     // established by the internal mutex of the pool. However, since the mutex
     // is locked/unlocked in release() and acquire(), it should be fine.
     // The previous failure might have been due to the copy-by-value of MemoryStrategy.
-    try testing.expect(msg2.len == 999); // Data persists
-
-    strategy.releaseMessage(msg2);
+    try testing.expect(msg2.len == 0); // Data was reset on acquire
 }

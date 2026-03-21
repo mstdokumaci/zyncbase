@@ -56,11 +56,10 @@ pub const RequestHandler = struct {
     /// 3. Build response
     /// 4. Reset arena to free all temporary memory in bulk
     pub fn handleRequest(self: *RequestHandler, message: []const u8) !Response {
-        // Get arena allocator for this request
-        const arena_allocator = self.memory_strategy.arenaAllocator();
-
-        // Ensure arena is reset after request completes (even on error)
-        defer self.memory_strategy.resetArena();
+        // Acquire arena allocator from the pool
+        const arena = try self.memory_strategy.acquireArena();
+        defer self.memory_strategy.releaseArena(arena);
+        const arena_allocator = arena.allocator();
 
         // Create request context with arena allocator
         var ctx = try RequestContext.init(arena_allocator, message);
