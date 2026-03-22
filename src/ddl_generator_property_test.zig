@@ -74,7 +74,7 @@ test "ddl_generator: property 7 - DDL contains required columns and constraints"
                 .integer => "INTEGER",
                 .real => "REAL",
                 .boolean => "INTEGER",
-                .array => "TEXT",
+                .array => "BLOB",
             };
 
             // Check column definition exists
@@ -184,5 +184,65 @@ test "ddl_generator: property 8 - generated DDL is executable" {
             std.debug.print("DDL execution failed for iter {d}: {}\nFull DDL:\n{s}\n", .{ iter, err, ddl });
             return err;
         };
+    }
+}
+
+// Feature: array-jsonb-storage, Property 1: DDL emits BLOB for array fields
+// For any Table with a mix of field types including at least one .array field,
+// generateDDL shall emit BLOB for array columns and the correct type for all others.
+test "ddl_generator: property 1 - DDL emits BLOB for array fields" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    var prng = std.Random.DefaultPrng.init(0xABCD_1234);
+    const rand = prng.random();
+
+    const field_names = [_][]const u8{ "f0", "f1", "f2", "f3", "f4" };
+    const non_array_types = [_]FieldType{ .text, .integer, .real, .boolean };
+
+    var iter: usize = 0;
+    while (iter < 100) : (iter += 1) {
+        const n_fields = rand.intRangeAtMost(usize, 2, 5);
+        const array_idx = rand.intRangeAtMost(usize, 0, n_fields - 1);
+
+        var fields = try allocator.alloc(Field, n_fields);
+        defer allocator.free(fields);
+
+        for (0..n_fields) |fi| {
+            fields[fi] = .{
+                .name = field_names[fi % field_names.len],
+                .sql_type = if (fi == array_idx) .array else non_array_types[rand.intRangeAtMost(usize, 0, non_array_types.len - 1)],
+                .required = rand.boolean(),
+                .indexed = false,
+                .references = null,
+                .on_delete = null,
+            };
+        }
+
+        const table = Table{ .name = "prop1_tbl", .fields = fields };
+        const ddl = try gen.generateDDL(table);
+        defer allocator.free(ddl);
+
+        for (fields) |f| {
+            const expected_type = switch (f.sql_type) {
+                .text => "TEXT",
+                .integer => "INTEGER",
+                .real => "REAL",
+                .boolean => "INTEGER",
+                .array => "BLOB",
+            };
+            const col_def = try std.fmt.allocPrint(allocator, "  {s} {s}", .{ f.name, expected_type });
+            defer allocator.free(col_def);
+            try std.testing.expect(std.mem.indexOf(u8, ddl, col_def) != null);
+        }
+
+        // Specifically assert the array column uses BLOB, not TEXT
+        const array_field = fields[array_idx];
+        const blob_def = try std.fmt.allocPrint(allocator, "  {s} BLOB", .{array_field.name});
+        defer allocator.free(blob_def);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, blob_def) != null);
+        const text_def = try std.fmt.allocPrint(allocator, "  {s} TEXT", .{array_field.name});
+        defer allocator.free(text_def);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, text_def) == null);
     }
 }

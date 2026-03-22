@@ -21,6 +21,7 @@ test {
     _ = @import("schema_parser_test.zig");
     _ = @import("ddl_generator_test.zig");
     _ = @import("migration_executor_test.zig");
+    _ = @import("msgpack_utils_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");

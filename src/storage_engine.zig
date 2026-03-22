@@ -560,8 +560,12 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateColumns(table, columns);
 
+        // Look up table schema to determine which columns are array fields
+        const table_schema = self.findTable(table).?; // validateColumns already confirmed table exists
+
         // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, ..., created_at, updated_at)
         // VALUES (?, ?, ..., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
+        // Array columns use jsonb(?) instead of ? as the placeholder.
         var sql_buf: std.ArrayList(u8) = .{};
         defer sql_buf.deinit(self.allocator);
 
@@ -573,8 +577,20 @@ pub const StorageEngine = struct {
             try sql_buf.appendSlice(self.allocator, col.name);
         }
         try sql_buf.appendSlice(self.allocator, ", created_at, updated_at) VALUES (?, ?");
-        for (columns) |_| {
-            try sql_buf.appendSlice(self.allocator, ", ?");
+        for (columns) |col| {
+            // Find the field schema to check if it's an array type
+            var is_array = false;
+            for (table_schema.fields) |f| {
+                if (std.mem.eql(u8, f.name, col.name)) {
+                    is_array = f.sql_type == .array;
+                    break;
+                }
+            }
+            if (is_array) {
+                try sql_buf.appendSlice(self.allocator, ", jsonb(?)");
+            } else {
+                try sql_buf.appendSlice(self.allocator, ", ?");
+            }
         }
         // created_at: preserve existing or use current time
         try sql_buf.appendSlice(self.allocator, ", COALESCE((SELECT created_at FROM ");
@@ -586,17 +602,30 @@ pub const StorageEngine = struct {
         const sql = try sql_buf.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(sql);
 
-        // Serialize columns to msgpack bytes for storage
+        // Serialize columns to msgpack bytes (or JSON for array fields) for storage
         const col_bytes = try self.allocator.alloc([]const u8, columns.len);
         errdefer {
             for (col_bytes) |b| self.allocator.free(b);
             self.allocator.free(col_bytes);
         }
         for (columns, 0..) |col, i| {
-            var list: std.ArrayList(u8) = .{};
-            errdefer list.deinit(self.allocator);
-            try msgpack.encodeTrusted(col.value, list.writer(self.allocator));
-            col_bytes[i] = try list.toOwnedSlice(self.allocator);
+            // Find the field schema to check if it's an array type
+            var is_array = false;
+            for (table_schema.fields) |f| {
+                if (std.mem.eql(u8, f.name, col.name)) {
+                    is_array = f.sql_type == .array;
+                    break;
+                }
+            }
+            if (is_array) {
+                // Convert array payload to JSON bytes for jsonb(?) storage
+                col_bytes[i] = try msgpack.payloadToJson(col.value, self.allocator);
+            } else {
+                var list: std.ArrayList(u8) = .{};
+                errdefer list.deinit(self.allocator);
+                try msgpack.encodeTrusted(col.value, list.writer(self.allocator));
+                col_bytes[i] = try list.toOwnedSlice(self.allocator);
+            }
         }
 
         const now = std.time.timestamp();
@@ -636,19 +665,37 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateField(table, field);
 
-        var list: std.ArrayList(u8) = .{};
-        errdefer list.deinit(self.allocator);
-        try msgpack.encodeTrusted(value, list.writer(self.allocator));
-        const val_bytes = try list.toOwnedSlice(self.allocator);
+        // Look up the field's sql_type to determine if it's an array field
+        const table_schema = self.findTable(table).?; // validateField already confirmed table exists
+        var field_sql_type: schema_parser.FieldType = .text;
+        for (table_schema.fields) |f| {
+            if (std.mem.eql(u8, f.name, field)) {
+                field_sql_type = f.sql_type;
+                break;
+            }
+        }
+
+        const val_bytes: []const u8 = if (field_sql_type == .array) blk: {
+            // Convert array payload to JSON bytes for jsonb(?) storage
+            break :blk try msgpack.payloadToJson(value, self.allocator);
+        } else blk: {
+            var list: std.ArrayList(u8) = .{};
+            errdefer list.deinit(self.allocator);
+            try msgpack.encodeTrusted(value, list.writer(self.allocator));
+            break :blk try list.toOwnedSlice(self.allocator);
+        };
         errdefer self.allocator.free(val_bytes);
+
+        // Use jsonb(?) placeholder for array fields, ? for others
+        const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
 
         const sql = try std.fmt.allocPrint(self.allocator,
             \\INSERT INTO {s} (id, namespace_id, {s}, created_at, updated_at)
-            \\VALUES (?, ?, ?, ?, ?)
+            \\VALUES (?, ?, {s}, ?, ?)
             \\ON CONFLICT(id, namespace_id) DO UPDATE SET
             \\  {s} = excluded.{s},
             \\  updated_at = excluded.updated_at
-        , .{ table, field, field, field });
+        , .{ table, field, field_placeholder, field, field });
         errdefer self.allocator.free(sql);
 
         const id_owned = try self.allocator.dupe(u8, id);
@@ -695,7 +742,7 @@ pub const StorageEngine = struct {
             defer handle.release();
             // We must copy the payload because the caller owns it and it might be modified or freed
             // after we release the handle.
-            return try self.duplicatePayload(handle.data().*);
+            return try msgpack.clonePayload(handle.data().*, self.allocator);
         } else |err| switch (err) {
             error.NotFound => {},
             else => return err,
@@ -706,7 +753,25 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql = try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} WHERE id=? AND namespace_id=?", .{table});
+        // Build explicit column list so array fields can be wrapped with json()
+        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
+        var sql_buf: std.ArrayList(u8) = .{};
+        defer sql_buf.deinit(self.allocator);
+        try sql_buf.appendSlice(self.allocator, "SELECT id, namespace_id");
+        for (table_schema.fields) |f| {
+            if (f.sql_type == .array) {
+                try sql_buf.appendSlice(self.allocator, ", json(");
+                try sql_buf.appendSlice(self.allocator, f.name);
+                try sql_buf.append(self.allocator, ')');
+            } else {
+                try sql_buf.append(self.allocator, ',');
+                try sql_buf.appendSlice(self.allocator, f.name);
+            }
+        }
+        try sql_buf.appendSlice(self.allocator, ", created_at, updated_at FROM ");
+        try sql_buf.appendSlice(self.allocator, table);
+        try sql_buf.appendSlice(self.allocator, " WHERE id=? AND namespace_id=?");
+        const sql = try sql_buf.toOwnedSlice(self.allocator);
         defer self.allocator.free(sql);
 
         // Snapshot write_seq before the DB read. We only populate the cache if
@@ -714,27 +779,16 @@ pub const StorageEngine = struct {
         // this key) between our read and the cache store.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try self.execSelectDocument(&node.conn, sql, id, namespace);
+        const payload = try self.execSelectDocument(&node.conn, sql, id, namespace, table_schema);
         if (payload) |p| {
             errdefer p.free(self.allocator);
             if (self.write_seq.load(.acquire) == seq_before) {
-                const cache_payload = try self.duplicatePayload(p);
+                const cache_payload = try msgpack.clonePayload(p, self.allocator);
                 errdefer cache_payload.free(self.allocator);
                 try self.metadata_cache.update(cache_key, cache_payload);
             }
         }
         return payload;
-    }
-
-    fn duplicatePayload(self: *StorageEngine, payload: msgpack.Payload) !msgpack.Payload {
-        // We use an allocating writer to clone the payload via msgpack encode/decode for simplicity
-        // though a recursive clone would be more efficient.
-        var list: std.ArrayList(u8) = .{};
-        defer list.deinit(self.allocator);
-        try msgpack.encodeTrusted(payload, list.writer(self.allocator));
-
-        var fbs = std.Io.fixedBufferStream(list.items);
-        return try msgpack.decodeTrusted(self.allocator, fbs.reader());
     }
 
     /// SELECT a single field for a document. Returns null if not found.
@@ -753,10 +807,23 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql = try std.fmt.allocPrint(self.allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
+        // Resolve field schema to determine if it's an array field
+        const table_schema = self.findTable(table).?;
+        var field_ctx: ?schema_parser.Field = null;
+        for (table_schema.fields) |f| {
+            if (std.mem.eql(u8, f.name, field)) {
+                field_ctx = f;
+                break;
+            }
+        }
+
+        const sql = if (field_ctx != null and field_ctx.?.sql_type == .array)
+            try std.fmt.allocPrint(self.allocator, "SELECT json({s}) FROM {s} WHERE id=? AND namespace_id=?", .{ field, table })
+        else
+            try std.fmt.allocPrint(self.allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
         defer self.allocator.free(sql);
 
-        return self.execSelectScalar(&node.conn, sql, id, namespace);
+        return self.execSelectScalar(&node.conn, sql, id, namespace, field_ctx);
     }
 
     /// SELECT * for all documents in a namespace. Returns a msgpack array of maps.
@@ -773,10 +840,28 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql = try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} WHERE namespace_id=?", .{table});
+        // Build explicit column list so array fields can be wrapped with json()
+        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
+        var sql_buf: std.ArrayList(u8) = .{};
+        defer sql_buf.deinit(self.allocator);
+        try sql_buf.appendSlice(self.allocator, "SELECT id, namespace_id");
+        for (table_schema.fields) |f| {
+            if (f.sql_type == .array) {
+                try sql_buf.appendSlice(self.allocator, ", json(");
+                try sql_buf.appendSlice(self.allocator, f.name);
+                try sql_buf.append(self.allocator, ')');
+            } else {
+                try sql_buf.append(self.allocator, ',');
+                try sql_buf.appendSlice(self.allocator, f.name);
+            }
+        }
+        try sql_buf.appendSlice(self.allocator, ", created_at, updated_at FROM ");
+        try sql_buf.appendSlice(self.allocator, table);
+        try sql_buf.appendSlice(self.allocator, " WHERE namespace_id=?");
+        const sql = try sql_buf.toOwnedSlice(self.allocator);
         defer self.allocator.free(sql);
 
-        return self.execSelectCollection(&node.conn, sql, namespace);
+        return self.execSelectCollection(&node.conn, sql, namespace, table_schema);
     }
 
     /// DELETE a document by id and namespace.
@@ -814,9 +899,59 @@ pub const StorageEngine = struct {
 
     // ─── Internal read helpers ────────────────────────────────────────────────
 
+    const ColumnContext = struct {
+        name: []const u8,
+        field: ?schema_parser.Field,
+    };
+
+    fn resolveColumnContext(
+        stmt: sqlite.DynamicStatement,
+        i: c_int,
+        table_schema: schema_parser.Table,
+    ) ColumnContext {
+        const col_name_ptr = sqlite.c.sqlite3_column_name(stmt.stmt, i);
+        // json(col) returns the column name as "json(col)" — strip the wrapper to get the real name
+        const raw_name = std.mem.span(col_name_ptr);
+        const col_name = if (std.mem.startsWith(u8, raw_name, "json(") and std.mem.endsWith(u8, raw_name, ")"))
+            raw_name[5 .. raw_name.len - 1]
+        else
+            raw_name;
+
+        // Resolve field context: null for system columns, Field for user-defined columns
+        const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
+        var field_ctx: ?schema_parser.Field = null;
+        var is_system = false;
+        for (system_cols) |sc| {
+            if (std.mem.eql(u8, col_name, sc)) {
+                is_system = true;
+                break;
+            }
+        }
+        if (!is_system) {
+            for (table_schema.fields) |f| {
+                if (std.mem.eql(u8, f.name, col_name)) {
+                    field_ctx = f;
+                    break;
+                }
+            }
+        }
+
+        return .{ .name = col_name, .field = field_ctx };
+    }
+
     /// Read a single column value from a prepared statement at column index i.
-    fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int) !msgpack.Payload {
+    /// Pass the resolved schema Field for user-defined columns; pass null for system columns
+    /// (id, namespace_id, created_at, updated_at). Array fields stored as JSONB are returned
+    /// via json(col) in the SELECT, which yields SQLITE_TEXT — dispatched to jsonToPayload.
+    fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
+        // Array fields: json(col) returns SQLITE_TEXT containing a JSON array string.
+        if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
+            const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
+            const s = if (ptr != null) ptr[0..len] else "[]";
+            return msgpack.jsonToPayload(s, self.allocator);
+        }
         return switch (col_type) {
             sqlite.c.SQLITE_INTEGER => msgpack.Payload.intToPayload(sqlite.c.sqlite3_column_int64(stmt.stmt, i)),
             sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt.stmt, i) },
@@ -838,13 +973,15 @@ pub const StorageEngine = struct {
         };
     }
 
-    /// Execute a SELECT * ... WHERE id=? AND namespace_id=? and return a msgpack map or null.
+    /// Execute a SELECT with explicit column list WHERE id=? AND namespace_id=? and return a msgpack map or null.
+    /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectDocument(
         self: *StorageEngine,
         reader: *sqlite.Db,
         sql: []const u8,
         id: []const u8,
         namespace: []const u8,
+        table_schema: schema_parser.Table,
     ) !?msgpack.Payload {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -868,10 +1005,9 @@ pub const StorageEngine = struct {
 
         var i: c_int = 0;
         while (i < col_count) : (i += 1) {
-            const col_name_ptr = sqlite.c.sqlite3_column_name(stmt.stmt, i);
-            const col_name = std.mem.span(col_name_ptr);
-            const val = try self.readColumnValue(stmt, i);
-            try map.mapPut(col_name, val);
+            const ctx = resolveColumnContext(stmt, i, table_schema);
+            const val = try self.readColumnValue(stmt, i, ctx.field);
+            try map.mapPut(ctx.name, val);
         }
         return map;
     }
@@ -883,6 +1019,7 @@ pub const StorageEngine = struct {
         sql: []const u8,
         id: []const u8,
         namespace: []const u8,
+        field_ctx: ?schema_parser.Field,
     ) !?msgpack.Payload {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -901,15 +1038,17 @@ pub const StorageEngine = struct {
         if (rc == sqlite.c.SQLITE_DONE) return null;
         if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-        return try self.readColumnValue(stmt, 0);
+        return try self.readColumnValue(stmt, 0, field_ctx);
     }
 
-    /// Execute a SELECT * ... WHERE namespace_id=? and return a msgpack array of maps.
+    /// Execute a SELECT with explicit column list WHERE namespace_id=? and return a msgpack array of maps.
+    /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectCollection(
         self: *StorageEngine,
         reader: *sqlite.Db,
         sql: []const u8,
         namespace: []const u8,
+        table_schema: schema_parser.Table,
     ) !msgpack.Payload {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -937,10 +1076,9 @@ pub const StorageEngine = struct {
 
             var i: c_int = 0;
             while (i < col_count) : (i += 1) {
-                const col_name_ptr = sqlite.c.sqlite3_column_name(stmt.stmt, i);
-                const col_name = std.mem.span(col_name_ptr);
-                const val = try self.readColumnValue(stmt, i);
-                try map.mapPut(col_name, val);
+                const ctx = resolveColumnContext(stmt, i, table_schema);
+                const val = try self.readColumnValue(stmt, i, ctx.field);
+                try map.mapPut(ctx.name, val);
             }
             try arr.append(self.allocator, map);
         }

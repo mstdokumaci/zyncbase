@@ -964,3 +964,211 @@ test "storage: property 18 - updated_at is always refreshed on write" {
         try testing.expect(updated_at_2 >= t_before_update);
     }
 }
+
+// ─── Property 10: Storage engine write/read round-trip for array fields ───────
+
+// Feature: array-jsonb-storage, Property 10: Storage engine write/read round-trip for array fields
+test "storage: property 10 - write/read round-trip for array fields" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xA77A1_10);
+    const rand = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p10_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+
+        var fields_arr = [_]schema_parser.Field{
+            makeField("tags", .array, false),
+            makeField("name", .text, false),
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        // Generate a random literal array
+        const n = rand.intRangeAtMost(usize, 0, 6);
+        const elems = try allocator.alloc(msgpack.Payload, n);
+        for (0..n) |i| {
+            elems[i] = .{ .int = rand.intRangeAtMost(i64, -100, 100) };
+        }
+        const array_payload = msgpack.Payload{ .arr = elems };
+        defer array_payload.free(allocator);
+
+        const name_payload = try msgpack.Payload.strToPayload("test-item", allocator);
+        defer name_payload.free(allocator);
+
+        const cols = [_]ColumnValue{
+            .{ .name = "tags", .value = array_payload },
+            .{ .name = "name", .value = name_payload },
+        };
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        // Read back via selectDocument
+        const doc = try engine.selectDocument("items", id, ns);
+        try testing.expect(doc != null);
+        defer doc.?.free(allocator);
+
+        const got_tags = (try doc.?.mapGet("tags")) orelse return error.MissingTags;
+        try testing.expect(got_tags == .arr);
+        try testing.expectEqual(n, got_tags.arr.len);
+        for (elems, got_tags.arr) |orig, got| {
+            const orig_val: i64 = switch (orig) {
+                .int => |v| v,
+                else => return error.UnexpectedType,
+            };
+            const got_val: i64 = switch (got) {
+                .int => |v| v,
+                .uint => |v| @intCast(v),
+                else => return error.UnexpectedType,
+            };
+            try testing.expectEqual(orig_val, got_val);
+        }
+
+        // Also read back via selectField
+        const field_result = try engine.selectField("items", id, ns, "tags");
+        try testing.expect(field_result != null);
+        defer field_result.?.free(allocator);
+        try testing.expect(field_result.? == .arr);
+        try testing.expectEqual(n, field_result.?.arr.len);
+    }
+}
+
+// ─── Property 11: Non-array fields are unaffected by the change ──────────────
+
+// Feature: array-jsonb-storage, Property 11: Non-array fields are unaffected by the change
+test "storage: property 11 - non-array fields are unaffected" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xB0B_11);
+    const rand = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p11_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+
+        var fields_arr = [_]schema_parser.Field{
+            makeField("title", .text, false),
+            makeField("score", .integer, false),
+            makeField("rating", .real, false),
+            makeField("active", .boolean, false),
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        const title_str = if (rand.boolean()) "hello" else "world";
+        const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
+        const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
+        const active_val: i64 = if (rand.boolean()) 1 else 0;
+
+        const title_payload = try msgpack.Payload.strToPayload(title_str, allocator);
+        defer title_payload.free(allocator);
+
+        const cols = [_]ColumnValue{
+            .{ .name = "title", .value = title_payload },
+            .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
+            .{ .name = "rating", .value = .{ .float = rating_val } },
+            .{ .name = "active", .value = msgpack.Payload.intToPayload(active_val) },
+        };
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        const doc = try engine.selectDocument("items", id, ns);
+        try testing.expect(doc != null);
+        defer doc.?.free(allocator);
+
+        // Verify text field
+        const got_title = (try doc.?.mapGet("title")) orelse return error.MissingTitle;
+        try testing.expectEqualStrings(title_str, got_title.str.value());
+
+        // Verify integer field
+        const got_score = (try doc.?.mapGet("score")) orelse return error.MissingScore;
+        const got_score_val: i64 = switch (got_score) {
+            .int => |v| v,
+            .uint => |v| @intCast(v),
+            else => return error.UnexpectedType,
+        };
+        try testing.expectEqual(score_val, got_score_val);
+    }
+}
+
+// ─── Property 12: SQLite JSON functions operate on stored array columns ───────
+
+// Feature: array-jsonb-storage, Property 12: SQLite JSON functions operate on stored array columns
+test "storage: property 12 - SQLite json_array_length works on stored array columns" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xC0DE_12);
+    const rand = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 20) : (iter += 1) {
+        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p12_{}", .{iter});
+        defer allocator.free(test_dir);
+        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+
+        var fields_arr = [_]schema_parser.Field{
+            makeField("tags", .array, false),
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+        var memory_strategy = try MemoryStrategy.init(allocator);
+        defer memory_strategy.deinit();
+        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        defer ctx.deinit();
+        const engine = ctx.engine;
+
+        const id = "doc-001";
+        const ns = "ns-test";
+
+        // Generate a random literal array of known length n
+        const n = rand.intRangeAtMost(usize, 0, 8);
+        const elems = try allocator.alloc(msgpack.Payload, n);
+        for (0..n) |i| {
+            elems[i] = .{ .int = rand.intRangeAtMost(i64, 0, 999) };
+        }
+        const array_payload = msgpack.Payload{ .arr = elems };
+        defer array_payload.free(allocator);
+
+        const cols = [_]ColumnValue{.{ .name = "tags", .value = array_payload }};
+        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.flushPendingWrites();
+
+        // Execute json_array_length directly against the SQLite database
+        const id_z = try allocator.dupeZ(u8, id);
+        defer allocator.free(id_z);
+        const ns_z = try allocator.dupeZ(u8, ns);
+        defer allocator.free(ns_z);
+
+        const LenResult = struct { len: i64 };
+        const result = try engine.writer_conn.one(
+            LenResult,
+            "SELECT json_array_length(tags) FROM items WHERE id=? AND namespace_id=?",
+            .{},
+            .{ id_z, ns_z },
+        );
+
+        try testing.expect(result != null);
+        try testing.expectEqual(@as(i64, @intCast(n)), result.?.len);
+    }
+}

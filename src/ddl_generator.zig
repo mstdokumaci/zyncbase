@@ -95,6 +95,6 @@ fn sqlType(ft: schema_parser.FieldType) []const u8 {
         .integer => "INTEGER",
         .real => "REAL",
         .boolean => "INTEGER",
-        .array => "TEXT",
+        .array => "BLOB",
     };
 }

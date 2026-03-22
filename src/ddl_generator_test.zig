@@ -92,3 +92,40 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);
 }
+
+test "ddl_generator: array field uses BLOB column type" {
+    const allocator = std.testing.allocator;
+    var gen = DDLGenerator.init(allocator);
+
+    const fields = [_]Field{
+        .{
+            .name = "tags",
+            .sql_type = .array,
+            .required = false,
+            .indexed = false,
+            .references = null,
+            .on_delete = null,
+        },
+        .{
+            .name = "name",
+            .sql_type = .text,
+            .required = true,
+            .indexed = false,
+            .references = null,
+            .on_delete = null,
+        },
+    };
+
+    const table = Table{
+        .name = "items",
+        .fields = @constCast(&fields),
+    };
+
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+
+    // Array field should use BLOB
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "tags BLOB") != null);
+    // Non-array field should use TEXT
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "name TEXT NOT NULL") != null);
+}

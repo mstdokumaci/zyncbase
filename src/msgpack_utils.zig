@@ -108,3 +108,158 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
 }
 
 pub const Payload = msgpack.Payload;
+
+// Copied from upstream zig-msgpack fn clonePayload (private). Replace with upstream call once made pub.
+/// Deep clone a Payload (allocates new memory for dynamic types).
+/// The caller owns the returned Payload and must call `payload.free(allocator)`.
+pub fn clonePayload(payload: Payload, allocator: std.mem.Allocator) !Payload {
+    return switch (payload) {
+        .nil, .bool, .int, .uint, .float, .timestamp => payload, // Value types, no allocation needed
+
+        .str => |s| try Payload.strToPayload(s.value(), allocator),
+        .bin => |b| try Payload.binToPayload(b.value(), allocator),
+        .ext => |e| try Payload.extToPayload(e.type, e.data, allocator),
+
+        .arr => |arr| {
+            const new_arr = try allocator.alloc(Payload, arr.len);
+            errdefer allocator.free(new_arr);
+            for (arr, 0..) |item, i| {
+                new_arr[i] = try clonePayload(item, allocator);
+            }
+            return Payload{ .arr = new_arr };
+        },
+
+        .map => |m| {
+            var new_map = msgpack.Map.init(allocator);
+            errdefer new_map.deinit();
+
+            var it = m.map.iterator();
+            while (it.next()) |entry| {
+                // map.put clones the key internally; we clone the value ourselves.
+                const cloned_value = try clonePayload(entry.value_ptr.*, allocator);
+                errdefer cloned_value.free(allocator);
+                try new_map.put(entry.key_ptr.*, cloned_value);
+            }
+            return Payload{ .map = new_map };
+        },
+    };
+}
+
+/// Returns true if the payload is a literal (primitive) value: nil, bool, int, uint, float, or str.
+/// Returns false for arr, map, bin, ext, and timestamp.
+pub fn isLiteral(payload: Payload) bool {
+    return switch (payload) {
+        .nil, .bool, .int, .uint, .float, .str => true,
+        .arr, .map, .bin, .ext, .timestamp => false,
+    };
+}
+
+/// Validates that payload is an array containing only literal elements.
+/// Returns error.NotAnArray if payload is not .arr.
+/// Returns error.NonLiteralElement if any element fails isLiteral.
+/// Returns without error for valid literal arrays, including empty arrays.
+pub fn ensureLiteralArray(payload: Payload) error{ NotAnArray, NonLiteralElement }!void {
+    const arr = switch (payload) {
+        .arr => |a| a,
+        else => return error.NotAnArray,
+    };
+    for (arr) |elem| {
+        if (!isLiteral(elem)) return error.NonLiteralElement;
+    }
+}
+
+/// Converts a Literal_Array Payload to a JSON array string.
+/// Calls ensureLiteralArray first; propagates any error.
+/// The caller owns the returned slice.
+pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8 {
+    try ensureLiteralArray(payload);
+    const arr = payload.arr;
+    var buf: std.ArrayList(u8) = .{};
+    errdefer buf.deinit(allocator);
+    try buf.append(allocator, '[');
+    for (arr, 0..) |elem, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
+        switch (elem) {
+            .nil => try buf.appendSlice(allocator, "null"),
+            .bool => |b| try buf.appendSlice(allocator, if (b) "true" else "false"),
+            .int => |v| try std.fmt.format(buf.writer(allocator), "{}", .{v}),
+            .uint => |v| try std.fmt.format(buf.writer(allocator), "{}", .{v}),
+            .float => |v| {
+                // Always emit a decimal point so JSON parsers treat this as a float,
+                // not an integer. e.g. 50.0 → "50.0" not "50".
+                const s = try std.fmt.allocPrint(allocator, "{d}", .{v});
+                defer allocator.free(s);
+                try buf.appendSlice(allocator, s);
+                // If no decimal point or exponent, append ".0" to preserve float type.
+                const has_dot = std.mem.indexOfScalar(u8, s, '.') != null;
+                const has_exp = std.mem.indexOfScalar(u8, s, 'e') != null or std.mem.indexOfScalar(u8, s, 'E') != null;
+                if (!has_dot and !has_exp) try buf.appendSlice(allocator, ".0");
+            },
+            .str => |s| {
+                try buf.append(allocator, '"');
+                for (s.value()) |c| {
+                    switch (c) {
+                        '"' => try buf.appendSlice(allocator, "\\\""),
+                        '\\' => try buf.appendSlice(allocator, "\\\\"),
+                        '\n' => try buf.appendSlice(allocator, "\\n"),
+                        '\r' => try buf.appendSlice(allocator, "\\r"),
+                        '\t' => try buf.appendSlice(allocator, "\\t"),
+                        0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f => try std.fmt.format(buf.writer(allocator), "\\u{x:0>4}", .{c}),
+                        else => try buf.append(allocator, c),
+                    }
+                }
+                try buf.append(allocator, '"');
+            },
+            else => unreachable, // ensureLiteralArray already validated
+        }
+    }
+    try buf.append(allocator, ']');
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Parses a JSON array string and returns a Literal_Array Payload.
+/// Returns error.NotAnArray if the top-level JSON value is not an array.
+/// Returns error.NonLiteralElement if any element is an object or nested array.
+/// The caller owns the returned Payload and must call payload.free(allocator).
+pub fn jsonToPayload(json: []const u8, allocator: std.mem.Allocator) !Payload {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+
+    const json_arr = switch (parsed.value) {
+        .array => |a| a,
+        else => return error.NotAnArray,
+    };
+
+    const payloads = try allocator.alloc(Payload, json_arr.items.len);
+    errdefer allocator.free(payloads);
+    var count: usize = 0;
+    errdefer for (payloads[0..count]) |p| p.free(allocator);
+
+    for (json_arr.items) |item| {
+        payloads[count] = switch (item) {
+            .null => .nil,
+            .bool => |b| .{ .bool = b },
+            .integer => |v| .{ .int = v },
+            .float => |v| .{ .float = v },
+            .number_string => |s| blk: {
+                // Large integers that exceed i64 range are returned as number_string.
+                // Try parsing as u64 first, then i64.
+                if (std.fmt.parseInt(u64, s, 10)) |v| {
+                    break :blk .{ .uint = v };
+                } else |_| {}
+                if (std.fmt.parseInt(i64, s, 10)) |v| {
+                    break :blk .{ .int = v };
+                } else |_| {}
+                if (std.fmt.parseFloat(f64, s)) |v| {
+                    break :blk .{ .float = v };
+                } else |_| {}
+                return error.NonLiteralElement;
+            },
+            .string => |s| try Payload.strToPayload(s, allocator),
+            .object, .array => return error.NonLiteralElement,
+        };
+        count += 1;
+    }
+
+    return Payload{ .arr = payloads };
+}
