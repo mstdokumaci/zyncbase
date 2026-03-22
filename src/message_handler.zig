@@ -9,9 +9,8 @@ const RequestHandler = @import("request_handler.zig").RequestHandler;
 const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("memory_strategy.zig").Connection;
 
@@ -61,7 +60,6 @@ pub const MessageHandler = struct {
     request_handler: *RequestHandler,
     storage_engine: *StorageEngine,
     subscription_manager: *SubscriptionManager,
-    cache: *LockFreeCache,
     connection_registry: ConnectionRegistry,
 
     /// Initialize message handler with all required components
@@ -72,7 +70,6 @@ pub const MessageHandler = struct {
         request_handler: *RequestHandler,
         storage_engine: *StorageEngine,
         subscription_manager: *SubscriptionManager,
-        cache: *LockFreeCache,
     ) !*MessageHandler {
         const self = try allocator.create(MessageHandler);
         errdefer allocator.destroy(self);
@@ -84,7 +81,6 @@ pub const MessageHandler = struct {
             .request_handler = request_handler,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
-            .cache = cache,
             .connection_registry = ConnectionRegistry.init(memory_strategy),
         };
 
@@ -140,8 +136,8 @@ pub const MessageHandler = struct {
         const arena_allocator = arena.allocator();
 
         // Parse MessagePack message
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
+        var fbs = std.Io.fixedBufferStream(message);
+        const parsed = msgpack.decode(arena_allocator, fbs.reader()) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
 
             // Record violation if it was a security/limit error
@@ -552,8 +548,8 @@ pub const MessageHandler = struct {
         return try self.buildSuccessResponse(msg_id);
     }
     fn buildDataResponse(self: *MessageHandler, msg_id: u64, result_payload: msgpack.Payload) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
@@ -562,14 +558,14 @@ pub const MessageHandler = struct {
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
         try payload.mapPut("value", result_payload); // Note: result_payload is now part of the map, deinit of payload will handle it
 
-        try msgpack.encode(payload, &aw.writer);
-        return aw.toOwnedSlice();
+        try msgpack.encode(payload, list.writer(self.allocator));
+        return list.toOwnedSlice(self.allocator);
     }
 
     /// Build an error response with a code string.
     fn buildErrorResponse(self: *MessageHandler, msg_id: u64, code: []const u8) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
@@ -578,14 +574,14 @@ pub const MessageHandler = struct {
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
         try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
 
-        try msgpack.encode(payload, &aw.writer);
-        return try aw.toOwnedSlice();
+        try msgpack.encode(payload, list.writer(self.allocator));
+        return try list.toOwnedSlice(self.allocator);
     }
 
     /// Build success response for StoreSet
     fn buildSuccessResponse(self: *MessageHandler, msg_id: u64) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
@@ -593,14 +589,14 @@ pub const MessageHandler = struct {
         try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
 
-        try msgpack.encode(payload, &aw.writer);
-        return try aw.toOwnedSlice();
+        try msgpack.encode(payload, list.writer(self.allocator));
+        return try list.toOwnedSlice(self.allocator);
     }
 
     /// Send error response to client
     fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
 
         var payload = msgpack.Payload.mapPayload(self.allocator);
         defer payload.free(self.allocator);
@@ -609,8 +605,8 @@ pub const MessageHandler = struct {
         try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
         try payload.mapPut("message", try msgpack.Payload.strToPayload(message, self.allocator));
 
-        try msgpack.encode(payload, &aw.writer);
-        const error_msg = try aw.toOwnedSlice();
+        try msgpack.encode(payload, list.writer(self.allocator));
+        const error_msg = try list.toOwnedSlice(self.allocator);
         defer self.allocator.free(error_msg);
 
         ws.send(error_msg, .binary);

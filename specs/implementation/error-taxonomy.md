@@ -38,6 +38,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
 | `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` or Hook Server returned `false` | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
+| `INVALID_ARRAY_ELEMENT` | Validation | Array field contains non-literal value | `store.set` with an array containing nested objects or arrays | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |
 | `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Exponential backoff |
 | `MESSAGE_TOO_LARGE` | Rate-Limit | Payload too big | Exceeding `maxMessageSize` | 413 | No - Reduce message size |

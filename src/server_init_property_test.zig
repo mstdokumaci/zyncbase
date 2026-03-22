@@ -52,7 +52,6 @@ test "server: initialization is idempotent" {
 
         // Verify server is properly initialized
         try testing.expect(@intFromPtr(server.memory_strategy) != 0);
-        try testing.expect(@intFromPtr(server.cache) != 0);
         try testing.expect(@intFromPtr(server.violation_tracker) != 0);
         try testing.expect(@intFromPtr(server.subscription_manager) != 0);
         try testing.expect(@intFromPtr(server.checkpoint_manager) != 0);

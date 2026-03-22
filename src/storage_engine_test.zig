@@ -498,3 +498,46 @@ test "StorageEngine: client writes blocked during migration" {
     const err3 = engine.deleteDocument("items", "id1", "ns");
     try testing.expectError(storage_engine.StorageError.MigrationInProgress, err3);
 }
+
+test "StorageEngine: manual transaction MUST increment write_seq on commit" {
+    const allocator = testing.allocator;
+
+    const test_dir = "test-artifacts/unit/storage_engine/test_transaction_race";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
+    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+
+    var memory_strategy = try MemoryStrategy.init(allocator);
+    defer memory_strategy.deinit();
+    const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
+    // 1. Initial write_seq
+    const seq0 = engine.write_seq.load(.acquire);
+    try testing.expectEqual(@as(u64, 0), seq0);
+
+    // 2. Begin transaction
+    try engine.beginTransaction();
+
+    // 3. Write something
+    const val_p = try msgpack.Payload.strToPayload("updated", allocator);
+    defer val_p.free(allocator);
+    const cols = [_]ColumnValue{.{ .name = "val", .value = val_p }};
+    try engine.insertOrReplace("items", "id1", "ns", &cols);
+
+    // 4. Flush batch. This should increment write_seq to 1 (in current code).
+    try engine.flushPendingWrites();
+    const seq1 = engine.write_seq.load(.acquire);
+    try testing.expectEqual(@as(u64, 1), seq1);
+
+    // 5. Commit transaction. This SHOULD increment write_seq to 2.
+    try engine.commitTransaction();
+
+    // 6. VERIFY: write_seq should have advanced to 2 to inform readers that
+    // the transaction is committed and any data read during it is potentially stale.
+    const seq2 = engine.write_seq.load(.acquire);
+    std.debug.print("\nSequence after commit: {d} (Expected: 2)\n", .{seq2});
+    try testing.expectEqual(@as(u64, 2), seq2);
+}

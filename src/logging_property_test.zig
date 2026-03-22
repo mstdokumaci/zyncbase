@@ -8,7 +8,6 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
@@ -106,9 +105,6 @@ test "logging: connection events" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     var handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -116,7 +112,6 @@ test "logging: connection events" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -310,9 +305,6 @@ test "logging: error details" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     var handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -320,7 +312,6 @@ test "logging: error details" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -451,9 +442,6 @@ test "logging: level filtering" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator, .{});
-        defer cache.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
@@ -461,7 +449,6 @@ test "logging: level filtering" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -535,9 +522,6 @@ test "logging: message formatting" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator, .{});
-        defer cache.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
@@ -545,7 +529,6 @@ test "logging: message formatting" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -607,9 +590,6 @@ test "logging: message formatting" {
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
 
-        var cache = try LockFreeCache.init(allocator, .{});
-        defer cache.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
@@ -617,7 +597,6 @@ test "logging: message formatting" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 

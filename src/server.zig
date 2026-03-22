@@ -1,6 +1,5 @@
 const std = @import("std");
 
-pub const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 pub const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
 pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
@@ -29,7 +28,6 @@ pub const ZyncBaseServer = struct {
     allocator: std.mem.Allocator,
     config: Config,
     memory_strategy: *MemoryStrategy,
-    cache: *LockFreeCache,
     violation_tracker: *ViolationTracker,
     subscription_manager: *SubscriptionManager,
     checkpoint_manager: *CheckpointManager,
@@ -92,14 +90,6 @@ pub const ZyncBaseServer = struct {
             memory_strategy.generalAllocator().free(config.schema_file);
             config.schema_file = try memory_strategy.generalAllocator().dupe(u8, file);
         }
-
-        // Initialize LockFreeCache
-        std.log.debug("Initializing LockFreeCache", .{});
-        const cache = try LockFreeCache.init(
-            memory_strategy.generalAllocator(),
-            .{},
-        );
-        errdefer cache.deinit();
 
         // Initialize violation tracker
         std.log.debug("Initializing violation tracker", .{});
@@ -226,7 +216,6 @@ pub const ZyncBaseServer = struct {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         errdefer message_handler.deinit();
 
@@ -234,7 +223,6 @@ pub const ZyncBaseServer = struct {
 
         self.config = config;
         self.memory_strategy = memory_strategy;
-        self.cache = cache;
         self.violation_tracker = violation_tracker;
         self.subscription_manager = subscription_manager;
         self.checkpoint_manager = checkpoint_manager;
@@ -357,8 +345,6 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing violation_tracker", .{});
         self.violation_tracker.deinit();
         self.allocator.destroy(self.violation_tracker);
-        std.log.debug("Deinitializing cache", .{});
-        self.cache.deinit();
         // Free config - need to use pointer to field
         std.log.debug("About to deinit config", .{});
         var config_ptr = &self.config;

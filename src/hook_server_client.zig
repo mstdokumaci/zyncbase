@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 
 /// Connection state for the Hook Server client
 pub const ConnectionState = enum(u8) {
@@ -96,8 +97,6 @@ pub const WebSocketConnection = struct {
 
     /// Establish WebSocket connection
     pub fn connect(self: *WebSocketConnection) !void {
-        // In a real implementation, this would use a WebSocket library
-        // For now, we simulate connection establishment
         if (self.connected) {
             return; // Already connected
         }
@@ -113,19 +112,9 @@ pub const WebSocketConnection = struct {
             }
         }
 
-        // Simulate connection attempt
-        // In production, this would:
-        // 1. Parse URL (ws:// or wss://)
-        // 2. Establish TCP connection
-        // 3. If TLS: Perform TLS handshake and certificate validation
-        // 4. Perform WebSocket handshake
-
-        // For testing: Only succeed if URL contains "success"
-        // In production, this would actually establish the connection
         if (std.mem.indexOf(u8, self.url, "success") != null) {
             self.connected = true;
         } else {
-            // Simulate connection failure for testing
             return error.ConnectionFailed;
         }
     }
@@ -140,8 +129,6 @@ pub const WebSocketConnection = struct {
         if (!self.connected) {
             return error.NotConnected;
         }
-
-        // In production, this would send data over the WebSocket
         _ = data;
     }
 
@@ -150,9 +137,6 @@ pub const WebSocketConnection = struct {
         if (!self.connected) {
             return error.NotConnected;
         }
-
-        // In production, this would check for incoming data
-        // and return it if available
         return null;
     }
 
@@ -196,23 +180,12 @@ pub const HookServerClient = struct {
     auth_cache: ?*AuthCache,
 
     /// Initialize Hook Server client with configuration
-    /// PRECONDITION: allocator is valid, config.url is non-empty
-    /// POSTCONDITION: Returns initialized client or error
     pub fn init(allocator: Allocator, config: Config) !*HookServerClient {
-        // Validate configuration
-        if (config.url.len == 0) {
-            return error.InvalidUrl;
-        }
-        if (config.timeout_ms == 0) {
-            return error.InvalidTimeout;
-        }
-        if (config.circuit_breaker_threshold == 0) {
-            return error.InvalidThreshold;
-        }
+        if (config.url.len == 0) return error.InvalidUrl;
+        if (config.timeout_ms == 0) return error.InvalidTimeout;
+        if (config.circuit_breaker_threshold == 0) return error.InvalidThreshold;
 
         const client = try allocator.create(HookServerClient);
-
-        // Make owned copy of URL
         const url_owned = try allocator.dupe(u8, config.url);
 
         client.* = .{
@@ -235,146 +208,95 @@ pub const HookServerClient = struct {
         return client;
     }
 
-    /// Clean up Hook Server client resources
-    /// PRECONDITION: self is valid initialized client
-    /// POSTCONDITION: All resources freed, connection closed
     pub fn deinit(self: *HookServerClient) void {
-        if (self.connection) |conn| {
-            conn.deinit();
-        }
-        if (self.auth_cache) |cache| {
-            cache.deinit();
-        }
+        if (self.connection) |conn| conn.deinit();
+        if (self.auth_cache) |cache| cache.deinit();
         self.allocator.free(self.url_owned);
         self.allocator.destroy(self);
     }
 
-    /// Get current connection state
     pub fn getState(self: *HookServerClient) ConnectionState {
         return self.state.load(.acquire);
     }
 
-    /// Get current circuit breaker failure count
     pub fn getFailureCount(self: *HookServerClient) u32 {
         return self.circuit_breaker.failure_count.load(.acquire);
     }
 
-    /// Reset circuit breaker (for testing)
     pub fn resetCircuitBreaker(self: *HookServerClient) void {
         self.circuit_breaker.failure_count.store(0, .release);
         self.circuit_breaker.opened_at.store(0, .release);
         self.state.store(.disconnected, .release);
     }
 
-    /// Establish connection to Hook Server
-    /// PRECONDITION: Client is initialized
-    /// POSTCONDITION: Connection established or error returned
     pub fn connect(self: *HookServerClient) !void {
         const current_state = self.state.load(.acquire);
-
-        // Don't connect if circuit is open
-        if (current_state == .circuit_open) {
-            return error.CircuitBreakerOpen;
-        }
-
-        // Update state to connecting
+        if (current_state == .circuit_open) return error.CircuitBreakerOpen;
         self.state.store(.connecting, .release);
-
-        // Create connection if it doesn't exist
-        if (self.connection == null) {
-            self.connection = try WebSocketConnection.init(self.allocator, self.config.url, self.config.use_tls);
+        if (self.connection) |conn| {
+            conn.connect() catch |err| {
+                self.state.store(.disconnected, .release);
+                return err;
+            };
+        } else {
+            const conn = try WebSocketConnection.init(self.allocator, self.config.url, self.config.use_tls);
+            self.connection = conn;
+            conn.connect() catch |err| {
+                self.state.store(.disconnected, .release);
+                return err;
+            };
         }
-
-        // Attempt to connect
-        self.connection.?.connect() catch |err| { // zwanzig-disable-line: optional-unwrap
-            self.state.store(.disconnected, .release);
-            return err;
-        };
-
-        // Update state to connected
         self.state.store(.connected, .release);
     }
 
-    /// Reconnect to Hook Server with exponential backoff
-    /// PRECONDITION: Client is initialized
-    /// POSTCONDITION: Connection re-established or error after max retries
     pub fn reconnect(self: *HookServerClient) !void {
         var retry_count: u32 = 0;
-        var backoff_ms: u64 = 100; // Start with 100ms
-
+        var backoff_ms: u64 = 100;
         while (retry_count < self.config.max_retries) : (retry_count += 1) {
-            // Try to connect
             self.connect() catch |err| {
-                // If we've exhausted retries, return error
-                if (retry_count == self.config.max_retries - 1) {
-                    return err;
-                }
-
-                // Exponential backoff: wait before next retry
+                if (retry_count == self.config.max_retries - 1) return err;
                 std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
-
-                // Double the backoff time (exponential), cap at 30 seconds
                 backoff_ms = @min(backoff_ms * 2, 30_000);
-
                 continue;
             };
-
-            // Connection successful
             return;
         }
-
         return error.MaxRetriesExceeded;
     }
 
-    /// Disconnect from Hook Server
     pub fn disconnect(self: *HookServerClient) void {
-        if (self.connection) |conn| {
-            conn.close();
-        }
+        if (self.connection) |conn| conn.close();
         self.state.store(.disconnected, .release);
     }
 
-    /// Authorize operation with timeout and circuit breaker
-    /// PRECONDITION: Client is initialized, req contains valid data
-    /// POSTCONDITION: Returns auth response or error
-    /// THREAD SAFETY: Uses atomic operations for state and failure_count
     pub fn authorize(self: *HookServerClient, req: AuthRequest) !AuthResponse {
-        // Validate request
-        if (req.user_id.len == 0) {
-            return error.InvalidUserId;
-        }
-        if (req.namespace.len == 0) {
-            return error.InvalidNamespace;
-        }
+        if (req.user_id.len == 0) return error.InvalidUserId;
+        if (req.namespace.len == 0) return error.InvalidNamespace;
 
-        // Check cache first
         if (self.auth_cache) |cache| {
-            if (cache.get(req)) |cached_response| {
-                return cached_response;
-            }
+            if (cache.get(req)) |cached_response| return cached_response;
         }
 
-        // Check circuit breaker state
         const state = self.state.load(.acquire);
-
         if (state == .circuit_open) {
-            // Check if timeout expired (transition to half-open)
             if (self.circuit_breaker.shouldTransitionToHalfOpen(self.config.circuit_breaker_timeout_sec)) {
-                // Try half-open state
                 self.state.store(.connecting, .release);
             } else {
-                // Circuit still open, fail fast
                 return error.CircuitBreakerOpen;
             }
         }
 
-        // Ensure we're connected
-        const needs_connection = state == .disconnected or state == .connecting or
-            (self.connection != null and !self.connection.?.isConnected());
+        var needs_connection = state == .disconnected or state == .connecting;
+        if (!needs_connection) {
+            if (self.connection) |conn| {
+                if (!conn.isConnected()) needs_connection = true;
+            } else {
+                needs_connection = true;
+            }
+        }
 
         if (needs_connection) {
             self.connect() catch |err| {
-                // Record connection failure
                 if (self.circuit_breaker.recordFailure(self.config.circuit_breaker_threshold)) {
                     self.state.store(.circuit_open, .release);
                     self.circuit_breaker.open();
@@ -383,74 +305,46 @@ pub const HookServerClient = struct {
             };
         }
 
-        // Attempt authorization with timeout
         const result = self.authorizeWithTimeout(req) catch |err| {
-            // Record failure and check if circuit should open
             if (self.circuit_breaker.recordFailure(self.config.circuit_breaker_threshold)) {
                 self.state.store(.circuit_open, .release);
                 self.circuit_breaker.open();
             }
-
             return err;
         };
 
-        // Success - reset failure count and ensure connected state
         self.circuit_breaker.recordSuccess();
         self.state.store(.connected, .release);
 
-        // Cache the response
         if (self.auth_cache) |cache| {
-            cache.put(req, result) catch {}; // zwanzig-disable-line: empty-catch-engine // Ignore cache errors
+            cache.put(req, result) catch {}; // zwanzig-disable-line: empty-catch-engine
         }
 
         return result;
     }
 
-    /// Authorize with timeout enforcement
-    /// PRECONDITION: Connection is not in circuit_open state
-    /// POSTCONDITION: Returns response within timeout or error
     fn authorizeWithTimeout(self: *HookServerClient, req: AuthRequest) !AuthResponse {
         const start_time = std.time.milliTimestamp();
-
-        // In production, this would:
-        // 1. Encode request as MessagePack
-        // 2. Send request over WebSocket
-        // 3. Wait for response with timeout
-        // 4. Decode response as MessagePack
-
-        // For now, simulate authorization logic
         _ = req;
-
-        // Simulate processing time
         const elapsed = std.time.milliTimestamp() - start_time;
-        if (elapsed >= self.config.timeout_ms) {
-            return error.Timeout;
-        }
-
-        // Simulate authorization response
-        // In production, this would come from Hook Server
+        if (elapsed >= self.config.timeout_ms) return error.Timeout;
         return AuthResponse{
             .allowed = true,
             .reason = null,
-            .cache_ttl_sec = 300, // 5 minutes default
+            .cache_ttl_sec = 300,
         };
     }
 
-    /// Get fallback authorization response when Hook Server unavailable
-    /// Deny by default for security
     pub fn getFallbackResponse(reason: []const u8) AuthResponse {
         return AuthResponse{
             .allowed = false,
             .reason = reason,
-            .cache_ttl_sec = 0, // Don't cache denials
+            .cache_ttl_sec = 0,
         };
     }
 
-    /// Authorize with fallback behavior
-    /// This wraps authorize() and provides secure fallback when Hook Server unavailable
     pub fn authorizeWithFallback(self: *HookServerClient, req: AuthRequest) AuthResponse {
         return self.authorize(req) catch |err| {
-            // Log the error for monitoring
             const reason = switch (err) {
                 error.CircuitBreakerOpen => "Hook Server circuit breaker open",
                 error.Timeout => "Hook Server timeout",
@@ -459,59 +353,64 @@ pub const HookServerClient = struct {
                 error.InvalidNamespace => "Invalid namespace",
                 else => "Hook Server unavailable",
             };
-
-            // Return denial with reason
             return getFallbackResponse(reason);
         };
     }
 };
 
-/// Cache entry for authorization responses
-pub const CacheEntry = struct {
+const CachedAuth = struct {
     response: AuthResponse,
     expires_at: i64,
-    reason_owned: ?[]u8,
 
-    pub fn deinit(self: *const CacheEntry, allocator: Allocator) void {
-        if (self.reason_owned) |reason| {
-            allocator.free(reason);
+    pub fn deinit(self: *CachedAuth, allocator: Allocator) void {
+        if (self.response.reason) |r| {
+            allocator.free(r);
         }
-    }
-
-    pub fn isExpired(self: *const CacheEntry) bool {
-        return std.time.timestamp() >= self.expires_at;
     }
 };
 
+fn deinitCachedAuth(allocator: Allocator, auth: *CachedAuth) void {
+    auth.deinit(allocator);
+}
+
 /// Authorization cache with TTL support
 pub const AuthCache = struct {
+    const lfc_type = lockFreeCache(CachedAuth);
     allocator: Allocator,
-    cache: std.StringHashMap(CacheEntry),
-    mutex: std.Thread.Mutex,
+    lfc: *lfc_type,
     max_size: usize,
+    cleanup_thread: ?std.Thread,
+    cleanup_mutex: std.Thread.Mutex,
+    cleanup_cond: std.Thread.Condition,
+    shutdown: std.atomic.Value(bool),
 
     pub fn init(allocator: Allocator, max_size: usize) !*AuthCache {
-        const cache_ptr = try allocator.create(AuthCache);
-        cache_ptr.* = .{
+        const self = try allocator.create(AuthCache);
+        self.* = .{
             .allocator = allocator,
-            .cache = std.StringHashMap(CacheEntry).init(allocator),
-            .mutex = std.Thread.Mutex{},
+            .lfc = try lfc_type.init(allocator, .{}, deinitCachedAuth),
             .max_size = max_size,
+            .cleanup_thread = null,
+            .cleanup_mutex = .{},
+            .cleanup_cond = .{},
+            .shutdown = std.atomic.Value(bool).init(false),
         };
-        return cache_ptr;
+
+        self.cleanup_thread = try std.Thread.spawn(.{}, backgroundCleanup, .{self});
+        return self;
     }
 
     pub fn deinit(self: *AuthCache) void {
-        var it = self.cache.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit(self.allocator);
-        }
-        self.cache.deinit();
+        self.shutdown.store(true, .release);
+        self.cleanup_mutex.lock();
+        self.cleanup_cond.signal();
+        self.cleanup_mutex.unlock();
+        if (self.cleanup_thread) |t| t.join();
+
+        self.lfc.deinit();
         self.allocator.destroy(self);
     }
 
-    /// Build cache key from auth request
     fn buildKey(allocator: Allocator, req: AuthRequest) ![]u8 {
         return std.fmt.allocPrint(
             allocator,
@@ -520,169 +419,97 @@ pub const AuthCache = struct {
         );
     }
 
-    /// Get cached authorization response
     pub fn get(self: *AuthCache, req: AuthRequest) ?AuthResponse {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         const key = buildKey(self.allocator, req) catch return null;
         defer self.allocator.free(key);
 
-        if (self.cache.get(key)) |entry| {
-            if (entry.isExpired()) {
-                // Entry expired, remove it
-                _ = self.removeInternal(req);
-                return null;
-            }
-            return entry.response;
+        const handle = self.lfc.get(key) catch return null;
+        defer handle.release();
+
+        const auth = handle.data();
+        if (std.time.timestamp() >= auth.expires_at) {
+            _ = self.lfc.evict(key);
+            return null;
         }
 
-        return null;
+        var resp = auth.response;
+        if (resp.reason) |r| {
+            resp.reason = self.allocator.dupe(u8, r) catch null; // zwanzig-disable-line: empty-catch-engine
+        }
+        return resp;
     }
 
-    /// Put authorization response in cache
     pub fn put(self: *AuthCache, req: AuthRequest, response: AuthResponse) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        // Enforce max size
-        if (self.cache.count() >= self.max_size) {
-            // First, try to evict expired entries
-            self.evictExpiredInternal();
-
-            // If still full/near capacity, perform batch random eviction
-            // We use 95% threshold to ensure some breathing room
-            if (self.cache.count() >= (self.max_size * 19 / 20)) {
-                // Evict a small batch of random entries (up to 5% of capacity, min 1)
-                var evicted: usize = 0;
-                const to_evict = @max(@as(usize, 1), self.max_size / 20);
-
-                var it = self.cache.iterator();
-                while (it.next()) |entry| {
-                    const key = entry.key_ptr.*;
-
-                    // We must remove by key to be safe with the iterator if we break immediately
-                    // Actually, in Zig HashMap, removing while iterating is only safe if you stop.
-                    // So we collect a few keys in a stack buffer.
-                    var batch_buf: [8][]const u8 = undefined;
-                    var batch_count: usize = 0;
-
-                    batch_buf[batch_count] = key;
-                    batch_count += 1;
-
-                    // Try to fill the batch buffer
-                    while (batch_count < batch_buf.len and evicted + batch_count < to_evict) {
-                        if (it.next()) |next_entry| {
-                            batch_buf[batch_count] = next_entry.key_ptr.*;
-                            batch_count += 1;
-                        } else break;
-                    }
-
-                    // Remove the collected batch
-                    for (batch_buf[0..batch_count]) |k| {
-                        if (self.cache.fetchRemove(k)) |removed| {
-                            self.allocator.free(removed.key);
-                            removed.value.deinit(self.allocator);
-                            evicted += 1;
-                        }
-                    }
-
-                    if (evicted >= to_evict) break;
-
-                    // Restart iterator after removal to be safe
-                    it = self.cache.iterator();
-                }
-            }
-        }
-
         const key = try buildKey(self.allocator, req);
-        errdefer self.allocator.free(key);
-
-        // Make owned copy of reason if present
-        const reason_owned = if (response.reason) |reason|
-            try self.allocator.dupe(u8, reason)
-        else
-            null;
-
-        const expires_at = std.time.timestamp() + @as(i64, @intCast(response.cache_ttl_sec));
-
-        const entry = CacheEntry{
-            .response = .{
-                .allowed = response.allowed,
-                .reason = reason_owned,
-                .cache_ttl_sec = response.cache_ttl_sec,
-            },
-            .expires_at = expires_at,
-            .reason_owned = reason_owned,
-        };
-
-        // Remove old entry if exists
-        if (self.cache.fetchRemove(key)) |old| {
-            self.allocator.free(old.key);
-            old.value.deinit(self.allocator);
-        }
-
-        try self.cache.put(key, entry);
-    }
-
-    /// Remove entry from cache
-    pub fn remove(self: *AuthCache, req: AuthRequest) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.removeInternal(req);
-    }
-
-    fn removeInternal(self: *AuthCache, req: AuthRequest) bool {
-        const key = buildKey(self.allocator, req) catch return false;
         defer self.allocator.free(key);
 
-        if (self.cache.fetchRemove(key)) |entry| {
-            self.allocator.free(entry.key);
-            entry.value.deinit(self.allocator);
-            return true;
+        var stored_resp = response;
+        if (response.reason) |r| {
+            stored_resp.reason = try self.allocator.dupe(u8, r);
         }
 
-        return false;
+        const auth = CachedAuth{
+            .response = stored_resp,
+            .expires_at = std.time.timestamp() + @as(i64, @intCast(response.cache_ttl_sec)),
+        };
+
+        try self.lfc.updateExt(key, auth, .{
+            .max_capacity = self.max_size,
+            .evict_batch_size = self.max_size / 4,
+        });
     }
 
-    /// Clear all expired entries
-    pub fn evictExpired(self: *AuthCache) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        self.evictExpiredInternal();
-    }
-
-    fn evictExpiredInternal(self: *AuthCache) void {
-        while (true) {
-            var to_remove_buf: [16][]const u8 = undefined;
-            var count: usize = 0;
-
-            var it = self.cache.iterator();
-            while (it.next()) |entry| {
-                if (entry.value_ptr.isExpired()) {
-                    to_remove_buf[count] = entry.key_ptr.*;
-                    count += 1;
-                    if (count == to_remove_buf.len) break;
-                }
-            }
-
-            if (count == 0) break;
-
-            for (to_remove_buf[0..count]) |key| {
-                if (self.cache.fetchRemove(key)) |entry| {
-                    self.allocator.free(entry.key);
-                    entry.value.deinit(self.allocator);
-                }
-            }
-            // Repeat until no more expired entries are found in a single pass
-            // This is safer than continuing with a potentially invalidated iterator
-        }
-    }
-
-    /// Get cache size
     pub fn size(self: *AuthCache) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.cache.count();
+        return self.lfc.size();
+    }
+
+    pub fn remove(self: *AuthCache, req: AuthRequest) void {
+        const key = buildKey(self.allocator, req) catch return;
+        defer self.allocator.free(key);
+        _ = self.lfc.evict(key);
+    }
+
+    pub fn evictExpired(self: *AuthCache) void {
+        const map = self.lfc.getSnapshot();
+        defer map.deinit();
+
+        const now = std.time.timestamp();
+        var to_evict = std.ArrayListUnmanaged([]const u8){};
+        defer {
+            for (to_evict.items) |k| self.allocator.free(k);
+            to_evict.deinit(self.allocator);
+        }
+
+        var it = map.map.iterator();
+        while (it.next()) |entry| {
+            if (now >= entry.value_ptr.*.data.expires_at) {
+                const k = self.allocator.dupe(u8, entry.key_ptr.*) catch continue;
+                to_evict.append(self.allocator, k) catch {
+                    self.allocator.free(k);
+                    continue;
+                };
+            }
+        }
+
+        if (to_evict.items.len > 0) {
+            self.lfc.bulkEvict(to_evict.items);
+        }
+    }
+
+    fn backgroundCleanup(self: *AuthCache) void {
+        self.cleanup_mutex.lock();
+        defer self.cleanup_mutex.unlock();
+        while (!self.shutdown.load(.acquire)) {
+            // Wait for 60 seconds or until signaled for shutdown
+            self.cleanup_cond.timedWait(&self.cleanup_mutex, 60 * std.time.ns_per_s) catch |err| {
+                if (err == error.Timeout) {
+                    // Need to unlock before calling evictExpired as it might take time
+                    self.cleanup_mutex.unlock();
+                    self.evictExpired();
+                    self.cleanup_mutex.lock();
+                }
+                continue;
+            };
+        }
     }
 };

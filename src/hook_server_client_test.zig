@@ -226,8 +226,7 @@ test "HookServerClient: authorization cache operations" {
     try testing.expectEqual(@as(usize, 1), cache.size());
 
     // Remove entry
-    const removed = cache.remove(req);
-    try testing.expect(removed);
+    cache.remove(req);
 
     // Cache should be empty again
     try testing.expect(cache.get(req) == null);
@@ -357,4 +356,91 @@ test "AuthCache: enforce max_size" {
 
     // Verify it's still alive and functional
     try testing.expect(cache.size() > 0);
+}
+
+test "AuthCache: concurrent put enforcement" {
+    const allocator = testing.allocator;
+    const max_size = 20;
+    var cache = try hook_server.AuthCache.init(allocator, max_size);
+    defer cache.deinit();
+
+    const num_threads = 8;
+    const puts_per_thread = 50;
+
+    const ThreadCtx = struct {
+        cache: *hook_server.AuthCache,
+        allocator: std.mem.Allocator,
+        thread_id: usize,
+        count: usize,
+
+        fn run(ctx: @This()) void {
+            var i: usize = 0;
+            while (i < ctx.count) : (i += 1) {
+                const user_id = std.fmt.allocPrint(ctx.allocator, "user-{}-{}", .{ ctx.thread_id, i }) catch unreachable; // zwanzig-disable-line: swallowed-error
+                defer ctx.allocator.free(user_id);
+
+                const req = AuthRequest{
+                    .user_id = user_id,
+                    .namespace = "ns",
+                    .operation = .read,
+                    .resource = "res",
+                    .timestamp = std.time.timestamp(),
+                };
+                const resp = hook_server.AuthResponse{
+                    .allowed = true,
+                    .reason = null,
+                    .cache_ttl_sec = 60,
+                };
+                ctx.cache.put(req, resp) catch {}; // zwanzig-disable-line: empty-catch-engine
+            }
+        }
+    };
+
+    var threads: [num_threads]std.Thread = undefined;
+    for (&threads, 0..) |*t, i| {
+        t.* = try std.Thread.spawn(.{}, ThreadCtx.run, .{ThreadCtx{
+            .cache = cache,
+            .allocator = allocator,
+            .thread_id = i,
+            .count = puts_per_thread,
+        }});
+    }
+
+    for (threads) |t| t.join();
+
+    // The size should never exceed max_size
+    const final_size = cache.size();
+    try testing.expect(final_size <= max_size);
+}
+
+test "AuthCache: evictExpired manually" {
+    const allocator = testing.allocator;
+    var cache = try hook_server.AuthCache.init(allocator, 100);
+    defer cache.deinit();
+
+    const req = AuthRequest{
+        .user_id = "expired-user",
+        .namespace = "ns",
+        .operation = .read,
+        .resource = "res",
+        .timestamp = std.time.timestamp(),
+    };
+
+    // Put entry with 1s TTL
+    const resp = hook_server.AuthResponse{
+        .allowed = true,
+        .reason = null,
+        .cache_ttl_sec = 1,
+    };
+    try cache.put(req, resp);
+
+    try testing.expectEqual(@as(usize, 1), cache.size());
+
+    // Wait for it to expire
+    std.Thread.sleep(1100 * std.time.ns_per_ms);
+
+    // Call evictExpired manually
+    cache.evictExpired();
+
+    try testing.expectEqual(@as(usize, 0), cache.size());
 }

@@ -6,7 +6,6 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const storage_mod = @import("storage_engine.zig");
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
@@ -36,9 +35,6 @@ test "store: set field extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -46,7 +42,6 @@ test "store: set field extraction" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -206,9 +201,6 @@ test "store: engine set integration" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -216,7 +208,6 @@ test "store: engine set integration" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -358,9 +349,6 @@ test "store: set success response format" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -368,7 +356,6 @@ test "store: set success response format" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -495,9 +482,6 @@ test "store: get field extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -505,7 +489,6 @@ test "store: get field extraction" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -626,9 +609,6 @@ test "store: engine get integration" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -636,7 +616,6 @@ test "store: engine get integration" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -803,9 +782,6 @@ test "store: get value response format" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -813,7 +789,6 @@ test "store: get value response format" {
         &request_handler,
         engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 

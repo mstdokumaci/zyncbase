@@ -368,11 +368,11 @@ pub const CheckpointManager = struct {
     pub fn backgroundCheckpointLoop(self: *CheckpointManager) !void {
         std.log.info("Starting background checkpoint loop (interval: {}s)", .{self.config.check_interval_sec});
 
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
         while (!self.shutdown_requested.load(.acquire)) {
             // Wait for configured interval or shutdown signal
-            self.shutdown_mutex.lock();
             self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch {}; // zwanzig-disable-line: swallowed-error empty-catch-engine
-            self.shutdown_mutex.unlock();
 
             if (self.shutdown_requested.load(.acquire)) break;
 
@@ -384,11 +384,14 @@ pub const CheckpointManager = struct {
 
                 std.log.info("Checkpoint triggered: wal_size={} bytes, time_since_last={}s", .{ wal_size, time_since_last });
 
-                // Perform checkpoint with escalation
+                // Unlock for actual work
+                self.shutdown_mutex.unlock();
                 const result = self.performCheckpointWithEscalation() catch |err| {
                     std.log.err("Background checkpoint failed: {}", .{err});
+                    self.shutdown_mutex.lock();
                     continue;
                 };
+                self.shutdown_mutex.lock();
 
                 if (result.success) {
                     std.log.info("Background checkpoint completed successfully", .{});
@@ -403,7 +406,9 @@ pub const CheckpointManager = struct {
     /// Stop the background checkpoint loop
     pub fn stop(self: *CheckpointManager) void {
         self.shutdown_requested.store(true, .release);
+        self.shutdown_mutex.lock();
         self.shutdown_cond.signal();
+        self.shutdown_mutex.unlock();
     }
 
     /// Start background checkpoint loop in a separate thread

@@ -26,7 +26,6 @@ test "Integration: All components properly wired" {
 
     // Verify all components are initialized and connected (pointers are non-null)
     try testing.expect(@intFromPtr(server.memory_strategy) != 0);
-    try testing.expect(@intFromPtr(server.cache) != 0);
     try testing.expect(@intFromPtr(server.violation_tracker) != 0);
     try testing.expect(@intFromPtr(server.subscription_manager) != 0);
     try testing.expect(@intFromPtr(server.checkpoint_manager) != 0);
@@ -38,7 +37,6 @@ test "Integration: All components properly wired" {
     try testing.expect(server.message_handler.storage_engine == server.storage_engine);
     try testing.expect(server.message_handler.storage_engine == server.storage_engine);
     try testing.expect(server.message_handler.subscription_manager == server.subscription_manager);
-    try testing.expect(server.message_handler.cache == server.cache);
 
     // Verify shutdown flag is initialized
     try testing.expect(server.shutdown_requested.load(.acquire) == false);

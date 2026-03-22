@@ -6,7 +6,6 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
@@ -106,9 +105,6 @@ test "buffer: message deallocation after processing" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     // Test 1: Single message processing
     {
         var handler = try MessageHandler.init(
@@ -118,7 +114,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -153,7 +148,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -184,7 +178,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -216,7 +209,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -242,7 +234,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -278,7 +269,6 @@ test "buffer: message deallocation after processing" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler.deinit();
 
@@ -390,10 +380,7 @@ test "buffer: concurrent message deallocation" {
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    var cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
-    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, &request_handler, storage_engine, subscription_manager, cache);
+    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, &request_handler, storage_engine, subscription_manager);
     defer handler.deinit();
 
     const ThreadContext = struct {

@@ -7,7 +7,6 @@ const RequestHandler = @import("request_handler.zig").RequestHandler;
 const it_storage_mod = @import("storage_engine.zig");
 const storage_mod = it_storage_mod;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
@@ -56,9 +55,6 @@ test "Verification: WebSocket connection lifecycle" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -66,7 +62,6 @@ test "Verification: WebSocket connection lifecycle" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -127,9 +122,6 @@ test "Verification: StoreSet message processing" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -137,7 +129,6 @@ test "Verification: StoreSet message processing" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -241,9 +232,6 @@ test "Verification: StoreGet message processing" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -251,7 +239,6 @@ test "Verification: StoreGet message processing" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -353,9 +340,6 @@ test "Verification: Error handling for invalid messages" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -363,7 +347,6 @@ test "Verification: Error handling for invalid messages" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -489,9 +472,6 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -499,7 +479,6 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 

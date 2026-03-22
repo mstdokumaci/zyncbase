@@ -7,6 +7,9 @@ const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
+
+const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -101,6 +104,16 @@ pub const StorageEngine = struct {
     write_cond: std.Thread.Condition,
     node_pool: MemoryStrategy.Pool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
+    metadata_cache: *metadata_cache_type,
+    /// Monotonically increasing counter bumped by the write thread after each
+    /// successful batch commit, before cache eviction. Readers snapshot this
+    /// before the DB read and only populate the cache if it hasn't advanced,
+    /// preventing stale values from racing into the cache.
+    write_seq: std.atomic.Value(u64),
+
+    fn deinitPayload(allocator: Allocator, payload: *msgpack.Payload) void {
+        payload.free(allocator);
+    }
 
     pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
         const self = try allocator.create(StorageEngine);
@@ -134,6 +147,9 @@ pub const StorageEngine = struct {
         const num_readers = try std.Thread.getCpuCount();
         const reader_pool = try allocator.alloc(ReaderNode, num_readers);
         errdefer allocator.free(reader_pool);
+
+        const metadata_cache = try metadata_cache_type.init(allocator, .{}, deinitPayload);
+        errdefer metadata_cache.deinit();
 
         var initialized_readers: usize = 0;
         errdefer {
@@ -170,6 +186,8 @@ pub const StorageEngine = struct {
             .write_mutex = .{},
             .write_cond = .{},
             .schema = schema,
+            .metadata_cache = metadata_cache,
+            .write_seq = std.atomic.Value(u64).init(0),
         };
 
         self.write_queue = try WriteQueue.init(allocator, &self.node_pool);
@@ -201,16 +219,18 @@ pub const StorageEngine = struct {
             thread.join();
         }
 
+        // 3. Deinit cache
+        self.metadata_cache.deinit();
         self.writer_conn.deinit();
 
-        // 3. Clean up readers
+        // 4. Clean up readers
         for (self.reader_pool) |*node| {
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
         gpa.free(self.db_path);
 
-        // 4. Clean up the queues and objects
+        // 5. Clean up the queues and objects
         self.write_queue.deinit();
         self.node_pool.deinit();
 
@@ -520,6 +540,10 @@ pub const StorageEngine = struct {
         }
     }
 
+    fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
+        return try std.fmt.allocPrint(self.allocator, "{s}:{s}:{s}", .{ table, namespace, id });
+    }
+
     // ─── Storage methods ──────────────────────────────────────────────────
 
     /// INSERT OR REPLACE a document into a table.
@@ -532,6 +556,7 @@ pub const StorageEngine = struct {
         columns: []const ColumnValue,
     ) !void {
         std.log.debug("insertOrReplace: table='{s}', id='{s}', namespace='{s}'", .{ table, id, namespace });
+
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateColumns(table, columns);
 
@@ -568,10 +593,10 @@ pub const StorageEngine = struct {
             self.allocator.free(col_bytes);
         }
         for (columns, 0..) |col, i| {
-            var aw: std.Io.Writer.Allocating = .init(self.allocator);
-            defer aw.deinit();
-            try msgpack.encode(col.value, &aw.writer);
-            col_bytes[i] = try aw.toOwnedSlice();
+            var list: std.ArrayList(u8) = .{};
+            errdefer list.deinit(self.allocator);
+            try msgpack.encodeTrusted(col.value, list.writer(self.allocator));
+            col_bytes[i] = try list.toOwnedSlice(self.allocator);
         }
 
         const now = std.time.timestamp();
@@ -611,10 +636,10 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateField(table, field);
 
-        var aw: std.Io.Writer.Allocating = .init(self.allocator);
-        defer aw.deinit();
-        try msgpack.encode(value, &aw.writer);
-        const val_bytes = try aw.toOwnedSlice();
+        var list: std.ArrayList(u8) = .{};
+        errdefer list.deinit(self.allocator);
+        try msgpack.encodeTrusted(value, list.writer(self.allocator));
+        const val_bytes = try list.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(val_bytes);
 
         const sql = try std.fmt.allocPrint(self.allocator,
@@ -663,6 +688,19 @@ pub const StorageEngine = struct {
     ) !?msgpack.Payload {
         try self.validateTable(table);
 
+        const cache_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}:{s}", .{ table, namespace, id });
+        defer self.allocator.free(cache_key);
+
+        if (self.metadata_cache.get(cache_key)) |handle| {
+            defer handle.release();
+            // We must copy the payload because the caller owns it and it might be modified or freed
+            // after we release the handle.
+            return try self.duplicatePayload(handle.data().*);
+        } else |err| switch (err) {
+            error.NotFound => {},
+            else => return err,
+        }
+
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
@@ -671,7 +709,32 @@ pub const StorageEngine = struct {
         const sql = try std.fmt.allocPrint(self.allocator, "SELECT * FROM {s} WHERE id=? AND namespace_id=?", .{table});
         defer self.allocator.free(sql);
 
-        return self.execSelectDocument(&node.conn, sql, id, namespace);
+        // Snapshot write_seq before the DB read. We only populate the cache if
+        // the sequence hasn't advanced, meaning no write committed (and evicted
+        // this key) between our read and the cache store.
+        const seq_before = self.write_seq.load(.acquire);
+
+        const payload = try self.execSelectDocument(&node.conn, sql, id, namespace);
+        if (payload) |p| {
+            errdefer p.free(self.allocator);
+            if (self.write_seq.load(.acquire) == seq_before) {
+                const cache_payload = try self.duplicatePayload(p);
+                errdefer cache_payload.free(self.allocator);
+                try self.metadata_cache.update(cache_key, cache_payload);
+            }
+        }
+        return payload;
+    }
+
+    fn duplicatePayload(self: *StorageEngine, payload: msgpack.Payload) !msgpack.Payload {
+        // We use an allocating writer to clone the payload via msgpack encode/decode for simplicity
+        // though a recursive clone would be more efficient.
+        var list: std.ArrayList(u8) = .{};
+        defer list.deinit(self.allocator);
+        try msgpack.encodeTrusted(payload, list.writer(self.allocator));
+
+        var fbs = std.Io.fixedBufferStream(list.items);
+        return try msgpack.decodeTrusted(self.allocator, fbs.reader());
     }
 
     /// SELECT a single field for a document. Returns null if not found.
@@ -768,7 +831,7 @@ pub const StorageEngine = struct {
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
                 const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
                 var any_reader: std.Io.Reader = .fixed(b);
-                break :blk msgpack.decode(self.allocator, &any_reader) catch
+                break :blk msgpack.decodeTrusted(self.allocator, &any_reader) catch
                     try msgpack.Payload.strToPayload(b, self.allocator);
             },
             else => .nil, // SQLITE_NULL
@@ -1023,6 +1086,9 @@ pub const StorageEngine = struct {
                             if (self.writer_conn.exec("COMMIT", .{}, .{})) |_| {
                                 self.transaction_active.store(false, .release);
                                 self.manual_transaction_active.store(false, .release);
+                                // Bump write_seq so readers know committed data may
+                                // differ from anything they read during the transaction.
+                                _ = self.write_seq.fetchAdd(1, .acq_rel);
                                 if (top.completion_signal) |sig| sig.signal(null);
                             } else |err| {
                                 self.transaction_active.store(false, .release);
@@ -1069,6 +1135,11 @@ pub const StorageEngine = struct {
                 }
             }
 
+            // Signal any threads waiting on flushPendingWrites
+            self.write_mutex.lock();
+            self.write_cond.broadcast();
+            self.write_mutex.unlock();
+
             // Check if we should flush batch
             const now = std.time.milliTimestamp();
             const time_since_last = now - last_batch_time;
@@ -1113,8 +1184,65 @@ pub const StorageEngine = struct {
     fn flushBatch(self: *StorageEngine, batch: *std.ArrayListUnmanaged(WriteOp), last_batch_time: *i64) !void {
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
+
+        // Collect eviction keys BEFORE committing so the cache is cleared
+        // before the new data becomes visible to readers. This ensures a reader
+        // that starts after the commit will always miss the cache and go to DB.
+        var eviction_keys = std.ArrayList([]const u8).empty;
+        defer {
+            for (eviction_keys.items) |k| self.allocator.free(k);
+            eviction_keys.deinit(self.allocator);
+        }
+        for (batch.items) |op| {
+            var table: []const u8 = undefined;
+            var id: []const u8 = undefined;
+            var ns: []const u8 = undefined;
+            const has_affected = switch (op) {
+                .insert => |o| blk: {
+                    table = o.table;
+                    id = o.id;
+                    ns = o.namespace;
+                    break :blk true;
+                },
+                .update => |o| blk: {
+                    table = o.table;
+                    id = o.id;
+                    ns = o.namespace;
+                    break :blk true;
+                },
+                .delete => |o| blk: {
+                    table = o.table;
+                    id = o.id;
+                    ns = o.namespace;
+                    break :blk true;
+                },
+                else => false,
+            };
+            if (has_affected) {
+                const key = self.getCacheKey(table, ns, id) catch |err| {
+                    std.log.err("Failed to create cache key for eviction: {}", .{err});
+                    continue;
+                };
+                eviction_keys.append(self.allocator, key) catch |err| {
+                    std.log.err("Failed to append eviction key: {}", .{err});
+                    self.allocator.free(key);
+                    continue;
+                };
+            }
+        }
+
+        // Evict before commit: any reader starting after this point will miss
+        // the cache and read fresh data from DB once the commit lands.
+        if (eviction_keys.items.len > 0) {
+            self.metadata_cache.bulkEvict(eviction_keys.items);
+        }
+
         const result = self.executeBatch(batch.items);
         if (result) |_| {
+            // Bump write_seq after commit so selectDocument's guard knows a
+            // write landed and skips caching a value read before this commit.
+            _ = self.write_seq.fetchAdd(1, .acq_rel);
+
             for (batch.items) |op| {
                 if (op.getCompletionSignal()) |sig| {
                     sig.signal(null);

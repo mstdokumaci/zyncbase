@@ -9,7 +9,6 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
 const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const LockFreeCache = @import("lock_free_cache.zig").LockFreeCache;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 
 // **Property: Connection open/close is inverse operation**
@@ -85,9 +84,6 @@ test "connection: open/close is inverse operation" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
@@ -96,7 +92,6 @@ test "connection: open/close is inverse operation" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -494,9 +489,6 @@ test "connection: unique monotonically increasing IDs" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
@@ -505,7 +497,6 @@ test "connection: unique monotonically increasing IDs" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -611,7 +602,6 @@ test "connection: unique monotonically increasing IDs" {
             &request_handler,
             storage_engine,
             subscription_manager,
-            cache,
         );
         defer handler2.deinit();
 
@@ -695,9 +685,6 @@ test "message: all valid frames are parsed" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     // Initialize message handler
     const handler = try MessageHandler.init(
         allocator,
@@ -706,7 +693,6 @@ test "message: all valid frames are parsed" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -802,9 +788,6 @@ test "message: type extraction" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -812,7 +795,6 @@ test "message: type extraction" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -950,9 +932,6 @@ test "message: request routing to handlers" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -960,7 +939,6 @@ test "message: request routing to handlers" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -1091,9 +1069,6 @@ test "message: response correlation by ID" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -1101,7 +1076,6 @@ test "message: response correlation by ID" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
@@ -1284,9 +1258,6 @@ test "message: error responses for invalid types/fields" {
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
 
-    const cache = try LockFreeCache.init(allocator, .{});
-    defer cache.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
@@ -1294,7 +1265,6 @@ test "message: error responses for invalid types/fields" {
         &request_handler,
         storage_engine,
         subscription_manager,
-        cache,
     );
     defer handler.deinit();
 
