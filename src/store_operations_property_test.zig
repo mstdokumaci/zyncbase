@@ -740,20 +740,24 @@ test "store: engine get integration" {
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
-        // Should get a NOT_FOUND response
+        // Should get an 'ok' response with value: null
         var fbs_reader: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &fbs_reader);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
-        var found_not_found = false;
+        var found_ok = false;
+        var found_null = false;
         var it = resp_parsed.map.iterator();
         while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "code")) {
-                try testing.expectEqualStrings("NOT_FOUND", entry.value_ptr.*.str.value());
-                found_not_found = true;
+            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
+                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
+                found_ok = true;
+            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                try testing.expect(entry.value_ptr.* == .nil);
+                found_null = true;
             }
         }
-        try testing.expect(found_not_found);
+        try testing.expect(found_ok and found_null);
     }
 }
 
@@ -930,19 +934,22 @@ test "store: get value response format" {
         const response = try handler.routeMessage(1, msg_info, parsed);
         defer allocator.free(response);
 
-        // Response should indicate not found
+        // Response should indicate not found (ok response with nil value)
         var reader_resp_get: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &reader_resp_get);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
-        var is_error = false;
+        var found_ok = false;
+        var found_null = false;
         var it = resp_parsed.map.iterator();
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                if (std.mem.eql(u8, entry.value_ptr.*.str.value(), "error")) is_error = true;
+                if (std.mem.eql(u8, entry.value_ptr.*.str.value(), "ok")) found_ok = true;
+            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
+                if (entry.value_ptr.* == .nil) found_null = true;
             }
         }
-        try testing.expect(is_error);
+        try testing.expect(found_ok and found_null);
     }
 
     // Test 4: Response format should be consistent

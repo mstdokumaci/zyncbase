@@ -39,6 +39,8 @@ pub const StorageError = error{
     NullNotAllowed,
     /// Write blocked because migration is in progress
     MigrationInProgress,
+    /// Field value type does not match schema
+    TypeMismatch,
 };
 
 /// A column name + msgpack value pair for storage inserts/updates.
@@ -533,11 +535,25 @@ pub const StorageEngine = struct {
                 if (std.mem.eql(u8, f.name, col.name)) {
                     found = true;
                     if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
+                    if (col.value != .nil) {
+                        try validateValueType(f.sql_type, col.value);
+                    }
                     break;
                 }
             }
             if (!found) return StorageError.UnknownField;
         }
+    }
+
+    fn validateValueType(ft: schema_parser.FieldType, value: msgpack.Payload) !void {
+        const match = switch (ft) {
+            .text => value == .str,
+            .integer => value == .uint or value == .int,
+            .real => value == .float or value == .uint or value == .int,
+            .boolean => value == .bool,
+            .array => value == .arr,
+        };
+        if (!match) return StorageError.TypeMismatch;
     }
 
     fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
@@ -665,12 +681,15 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         try self.validateField(table, field);
 
-        // Look up the field's sql_type to determine if it's an array field
+        // Look up the field's sql_type to determine if it's an array field and validate type
         const table_schema = self.findTable(table).?; // validateField already confirmed table exists
         var field_sql_type: schema_parser.FieldType = .text;
         for (table_schema.fields) |f| {
             if (std.mem.eql(u8, f.name, field)) {
                 field_sql_type = f.sql_type;
+                if (value != .nil) {
+                    try validateValueType(field_sql_type, value);
+                }
                 break;
             }
         }
@@ -941,7 +960,7 @@ pub const StorageEngine = struct {
 
     /// Read a single column value from a prepared statement at column index i.
     /// Pass the resolved schema Field for user-defined columns; pass null for system columns
-    /// (id, namespace_id, created_at, updated_at). Array fields stored as JSONB are returned
+    /// (id, namespace_id, created_at, updated_at). Array fields stored as BLOB are returned
     /// via json(col) in the SELECT, which yields SQLITE_TEXT — dispatched to jsonToPayload.
     fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);

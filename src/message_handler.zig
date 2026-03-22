@@ -450,20 +450,20 @@ pub const MessageHandler = struct {
                 }
 
                 // namespace is guaranteed to be non-null by the check above
-                try self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items);
+                self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items) catch |err| return self.sendStorageErrorResponse(msg_id, err);
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 // For now, only support single depth or simple join
                 if (f.fields.len == 1) {
                     // namespace and value are guaranteed to be non-null by the check above
-                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
                     // Note: Implement deep flattening if needed, or join with _
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace and value are guaranteed to be non-null by the check above
-                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot set on a collection
@@ -514,10 +514,7 @@ pub const MessageHandler = struct {
         const result_payload: ?msgpack.Payload = switch (parsed_path orelse unreachable) {
             .document => |doc| blk: {
                 // namespace is guaranteed to be non-null by the check above
-                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| {
-                    std.log.err("handleStoreGet: selectDocument error: {}", .{err});
-                    return err;
-                };
+                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
 
                 if (stored_doc == null) {
                     std.log.debug("handleStoreGet: selectDocument returned null for {s}:{s} in {s}", .{ doc.table, doc.id, namespace orelse unreachable });
@@ -529,27 +526,25 @@ pub const MessageHandler = struct {
             .field => |f| blk: {
                 // namespace is guaranteed to be non-null by the check above
                 if (f.fields.len == 1) {
-                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]);
+                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
-                    break :blk try self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field);
+                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 }
                 break :blk null;
             },
             .collection => |c| blk: {
                 // namespace is guaranteed to be non-null by the check above
                 // Return all documents in the collection
-                break :blk try self.storage_engine.selectCollection(c.table, namespace orelse unreachable);
+                break :blk self.storage_engine.selectCollection(c.table, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
             },
         };
 
         // Build response
-        if (result_payload) |payload| {
-            return try self.buildDataResponse(msg_id, payload);
-        } else {
-            return try self.buildErrorResponse(msg_id, "NOT_FOUND");
-        }
+        // If the result is null (e.g., document not found), return success with null value
+        // instead of an error, per the finalized error taxonomy spec.
+        return try self.buildDataResponse(msg_id, result_payload orelse .nil);
     }
 
     fn handleStoreRemove(
@@ -590,18 +585,18 @@ pub const MessageHandler = struct {
         switch (parsed_path orelse unreachable) {
             .document => |doc| {
                 // namespace is guaranteed to be non-null by the check above
-                try self.storage_engine.deleteDocument(doc.table, doc.id, namespace orelse unreachable);
+                self.storage_engine.deleteDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 if (f.fields.len == 1) {
                     // namespace is guaranteed to be non-null by the check above
-                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace is guaranteed to be non-null by the check above
-                    try self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot remove a whole collection yet
@@ -653,6 +648,18 @@ pub const MessageHandler = struct {
 
         try msgpack.encode(payload, list.writer(self.allocator));
         return try list.toOwnedSlice(self.allocator);
+    }
+    fn sendStorageErrorResponse(self: *MessageHandler, msg_id: u64, err: anyerror) ![]const u8 {
+        const code = if (err == error.UnknownTable)
+            "COLLECTION_NOT_FOUND"
+        else if (err == error.UnknownField)
+            "FIELD_NOT_FOUND"
+        else if (err == error.TypeMismatch)
+            "SCHEMA_VALIDATION_FAILED"
+        else
+            return err;
+
+        return try self.buildErrorResponse(msg_id, code);
     }
 
     /// Send error response to client

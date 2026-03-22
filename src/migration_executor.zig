@@ -111,7 +111,7 @@ pub const MigrationExecutor = struct {
             },
             .add_column => {
                 const field = change.field orelse return error.MissingFieldInChange;
-                const sql_type_str = fieldTypeToSql(field.sql_type);
+                const sql_type_str = field.sql_type.toSqlType();
                 // SQLite ALTER TABLE ADD COLUMN does NOT allow NOT NULL without DEFAULT
                 const sql = try std.fmt.allocPrint(
                     self.allocator,
@@ -306,14 +306,4 @@ fn findTable(schema: schema_parser.Schema, name: []const u8) ?schema_parser.Tabl
         if (std.mem.eql(u8, t.name, name)) return t;
     }
     return null;
-}
-
-fn fieldTypeToSql(ft: schema_parser.FieldType) []const u8 {
-    return switch (ft) {
-        .text => "TEXT",
-        .integer => "INTEGER",
-        .real => "REAL",
-        .boolean => "INTEGER",
-        .array => "TEXT",
-    };
 }

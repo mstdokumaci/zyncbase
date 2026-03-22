@@ -47,6 +47,9 @@ zig build -Doptimize=ReleaseFast
 
 # 1. Bi-directional Sync Test
 echo "--- Scenario 1: Bi-directional Sync ---"
+rm -rf "$DATA_DIR"
+mkdir -p "$DATA_DIR"
+
 # Create config for sync test
 echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'", "schema": "tests/e2e/schema-sync.json"}' > test-artifacts/zyncbase-config.json
 
@@ -66,6 +69,9 @@ sleep 0.5
 
 # 2. Persistence Test
 echo "--- Scenario 2: Persistence ---"
+rm -rf "$DATA_DIR"
+mkdir -p "$DATA_DIR"
+
 # Create config for persistence test
 echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'", "schema": "tests/e2e/schema-persistence.json"}' > test-artifacts/zyncbase-config.json
 
@@ -87,6 +93,25 @@ SERVER_PID=$!
 wait_for_port $PORT
 
 bun tests/e2e/src/test-persistence.ts get
-# Cleanup (kill and rm config) handled by trap EXIT
+kill $SERVER_PID
+SERVER_PID=""
+sleep 0.5
+
+# 3. Error Reporting Test
+echo "--- Scenario 3: Error Reporting ---"
+rm -rf "$DATA_DIR"
+mkdir -p "$DATA_DIR"
+
+# Reuse sync schema
+echo '{"server": {"port": '$PORT'}, "dataDir": "'$DATA_DIR'", "schema": "tests/e2e/schema-sync.json"}' > test-artifacts/zyncbase-config.json
+
+$SERVER_BIN --config test-artifacts/zyncbase-config.json > /dev/null 2>&1 &
+SERVER_PID=$!
+wait_for_port $PORT
+
+echo "Running error reporting test..."
+bun tests/e2e/src/test-errors.ts || { echo "Error reporting test failed!"; exit 1; }
+kill $SERVER_PID
+SERVER_PID=""
 
 echo "=== All E2E Tests Passed! ==="

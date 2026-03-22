@@ -24,25 +24,17 @@ fn isSystemColumn(name: []const u8) bool {
     return false;
 }
 
-fn fieldTypeToSqlStr(ft: schema_parser.FieldType) []const u8 {
-    return switch (ft) {
-        .text => "TEXT",
-        .integer => "INTEGER",
-        .real => "REAL",
-        .boolean => "INTEGER",
-        .array => "TEXT",
-    };
-}
-
 fn dbTypeToFieldType(db_type: []const u8) schema_parser.FieldType {
     if (std.mem.eql(u8, db_type, "TEXT")) return .text;
     if (std.mem.eql(u8, db_type, "INTEGER")) return .integer;
     if (std.mem.eql(u8, db_type, "REAL")) return .real;
+    if (std.mem.eql(u8, db_type, "BLOB")) return .array;
     return .text;
 }
-
 fn typesMatch(target: schema_parser.FieldType, db_type: []const u8) bool {
-    return std.mem.eql(u8, fieldTypeToSqlStr(target), db_type);
+    const sql_type = target.toSqlType();
+    if (std.mem.eql(u8, sql_type, db_type)) return true;
+    return false;
 }
 
 pub const MigrationDetector = struct {

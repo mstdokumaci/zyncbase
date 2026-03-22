@@ -492,12 +492,12 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     // Store multiple values
     const test_data = [_]struct {
         namespace: []const u8,
-        path: []const u8,
+        id: []const u8,
         value: []const u8,
     }{
-        .{ .namespace = "app", .path = "/user/1", .value = "Alice" },
-        .{ .namespace = "app", .path = "/user/2", .value = "Bob" },
-        .{ .namespace = "config", .path = "/setting/theme", .value = "dark" },
+        .{ .namespace = "app", .id = "user1", .value = "Alice" },
+        .{ .namespace = "app", .id = "user2", .value = "Bob" },
+        .{ .namespace = "config", .id = "theme", .value = "dark" },
     };
 
     for (test_data, 0..) |td, i| {
@@ -505,7 +505,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             allocator,
             i + 1,
             td.namespace,
-            &[_][]const u8{ "data_table", td.path },
+            &[_][]const u8{ "data_table", td.id },
             td.value,
         );
         defer allocator.free(set_message);
@@ -545,7 +545,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             allocator,
             i + 100,
             td.namespace,
-            &.{ "data_table", td.path, "val" },
+            &.{ "data_table", td.id, "val" },
         );
         defer allocator.free(get_message);
 
@@ -572,16 +572,15 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         }
         try testing.expect(val != null);
         try testing.expectEqualStrings(td.value, val.?);
+    }
 
-        // Also verify directly in storage engine
-        const stored_doc = try storage_engine.selectDocument("data_table", td.path, td.namespace);
-        defer if (stored_doc) |d| d.free(allocator);
+    // Also verify directly in storage engine
+    for (test_data) |td| {
+        const stored_doc = try storage_engine.selectDocument("data_table", td.id, td.namespace);
         try testing.expect(stored_doc != null);
+        defer stored_doc.?.free(allocator);
 
-        const k_payload = try msgpack.Payload.strToPayload("val", allocator);
-        defer k_payload.free(allocator);
-        const val_field = stored_doc.?.map.get(k_payload);
-        try testing.expect(val_field != null);
-        try testing.expectEqualStrings(td.value, val_field.?.str.value());
+        const got_val = (try stored_doc.?.mapGet("val")) orelse return error.MissingValue;
+        try testing.expectEqualStrings(td.value, got_val.str.value());
     }
 }

@@ -28,7 +28,7 @@ pub const DDLGenerator = struct {
             try buf.appendSlice(self.allocator, ",\n  ");
             try buf.appendSlice(self.allocator, field.name);
             try buf.append(self.allocator, ' ');
-            try buf.appendSlice(self.allocator, sqlType(field.sql_type));
+            try buf.appendSlice(self.allocator, field.sql_type.toSqlType());
             if (field.required) {
                 try buf.appendSlice(self.allocator, " NOT NULL");
             }
@@ -88,13 +88,3 @@ pub const DDLGenerator = struct {
         return buf.toOwnedSlice(self.allocator);
     }
 };
-
-fn sqlType(ft: schema_parser.FieldType) []const u8 {
-    return switch (ft) {
-        .text => "TEXT",
-        .integer => "INTEGER",
-        .real => "REAL",
-        .boolean => "INTEGER",
-        .array => "BLOB",
-    };
-}

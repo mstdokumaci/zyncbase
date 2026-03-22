@@ -219,12 +219,12 @@ test "storage: connection pool reuse and release" {
         const val_payload1 = try msgpack.Payload.strToPayload("test1", allocator);
         defer val_payload1.free(allocator);
         const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-        try engine.insertOrReplace("test", "/key1", "test", &cols1);
+        try engine.insertOrReplace("test", "key1", "test", &cols1);
 
         const val_payload2 = try msgpack.Payload.strToPayload("test2", allocator);
         defer val_payload2.free(allocator);
         const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-        try engine.insertOrReplace("test", "/key2", "test", &cols2);
+        try engine.insertOrReplace("test", "key2", "test", &cols2);
     }
     try engine.flushPendingWrites();
 
@@ -233,7 +233,7 @@ test "storage: connection pool reuse and release" {
     const num_operations = 1000;
     var i: usize = 0;
     while (i < num_operations) : (i += 1) {
-        const key = if (i % 2 == 0) "/key1" else "/key2";
+        const key = if (i % 2 == 0) "key1" else "key2";
         const doc = try engine.selectDocument("test", key, "test");
         defer if (doc) |d| d.free(testing.allocator);
         try testing.expect(doc != null);
@@ -266,12 +266,12 @@ test "storage: persistence round-trip (various types)" {
         path: []const u8,
         value: []const u8,
     }{
-        .{ .namespace = "ns1", .path = "/simple", .value = "{\"data\":\"simple\"}" },
-        .{ .namespace = "ns1", .path = "/nested", .value = "{\"user\":{\"name\":\"Alice\",\"age\":30}}" },
-        .{ .namespace = "ns2", .path = "/array", .value = "[1,2,3,4,5]" },
-        .{ .namespace = "ns2", .path = "/empty", .value = "{}" },
-        .{ .namespace = "ns3", .path = "/unicode", .value = "{\"text\":\"Hello 世界 🌍\"}" },
-        .{ .namespace = "ns3", .path = "/special", .value = "{\"chars\":\"\\\"\\n\\t\\r\"}" },
+        .{ .namespace = "ns1", .path = "simple", .value = "{\"data\":\"simple\"}" },
+        .{ .namespace = "ns1", .path = "nested", .value = "{\"user\":{\"name\":\"Alice\",\"age\":30}}" },
+        .{ .namespace = "ns2", .path = "array", .value = "[1,2,3,4,5]" },
+        .{ .namespace = "ns2", .path = "empty", .value = "{}" },
+        .{ .namespace = "ns3", .path = "unicode", .value = "{\"text\":\"Hello 世界 🌍\"}" },
+        .{ .namespace = "ns3", .path = "special", .value = "{\"chars\":\"\\\"\\n\\t\\r\"}" },
     };
 
     // Insert all test cases
@@ -1079,7 +1079,7 @@ test "storage: property 11 - non-array fields are unaffected" {
         const title_str = if (rand.boolean()) "hello" else "world";
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
-        const active_val: i64 = if (rand.boolean()) 1 else 0;
+        const active_val = rand.boolean();
 
         const title_payload = try msgpack.Payload.strToPayload(title_str, allocator);
         defer title_payload.free(allocator);
@@ -1088,7 +1088,7 @@ test "storage: property 11 - non-array fields are unaffected" {
             .{ .name = "title", .value = title_payload },
             .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
             .{ .name = "rating", .value = .{ .float = rating_val } },
-            .{ .name = "active", .value = msgpack.Payload.intToPayload(active_val) },
+            .{ .name = "active", .value = .{ .bool = active_val } },
         };
         try engine.insertOrReplace("items", id, ns, &cols);
         try engine.flushPendingWrites();
@@ -1098,7 +1098,10 @@ test "storage: property 11 - non-array fields are unaffected" {
         defer doc.?.free(allocator);
 
         // Verify text field
-        const got_title = (try doc.?.mapGet("title")) orelse return error.MissingTitle;
+        const got_title = (try doc.?.mapGet("title")) orelse {
+            std.debug.print("Property 11: Missing title field!\n", .{});
+            return error.MissingTitle;
+        };
         try testing.expectEqualStrings(title_str, got_title.str.value());
 
         // Verify integer field

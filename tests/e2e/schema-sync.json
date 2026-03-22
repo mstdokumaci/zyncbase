@@ -5,6 +5,9 @@
       "fields": {
         "title": {
           "type": "string"
+        },
+        "tags": {
+          "type": "array"
         }
       }
     }

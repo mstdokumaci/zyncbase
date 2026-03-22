@@ -3,7 +3,23 @@ const Allocator = std.mem.Allocator;
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
-pub const FieldType = enum { text, integer, real, boolean, array };
+pub const FieldType = enum {
+    text,
+    integer,
+    real,
+    boolean,
+    array,
+
+    pub fn toSqlType(self: FieldType) []const u8 {
+        return switch (self) {
+            .text => "TEXT",
+            .integer => "INTEGER",
+            .real => "REAL",
+            .boolean => "INTEGER",
+            .array => "BLOB",
+        };
+    }
+};
 
 pub const OnDelete = enum { cascade, restrict, set_null };
 

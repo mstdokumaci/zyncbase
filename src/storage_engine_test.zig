@@ -373,7 +373,7 @@ test "StorageEngine: concurrent reads" {
     // zwanzig-disable-next-line: empty-catch-engine
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
 
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
+    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
     var memory_strategy = try MemoryStrategy.init(allocator);
@@ -426,7 +426,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     const num_keys = 50;
 
     {
-        var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
+        var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
 
         var memory_strategy = try MemoryStrategy.init(allocator);
@@ -444,7 +444,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     }
 
     // Reopen the same database and verify every key is present.
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
+    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy_verify = try MemoryStrategy.init(allocator);
     defer memory_strategy_verify.deinit();

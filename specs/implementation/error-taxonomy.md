@@ -38,6 +38,8 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
 | `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` or Hook Server returned `false` | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
+| `COLLECTION_NOT_FOUND` | Authorization | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |
+| `FIELD_NOT_FOUND` | Validation | Field missing in schema | Path/value refers to a field not defined in the schema | 400 | No - Fix schema or data |
 | `INVALID_ARRAY_ELEMENT` | Validation | Array field contains non-literal value | `store.set` with an array containing nested objects or arrays | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |
 | `RATE_LIMITED` | Rate-Limit | Threshold exceeded | Too many messages per second (per IP/token) | 429 | Yes - Exponential backoff |
@@ -60,9 +62,6 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `CIRCUIT_BREAKER_OPEN` | Hook Server | Circuit breaker is open | Too many Hook Server failures | 503 | Yes - Wait for timeout |
 | `SUBSCRIPTION_LIMIT_EXCEEDED` | Rate-Limit | Too many subscriptions | Client exceeded max subscriptions | 429 | No - Reduce subscriptions |
 | `WAL_SIZE_EXCEEDED` | Server | WAL file too large | WAL file exceeded threshold | 500 | Yes - Automatic checkpoint |
-
-> [!NOTE]
-> `PATH_NOT_FOUND` has been removed. Reads from empty paths return `null`, and writes to new paths automatically create them (upsert).
 
 ---
 

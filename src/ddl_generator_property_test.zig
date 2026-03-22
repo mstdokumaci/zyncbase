@@ -69,13 +69,7 @@ test "ddl_generator: property 7 - DDL contains required columns and constraints"
 
         // Assert each field appears with correct type and NOT NULL if required
         for (fields) |field| {
-            const expected_type = switch (field.sql_type) {
-                .text => "TEXT",
-                .integer => "INTEGER",
-                .real => "REAL",
-                .boolean => "INTEGER",
-                .array => "BLOB",
-            };
+            const expected_type = field.sql_type.toSqlType();
 
             // Check column definition exists
             const col_def = try std.fmt.allocPrint(allocator, "  {s} {s}", .{ field.name, expected_type });
@@ -224,13 +218,7 @@ test "ddl_generator: property 1 - DDL emits BLOB for array fields" {
         defer allocator.free(ddl);
 
         for (fields) |f| {
-            const expected_type = switch (f.sql_type) {
-                .text => "TEXT",
-                .integer => "INTEGER",
-                .real => "REAL",
-                .boolean => "INTEGER",
-                .array => "BLOB",
-            };
+            const expected_type = f.sql_type.toSqlType();
             const col_def = try std.fmt.allocPrint(allocator, "  {s} {s}", .{ f.name, expected_type });
             defer allocator.free(col_def);
             try std.testing.expect(std.mem.indexOf(u8, ddl, col_def) != null);
