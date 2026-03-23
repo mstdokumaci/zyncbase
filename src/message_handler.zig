@@ -136,8 +136,8 @@ pub const MessageHandler = struct {
         const arena_allocator = arena.allocator();
 
         // Parse MessagePack message
-        var fbs = std.Io.fixedBufferStream(message);
-        const parsed = msgpack.decode(arena_allocator, fbs.reader()) catch |err| {
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
 
             // Record violation if it was a security/limit error

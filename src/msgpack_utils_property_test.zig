@@ -24,8 +24,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
         }
         depth_bomb[33] = 0xc0; // nil at innermost level
 
-        var fbs = std.Io.fixedBufferStream(&depth_bomb);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(&depth_bomb);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             // Bug confirmed: decode returned a valid Payload instead of error.MaxDepthExceeded
@@ -51,8 +51,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             array_bomb[i] = 0xc0; // nil
         }
 
-        var fbs = std.Io.fixedBufferStream(&array_bomb);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(&array_bomb);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             // Bug confirmed: decode returned a valid Payload instead of error.ArrayTooLarge
@@ -78,8 +78,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             map_bomb[i] = 0xc0; // nil (key and value both nil)
         }
 
-        var fbs = std.Io.fixedBufferStream(&map_bomb);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(&map_bomb);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             // Bug confirmed: decode returned a valid Payload instead of error.MapTooLarge
@@ -106,8 +106,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
         string_bomb[4] = @intCast(str_len & 0xff);
         @memset(string_bomb[5..], 0); // zero bytes for string content
 
-        var fbs = std.Io.fixedBufferStream(string_bomb);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(string_bomb);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             // Bug confirmed: decode returned a valid Payload instead of error.StringTooLong
@@ -173,8 +173,8 @@ test "msgpack: round-trip encoding/decoding preservation" {
         defer allocator.free(encoded);
 
         // Decode using the project's standard fixed reader
-        var fbs = std.Io.fixedBufferStream(encoded);
-        const decoded = try msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(encoded);
+        const decoded = try msgpack_utils.decode(allocator, &reader);
         defer decoded.free(allocator);
 
         // Verify equality
@@ -200,8 +200,8 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
         }
         depth31[31] = 0xc0; // nil at innermost level
 
-        var fbs = std.Io.fixedBufferStream(&depth31);
-        const result = try msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(&depth31);
+        const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
 
@@ -219,8 +219,8 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
         array_exact[4] = @intCast(count & 0xff);
         @memset(array_exact[5..], 0xc0); // nil
 
-        var fbs = std.Io.fixedBufferStream(array_exact);
-        const result = try msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(array_exact);
+        const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
 
@@ -238,8 +238,8 @@ test "msgpack: boundary success (31 depth, 100000 items, 1MB str)" {
         string_exact[4] = @intCast(str_len & 0xff);
         @memset(string_exact[5..], 0);
 
-        var fbs = std.Io.fixedBufferStream(string_exact);
-        const result = try msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(string_exact);
+        const result = try msgpack_utils.decode(allocator, &reader);
         result.free(allocator);
     }
 }
@@ -260,8 +260,8 @@ test "msgpack: reject one-over-boundary payloads" {
         }
         depth32[32] = 0xc0; // nil at innermost level
 
-        var fbs = std.Io.fixedBufferStream(&depth32);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(&depth32);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             return error.TestUnexpectedResult;
@@ -284,8 +284,8 @@ test "msgpack: reject one-over-boundary payloads" {
         array_over[4] = @intCast(count & 0xff);
         @memset(array_over[5..], 0xc0); // nil
 
-        var fbs = std.Io.fixedBufferStream(array_over);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(array_over);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             return error.TestUnexpectedResult;
@@ -308,8 +308,8 @@ test "msgpack: reject one-over-boundary payloads" {
         string_over[4] = @intCast(str_len & 0xff);
         @memset(string_over[5..], 0);
 
-        var fbs = std.Io.fixedBufferStream(string_over);
-        const result = msgpack_utils.decode(allocator, fbs.reader());
+        var reader: std.Io.Reader = .fixed(string_over);
+        const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
             // Limit not enforced: string of 64KB+1 decoded successfully — unfixed code uses DEFAULT_LIMITS (max_string_length=100MB)

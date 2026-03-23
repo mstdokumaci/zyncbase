@@ -30,22 +30,10 @@ fn readerCtx(comptime R: type) type {
         reader: R,
 
         fn read(self: @This(), buf: []u8) error{ EndOfStream, ReadFailed }!usize {
-            const reader_type = switch (comptime @typeInfo(R)) {
-                .pointer => |ptr| ptr.child,
-                else => R,
+            self.reader.readSliceAll(buf) catch |err| switch (err) {
+                error.EndOfStream => return error.EndOfStream,
+                else => return error.ReadFailed,
             };
-            const has_read_slice_all = comptime @hasDecl(reader_type, "readSliceAll");
-            if (comptime has_read_slice_all) {
-                _ = self.reader.readSliceAll(buf) catch |err| switch (err) {
-                    error.EndOfStream => return error.EndOfStream,
-                    else => return error.ReadFailed,
-                };
-            } else {
-                _ = self.reader.readAll(buf) catch |err| switch (err) {
-                    error.EndOfStream => return error.EndOfStream,
-                    else => return error.ReadFailed,
-                };
-            }
             return buf.len;
         }
     };
