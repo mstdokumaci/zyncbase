@@ -104,6 +104,8 @@ pub const StorageEngine = struct {
     reconnection_config: ReconnectionConfig,
     write_mutex: std.Thread.Mutex,
     write_cond: std.Thread.Condition,
+    flush_cond: std.Thread.Condition,
+    write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.Pool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
     metadata_cache: *metadata_cache_type,
@@ -187,6 +189,8 @@ pub const StorageEngine = struct {
             .reconnection_config = .{},
             .write_mutex = .{},
             .write_cond = .{},
+            .flush_cond = .{},
+            .write_thread_ready = std.atomic.Value(bool).init(false),
             .schema = schema,
             .metadata_cache = metadata_cache,
             .write_seq = std.atomic.Value(u64).init(0),
@@ -203,8 +207,14 @@ pub const StorageEngine = struct {
             if (self.write_thread) |thread| thread.join();
         }
 
-        // Give the write thread a moment to initialize
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        // Wait deterministically for the write thread to signal readiness
+        {
+            self.write_mutex.lock();
+            defer self.write_mutex.unlock();
+            while (!self.write_thread_ready.load(.acquire)) {
+                self.write_cond.wait(&self.write_mutex);
+            }
+        }
 
         return self;
     }
@@ -490,15 +500,11 @@ pub const StorageEngine = struct {
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
         std.log.debug("flushPendingWrites: count={}", .{self.pending_writes_count.load(.acquire)});
-        // Wait for write queue and currently processing batch to drain.
-        // We use a small sleep to avoid spinning too hard, and check acquire load.
+        self.write_mutex.lock();
+        defer self.write_mutex.unlock();
         while (self.pending_writes_count.load(.acquire) > 0) {
-            std.Thread.yield() catch {}; // zwanzig-disable-line: empty-catch-engine
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            self.flush_cond.wait(&self.write_mutex);
         }
-        // Small extra buffer to ensure SQLite has finished its internal write
-        // and the reader connections can see it.
-        std.Thread.sleep(2 * std.time.ns_per_ms);
     }
 
     // ─── Schema validation helpers ────────────────────────────────────────────
@@ -1190,6 +1196,12 @@ pub const StorageEngine = struct {
     }
 
     fn writeThreadLoopImpl(self: *StorageEngine) !void {
+        // Signal that the write thread is up and running
+        self.write_thread_ready.store(true, .release);
+        self.write_mutex.lock();
+        self.write_cond.signal();
+        self.write_mutex.unlock();
+
         const batch_size = 100;
         const batch_timeout_ms = 10;
 
@@ -1214,6 +1226,9 @@ pub const StorageEngine = struct {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
+                                self.write_mutex.lock();
+                                self.flush_cond.broadcast();
+                                self.write_mutex.unlock();
                                 continue;
                             };
                         },
@@ -1230,6 +1245,9 @@ pub const StorageEngine = struct {
                                 if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
+                            self.write_mutex.lock();
+                            self.flush_cond.broadcast();
+                            self.write_mutex.unlock();
                         },
                         .commit_transaction => |top| {
                             if (batch.items.len > 0) {
@@ -1238,6 +1256,9 @@ pub const StorageEngine = struct {
                             if (!self.transaction_active.load(.acquire)) {
                                 if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
+                                self.write_mutex.lock();
+                                self.flush_cond.broadcast();
+                                self.write_mutex.unlock();
                                 continue;
                             }
                             if (self.writer_conn.exec("COMMIT", .{}, .{})) |_| {
@@ -1253,6 +1274,9 @@ pub const StorageEngine = struct {
                                 if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
+                            self.write_mutex.lock();
+                            self.flush_cond.broadcast();
+                            self.write_mutex.unlock();
                         },
                         .rollback_transaction => |top| {
                             if (batch.items.len > 0) {
@@ -1261,6 +1285,9 @@ pub const StorageEngine = struct {
                             if (!self.transaction_active.load(.acquire)) {
                                 if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
+                                self.write_mutex.lock();
+                                self.flush_cond.broadcast();
+                                self.write_mutex.unlock();
                                 continue;
                             }
                             if (self.writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
@@ -1273,6 +1300,9 @@ pub const StorageEngine = struct {
                                 if (top.completion_signal) |sig| sig.signal(classifyError(err));
                             }
                             _ = self.pending_writes_count.fetchSub(1, .release);
+                            self.write_mutex.lock();
+                            self.flush_cond.broadcast();
+                            self.write_mutex.unlock();
                         },
                         .checkpoint => |cop| {
                             if (batch.items.len > 0) {
@@ -1281,21 +1311,22 @@ pub const StorageEngine = struct {
                             const stats = self.internalExecuteCheckpoint(cop.mode) catch |err| {
                                 cop.completion_signal.signal(err);
                                 _ = self.pending_writes_count.fetchSub(1, .release);
+                                self.write_mutex.lock();
+                                self.flush_cond.broadcast();
+                                self.write_mutex.unlock();
                                 continue;
                             };
                             cop.completion_signal.signalWithResult(stats);
                             _ = self.pending_writes_count.fetchSub(1, .release);
+                            self.write_mutex.lock();
+                            self.flush_cond.broadcast();
+                            self.write_mutex.unlock();
                         },
                     }
                 } else {
                     break;
                 }
             }
-
-            // Signal any threads waiting on flushPendingWrites
-            self.write_mutex.lock();
-            self.write_cond.broadcast();
-            self.write_mutex.unlock();
 
             // Check if we should flush batch
             const now = std.time.milliTimestamp();
@@ -1321,6 +1352,9 @@ pub const StorageEngine = struct {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         _ = self.pending_writes_count.fetchSub(1, .release);
+                        self.write_mutex.lock();
+                        self.flush_cond.broadcast();
+                        self.write_mutex.unlock();
                     };
                 },
                 else => {
@@ -1328,6 +1362,9 @@ pub const StorageEngine = struct {
                     if (op.getCompletionSignal()) |sig| sig.signal(StorageError.InvalidOperation);
                     op.deinit(self.allocator);
                     _ = self.pending_writes_count.fetchSub(1, .release);
+                    self.write_mutex.lock();
+                    self.flush_cond.broadcast();
+                    self.write_mutex.unlock();
                 },
             }
         }
@@ -1416,6 +1453,9 @@ pub const StorageEngine = struct {
         }
         batch.clearRetainingCapacity();
         _ = self.pending_writes_count.fetchSub(batch_len, .release);
+        self.write_mutex.lock();
+        self.flush_cond.broadcast();
+        self.write_mutex.unlock();
         last_batch_time.* = std.time.milliTimestamp();
     }
 

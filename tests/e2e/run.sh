@@ -65,7 +65,7 @@ bun tests/e2e/src/test-sync.ts || { echo "Sync test failed! Server log follows:"
 echo "Stopping server for persistence phase..."
 kill $SERVER_PID
 SERVER_PID=""
-sleep 0.5
+sleep 0.1
 
 # 2. Persistence Test
 echo "--- Scenario 2: Persistence ---"
@@ -84,7 +84,7 @@ wait_for_port $PORT
 bun tests/e2e/src/test-persistence.ts set
 kill $SERVER_PID
 SERVER_PID=""
-sleep 0.5
+sleep 0.1
 
 # Verify data after restart
 echo "Restarting for verification..."
@@ -95,7 +95,7 @@ wait_for_port $PORT
 bun tests/e2e/src/test-persistence.ts get
 kill $SERVER_PID
 SERVER_PID=""
-sleep 0.5
+sleep 0.1
 
 # 3. Error Reporting Test
 echo "--- Scenario 3: Error Reporting ---"
