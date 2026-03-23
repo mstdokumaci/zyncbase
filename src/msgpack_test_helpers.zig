@@ -8,23 +8,23 @@ pub const encode = msgpack_utils.encode;
 
 /// Helper to create a MessagePack map for testing
 /// Creates a simple map with string keys and values
-pub fn createStoreSetMessage(
+pub fn createMessage(
     allocator: std.mem.Allocator,
     id: u64,
+    msg_type: []const u8,
     namespace: []const u8,
     path: []const []const u8,
-    value: []const u8,
+    value: ?[]const u8,
 ) ![]u8 {
     var buf: std.ArrayList(u8) = .{};
     errdefer buf.deinit(allocator);
 
-    // fixmap with 5 elements
-    try buf.append(allocator, 0x85);
+    const num_elements: u8 = if (value != null) 5 else 4;
+    try buf.append(allocator, 0x80 | num_elements); // fixmap with N elements
 
     // "type" key
     try writeString(allocator, &buf, "type");
-    // "StoreSet" value
-    try writeString(allocator, &buf, "StoreSet");
+    try writeString(allocator, &buf, msg_type);
 
     // "id" key
     try writeString(allocator, &buf, "id");
@@ -41,7 +41,6 @@ pub fn createStoreSetMessage(
 
     // "namespace" key
     try writeString(allocator, &buf, "namespace");
-    // namespace value
     try writeString(allocator, &buf, namespace);
 
     // "path" key
@@ -52,14 +51,26 @@ pub fn createStoreSetMessage(
         try writeString(allocator, &buf, p);
     }
 
-    // "value" key
-    try writeString(allocator, &buf, "value");
-    // value value (map with "val" field)
-    try buf.append(allocator, 0x81); // fixmap with 1 element
-    try writeString(allocator, &buf, "val"); // field name
-    try writeString(allocator, &buf, value); // field value
+    if (value) |val| {
+        // "value" key
+        try writeString(allocator, &buf, "value");
+        // value value (map with "val" field)
+        try buf.append(allocator, 0x81); // fixmap with 1 element
+        try writeString(allocator, &buf, "val"); // field name
+        try writeString(allocator, &buf, val); // field value
+    }
 
     return buf.toOwnedSlice(allocator);
+}
+
+pub fn createStoreSetMessage(
+    allocator: std.mem.Allocator,
+    id: u64,
+    namespace: []const u8,
+    path: []const []const u8,
+    value: []const u8,
+) ![]u8 {
+    return createMessage(allocator, id, "StoreSet", namespace, path, value);
 }
 
 pub fn createStoreGetMessage(
@@ -68,44 +79,7 @@ pub fn createStoreGetMessage(
     namespace: []const u8,
     path: []const []const u8,
 ) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
-    errdefer buf.deinit(allocator);
-
-    // fixmap with 4 elements
-    try buf.append(allocator, 0x84);
-
-    // "type" key
-    try writeString(allocator, &buf, "type");
-    // "StoreGet" value
-    try writeString(allocator, &buf, "StoreGet");
-
-    // "id" key
-    try writeString(allocator, &buf, "id");
-    // id value (uint64)
-    try buf.append(allocator, 0xcf); // uint 64
-    try buf.append(allocator, @intCast((id >> 56) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 48) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 40) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 32) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 24) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 16) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 8) & 0xFF));
-    try buf.append(allocator, @intCast(id & 0xFF));
-
-    // "namespace" key
-    try writeString(allocator, &buf, "namespace");
-    // namespace value
-    try writeString(allocator, &buf, namespace);
-
-    // "path" key
-    try writeString(allocator, &buf, "path");
-    // path value (array of strings)
-    try buf.append(allocator, @intCast(0x90 | path.len)); // fixarray
-    for (path) |p| {
-        try writeString(allocator, &buf, p);
-    }
-
-    return buf.toOwnedSlice(allocator);
+    return createMessage(allocator, id, "StoreGet", namespace, path, null);
 }
 
 pub fn writeString(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), s: []const u8) !void {
@@ -141,44 +115,7 @@ pub fn createStoreRemoveMessage(
     namespace: []const u8,
     path: []const []const u8,
 ) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
-    errdefer buf.deinit(allocator);
-
-    // fixmap with 4 elements
-    try buf.append(allocator, 0x84);
-
-    // "type" key
-    try writeString(allocator, &buf, "type");
-    // "StoreRemove" value
-    try writeString(allocator, &buf, "StoreRemove");
-
-    // "id" key
-    try writeString(allocator, &buf, "id");
-    // id value (uint64)
-    try buf.append(allocator, 0xcf); // uint 64
-    try buf.append(allocator, @intCast((id >> 56) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 48) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 40) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 32) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 24) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 16) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 8) & 0xFF));
-    try buf.append(allocator, @intCast(id & 0xFF));
-
-    // "namespace" key
-    try writeString(allocator, &buf, "namespace");
-    // namespace value
-    try writeString(allocator, &buf, namespace);
-
-    // "path" key
-    try writeString(allocator, &buf, "path");
-    // path value (array of strings)
-    try buf.append(allocator, @intCast(0x90 | path.len)); // fixarray
-    for (path) |p| {
-        try writeString(allocator, &buf, p);
-    }
-
-    return buf.toOwnedSlice(allocator);
+    return createMessage(allocator, id, "StoreRemove", namespace, path, null);
 }
 
 pub fn createCustomMessage(
@@ -188,41 +125,5 @@ pub fn createCustomMessage(
     namespace: []const u8,
     path: []const []const u8,
 ) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
-    errdefer buf.deinit(allocator);
-
-    // fixmap with 4 elements
-    try buf.append(allocator, 0x84);
-
-    // "type" key
-    try writeString(allocator, &buf, "type");
-    // custom type value
-    try writeString(allocator, &buf, msg_type);
-
-    // "id" key
-    try writeString(allocator, &buf, "id");
-    // id value
-    try buf.append(allocator, 0xcf);
-    try buf.append(allocator, @intCast((id >> 56) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 48) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 40) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 32) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 24) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 16) & 0xFF));
-    try buf.append(allocator, @intCast((id >> 8) & 0xFF));
-    try buf.append(allocator, @intCast(id & 0xFF));
-
-    // "namespace" key
-    try writeString(allocator, &buf, "namespace");
-    try writeString(allocator, &buf, namespace);
-
-    // "path" key
-    try writeString(allocator, &buf, "path");
-    // path value (array of strings)
-    try buf.append(allocator, @intCast(0x90 | path.len)); // fixarray
-    for (path) |p| {
-        try writeString(allocator, &buf, p);
-    }
-
-    return buf.toOwnedSlice(allocator);
+    return createMessage(allocator, id, msg_type, namespace, path, null);
 }
