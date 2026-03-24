@@ -8,7 +8,7 @@ const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 // 4. Failed checkpoints don't corrupt database state
 // 5. Concurrent reads can continue during checkpoint
 
-test "checkpoint: integrity no data loss" {
+test "checkpoint: integrity - no data loss occurs during checkpoint" {
     const allocator = testing.allocator;
 
     // Create mock storage layer
@@ -47,7 +47,7 @@ test "checkpoint: integrity no data loss" {
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 }
 
-test "checkpoint: WAL size management" {
+test "checkpoint: WAL size management - size decreases or stays same after success" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -73,7 +73,7 @@ test "checkpoint: WAL size management" {
     }
 }
 
-test "checkpoint: threshold detection" {
+test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -100,7 +100,7 @@ test "checkpoint: threshold detection" {
     try testing.expect(manager.shouldCheckpoint());
 }
 
-test "checkpoint: failure handling" {
+test "checkpoint: failure handling - failed checkpoints increment counter" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -121,7 +121,7 @@ test "checkpoint: failure handling" {
     try testing.expect(initial_failures == 0);
 }
 
-test "checkpoint: metrics accuracy" {
+test "checkpoint: metrics accuracy - metrics reflect operations accurately" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -154,7 +154,7 @@ test "checkpoint: metrics accuracy" {
     try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
-test "checkpoint: escalation logic" {
+test "checkpoint: escalation logic - works correctly when needed" {
     const allocator = testing.allocator;
 
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
@@ -179,7 +179,7 @@ test "checkpoint: escalation logic" {
     try testing.expect(result.duration_ms >= 0);
 }
 
-test "checkpoint: Prometheus formatting" {
+test "checkpoint: Prometheus formatting - output contains all required metrics" {
     const allocator = testing.allocator;
 
     const metrics = CheckpointManager.CheckpointMetrics{

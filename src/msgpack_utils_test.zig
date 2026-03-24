@@ -367,7 +367,7 @@ fn payloadsEqual(a: Payload, b: Payload) bool {
 }
 
 // Feature: array-jsonb-storage, Property 2: clonePayload structural equivalence
-test "msgpack_utils: property 2 - clonePayload structural equivalence" {
+test "msgpack_utils: clonePayload structural equivalence" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x1234_5678);
     const rand = prng.random();
@@ -385,7 +385,7 @@ test "msgpack_utils: property 2 - clonePayload structural equivalence" {
 }
 
 // Feature: array-jsonb-storage, Property 3: isLiteral returns true for all literal types
-test "msgpack_utils: property 3 - isLiteral returns true for all literal types" {
+test "msgpack_utils: isLiteral returns true for all literal types" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xAAAA_BBBB);
     const rand = prng.random();
@@ -399,7 +399,7 @@ test "msgpack_utils: property 3 - isLiteral returns true for all literal types" 
 }
 
 // Feature: array-jsonb-storage, Property 4: isLiteral returns false for all non-literal types
-test "msgpack_utils: property 4 - isLiteral returns false for all non-literal types" {
+test "msgpack_utils: isLiteral returns false for all non-literal types" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xCCCC_DDDD);
     const rand = prng.random();
@@ -423,7 +423,7 @@ test "msgpack_utils: property 4 - isLiteral returns false for all non-literal ty
 }
 
 // Feature: array-jsonb-storage, Property 5: ensureLiteralArray accepts literal arrays and rejects non-arrays
-test "msgpack_utils: property 5 - ensureLiteralArray accepts literal arrays and rejects non-arrays" {
+test "msgpack_utils: ensureLiteralArray accepts literal arrays and rejects non-arrays" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xEEEE_FFFF);
     const rand = prng.random();
@@ -458,7 +458,7 @@ test "msgpack_utils: property 5 - ensureLiteralArray accepts literal arrays and 
 }
 
 // Feature: array-jsonb-storage, Property 6: payloadToJson rejects non-literal-array payloads
-test "msgpack_utils: property 6 - payloadToJson rejects non-literal-array payloads" {
+test "msgpack_utils: payloadToJson rejects non-literal-array payloads" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x1111_2222);
     const rand = prng.random();
@@ -505,7 +505,7 @@ fn payloadsEqualRoundTrip(a: Payload, b: Payload) bool {
 }
 
 // Feature: array-jsonb-storage, Property 7: JSON round-trip for Literal_Arrays
-test "msgpack_utils: property 7 - JSON round-trip for Literal_Arrays" {
+test "msgpack_utils: JSON round-trip for Literal_Arrays" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x3333_4444);
     const rand = prng.random();
@@ -532,7 +532,7 @@ test "msgpack_utils: property 7 - JSON round-trip for Literal_Arrays" {
 }
 
 // Feature: array-jsonb-storage, Property 8: jsonToPayload rejects invalid JSON inputs
-test "msgpack_utils: property 8 - jsonToPayload rejects invalid JSON inputs" {
+test "msgpack_utils: jsonToPayload rejects invalid JSON inputs" {
     const allocator = testing.allocator;
 
     // (a) Non-array JSON strings → error

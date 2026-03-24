@@ -48,7 +48,7 @@ fn insertSchemaMetaVersion(db: *sqlite.Db, allocator: std.mem.Allocator, version
 // For any database state and additive MigrationPlan (containing only create_table and add_column
 // changes), after Migration_Executor.execute completes, every row that existed before the migration
 // SHALL still exist with all its original column values intact.
-test "migration_executor: property 10 - additive migration preserves existing data" {
+test "migration_executor: additive migration preserves existing data" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(42);
@@ -160,7 +160,7 @@ test "migration_executor: property 10 - additive migration preserves existing da
 // For any MigrationPlan that contains at least one change_type or remove_column change,
 // when MigrationConfig.allow_destructive is false, Migration_Executor.execute SHALL return
 // an error and SHALL NOT modify the database.
-test "migration_executor: property 11 - destructive migration refused when not allowed" {
+test "migration_executor: destructive migration refused when not allowed" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(77);
@@ -261,7 +261,7 @@ test "migration_executor: property 11 - destructive migration refused when not a
 // For any successful migration, querying schema_meta immediately after
 // Migration_Executor.execute returns SHALL yield a row whose version column equals
 // the version string from the target Schema.
-test "migration_executor: property 12 - schema version persisted after migration" {
+test "migration_executor: schema version persisted after migration" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(55);
@@ -327,7 +327,7 @@ test "migration_executor: property 12 - schema version persisted after migration
 // For any database whose persisted major version component is less than the major version
 // component in the target Schema, Migration_Executor.execute SHALL return an error and
 // SHALL NOT apply any changes.
-test "migration_executor: property 20 - major version bump is refused" {
+test "migration_executor: major version bump is refused" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(33);

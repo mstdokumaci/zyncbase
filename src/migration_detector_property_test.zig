@@ -34,7 +34,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.
 // For any pair of schemas (old, new), the MigrationPlan produced by
 // Migration_Detector.detectChanges SHALL contain exactly one Change entry for each
 // table or column that differs between old and new, with the correct ChangeKind.
-test "migration_detector: property 9 - migration plan accurately describes schema diff" {
+test "migration_detector: migration plan accurately describes schema diff" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(42);
@@ -161,7 +161,7 @@ test "migration_detector: property 9 - migration plan accurately describes schem
 // Feature: schema-aware-storage, Property 19: Matching version produces empty migration plan
 // For any database whose schema matches the target Schema exactly,
 // Migration_Detector.detectChanges SHALL return a MigrationPlan with zero changes.
-test "migration_detector: property 19 - matching schema produces empty migration plan" {
+test "migration_detector: matching schema produces empty migration plan" {
     const allocator = std.testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(99);

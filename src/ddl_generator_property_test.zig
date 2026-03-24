@@ -13,7 +13,7 @@ const sqlite = @import("sqlite");
 // id TEXT PRIMARY KEY, namespace_id TEXT NOT NULL, one correctly-typed column per field in t.fields
 // (with NOT NULL for required fields, FOREIGN KEY for referenced fields),
 // created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, and a CREATE INDEX on namespace_id.
-test "ddl_generator: property 7 - DDL contains required columns and constraints" {
+test "ddl_generator: DDL contains required columns and constraints" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
@@ -96,7 +96,7 @@ test "ddl_generator: property 7 - DDL contains required columns and constraints"
 // Feature: schema-aware-storage, Property 8: Generated DDL is executable
 // For any Table value t, executing the DDL produced by DDL_Generator.generateDDL(t)
 // against an empty in-memory SQLite database SHALL succeed without error.
-test "ddl_generator: property 8 - generated DDL is executable" {
+test "ddl_generator: generated DDL is executable" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
@@ -184,7 +184,7 @@ test "ddl_generator: property 8 - generated DDL is executable" {
 // Feature: array-jsonb-storage, Property 1: DDL emits BLOB for array fields
 // For any Table with a mix of field types including at least one .array field,
 // generateDDL shall emit BLOB for array columns and the correct type for all others.
-test "ddl_generator: property 1 - DDL emits BLOB for array fields" {
+test "ddl_generator: DDL emits BLOB for array fields" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 

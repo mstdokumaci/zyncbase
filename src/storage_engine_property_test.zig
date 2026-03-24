@@ -576,7 +576,7 @@ fn setupPropTestEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStr
     };
 }
 // ─── Property 13: Document set/get round-trip ────────────────────────────────
-test "storage: property 13 - document set/get round-trip" {
+test "storage: document set/get round-trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
     const rand = prng.random();
@@ -628,7 +628,7 @@ test "storage: property 13 - document set/get round-trip" {
     }
 }
 // ─── Property 14: Field set/get round-trip ───────────────────────────────────
-test "storage: property 14 - field set/get round-trip" {
+test "storage: field set/get round-trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
     const rand = prng.random();
@@ -674,7 +674,7 @@ test "storage: property 14 - field set/get round-trip" {
     }
 }
 // ─── Property 15: Collection get is namespace-scoped ─────────────────────────
-test "storage: property 15 - collection get is namespace-scoped" {
+test "storage: collection get is namespace-scoped" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
     const rand = prng.random();
@@ -720,7 +720,7 @@ test "storage: property 15 - collection get is namespace-scoped" {
     }
 }
 // ─── Property 16: Remove then get returns null ────────────────────────────────
-test "storage: property 16 - remove then get returns null" {
+test "storage: remove then get returns null" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -748,7 +748,7 @@ test "storage: property 16 - remove then get returns null" {
     }
 }
 // ─── Property 17: Schema validation rejects unknown tables and fields ─────────
-test "storage: property 17 - schema validation rejects unknown tables and fields" {
+test "storage: schema validation rejects unknown tables and fields" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -773,7 +773,7 @@ test "storage: property 17 - schema validation rejects unknown tables and fields
     }
 }
 // ─── Property 18: updated_at is always refreshed on write ────────────────────
-test "storage: property 18 - updated_at is always refreshed on write" {
+test "storage: updated_at is always refreshed on write" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -823,7 +823,7 @@ test "storage: property 18 - updated_at is always refreshed on write" {
 }
 // ─── Property 10: Storage engine write/read round-trip for array fields ───────
 // Feature: array-jsonb-storage, Property 10: Storage engine write/read round-trip for array fields
-test "storage: property 10 - write/read round-trip for array fields" {
+test "storage: write/read round-trip for array fields" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xA77A1_10);
     const rand = prng.random();
@@ -890,7 +890,7 @@ test "storage: property 10 - write/read round-trip for array fields" {
 }
 // ─── Property 11: Non-array fields are unaffected by the change ──────────────
 // Feature: array-jsonb-storage, Property 11: Non-array fields are unaffected by the change
-test "storage: property 11 - non-array fields are unaffected" {
+test "storage: non-array fields are unaffected" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xB0B_11);
     const rand = prng.random();
@@ -949,7 +949,7 @@ test "storage: property 11 - non-array fields are unaffected" {
 }
 // ─── Property 12: SQLite JSON functions operate on stored array columns ───────
 // Feature: array-jsonb-storage, Property 12: SQLite JSON functions operate on stored array columns
-test "storage: property 12 - SQLite json_array_length works on stored array columns" {
+test "storage: SQLite json_array_length works on stored array columns" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xC0DE_12);
     const rand = prng.random();

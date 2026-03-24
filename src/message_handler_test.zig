@@ -556,7 +556,7 @@ test "StoreSet: array field with valid literal array succeeds" {
 }
 // ─── Task 7.9: Property 9 — Message handler rejects arrays with non-literal elements ──
 // Feature: array-jsonb-storage, Property 9: Message handler rejects arrays with non-literal elements
-test "StoreSet: property 9 - message handler rejects arrays with non-literal elements" {
+test "StoreSet: message handler rejects arrays with non-literal elements" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xDEAD_C0DE);
     const rand = prng.random();
