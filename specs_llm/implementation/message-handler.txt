@@ -1,0 +1,34 @@
+Message Handler [Memory Management Implementation Protocol `MessageHandler primary processing WebSocket messages implements MessagePack wire protocol handles per-connection memory lifecycle routes operations storage engine Interface Contract```zig
+pub const MessageHandler = struct {
+    allocator: Allocator,
+    memory_strategy: *MemoryStrategy,
+    violation_tracker: *ViolationTracker,
+    storage_engine: *StorageEngine,
+    subscription_manager: *SubscriptionManager,
+    connection_registry: ConnectionRegistry,
+
+    /// Process one WebSocket message.
+    ///
+    /// Guarantees:
+    ///   - All temporary allocations (parse buffers, intermediate results) are 
+    ///     allocated from a pooled arena via MemoryStrategy.
+    ///   - Arena is acquired and released per message.
+    ///   - Message processing is synchronized per connection via a mutex in Connection state.
+    ///   - Operations are routed to StorageEngine after MessagePack decoding.
+    pub fn handleMessage(
+        self: *MessageHandler, 
+        ws: *WebSocket, 
+        message: []const u8, 
+        msg_type: MessageType
+    ) !void {
+        // ... acquisition and mutex locking ...
+        const arena = try self.memory_strategy.acquireArena();
+        defer self.memory_strategy.releaseArena(arena);
+        const arena_allocator = arena.allocator();
+
+        var reader: std.Io.Reader = .fixed(message);
+        const payload = try msgpack.decode(arena_allocator, &reader);
+        try self.routeMessage(ws, arena_allocator, payload);
+    }
+};
+```Memory Management Strategy Allocation Lifecycle Parse buffers temp strings Pooled Arena Released pool end `handleMessage Persistent state (subscriptions) GPA Until connection close Response buffers Allocated `buildSuccessResponse Caller sends via.send() frees Thread Safety Concurrency `MessageHandler shared across worker threads Thread safety-Connection Locking** mutex `handleMessage locks mutex sequential message processing client **Atomic Reference Counting** Connections ref-counted safety concurrent `handleOpen events **Thread-Safe Component `StorageEngine `SubscriptionManager handle internal synchronization Invariants Error Conditions Arena released `defer releaseArena ensures cleanup error paths Processed under mutex Messages connection never run concurrently No leak on invalid MsgPack Faulty payloads caught decoder arena released Error Cause Behaviour.OutOfMemory ArenaPool GPA exhausted `INTERNAL_ERROR sent connection throttled.InvalidMessage MessagePack parse failure violation trackedUnauthorized Permission check failed sent Validation Success Criteria Arena released after message pooled arena stats Correct routing wire protocol operations`StoreSet `StoreGet ThreadSanitizer passes for concurrent message processing multiple connections [Memory Management Arena GPA strategy [Threading Implementation Per-thread memory [Wire Protocol Message format handler

@@ -1,4 +1,4 @@
-Lock-Free Cache Implementation Cache Architecture ZyncBase lock-free cache parallel read access CPU cores without locks-free cache atomic reference counting single-writer-multiple-reader model Writes serialized mutex reads wait-free```
+Lock-Free Cache Implementation-Free Cache Architecture Implementation specifics ZyncBase lock-free cache enables parallel read access CPU cores without global locks lock-free cache uses atomic reference counting single-writer-multiple-reader model Writes serialized mutex reads wait-free```
 [Reader Thread A] --+
 [Reader Thread B] --+--> [Atomic Value: Hash Map Pointer]
 [Reader Thread C] --+           |
@@ -6,7 +6,7 @@ Lock-Free Cache Implementation Cache Architecture ZyncBase lock-free cache paral
                        [Current Hash Map]
                         /       |       \
                [Entry 1]    [Entry 2]    [Entry 3]
-```Implementation Structure```zig
+```Implementation Core Structure```zig
 pub const LockFreeCache = struct {
     // Atomic pointer to the current hash map
     entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
@@ -20,7 +20,7 @@ pub const CacheEntry = struct {
     ref_count: std.atomic.Value(u32),
     timestamp: std.atomic.Value(i64),
 };
-```Wait```zig
+```Wait Path```zig
 pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
     // Acquire the current map pointer
     const map = self.entries.load(.Acquire);
@@ -31,12 +31,12 @@ pub fn get(self: *LockFreeCache, namespace: []const u8) !*StateTree {
     
     return &entry.state;
 }
-```Invariants Error Conditions ref_count Overflow `u32 reaches.math.maxInt(u32) `fetchAdd wraps 0 use-after-free writer evicts entry readers hold reader threads CPU core 256 invariant```
+```Invariants Error Conditions ref_count Overflow `u32` reaches.math.maxInt(u32) next `fetchAdd` wraps to 0 use-after-free writer evicts entry readers hold concurrent reader threads bounded by CPU core count (≤ 256 invariant```
 ref_count ≤ thread_count_max  (always << u32 max)
-```debug builds assert```zig
+```debug builds assert `fetchAdd```zig
 const prev = entry.ref_count.fetchAdd(1, .AcqRel);
 std.debug.assert(prev < 65536); // sanity bound well below u32 max
-```Eviction Contract entry freed by writer when `ref_count == 0 Remove entry from map_mutex-wait until.ref_count.load == 0 call `allocator.destroy(entry) Readers pointer before swap hold reference eviction wait before memory Error Conditions `error.NotFound Namespace not in map Caller storage ref_count overflow > 65536 readers on entry Double-release ref_count underflows Operational Logic Memory Ordering Guarantees **Acquire/Release** pointer synchronization **AcqRel** reference counting visibility Writer Serialization reads lock-free mutations acquire `write_mutex thread map race conditions rotation Validation Success Criteria Performance Targets Concurrent Read Scaling 64 cores Read Latency < 500ns for entries Zero Lock Contention on path Verification Commands```bash
+```Eviction Contract entry freed by writer when `ref_count == 0 Remove entry from map `write_mutex Spin-wait or defer until `entry.ref_count.load == 0 call `allocator.destroy(entry) Readers loaded pointer before map swap hold reference eviction wait before memory reclaimed Error Conditions `error.NotFound` Namespace not in map Caller falls storage ref_count overflow > 65536 readers on one entry Debug undefined behaviour Double-release() without() ref_count underflows Operational Logic Memory Ordering Guarantees **Acquire/Release** map pointer synchronization updated **AcqRel** reference counting visibility across Writer Serialization reads lock-free mutations acquire `write_mutex` one thread re-building map race conditions during rotation Validation & Success Criteria Performance Targets Concurrent Read Scaling to 64 cores Read Latency < 500ns for hot entries Zero Lock Contention on read path Verification Commands```bash
 # Run stress tests with thread sanitizer
 zig test src/cache_stress_test.zig -fsanitize=thread
-```See [Threading.md [Storage Implementation [Memory Management
+```See [Threading Implementation/threading.md [Storage Implementation.md [Memory Management/memory-management

@@ -1,4 +1,4 @@
-Network Layer 2026-03-09 ZyncBase uWebSockets foundation Zig multi event loop TLS zero-copy I/O server uWebSockets Architecture Core Components```
+Network Layer 2026-03-09 Overview ZyncBase uses uWebSockets networking foundation integrated Zig multi event loop TLS BoringSSL zero-copy I/O server uWebSockets Architecture Core Components```
 ┌─────────────────────────────────────────────────────┐
 │  uWebSockets (C++)                                  │
 │                                                     │
@@ -24,7 +24,7 @@ Network Layer 2026-03-09 ZyncBase uWebSockets foundation Zig multi event loop TL
 │  │  └──────────┘  └──────────┘  └──────────┘     │  │
 │  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
-```Features Multi Event app thread port load balancing Scales Zero-Copy I Direct buffer data transfer Low CPU overhead Native Kernel epoll kqueue IOCP Windows Zero-abstraction Zig Integration Configuration```zig
+```Features Multi Event app thread port Automatic load balancing Scales Zero-Copy I Minimizes memory Direct buffer Efficient data transfer Low CPU overhead Native Kernel epoll Linux kqueue BSD IOCP Windows Zero-abstraction penalty Zig Integration Configuration```zig
 // build.zig - Link uWebSockets
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
@@ -112,7 +112,7 @@ pub const Server = struct {
         uws.uWS_App_run(self.app);
     }
 };
-```WebSocket Connection```
+```WebSocket Connection Lifecycle```
 ┌─────────────────────────────────────────────────┐
 │  1. HTTP Upgrade Request                        │
 │     GET /ws HTTP/1.1                            │
@@ -154,7 +154,7 @@ pub const Server = struct {
 │     - Clear presence data                       │
 │     - Cleanup subscriptions                     │
 └─────────────────────────────────────────────────┘
-```Frame WebSocket overhead```
+```Frame WebSocket minimal overhead```
 ┌─────────────────────────────────────────────────┐
 │  Frame Header (2-6 bytes)                       │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
@@ -169,7 +169,7 @@ pub const Server = struct {
 │  │  Short strings: 2-6 bytes overhead        │  │
 │  └───────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
-```2-6 bytes HTTP 100+ MessagePack Serialization```zig
+```2-6 bytes message HTTP 100+ MessagePack Serialization Format```zig
 const Message = struct {
     type: MessageType,
     id: u64, // Request ID
@@ -192,7 +192,7 @@ const MessageType = enum {
     response,
     error,
 };
-```Security Iterative Parser nested data parser depth limits```zig
+```Security Iterative Parser overflow nested data Iterative parser depth limits```zig
 const Parser = struct {
     max_depth: usize = 32,
     max_size: usize = 10 * 1024 * 1024, // 10MB
@@ -219,7 +219,7 @@ const Parser = struct {
         }
     }
 };
-```**Depth nested objects Excessive data Recursive parsing **Memory Unbounded allocation Connection Management State```zig
+```**Protections **Depth nested objects **Size Excessive data **Stack Recursive parsing **Memory Unbounded allocation Connection Management State```zig
 const Connection = struct {
     id: u64,
     socket: WebSocket,
@@ -232,7 +232,7 @@ const Connection = struct {
         try self.socket.send(bytes);
     }
 };
-```Authentication-based ZyncBase SDK abstracts process Developers provide `createClient token 'jwt SDK performs exchange token URL```
+```Authentication **Ticket-based (recommended): ZyncBase SDK abstracts process Developers provide `createClient( token: 'jwt' SDK performs exchange token `ws:// URL```
 1. Client requests ticket from HTTP endpoint
    POST /auth/ticket
    Authorization: Bearer <JWT>
@@ -244,7 +244,7 @@ const Connection = struct {
    ws://server/ws?ticket=abc123...
    
 4. Server validates ticket, establishes connection
-```tickets Short-lived (5-10 Not logged revoked Separate JWTs Cross WebSocket Hijacking```zig
+```tickets Short-lived (5-10 minutes Not logged revoked Separate JWTs Origin Validation Cross-Site WebSocket Hijacking```zig
 fn validateOrigin(origin: []const u8, allowed: []const []const u8) bool {
     for (allowed) |allowed_origin| {
         if (std.mem.eql(u8, origin, allowed_origin)) {
@@ -265,7 +265,7 @@ fn validateOrigin(origin: []const u8, allowed: []const []const u8) bool {
     ]
   }
 }
-```Connection Errors```zig
+```Error Connection Errors```zig
 fn onError(ws: *uws.uWS_WebSocket, error_code: c_int) callconv(.C) void {
     switch (error_code) {
         uws.ECONNRESET => {
@@ -298,4 +298,4 @@ fn handleMessage(msg: []const u8) !Response {
     
     // Process message...
 }
-```See [Core Principles uWebSockets [Threading Model multi-threading [Storage Layer SQLite integration [Query Engine Message processing [Research Performance validation
+```See [Core Principles]/core-principles.md chose uWebSockets [Threading Model] multi-threading works [Storage Layer].md SQLite integration [Query Engine Message processing [Research] Performance validation

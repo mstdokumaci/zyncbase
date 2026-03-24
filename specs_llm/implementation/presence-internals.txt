@@ -1,11 +1,11 @@
-Presence Internals API Design.md requirements user awareness ephemeral state covers architectural details performance optimizations implementation ZyncBase presence system Architecture Presence scoped server manages active users presence updates affect context```
+Presence Internals API Design-api.md requirements user awareness ephemeral state document covers architectural details performance optimizations implementation ZyncBase presence system Logical Architecture Presence scoped `presenceNamespace server manages map active users ensures user presence updates affect same context```
 [WebSocket Client] -> [PresenceManager (In-Memory)]
                            |
             +--------------+--------------+
             |                             |
       [State Map]                 [History Buffer]
   (User -> Presence)             (Last 5 Seconds)
-```Implementation Presence Manager keeps data RAM sub-100ms latency```zig
+```Implementation Presence Manager core state management keeps data RAM sub-100ms latency```zig
 const PresenceManager = struct {
     allocator: Allocator,
     
@@ -126,7 +126,7 @@ const PresenceUpdate = struct {
     user_id: []const u8,
     data: json.Value,
 };
-```History Ring Buffer context late joiners```zig
+```History Ring Buffer immediate context late joiners```zig
 const RingBuffer = struct {
     items: []PresenceSnapshot,
     head: usize,
@@ -141,7 +141,7 @@ const RingBuffer = struct {
         return result.toOwnedSlice();
     }
 };
-```Operational Logic Client-Side Throttling High-frequency updates throttled SDK to (16ms overwhelming network server Server-Side Batching batches presence updates every 50ms multiple users update broadcast single message Automatic Cleanup WebSocket connection closed server removes presence data.remove broadcasts removal message Client-Side State Management sub-millisecond ZyncBase Client SDKs maintain mirrored state `presenceNamespace Synchronous Getters SDK methods.get.getAll( mapped to wire protocol messages perform lookups against internal cache initialized response messages cache cleared client unsubscribes connection lost Rationale Omission Wire Protocol UI rendering network round-trip Local sync lookups 0ms client subscribe updates SDK possesses data requests Validation Success Criteria Metrics Latency < 1ms < 100μs Broadcast Interval 50ms 5ms Verification Commands```bash
+```Operational Logic Client-Side Throttling High-frequency updates throttled SDK to ~60fps (16ms) overwhelming network server Server-Side Batching batches presence updates every 50ms multiple users update broadcast single message Automatic Cleanup WebSocket connection closed server removes presence data `PresenceManager.remove broadcasts removal message Client-Side State Management sub-millisecond local reads ZyncBase Client SDKs maintain mirrored state of `presenceNamespace Synchronous Getters SDK methods `presence.get.getAll() mapped to wire protocol messages perform lookups against internal cache initialized receives `PresenceSubscribe response updated real-time `PresenceBroadcast messages arrive cache cleared when client unsubscribes or connection lost Rationale for Omission Wire Protocol UI rendering loops network round-trip Local sync lookups 0ms client must subscribe updates SDK possesses necessary data fulfill "Get requests locally Validation Success Criteria Success Metrics Latency (Set): < 1ms (Get): < 100μs Broadcast Interval: 50ms (+ 5ms Verification Commands```bash
 # Unit tests for PresenceManager (set/get/remove/getAll)
 zig test src/presence_manager_test.zig
 
@@ -150,4 +150,4 @@ zig test src/presence_manager_test.zig -Dsanitize=thread
 
 # Verify history ring buffer eviction
 zig test src/ring_buffer_test.zig
-```See API Design-api.md [Query Engine Implementation-engine.md API Reference-api.md
+```See [Presence API Design-api.md [Query Engine Implementation-engine.md API Reference-design/store-api.md

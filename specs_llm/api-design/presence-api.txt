@@ -1,19 +1,19 @@
-Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory cleaned disconnect Table Contents [Methods-methods-namespaces Cases Examples Practices Presence Methods.set(data presence data broadcast users same```typescript
+Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory cleaned on disconnect Table of Contents [Methods#presence-methods [Namespaces-namespaces [Use Cases Examples [Best Practices Presence Methods `presence.set(data) Set presence data broadcast users same```typescript
 client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
-````presence.subscribe real-time changes leaves users namespace```typescript
+````presence.subscribe Subscribe real-time changes leaves updates users namespace```typescript
 client.presence.subscribe((users) => {
   renderCursors(users)
 })
-````presence.get(userId) user's current presence data **synchronous local SDK cache returns values active [Subscription namespace```typescript
+````presence.get(userId)` specific user's current presence data **synchronous local lookup** SDK's internal cache returns values active [Subscription] namespace```typescript
 const alice = client.presence.get('user-123')
-````presence.getAll Returns users presence data namespace Excludes self Like( local returns empty array no subscription```typescript
+````presence.getAll Returns users presence data namespace Excludes self Like `get() **synchronous local returns empty array no active subscription```typescript
 const everyone = client.presence.getAll({ includeSelf: true })
-```Presence Namespaces scoped Initialization users same namespace see other Document-Scoped Presence**```typescript
+```Presence Namespaces scoped [Client Initialization/configuration users same namespace see each other Document-Scoped Presence**```typescript
 const client = createClient({
   presenceNamespace: 'workspace:acme:doc:123'
 })
 // Users in doc:123 only see each other's cursors.
-```Cases Examples Collaborative Editor```typescript
+```Use Cases Examples Collaborative Editor```typescript
 document.addEventListener('mousemove', (e) => {
   client.presence.set({ cursor: { x: e.clientX, y: e.clientY }, name: 'Alice' })
 })
@@ -26,4 +26,4 @@ input.addEventListener('input', () => {
   client.presence.set({ typing: true })
   setTimeout(() => client.presence.set({ typing: false }), 3000)
 })
-```Best Practices Data Presence updates frequent include essential transient state Use specific namespaces:123 reduce unneeded broadcasts Late receive last 5s updates See API Reference-api.md persistent state management [Configuration.md Defining presence fields schema
+```Best Practices **Keep Data Presence updates frequent include essential transient state **Namespace Granularity** Use specific namespaces `doc:123 reduce unneeded broadcasts **Handle Late joining receive last 5s updates automatically See API Reference-api.md persistent state management [Configuration/configuration.md Defining presence fields schema

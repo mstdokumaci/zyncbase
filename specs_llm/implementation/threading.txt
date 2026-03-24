@@ -1,4 +1,4 @@
-Threading Implementation Model Architecture ZyncBase threading model Core Engine Implementation```zig
+Threading Implementation Model Architecture document contains specifics ZyncBase threading model Core Engine Implementation```zig
 pub const CoreEngine = struct {
     // Lock-free cache for reads (parallel access)
     state_cache: LockFreeCache,
@@ -45,7 +45,7 @@ pub const CoreEngine = struct {
         return .{ .type = .success };
     }
 };
-```Lock-Free Cache Coordination CoreEngine Lock-Free Cache```zig
+```Lock-Free Cache Coordination CoreEngine Lock-Free Cache critical```zig
 const LockFreeCache = struct {
     // Use atomic reference counting for cache entries
     entries: std.atomic.Value(*HashMap([]const u8, *CacheEntry)),
@@ -82,7 +82,7 @@ const LockFreeCache = struct {
         _ = entry.version.fetchAdd(1, .release);
     }
 };
-```Critical Implementation Notes use atomic operations cache mutex negates benefits reads block Performance single-threaded~10k req/sec 17x improvement lock-free reads ordering.Acquire loads previous writes.Release stores visible.AcqRel read-modify-write combines Validation Success Criteria Verification Commands```bash
+```Critical Implementation Notes use atomic operations cache global mutex negates benefits reads block Performance to single-threaded levels~10k req/sec 17x improvement lock-free reads **Memory ordering `.Acquire for loads previous writes `.Release` stores writes visible.AcqRel` read-modify-write combines both Validation Success Criteria Verification Commands```bash
 # Run threading unit tests with thread sanitizer
 zig test src/core_engine_test.zig -Dsanitize=thread
 
@@ -91,4 +91,4 @@ zig test src/cache_stress_test.zig -Dsanitize=thread
 
 # Run full test suite to confirm no regressions
 zig build test
-```Success Criteria Read throughput scales cores_stress Write throughput single-writer load Mixed workload no deadlocks data races lock contention read path zero races
+```Success Criteria Read throughput scales cores_stress_test Write throughput single-writer serialization holds under concurrent load Mixed workload no deadlocks data races No lock contention read path zero races `get

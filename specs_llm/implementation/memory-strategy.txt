@@ -1,0 +1,46 @@
+Memory Management Implementation [Threading Model Architecture-001 Zig Core Language document ZyncBase memory management "Duality Pool" strategy request-scoped lifetimes object lifecycle maintenance ZyncBase avoids global garbage collector uses tiered allocator strategy memory managed lifecycle locality requirements```
+[System Memory]
+      |
+      +--- [GPA (General Purpose)] -> Long-lived State (Subscriptions, Server Shell)
+      |
+      +--- [Arena Allocator]      -> Request-scoped data (Message parsing, temporary buffers)
+      |
+      +--- [DynamicPool]          -> Large, sparse objects (Messages, 64KB buffers)
+      |
+      +--- [IndexPool]            -> High-churn, small objects (Connections, Arenas, DeferNodes)
+```Tiered Allocator Strategy ZyncBase allocators memory minimize fragmentation overhead```zig
+const MemoryStrategy = struct {
+    // DynamicPool: Sparse/Large objects (Lazy heap allocation)
+    message_pool: DynamicPool(Message),
+    
+    // IndexPool: High-churn/Small objects (Contiguous pre-allocated memory)
+    connection_pool: IndexPool(Connection),
+    arena_pool: IndexPool(std.heap.ArenaAllocator),
+};
+```Object Pooling Duality DynamicPool(T) large objects memory reservation expensive Uses `std.Thread.Mutex protected linked-list thread-safety stability LLVM ThreadSanitizer Apple Silicon Lazy heap allocation`allocator.create Mutex-protected stack prevents pointer races 128-bit atomic incompatibilities `Message` `Buffer` 2. IndexPool(T) high high-churn objects fragmentation cache locality critical `Node(T) Uses 64-bit atomics 32-bit array index 32-bit ABA tag Metadata `next_index stored `std.atomic.Value` prevent TSAN data races cycles pool exhausted back to dynamic heap allocation `Connection` `ArenaAllocator `lockFreeCache.DeferNode````zig
+// IndexPool core logic snippet
+pub fn release(self: *Self, data: *T) void {
+    const node: *Node = @alignCast(@fieldParentPtr("data", data));
+    const ptr = @intFromPtr(node);
+    const start = @intFromPtr(self.nodes.ptr);
+    const end = start + self.nodes.len * @sizeOf(Node);
+
+    if (ptr >= start and ptr < end) {
+        // Fast path: push back to contiguous array stack
+        // ... index bit-packing logic ...
+    } else {
+        // Overflow path: destroy heap-allocated node (self-healing)
+        if (self.deinitData) |deinit_fn| deinit_fn(self.allocator, data);
+        self.allocator.destroy(node);
+    }
+}
+```Operational Logic Pool Selection Matrix Type Sync Type Locality **Dynamic** Heap Mutex Stack Sparse Rare/Large objects **Index** Contiguous 64-bit Index Excellent Frequent/Small objects Memory Safety Practices Unbounded Allocations** parsers enforce depth size limits prevent OOM attacks **Self-Healing `IndexPool returns dynamic memory footprint bloat-Place Initialization** Types.Thread.Mutex.atomic.Value initialized in-place Returning types value illegal leads memory corruption **Fail-Fast on OOM** ZyncBase treats allocation failure fatal request error Invariants Error Conditions Arena reset via `defer` before request handler Pool exhaustion `IndexPool.pop() returns `null.acquire() heap OOM Returns `error.OutOfMemory `INTERNAL_ERROR Index Overflow `IndexPool` capacity capped at `u32.64-bit packing Validation Success Criteria Metrics Zero heap allocation cycles steady state Leak-free execution GPA safety checks Race-free atomic operations `TSAN Verification Commands```bash
+# Verify naming and basic consistency
+bun run lint
+
+# Verify pool stability under concurrency
+bun run test:tsan
+
+# Full integration verification
+bun run test:e2e
+```See [Threading Model Architecture-model.md [Lock-Free Cache Implementation-free-cache.md

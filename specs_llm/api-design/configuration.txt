@@ -1,4 +1,4 @@
-ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Configuration-First Approach [zyncbase-config.json [schema.json Migrations [authorization.json [Environment Variables [Examples ZyncBase follows"Zero-Zig" write server code data validation security rules defined JSON files [Zero-Zig Philosophy configuration files `zyncbase-config.json settings.json Data validation `authorization.json Security rules zyncbase-config.json configuration Minimal Configuration```json
+ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents [Configuration-First Approach [zyncbase-config.json [schema.json Migrations [authorization.json [Environment Variables 7. [Examples] ZyncBase follows"Zero-Zig" don't write server code data validation to security rules defined in declarative JSON files details [Zero-Zig Philosophy] configuration files `zyncbase-config.json Main server settings `schema.json Data validation `authorization.json Security rules zyncbase-config.json Main server configuration file Minimal Configuration```json
 {
   "server": {
     "port": 3000
@@ -74,7 +74,7 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     "batchTimeout": 10
   }
 }
-```Configuration Reference network```json
+```Configuration Reference network configuration```json
 {
   "server": {
     "port": 3000,              // Port to listen on
@@ -82,7 +82,7 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     "maxConnections": 100000   // Max concurrent connections
   }
 }
-````schema JSON migration settings```json
+````schema Path JSON migration settings```json
 {
   "schema": {
     "file": "./schema.json",
@@ -91,15 +91,15 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     "allowDestructive": false
   }
 }
-```string```json
+```simple string```json
 {
   "schema": "./schema.json"
 }
-````autoMigrate `true Auto-migrate all"additive-only-migrate changes `false Require migrations `allowDestructive Allow destructive changes confirmation `false Block destructive changes `version Semantic version schema Major changes require migrations Minor versions auto-migrate `authorization.json file rules```json
+```**Migration `autoMigrate `true Auto-migrate all changes"additive-only auto-migrate additive changes `false` Require migrations `allowDestructive `true Allow destructive changes with confirmation `false` Block destructive changes `version` Semantic version schema Major changes require migrations Minor/patch versions auto-migrate `authorization `authorization.json file rules```json
 {
   "authorization": "./authorization.json"
 }
-```See [README API overview entry point API Reference store [Presence API Reference.md configuration `dataDir` Directory SQLite database data files```json
+```See [README API overview entry point API Reference-api.md use store configured [Presence API Reference-api.md presence configuration context `dataDir` Directory SQLite database data files```json
 {
   "dataDir": "./data"
 }
@@ -114,7 +114,7 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     ]
   }
 }
-```settings```json
+````security settings```json
 {
   "security": {
     "allowedOrigins": [
@@ -128,14 +128,14 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     }
   }
 }
-```configuration```json
+````logging configuration```json
 {
   "logging": {
     "level": "info",    // debug, info, warn, error
     "format": "json"    // json, text
   }
 }
-```tuning```json
+````performance tuning```json
 {
   "performance": {
     "messageBufferSize": 1000,
@@ -143,7 +143,7 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     "batchTimeout": 10
   }
 }
-```schema.json structure ZyncBase Collaborative Canvas```json
+```schema.json data structure ZyncBase schema Collaborative Canvas```json
 {
   "version": "1.0.0",
   "store": {
@@ -212,7 +212,7 @@ ZyncBase Server Configuration 2026-03-09 guide JSON files Table of Contents [Con
     }
   }
 }
-```ZyncBase generates need```sql
+```ZyncBase generates don need```sql
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     namespace_id TEXT NOT NULL,
@@ -225,7 +225,7 @@ CREATE TABLE users (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
-```ZyncBase Define data store structure```json
+```Schema ZyncBase format Define data store structure```json
 {
   "version": "1.0.0",
   "store": {
@@ -238,7 +238,7 @@ CREATE TABLE users (
     }
   }
 }
-```Nested Fields ZyncBase flattens querying```json
+```Nested Fields Flattening ZyncBase flattens querying```json
 {
   "store": {
     "users": {
@@ -271,7 +271,7 @@ await zyncbase.set(users.user-1', {
 const users = await zyncbase.query(users', {
   where: { 'address.city': 'San Francisco' }
 })
-```hood Nested fields flattened to columns_street query efficiently Frontend one level nesting Nested objects contain arrays deeper nesting separate store paths references ZyncBase supports constraints Simple arrays```json
+```under hood Nested fields flattened to columns_street_city_zipCode query efficiently Frontend **Limitations one level nesting Nested objects contain arrays deeper nesting use separate store paths references Arrays ZyncBase supports arrays specific constraints Simple arrays```json
 {
   "store": {
     "tasks": {
@@ -291,7 +291,7 @@ const users = await zyncbase.query(users', {
 await zyncbase.set(tasks.task-1', {
   tags: ["urgent", "backend"]
 })
-```Arrays objects```json
+```Arrays objects supported):**```json
 {
   "store": {
     "projects": {
@@ -310,7 +310,7 @@ await zyncbase.set(tasks.task-1', {
     }
   }
 }
-```store path references```json
+```separate store path references```json
 {
   "store": {
     "projects": {
@@ -348,7 +348,7 @@ await zyncbase.set(project_members.member-1', {
 const members = await zyncbase.query(project_members', {
   where: { projectId: 'proj-1' }
 })
-```References ZyncBase supports references data```json
+```References ZyncBase supports references relational data```json
 {
   "store": {
     "projects": {
@@ -384,11 +384,11 @@ await zyncbase.set(tasks.task-1', {
 // Delete project (cascades to tasks)
 await zyncbase.remove(projects.proj-1')
 // task-1 is automatically deleted
-```Options `onDelete "cascade Delete tasks deleted "restrict Prevent deletion_null Set projectId null Data integrity Cascading deletes Efficient queries Frontend uses IDs ZyncBase JSON Schema Tips `enum fixed values```json
+```**Reference Options `onDelete "cascade Delete tasks deleted "restrict Prevent deletion tasks "set_null Set projectId null deleted **Benefits Data integrity Cascading deletes Efficient queries Frontend uses IDs ZyncBase handles JSON Schema Tips `enum` for fixed values```json
 {
   "status": { "type": "string", "enum": ["active", "pending", "deleted"] }
 }
-```validation```json
+````format validation```json
 {
   "email": { "type": "string", "format": "email" },
   "url": { "type": "string", "format": "uri" },
@@ -398,15 +398,15 @@ await zyncbase.remove(projects.proj-1')
 {
   "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
 }
-````maxLength strings```json
+```**Use`maxLength` strings```json
 {
   "name": { "type": "string", "minLength": 1, "maxLength": 100 }
 }
-````maximum numbers```json
+````minimum/`maximum numbers```json
 {
   "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
 }
-```Schema Migrations ZyncBase generates SQLite tables handles migrations-to-Table Mapping```
+```Schema Migrations ZyncBase generates SQLite tables schema.json handles migrations environment **Path-to-Table Mapping```
 Path: 'tasks' → Table: tasks
 Path: 'tasks.task-1' → Table: tasks, row with id='task-1'
 Path: 'users' → Table: users
@@ -438,7 +438,7 @@ CREATE TABLE tasks (
 
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
-```Auto-Migration changes zero friction```json
+```Auto-Migration Path changes-migrate zero friction```json
 // schema.json v1
 {
   "store": {
@@ -472,7 +472,7 @@ $ zyncbase-server start
 ✓ Adding column 'tasks.assignee'
 ✓ Creating index on 'tasks.assignee'
 ✓ Server started (2ms)
-```migration friction Development vs Production Mode```json
+```migration friction Development vs Production Mode (Fast```json
 // zyncbase-config.json
 {
   "environment": "development",
@@ -501,7 +501,7 @@ Continue? [y/N]: y
 ✓ Server started
 
 ⚠ All data in 'tasks' was lost
-```Mode```json
+```Mode (Safety```json
 // zyncbase-config.json
 {
   "environment": "production",
@@ -528,14 +528,14 @@ Options:
 3. Force (data loss): zyncbase-server start --force-schema
 
 See: https://zyncbase.dev/docs/MIGRATIONS.md
-```Schema Versioning semantic changes```json
+```Schema Versioning semantic track changes```json
 {
   "version": "1.2.0",
   "properties": {
     "tasks": { ... }
   }
 }
-```Rules (1.2.0 Additive (1.2.0 1.3.0 Additive (1.2.0 2.0.0```bash
+```Rules (1.2.0 Additive auto-migrate (1.2.0 1.3.0 Additive-migrate (1.2.0 2.0.0 Breaking migration```bash
 # Patch/Minor - auto-migrates
 $ zyncbase-server start
 ✓ Schema version: 1.2.0 → 1.3.0 (minor)
@@ -552,7 +552,7 @@ Create migration:
 
 Or force in development:
   zyncbase-server start --force-schema
-```Auto-Migrates safe Add new field table (path index Make field optional **Requires migration Change field type → Remove field Rename field Make field required Migration Commands```bash
+```Auto-Migrates **Always safe all environments):** Add new field new table (path) index Make field optional **Requires migration Change field type (integer → string Remove field Rename field Make field required Migration Commands```bash
 # Check migration status
 zyncbase migrate status
 
@@ -567,14 +567,14 @@ zyncbase migrate down
 
 # Dry run (see what would happen)
 zyncbase migrate up --dry-run
-```Environment-Specific Behavior Change Type Development Production Add field Auto-migrate Add table Auto-migrate Change type Allow confirm Require migration Remove field confirm Require migration Major version confirm Require migration Quick Start Guide **Adding field```bash
+```Environment-Specific Behavior Change Type  Development  Production ||------------- Add field Auto-migrate Add table Auto-migrate Change type  Allow confirm Require migration Remove field Allow confirm Require migration Major version  Allow confirm Require migration Quick Start Guide **Adding field (zero friction):**```bash
 # 1. Edit schema
 $ vim schema.json  # Add 'assignee' field
 
 # 2. Start server
 $ zyncbase-server start
 ✓ Auto-migrated: added column 'tasks.assignee'
-```type```bash
+```**Changing type```bash
 # 1. Edit schema
 $ vim schema.json  # priority: integer → string
 
@@ -587,7 +587,7 @@ Continue? [y/N]: y
 
 # 3. Rebuild test data
 $ node scripts/seed-dev-data.js
-```type```bash
+```**Changing type```bash
 # 1. Edit schema and bump version
 $ vim schema.json  # version: "1.3.0" → "2.0.0"
 
@@ -604,7 +604,7 @@ $ zyncbase migrate up
 $ zyncbase-server start
 ✓ Migrations applied
 ✓ Server started
-```migration ZyncBase.md removed aspirational authorization.json Define rules simple expression language Rules```json
+```migration guides ZyncBase.md removed aspirational authorization.json Define authorization rules simple expression language Simple Rules```json
 {
   "rules": [
     {
@@ -631,7 +631,7 @@ $ zyncbase-server start
     }
   }
 }
-```Expression Language variables `jwt. Claims JWT token.userId.role `namespace. Parsed namespace parts.tenantId.roomId `operation operation"read"write `===`!==` Equality `&&`||` Logical AND/OR `in` Check value array `!` Logical```json
+```Expression Language variables `jwt.` Claims JWT token.userId.tenantId.role `namespace.` Parsed namespace parts.tenantId.roomId `operation` operation"read or"write `===` `!==` - Equality `&&` `||` Logical AND/OR `in` Check value array `!` - Logical **Examples```json
 {
   "rules": [
     {
@@ -650,7 +650,7 @@ $ zyncbase-server start
     }
   ]
 }
-```Hook Server Functions authorization logic TypeScript.auth.ts not config managed by ZyncBase CLI.auth.ts```typescript
+```Hook Server Functions authorization logic TypeScript functions `zyncbase.auth.ts not config managed by ZyncBase CLI.auth.ts```typescript
 import { createAdminClient } from '@zyncbase/server';
 
 // Automatically configured to talk to the local Zig core
@@ -695,7 +695,7 @@ export async function hasPermission({ session, namespace, path, value }) {
     }
   ]
 }
-```CLI Bun Hook Server manages IPC Environment Variables ZyncBase supports substitution.env```bash
+```CLI Bun Hook Server manages IPC/WebSocket connection Environment Variables ZyncBase supports variable substitution syntax.env```bash
 # Server
 PORT=3000
 HOST=0.0.0.0
@@ -728,7 +728,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "allowedOrigins": "${ALLOWED_ORIGINS}"
   }
 }
-```Examples Collaborative Whiteboard-config.json```json
+```Examples 1: Collaborative Whiteboard-config.json```json
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
@@ -768,7 +768,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     }
   ]
 }
-```Multi-tenant SaaS```json
+```2: Multi-tenant SaaS```json
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
@@ -792,7 +792,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     }
   ]
 }
-```Example 3: Complex Authorization Hook Server.json rules database Hook Server custom logic complex authorization Bun TypeScript server TypeScript hooks Admin Client configuring `authorization.json delegation Implementation Guide-hook-server Server restart changes No automatic hot reload```
+```Example 3: Complex Authorization Hook Server `authorization.json rules database use Hook Server custom logic delegate complex authorization local Bun TypeScript server guide writing TypeScript hooks Admin Client configuring `authorization.json delegation [Authorization Implementation Guide-hook-server-managing Server restart required changes No automatic hot reload supported```
 
 **What triggers reload:**
 - `zyncbase-config.json` changes (requires restart)
@@ -809,4 +809,4 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ZyncBase evaluates all config files on startup and provides clear error messages:
 
-```bash-server Invalid configuration zyncbase-config.json Line 12 Missing field "schema" Add.json config Next Steps API-api.md Learn data sync Deploy production [Examples/zyncbase/examples examples
+```bash/zyncbase-server Error Invalid configuration zyncbase-config.json Line 12 Missing field "schema" Add/schema.json config Next Steps API-api.md Learn data sync API Deploy production content [Examples/zyncbase/examples complete examples

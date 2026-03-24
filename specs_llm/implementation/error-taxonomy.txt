@@ -1,4 +1,4 @@
-ZyncBase Error Taxonomy Handling Strategy Finalized defines error taxonomy ZyncBase error categories retry semantics SDK-level handling follows decisions [ADR-019 Formal Error Taxonomy Error Categories grouped 7 functional categories automatic SDK behavior reverts Typical Codes Retryable SDK Behavior `CONNECTION_FAILED `TIMEOUT backoff **Authentication** `AUTH_FAILED `TOKEN_EXPIRED `authRefresh **Authorization** `NAMESPACE_UNAUTHORIZED `PERMISSION_DENIED error update **Validation**_VALIDATION_FAILED `INVALID_MESSAGE error **Rate-Limit** `RATE_LIMITED `MESSAGE_TOO_LARGE Auto-retry backoff `RATE_LIMITED `INTERNAL_ERROR` Retry 3 times backoff**Hook_UNAVAILABLE_DENIED Surface error developer hook logic Error Catalog Code Category Description Trigger HTTP Status Retry Strategy `AUTH_FAILED Authentication Identity verification failed Invalid ticket expired JWT new token `TOKEN_EXPIRED Session expired Connection closed re-auth Refresh token `NAMESPACE_UNAUTHORIZED No access namespace `setStoreNamespace restricted path 403 `PERMISSION_DENIED Rule blocked operation `authorization.json Server `false `SCHEMA_VALIDATION_FAILED Data shape mismatch invalid fields/types Fix data `INVALID_ARRAY_ELEMENT Array field non-literal valuearray nested 400 No - Fix data_MESSAGE Validation Malformed frame Failed decode MessagePack missing Fix message format_LIMITED Threshold exceeded messages second 429 backoff `MESSAGE_TOO_LARGE-Limit Payload Exceeding 413 No Reduce message size_FAILED Transport failure WebSocket closed DNS failure Reconnect `TIMEOUT Connection No server response Request exceededtimeout 10s 408 Retry backoff_ERROR Zig core failure Crash Disk I/O error unhandled exception 500 Retry 3 times_SERVER_UNAVAILABLE Logic runtime Zig reach Hook Server 503 No - Check Hook Server `HOOK_DENIED Logic rejected Developer TS hook returned error 403 No - Check `MSGPACK_MAX_DEPTH_EXCEEDED exceeds depth 32 levels 400 - Reduce `MSGPACK_MAX_SIZE_EXCEEDED large exceeds 10MB limit 413 - Reduce_MAX_STRING_LENGTH_EXCEEDED exceeds 1MB 400 Reduce_ARRAY_LENGTH_EXCEEDED large exceeds 100k elements No - Reduce_MAX_MAP_SIZE_EXCEEDED Map large exceeds 100k entries `CHECKPOINT_FAILED Database checkpoint SQLite checkpoint 500 Automatic retry `DATABASE_BUSY lockedSQLite database busy 503 Retry backoff `DATABASE_LOCKED locked process Retry backoff `DATABASE_CORRUPT` corruption integrity check failed 500 Restore backup `CACHE_REF_COUNT_OVERFLOW concurrent readers exceeded u32 max 500 bug `CIRCUIT_BREAKER_OPEN failures 503 Wait timeout `SUBSCRIPTION_LIMIT_EXCEEDED subscriptions exceeded max subscriptions 429 Reduce subscriptions `WAL_SIZE_EXCEEDED WAL file large exceeded threshold 500 Automatic checkpoint `PATH_NOT_FOUND` removed Reads empty paths return `null new paths SDK Implementation Details `ZyncBaseError` Object errors consistent typed object```typescript
+ZyncBase Error Taxonomy Handling Strategy Finalized defines formal error taxonomy ZyncBase error categories retry semantics SDK-level handling implementation follows decisions [ADR-019 Formal Error Taxonomy Error Categories grouped into 7 functional categories automatic SDK behavior (retries reverts Typical Codes Retryable SDK Behavior **Connection** `CONNECTION_FAILED` `TIMEOUT` backoff until **Authentication** `AUTH_FAILED `TOKEN_EXPIRED` Fire event wait `authRefresh **Authorization** `NAMESPACE_UNAUTHORIZED `PERMISSION_DENIED` Surface error revert update **Validation** `SCHEMA_VALIDATION_FAILED `INVALID_MESSAGE` Surface error revert update **Rate-Limit** `RATE_LIMITED` `MESSAGE_TOO_LARGE` Auto-retry backoff if `RATE_LIMITED `INTERNAL_ERROR` Retry 3 times with backoff**Hook Server**_UNAVAILABLE_DENIED` Surface error issue developer's hook logic Complete Error Catalog Code Category Description Trigger HTTP Status Retry Strategy `AUTH_FAILED` Authentication Identity verification failed Invalid ticket expired JWT 401 new token `TOKEN_EXPIRED` Authentication Session expired Connection closed requires re-auth Refresh token `NAMESPACE_UNAUTHORIZED` Authorization No access namespace `setStoreNamespace restricted path 403 Check permissions `PERMISSION_DENIED` Authorization Rule blocked operation `authorization.json Hook Server returned `false` `SCHEMA_VALIDATION_FAILED` Data shape mismatch `store.set invalid fields/types 400 No Fix data `COLLECTION_NOT_FOUND` Collection missing schema Path refers table/collection not defined 403 No - Fix schema path `FIELD_NOT_FOUND` Validation Field missing not 400 No Fix schema data `INVALID_ARRAY_ELEMENT` Validation Array field non-literal value `store.array nested 400 No - Fix data `INVALID_MESSAGE Validation Malformed frame Failed decode MessagePack missing 400 - Fix message format `RATE_LIMITED Threshold exceeded many messages second IP 429 backoff `MESSAGE_TOO_LARGE Rate-Limit Payload big Exceeding `maxMessageSize 413 No - Reduce message size `CONNECTION_FAILED Transport failure WebSocket closed DNS failure Reconnect `TIMEOUT Connection No server response Request exceededtimeout 10s 408 Retry backoff `INTERNAL_ERROR Zig core failure Crash Disk I/O error unhandled exception 500 Retry 3 times `HOOK_SERVER_UNAVAILABLE Hook Server Logic runtime down Zig reach Hook Server 503 No - Check Hook Server `HOOK_DENIED Logic rejected Developer TS hook returned error 403 No - Check hook logic `MSGPACK_MAX_DEPTH_EXCEEDED MessagePack exceeds depth 32 levels 400 No - Reduce `MSGPACK_MAX_SIZE_EXCEEDED large exceeds 10MB limit 413 No - Reduce size_MAX_STRING_LENGTH_EXCEEDED exceeds 1MB 400 No - Reduce length_MAX_ARRAY_LENGTH_EXCEEDED Array large exceeds 100k elements 400 No - Reduce array size `MSGPACK_MAX_MAP_SIZE_EXCEEDED Map large exceeds 100k entries - Reduce `CHECKPOINT_FAILED Database checkpoint failed SQLite checkpoint failed 500 Automatic retry `DATABASE_BUSY Database lockedSQLite database busy 503  Retry backoff `DATABASE_LOCKED` Server Database locked process 503 Retry backoff `DATABASE_CORRUPT` Server Database corruption detected SQLite integrity check failed 500  Restore backup `CACHE_REF_COUNT_OVERFLOW` Server concurrent readers_count exceeded u32 max 500 Indicates bug `CIRCUIT_BREAKER_OPEN` Server failures 503 Wait timeout `SUBSCRIPTION_LIMIT_EXCEEDED`-Limit many subscriptions Client exceeded max subscriptions 429  No Reduce subscriptions `WAL_SIZE_EXCEEDED` Server WAL file large exceeded threshold 500  Automatic checkpoint SDK Implementation Details `ZyncBaseError` Object errors consistent typed object```typescript
 interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code (e.g., 'RATE_LIMITED')
   category: string;       // Category for grouping logic
@@ -8,11 +8,11 @@ interface ZyncBaseError extends Error {
   path?: string[];        // Affected data path (if applicable)
   details?: Record<string, string[]>; // Field-level validation errors
 }
-```Retry Semantics **Exponential retryable errors SDK uses `initialDelay base attempt + jitter-Limit Enabled server provides `retryAfter SDK respects.set.remove error response SDK revert local state change synchronization Error Propagation Flow Server sends Reverts optimistic state request `id matches write `await calls throw `ZyncBaseError Continuous streams fire global `client.on('error event/Vue/Svelte Populate `error state hook result```typescript
+```Retry Semantics **Exponential retryable errors SDK uses `initialDelay * base attempt + jitter **Rate-Limit Enabled default server provides `retryAfter SDK respects **Optimistic Reverts** `store.set.remove error response SDK revert local state change maintain synchronization Error Propagation Flow **Wire Server sends code Internal** Reverts optimistic state if request `id matches write `await calls throw `ZyncBaseError` Continuous streams fire global `client.on('error event **Framework/Vue/Svelte Populate `error` state hook result```typescript
 // Example: React handling
 const { data, error } = useStore('tasks.123');
 
-```4.1 Asynchronous Error Reporting high-throughput-and-forget operations server returns `ok unsolicited error background persistence fails server sends error `requestId matches original request seconds later errors related `DATABASE_BUSY_LOCKED_FULL_VIOLATION background batch processing unsolicited error `requestId SDK revert optimistic state user moved operations Detailed Retry Strategies Connection Errors `CONNECTION_FAILED `TIMEOUT backoff jitter```typescript
+```4.1 Asynchronous Error Reporting high-throughput "fire-and-forget operations server returns `ok send unsolicited error message if background persistence fails server sends error message `requestId matches original write request seconds later errors related to `DATABASE_BUSY_LOCKED `DISK_FULL `SCHEMA_VIOLATION background batch processing unsolicited error known `requestId SDK revert optimistic state user moved other operations 5. Detailed Retry Strategies Connection Errors `CONNECTION_FAILED `TIMEOUT` Exponential backoff jitter```typescript
 const retryConfig = {
   initialDelay: 1000,      // 1 second
   maxDelay: 30000,         // 30 seconds
@@ -48,7 +48,7 @@ async function connectWithRetry() {
     }
   }
 }
-```Rate Limit Errors_LIMITED Respect header backoff```typescript
+```Rate Limit Errors_LIMITED Respect `retryAfter header backoff```typescript
 async function handleRateLimit(error: ZyncBaseError) {
   if (error.retryAfter) {
     // Server told us exactly when to retry
@@ -62,12 +62,12 @@ async function handleRateLimit(error: ZyncBaseError) {
   // Retry the request
   return retry()
 }
-```-retry** Enabled disabled```typescript
+```-retry** Enabled default disabled```typescript
 const client = createClient({
   url: 'ws://localhost:3000',
   retryRateLimits: true  // Default: true
 })
-```Server Errors_ERROR_BUSY_LOCKED_FAILED Bounded retry exponential backoff```typescript
+```Server Errors_ERROR_BUSY_LOCKED `CHECKPOINT_FAILED Bounded retry exponential backoff```typescript
 const serverErrorRetry = {
   maxAttempts: 3,
   initialDelay: 1000,
@@ -99,7 +99,7 @@ async function retryServerError(operation: () => Promise<any>) {
     }
   }
 }
-```Hook Server Errors_UNAVAILABLE_BREAKER_OPEN No automatic retry```typescript
+```Hook Server Errors_SERVER_UNAVAILABLE_BREAKER_OPEN No automatic retry fast```typescript
 // Circuit breaker prevents cascading failures
 if (error.code === 'CIRCUIT_BREAKER_OPEN') {
   // Don't retry - circuit breaker will auto-recover after timeout
@@ -111,7 +111,7 @@ if (error.code === 'HOOK_SERVER_UNAVAILABLE') {
   // Operations are denied by default for security
   throw error
 }
-```Authentication Errors_EXPIRED Fire event refresh```typescript
+```Authentication Errors_EXPIRED Fire event token refresh```typescript
 client.on('tokenExpired', async () => {
   // Get new token from your auth service
   const newToken = await refreshAuthToken()
@@ -119,7 +119,7 @@ client.on('tokenExpired', async () => {
   // Reconnect with new token
   await client.reconnect({ token: newToken })
 })
-```retry `AUTH_FAILED_UNAUTHORIZED_DENIED configuration permission issues Retrying help error Validation Errors_VALIDATION_FAILED_MESSAGE `MSGPACK_EXCEEDED No retry-side bug```typescript
+```retry `AUTH_FAILED_UNAUTHORIZED_DENIED configuration permission issues Retrying help Surface error user Validation Errors `SCHEMA_VALIDATION_FAILED `INVALID_MESSAGE `MSGPACK_EXCEEDED No retry-side bug```typescript
 // These errors indicate bugs in client code
 // Retrying won't help - fix the code
 if (isValidationError(error)) {
@@ -129,7 +129,7 @@ if (isValidationError(error)) {
   // Surface error to developer
   throw error
 }
-```Retry Decision Matrix Error Category Auto-Retry Max Attempts Backoff User Action Required Connection Yes Infinite Exponential None automatic Rate-Limit Yes (opt-out Respect `retryAfter None automatic Server Yes Exponential Alert persistent Hook Server Check Hook Server Authentication Partial Refresh token Authorization No Fix permissions Validation Fix client code SDK Error Object errors consistent typed object `ZyncBaseError interface SDK package fields server-side contract```typescript
+```Retry Decision Matrix Error Category Auto-Retry Max Attempts Backoff User Action Required Connection Yes Infinite Exponential None - automatic Rate-Limit Yes (opt-out Infinite Respect `retryAfter` None - automatic Server Yes 3 Exponential Alert persistent Hook Server No 0 N/A Check Hook Server Authentication Partial 1 None Refresh token Authorization No 0 N/A Fix permissions Validation No N/A Fix client code SDK Error Object errors SDK use consistent typed object `ZyncBaseError` interface SDK package fields server-side contract```typescript
 interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code from the catalog above
   category: string;       // Functional category (connection | auth | authorization | validation | rate-limit | server | hook-server)
@@ -139,4 +139,4 @@ interface ZyncBaseError extends Error {
   path?: string[];        // Affected data path, if applicable
   details?: Record<string, string[]>; // Field-level validation errors
 }
-```Model Rate limiter circuit breaker Protocol Error envelope wire format [ADR-019-error-taxonomy-strategy Decision record taxonomy
+```See [Security Model Rate limiter circuit breaker [Wire Protocol Error envelope wire format [ADR-019.md-error-taxonomy-handling-strategy Decision record taxonomy

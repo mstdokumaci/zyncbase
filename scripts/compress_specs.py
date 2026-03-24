@@ -16,7 +16,7 @@ from llmlingua import PromptCompressor
 SOURCE_DIR = "specs"
 TARGET_DIR = "specs_llm"
 MODEL_NAME = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
-COMPRESSION_RATE = 0.4
+COMPRESSION_RATE = 0.5
 USE_LLMLINGUA2 = True
 PROTECT_CODE_BLOCKS = True
 # ========================================================
@@ -80,19 +80,21 @@ def main():
                     pattern = r"(```[\s\S]*?```)"
                     parts = re.split(pattern, content)
                     compressed_parts = []
-                    
+
                     for part in parts:
                         if part.startswith("```"):
                             # Preserve code blocks/diagrams exactly
                             compressed_parts.append(part)
                         elif len(part.strip()) > 20:
                             # Compress prose segments that have significant content
-                            res = llm_lingua.compress_prompt(part, rate=COMPRESSION_RATE)
+                            res = llm_lingua.compress_prompt(
+                                part, rate=COMPRESSION_RATE
+                            )
                             compressed_parts.append(res["compressed_prompt"])
                         else:
                             # Keep very short snippets or whitespace as is
                             compressed_parts.append(part)
-                    
+
                     compressed = "".join(compressed_parts)
                 else:
                     result = llm_lingua.compress_prompt(content, rate=COMPRESSION_RATE)

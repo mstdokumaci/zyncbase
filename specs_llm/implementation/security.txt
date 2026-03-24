@@ -1,4 +1,4 @@
-Security Model System Exchange Implementation describes security mechanisms ZyncBase covers defense-in-depth layer model parser limits circuit breaker contract Hook Server rate limiter data structures security seven layers component```
+Security Model [Auth System Exchange Implementation document describes security mechanisms ZyncBase covers defense-in-depth layer model parser limits circuit breaker contract Hook Server rate limiter data structures Defense-in Layer Model enforces security seven layers specific component```
 Layer 1: TLS (uWebSockets / BoringSSL)          — encrypts all client traffic
 Layer 2: Rate Limiting (ConnectionLimiter)       — per-IP connection and message limits
 Layer 3: Input Validation (MessagePack parser)   — enforces size/depth/type limits before any allocation
@@ -6,7 +6,7 @@ Layer 4: Authentication (AuthExchange)           — ticket validation on every 
 Layer 5: Authorization (Hook Server client)      — per-operation policy check via Hook Server
 Layer 6: Namespace Isolation (StorageLayer)      — every query is scoped to namespace_id
 Layer 7: Audit Logging (SecurityLogger)          — structured log entry for every security event
-```layer independent failure layer access next applies MessagePack Parser Limits enforces before memory parsed Exceeding closes connection violations```zig
+```layer independent failure layer grant access next applies MessagePack Parser Limits enforces limits before allocating memory parsed value Exceeding limit closes connection violations```zig
 pub const ParserConfig = struct {
     max_depth:         usize = 32,
     max_size:          usize = 10 * 1024 * 1024,  // 10 MB
@@ -14,7 +14,7 @@ pub const ParserConfig = struct {
     max_array_length:  usize = 100_000,
     max_map_size:      usize = 100_000,
 };
-```parser iterative uses explicit stack_depth overflow impossible input Violation Handling```zig
+```parser iterative uses explicit stack bounded_depth stack overflow impossible input nesting Violation Handling```zig
 pub const ViolationTracker = struct {
     count:     u32 = 0,
     threshold: u32 = 3,
@@ -26,12 +26,12 @@ pub const ViolationTracker = struct {
         return self.count >= self.threshold;
     }
 };
-```violations connection closed Circuit Breaker Contract Hook Server authorization call circuit breaker three states```
+```violations connection closed code Circuit Breaker Contract Hook Server client wraps authorization call circuit breaker breaker three states```
 Closed  ──(failures >= threshold)──▶  Open
   ▲                                     │
   │                                     │ (timeout elapsed)
   └──────(success)──── Half-Open ◀──────┘
-```State Behaviour Closed Requests Hook Server Open authorization requests denied.CircuitOpen Half-Open probe request success Closed failure Open```zig
+```State Behaviour Closed Requests forwarded Hook Server Open authorization requests denied.CircuitOpen without contacting Hook Server Half-Open probe request success Closed failure Open```zig
 pub const CircuitBreaker = struct {
     state:             State = .closed,
     failure_count:     u32  = 0,
@@ -73,7 +73,7 @@ pub const CircuitBreaker = struct {
         self.state = .closed;
     }
 };
-```circuit open ZyncBase denies returns.ServiceUnavailable fails Rate Limiter Data Connection Limiter```zig
+```circuit open ZyncBase denies returns.ServiceUnavailable client never fails Rate Limiter Data Structures Connection Limiter```zig
 pub const ConnectionLimiter = struct {
     // ip_str -> active connection count
     counts: std.StringHashMap(u32),
@@ -92,7 +92,7 @@ pub const ConnectionLimiter = struct {
         }
     }
 };
-```Message Rate Limiter```zig
+```Message Rate Limiter token```zig
 pub const RateLimiter = struct {
     tokens:      f64,
     max_tokens:  f64 = 100.0,
@@ -112,9 +112,9 @@ pub const RateLimiter = struct {
         return false;
     }
 };
-```Namespace Isolation SQLite query includes namespace_id = ? clause_id set from authenticated session context client-supplied data Cross-namespace access requires authorization Hook Server Invariants Error Conditions Fail-secure circuit breaker open Hook Server access denied Parser-before-alloc No heap allocation until parser limits pass Namespace scoping `namespace_id from `AuthContext not wire message Violation threshold connection closed after parser violations Error.CircuitOpen_UNAVAILABLE.AuthTimeout `UNAUTHORIZED.MaxDepthExceeded.MaxSizeExceeded Validation Success Criteria TSan clean auth rate-limiter paths Parser rejects depth > 32 size > 10 MB Circuit breaker Closed → Open after 5 failures denies requests Open Connection limiter blocks connection 101 from IP Verification Commands```bash
+```Namespace Isolation SQLite query includes namespace_id = ?` clause `namespace_id set from authenticated session context client-supplied data Cross-namespace access requires authorization from Hook Server Invariants Error Conditions Fail-secure circuit breaker open or Hook Server times out access denied never granted Parser-before-alloc No heap allocation until parser limits pass Namespace scoping `namespace_id` from `AuthContext` not wire message Violation threshold connection closed after parser violations Error Behaviour `error.CircuitOpen` return `SERVICE_UNAVAILABLE`.AuthTimeout return `UNAUTHORIZED`.MaxDepthExceeded` Record violation close connection.MaxSizeExceeded violation close Validation Success Criteria TSan clean on auth rate-limiter paths Parser rejects depth > 32 size > 10 MB Circuit breaker transitions Closed → Open after 5 failures Circuit breaker denies requests while Open Connection limiter blocks connection 101 from same IP Verification Commands```bash
 zig test src/msgpack_parser_test.zig
 zig test src/circuit_breaker_test.zig
 zig test src/rate_limiter_test.zig
 zig build test -Dsanitize=thread
-```System Hook Server rules Exchange Ticket handshake session enrichment TSan GPA coverage Implementation TLS connection lifecycle
+```See [Auth System Hook Server authorization rules Exchange Ticket handshake session enrichment [Sanitizers TSan GPA coverage [Networking Implementation TLS connection lifecycle

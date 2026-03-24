@@ -1,4 +1,4 @@
-Query Engine 2026-03-09 handles filtering sorting real-time subscriptions executes queries-memory cache SQLite storage tracks change detection in-memory subscriptions efficient real-time updates```zig
+Query Engine 2026-03-09 handles filtering sorting real-time subscriptions executes queries in-memory cache SQLite storage tracks subscriptions changes Fine-grained change detection in-memory subscriptions efficient real-time updates Structure```zig
 const Query = struct {
     path: []const u8,
     filters: []Filter,
@@ -32,7 +32,7 @@ const Sort = struct {
     field: []const u8,
     direction: enum { asc, desc },
 };
-```Query Execution```
+```Query Execution Flow```
 ┌─────────────────────────────────────────────────┐
 │  1. Parse Query                                 │
 │     - Validate syntax                           │
@@ -125,7 +125,7 @@ const QueryEngine = struct {
         return buf.toOwnedSlice();
     }
 };
-```Subscriptions Tracking```zig
+```Real-time Subscriptions Tracking```zig
 const Subscription = struct {
     id: u64,
     connection_id: u64,
@@ -163,7 +163,7 @@ const SubscriptionManager = struct {
         }
     }
 };
-```Change Detection ZyncBase-Grained strategy sub-100ms sync without overloading SQLite reader pool Writer thread emits change event `SubscriptionManager evaluates_row against filters SQLite queries re broadcast for filter matches Updates if row matching changed Fine-Grained Implementation notification pipeline RAM```zig
+```Change Detection ZyncBase-Grained strategy sub-100ms sync without overloading SQLite reader pool Fine-Grained Observation Writer thread emits change event operation `SubscriptionManager evaluates_row against subscription filters SQLite queries re during broadcast for filter matches Updates pushed if row matching changed Fine-Grained Implementation notification pipeline operates in RAM```zig
 pub fn notify(self: *SubscriptionManager, table: []const u8, changed_id: []const u8, new_row: json.Value) !void {
     const subs = self.table_index.get(table) orelse return;
     
@@ -197,9 +197,9 @@ fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_i
     
     return false;
 }
-```Presence Awareness ZyncBase system tracks user state real-time data stored in-memory state management batching history buffers Internals Authorization Optimization SQL queries authorization WebSocket bottleneck```
+```Presence Awareness ZyncBase presence system tracks user state online status real-time presence data stored in-memory state management batching history buffers see [Presence Internals Authorization Optimization Problem SQL queries authorization WebSocket bottleneck```
 Cursor movement (100/sec) × SQL query (1ms) = 100ms latency
-```Solution Permission connection```zig
+```Solution Permission Snapshots. connection```zig
 fn onConnect(conn: *Connection) !void {
     // Execute SQL queries to determine permissions
     const permissions = try db.query(
@@ -218,7 +218,7 @@ fn checkPermission(conn: *Connection, room_id: []const u8) bool {
     // Memory lookup (nanoseconds)
     return conn.permissions.rooms.contains(room_id);
 }
-```. Invalidation```zig
+```**3. Invalidation```zig
 fn onRoomMembershipChange(user_id: []const u8) !void {
     // Find all connections for this user
     for (connections) |conn| {
@@ -228,4 +228,4 @@ fn onRoomMembershipChange(user_id: []const u8) !void {
         }
     }
 }
-```Common Nanosecond memory lookup Rare SQL query permissions change Authorization doesn bottleneck operations Principles Design [Threading Model Parallel query execution Layer SQLite optimization Layer WebSocket protocol Language Query syntax reference Performance validation
+```Common path Nanosecond memory lookup Rare SQL query permissions change Authorization doesn bottleneck real-time operations [Core Principles Design [Threading Model Parallel query execution [Storage Layer SQLite optimization [Network Layer WebSocket protocol [Query Language Query syntax reference [Research Performance validation

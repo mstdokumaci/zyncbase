@@ -1,4 +1,4 @@
-Storage Implementation Layer Architecture ZyncBase storage layer SQLite configuration connection management schema generation migration logic SQLite Configuration Pragma Settings PRAGMAs high workloads```sql
+Storage Implementation Layer Architecture document ZyncBase storage layer SQLite configuration connection management schema generation migration logic SQLite Configuration Pragma Settings ZyncBase uses PRAGMAs high-concurrency real-time workloads```sql
 -- Enable WAL mode (parallel reads + better concurrency)
 PRAGMA journal_mode = WAL;
 
@@ -16,7 +16,7 @@ PRAGMA read_uncommitted = 1;
 
 -- Proactive checkpoint management (prevent WAL growth)
 PRAGMA wal_autocheckpoint = 1000;
-```SQLite WAL Mode ZyncBase leverages SQLite high-performance concurrency Layer Architecture enforce settings connection_size -64000 Caches pages RAM I/O Negative (64MB NORMAL Balances durability performance Safe crashes vulnerable power failure_size 256MB Maps database memory syscall overhead reads Connection Pool ZyncBase thread-local connection pool read throughput```zig
+```SQLite Configuration WAL Mode ZyncBase leverages SQLite Write-Ahead Logging high-performance concurrency Layer Architecture-mode enforce settings connection_size -64000 Caches hot pages RAM disk I/O Negative value KB (64MB **synchronous NORMAL Balances durability performance Safe crashes vulnerable power failure_size 256MB Maps database memory reducing syscall overhead reads Connection Pool Implementation ZyncBase maintains thread-local connection pool read throughput```zig
 const StorageLayer = struct {
     write_conn: *sqlite.Connection,      // Single writer
     read_pool: []sqlite.Connection,      // Multiple readers
@@ -53,7 +53,7 @@ const StorageLayer = struct {
         return &self.read_pool[reader_idx];
     }
 };
-```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer 64-bit float `boolean Stored as 0 or 1 `object Flattened columns `address.city_city TEXT `array` Stored as JSON blob Implementation Logic schema during `StorageEngine initialization ZyncBase strict-schema architecture valid JSON schema for server startup no invalid database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity```zig
+```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping Implementation JSON Schema SQLite Type Notes `string` `TEXT` Map to UTF-8 text `integer 64-bit signed integer `number` 64-bit float `boolean` Stored as 0 or 1 `object` Flattened columns `address.city` `address_city TEXT` `array` `TEXT Stored as JSON blob Implementation Logic schema during `StorageEngine` initialization Schema ZyncBase enforces strict-schema architecture valid JSON schema for server startup server if no schema or invalid database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity```zig
 const SchemaParser = struct {
     allocator: Allocator,
     
@@ -146,7 +146,7 @@ const DDLGenerator = struct {
         return buf.toOwnedSlice();
     }
 };
-```Relational Features Supports `cascade_null Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current target schema Execution Strategy```zig
+```Relational Features **Foreign `references Supports `cascade `restrict_null Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution comparing current target schema Execution Strategy```zig
 const MigrationDetector = struct {
     pub fn detectChanges(old_schema: Schema, new_schema: Schema) ![]Change {
         var changes = ArrayList(Change).init(allocator);
@@ -215,7 +215,7 @@ const MigrationExecutor = struct {
         defer self.db.allocator.free(drop_backup);
         try self.db.exec(drop_backup);
     }};
-```Async Batching avoid I/O ZyncBase transactions```zig
+```Async Batching avoid I/O bottlenecks ZyncBase transactions```zig
 const StorageLayer = struct {
     write_queue: RingBuffer(WriteOp),
     batch_size: usize = 100,
@@ -236,14 +236,14 @@ const StorageLayer = struct {
         try self.write_conn.exec("COMMIT");
     }
 };
-```Asynchronous Completion Tracking Error Reporting track origin write operation Structural Changes Add metadata link operation requester```zig
+```Asynchronous Completion Tracking support Error Reporting `StorageLayer track origin write operation Proposed Structural Changes`WriteOp Add metadata link operation requester```zig
     pub const WriteOp = struct {
         type: enum { ... },
         // ... existing fields ...
         client_id: ?u64 = null,    // Unique identifier for the WebSocket connection
         request_id: ?u64 = null,  // Original id from the client message
     };
-    ````StorageLayer callback interface report background processing results```zig
+    ````StorageLayer callback interface initialization report background processing results```zig
     const StorageLayer = struct {
         // ...
         on_error: ?*const fn (client_id: u64, request_id: u64, err: anyerror) void = null,
@@ -255,7 +255,7 @@ const StorageLayer = struct {
             }
         }
     };
-    ```Server Integration `ZyncBaseServer_error callback_id registry sending late `error message WebSocket Strategy Cache Integration lock-free-memory cache read-through layer```zig
+    ```Server Integration `ZyncBaseServer` `on_error callback `client_id connection registry sending late `error message WebSocket Strategy Cache Integration lock-free in-memory cache read-through layer```zig
 const StateManager = struct {
     cache: HashMap([]const u8, *Namespace),
     storage: *StorageLayer,
@@ -268,7 +268,7 @@ const StateManager = struct {
         return ns;
     }
 };
-```Checkpoint Management Prevents starvation minimizes degradation PASSIVE Non-blocking best effort Background maintenance Waits readers completes Scheduled maintenance Resets shrinks WAL disk space Performance Optimization Authorization Snapshots permission queries connection In-memory lookup prevents authorization read-path Backup Online Backup checkpoints WAL database copies SQLite online backup API```zig
+```Checkpoint Management Prevents WAL starvation minimizes read degradation Mode Behavior Use Case PASSIVE Non-blocking best effort Background maintenance Waits readers completes Scheduled maintenance Resets shrinks WAL Reclaim disk space Performance Optimization Authorization Snapshots permission queries connection In-memory lookup prevents authorization read-path Backup Online Backup safe server running checkpoints WAL database copies atomically SQLite online backup API```zig
 pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
     // Checkpoint WAL into the main database file
     try self.write_conn.exec("PRAGMA wal_checkpoint(FULL)");
@@ -280,6 +280,6 @@ pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
     defer bk.finish();
     while (try bk.step(100) == .more) {} // copy 100 pages at a time
 }
-```Invariants destination file valid SQLite database source database operational backup error destination file incomplete discarded Verification```bash
+```Invariants destination file valid readable SQLite database success source database operational during backup returns error destination file incomplete discarded Verification```bash
 zig test src/storage_backup_test.zig
-```Layer Architecture dive WAL pooling design [Threading Model Multi-threaded core integration Benchmarks performance validation
+```See [Storage Layer Architecture Deep dive WAL pooling design [Threading Model Multi-threaded core integration [Research Benchmarks performance validation
