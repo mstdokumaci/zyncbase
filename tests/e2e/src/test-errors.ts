@@ -1,7 +1,7 @@
 import { ZyncBaseClient } from "./client";
 
-async function main() {
-  const client = new ZyncBaseClient("ws://127.0.0.1:3000");
+export async function run(port: number = 3000) {
+  const client = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
 
   try {
     console.log("Connecting client...");
@@ -66,10 +66,8 @@ async function main() {
     console.log("All error reporting tests passed!");
   } catch (err) {
     console.error("Test failed:", err);
-    process.exit(1);
+    throw err;
   } finally {
     client.close();
   }
 }
-
-main();

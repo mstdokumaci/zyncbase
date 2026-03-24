@@ -1,8 +1,8 @@
 import { ZyncBaseClient } from "./client";
 
-async function main() {
-  const clientA = new ZyncBaseClient("ws://127.0.0.1:3000");
-  const clientB = new ZyncBaseClient("ws://127.0.0.1:3000");
+export async function run(port: number = 3000) {
+  const clientA = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
+  const clientB = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
 
   try {
     console.log("Connecting clients...");
@@ -51,11 +51,9 @@ async function main() {
     console.log("E2E Sync test passed successfully!");
   } catch (err) {
     console.error("Test failed:", err);
-    process.exit(1);
+    throw err;
   } finally {
     clientA.close();
     clientB.close();
   }
 }
-
-main();

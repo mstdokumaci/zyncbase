@@ -1,6 +1,6 @@
 {
     "scripts": {
-        "test:e2e": "sh tests/e2e/run.sh",
+        "test:e2e": "bun tests/e2e/src/runner.ts",
         "specs:compress": "uv run python scripts/compress_specs.py",
         "test:tsan": "zig build test -Dsanitize=thread --summary all",
         "test:safe": "zig build test -Doptimize=ReleaseSafe --summary all",

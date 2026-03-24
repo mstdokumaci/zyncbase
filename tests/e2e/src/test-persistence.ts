@@ -2,9 +2,8 @@ import { ZyncBaseClient } from "./client";
 import * as fs from "fs";
 import * as path_pkg from "path";
 
-async function main() {
-  const mode = process.argv[2]; // "set" or "get"
-  const client = new ZyncBaseClient("ws://localhost:3000");
+export async function run(mode: "set" | "get", port: number = 3000) {
+  const client = new ZyncBaseClient(`ws://localhost:${port}`);
   const timestampFile = path_pkg.join(process.cwd(), "test-artifacts", "persistence_timestamp.txt");
 
   try {
@@ -39,10 +38,8 @@ async function main() {
     }
   } catch (err) {
     console.error("Test failed:", err);
-    process.exit(1);
+    throw err;
   } finally {
     client.close();
   }
 }
-
-main();
