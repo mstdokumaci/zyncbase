@@ -3,7 +3,6 @@ const testing = std.testing;
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const it_storage_mod = @import("storage_engine.zig");
 const storage_mod = it_storage_mod;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
@@ -41,8 +40,6 @@ test "Verification: WebSocket connection lifecycle" {
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
@@ -51,15 +48,12 @@ test "Verification: WebSocket connection lifecycle" {
 
     const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit(); // Note: context.deinit() handles directory cleanup
-
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
         violation_tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -108,8 +102,6 @@ test "Verification: StoreSet message processing" {
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
@@ -118,15 +110,12 @@ test "Verification: StoreSet message processing" {
 
     const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
-
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
         violation_tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -219,8 +208,6 @@ test "Verification: StoreGet message processing" {
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -228,15 +215,12 @@ test "Verification: StoreGet message processing" {
 
     const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
-
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
         violation_tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -326,8 +310,6 @@ test "Verification: Error handling for invalid messages" {
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
@@ -336,15 +318,12 @@ test "Verification: Error handling for invalid messages" {
 
     const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
-
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
         violation_tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -459,8 +438,6 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -468,15 +445,12 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
     defer storage_engine.deinit();
-
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     const handler = try MessageHandler.init(
         allocator,
         &memory_strategy,
         violation_tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );

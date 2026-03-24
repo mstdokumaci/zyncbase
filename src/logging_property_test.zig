@@ -5,7 +5,6 @@ pub var global_capture: ?*LogCapture = null;
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -84,8 +83,6 @@ test "logging: connection events" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const test_dir = "test-artifacts/test_connection_logging";
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
@@ -109,7 +106,6 @@ test "logging: connection events" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -284,8 +280,6 @@ test "logging: error details" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const test_dir = "test-artifacts/test_error_logging";
     std.fs.cwd().makeDir(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
@@ -309,7 +303,6 @@ test "logging: error details" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -422,8 +415,6 @@ test "logging: level filtering" {
         var tracker = ViolationTracker.init(allocator, 10);
         defer tracker.deinit();
 
-        var request_handler = RequestHandler.init(&memory_strategy);
-
         const test_dir = "test-artifacts/test_log_level";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
@@ -438,15 +429,12 @@ test "logging: level filtering" {
         const dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_2);
         defer storage_engine.deinit();
-
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -502,8 +490,6 @@ test "logging: message formatting" {
         var tracker = ViolationTracker.init(allocator, 10);
         defer tracker.deinit();
 
-        var request_handler = RequestHandler.init(&memory_strategy);
-
         const test_dir = "test-artifacts/test_log_format";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
@@ -518,15 +504,12 @@ test "logging: message formatting" {
         const dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_3);
         defer storage_engine.deinit();
-
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -570,8 +553,6 @@ test "logging: message formatting" {
         var tracker = ViolationTracker.init(allocator, 10);
         defer tracker.deinit();
 
-        var request_handler = RequestHandler.init(&memory_strategy);
-
         const test_dir = "test-artifacts/test_log_params";
         std.fs.cwd().makeDir(test_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
@@ -586,15 +567,12 @@ test "logging: message formatting" {
         const dummy_schema_4 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_4);
         defer storage_engine.deinit();
-
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
-
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );

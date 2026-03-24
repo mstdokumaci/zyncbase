@@ -230,20 +230,16 @@ test "connection: state deallocation on close" {
             };
             threads[idx] = try std.Thread.spawn(.{}, worker, .{ctx});
         }
-
         // Wait for all threads
         for (threads) |thread| {
             thread.join();
         }
     }
-
     // Test 7: Registry deinit deallocates all remaining connections
     {
         var memory_strategy = try MemoryStrategy.init(allocator);
         defer memory_strategy.deinit();
-
         var registry = ConnectionRegistry.init(&memory_strategy);
-
         const num_connections = 20;
         var i: u64 = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -252,12 +248,10 @@ test "connection: state deallocation on close" {
             try state.subscription_ids.append(state.allocator, i * 10);
             try registry.add(i, state);
         }
-
         // Deinit should deallocate all remaining connections
         registry.deinit();
     }
 }
-
 test "connection: state deallocation edge cases" {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
@@ -270,54 +264,42 @@ test "connection: state deallocation edge cases" {
         }
     }
     const allocator = gpa.allocator();
-
     // Test: Remove non-existent connection (should not crash)
     {
         var memory_strategy = try MemoryStrategy.init(allocator);
         defer memory_strategy.deinit();
-
         var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
-
         // Try to remove a connection that doesn't exist
         registry.remove(999);
     }
-
     // Test: Connection with empty subscription list
     {
         var memory_strategy = try MemoryStrategy.init(allocator);
         defer memory_strategy.deinit();
-
         var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
-
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         const state = try memory_strategy.createConnection(conn_id, dummy_ws);
         // Don't add any subscriptions
-
         try registry.add(conn_id, state);
         registry.remove(conn_id);
     }
-
     // Test: Connection with large subscription list
     {
         var memory_strategy = try MemoryStrategy.init(allocator);
         defer memory_strategy.deinit();
-
         var registry = ConnectionRegistry.init(&memory_strategy);
         defer registry.deinit();
-
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         const state = try memory_strategy.createConnection(conn_id, dummy_ws);
-
         // Add many subscriptions
         var i: u64 = 0;
         while (i < 1000) : (i += 1) {
             try state.subscription_ids.append(state.allocator, i);
         }
-
         try registry.add(conn_id, state);
         registry.remove(conn_id);
     }

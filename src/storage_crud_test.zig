@@ -48,7 +48,6 @@ test "Storage: CRUD operations" {
         schema_parser.freeSchema(allocator, schema_ptr.*);
         allocator.destroy(schema_ptr);
     }
-
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
@@ -56,7 +55,6 @@ test "Storage: CRUD operations" {
     defer allocator.free(ddl_z);
     try storage.writer_conn.execMulti(ddl_z, .{});
     allocator.free(fields);
-
     // 1. Create (Insert)
     {
         const cols = try createUserCols(allocator, "Alice", 30);
@@ -64,13 +62,11 @@ test "Storage: CRUD operations" {
         try storage.insertOrReplace("users", "1", "test_ns", cols);
     }
     try storage.flushPendingWrites();
-
     // 2. Read (Select)
     {
         const doc = try storage.selectDocument("users", "1", "test_ns");
         defer if (doc) |d| d.free(allocator);
         try testing.expect(doc != null);
-
         if (doc) |d| {
             var found_name = false;
             var it = d.map.iterator();
@@ -83,7 +79,6 @@ test "Storage: CRUD operations" {
             try testing.expect(found_name);
         }
     }
-
     // 3. Update (InsertOrReplace with new data)
     {
         const cols = try createUserCols(allocator, "Alice Updated", 31);
@@ -91,7 +86,6 @@ test "Storage: CRUD operations" {
         try storage.insertOrReplace("users", "1", "test_ns", cols);
     }
     try storage.flushPendingWrites();
-
     // Verify update
     {
         const doc = try storage.selectDocument("users", "1", "test_ns");
@@ -110,11 +104,9 @@ test "Storage: CRUD operations" {
             }
         }
     }
-
     // 4. Delete
     try storage.deleteDocument("users", "1", "test_ns");
     try storage.flushPendingWrites();
-
     // Verify deletion
     {
         const doc = try storage.selectDocument("users", "1", "test_ns");

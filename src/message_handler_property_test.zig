@@ -7,7 +7,6 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 
@@ -68,8 +67,6 @@ test "connection: open/close is inverse operation" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property4", "test", &test_schema, &memory_strategy);
     defer {
@@ -89,7 +86,6 @@ test "connection: open/close is inverse operation" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -473,8 +469,6 @@ test "connection: unique monotonically increasing IDs" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_1: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property5", "test", &test_schema_1, &memory_strategy);
     defer {
@@ -494,7 +488,6 @@ test "connection: unique monotonically increasing IDs" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -599,7 +592,6 @@ test "connection: unique monotonically increasing IDs" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -669,8 +661,6 @@ test "message: all valid frames are parsed" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_2: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property7", "test", &test_schema_2, &memory_strategy);
     defer {
@@ -690,7 +680,6 @@ test "message: all valid frames are parsed" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -772,8 +761,6 @@ test "message: type extraction" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_3: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property8", "test", &test_schema_3, &memory_strategy);
     defer {
@@ -792,7 +779,6 @@ test "message: type extraction" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -916,8 +902,6 @@ test "message: request routing to handlers" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_4: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/test_data_property9", "test_table", &test_schema_4, &memory_strategy);
     defer {
@@ -936,7 +920,6 @@ test "message: request routing to handlers" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -1053,8 +1036,6 @@ test "message: response correlation by ID" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_5: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property10", "test_table", &test_schema_5, &memory_strategy);
     defer {
@@ -1073,7 +1054,6 @@ test "message: response correlation by ID" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );
@@ -1242,8 +1222,6 @@ test "message: error responses for invalid types/fields" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     var test_schema_6: ?*schema_parser.Schema = null;
     const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property11", "test", &test_schema_6, &memory_strategy);
     defer {
@@ -1262,7 +1240,6 @@ test "message: error responses for invalid types/fields" {
         allocator,
         &memory_strategy,
         &tracker,
-        &request_handler,
         storage_engine,
         subscription_manager,
     );

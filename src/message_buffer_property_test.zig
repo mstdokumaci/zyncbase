@@ -3,7 +3,6 @@ const std = @import("std");
 const testing = std.testing;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -83,8 +82,6 @@ test "buffer: message deallocation after processing" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     // Create temporary directory for storage engine
     const test_dir = "test-artifacts/message_buffer/dealloc";
     std.fs.cwd().makePath(test_dir) catch |err| {
@@ -101,17 +98,14 @@ test "buffer: message deallocation after processing" {
             allocator.destroy(s);
         }
     }
-
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
     // Test 1: Single message processing
     {
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -145,7 +139,6 @@ test "buffer: message deallocation after processing" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -175,7 +168,6 @@ test "buffer: message deallocation after processing" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -206,7 +198,6 @@ test "buffer: message deallocation after processing" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -231,7 +222,6 @@ test "buffer: message deallocation after processing" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -266,7 +256,6 @@ test "buffer: message deallocation after processing" {
             allocator,
             &memory_strategy,
             &tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -359,8 +348,6 @@ test "buffer: concurrent message deallocation" {
     var tracker = ViolationTracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var request_handler = RequestHandler.init(&memory_strategy);
-
     const test_dir = "test-artifacts/message_buffer/concurrent";
     std.fs.cwd().makePath(test_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
@@ -376,11 +363,9 @@ test "buffer: concurrent message deallocation" {
             allocator.destroy(s);
         }
     }
-
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-
-    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, &request_handler, storage_engine, subscription_manager);
+    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, storage_engine, subscription_manager);
     defer handler.deinit();
 
     const ThreadContext = struct {

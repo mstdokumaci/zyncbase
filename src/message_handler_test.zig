@@ -259,7 +259,6 @@ test "ConnectionRegistry - thread safety simulation" {
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const msgpack_utils = @import("msgpack_utils.zig");
@@ -365,7 +364,6 @@ fn setupHandlerWithArraySchema(
     schema: *schema_parser.Schema,
     violation_tracker: *ViolationTracker,
     subscription_manager: *SubscriptionManager,
-    request_handler: *RequestHandler,
 } {
     // Build a schema with one array field and one text field
     const tables_def = [_]struct { name: []const u8, fields: []const []const u8 }{
@@ -411,15 +409,10 @@ fn setupHandlerWithArraySchema(
 
     const subscription_manager = try SubscriptionManager.init(allocator);
 
-    // Allocate request_handler on the heap so the pointer remains valid
-    const request_handler = try allocator.create(RequestHandler);
-    request_handler.* = RequestHandler.init(memory_strategy);
-
     const handler = try MessageHandler.init(
         allocator,
         memory_strategy,
         violation_tracker,
-        request_handler,
         engine,
         subscription_manager,
     );
@@ -430,7 +423,6 @@ fn setupHandlerWithArraySchema(
         .schema = schema,
         .violation_tracker = violation_tracker,
         .subscription_manager = subscription_manager,
-        .request_handler = request_handler,
     };
 }
 
@@ -452,21 +444,17 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
         setup.violation_tracker.deinit();
         allocator.destroy(setup.violation_tracker);
         setup.subscription_manager.deinit();
-        allocator.destroy(setup.request_handler);
     }
-
     // Build an array payload with a nested map (non-literal element)
     var nested_map = msgpack_utils.Payload.mapPayload(allocator);
     defer nested_map.free(allocator);
     try nested_map.mapPut("key", try msgpack_utils.Payload.strToPayload("val", allocator));
-
     const inner_arr = try allocator.alloc(msgpack_utils.Payload, 1);
     inner_arr[0] = nested_map;
     // Transfer ownership: nested_map is now owned by the array
     nested_map = .nil; // prevent double-free in defer above
     const invalid_array = msgpack_utils.Payload{ .arr = inner_arr };
     defer invalid_array.free(allocator);
-
     const message = try buildStoreSetWithArrayField(
         allocator,
         42,
@@ -477,44 +465,33 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
         invalid_array,
     );
     defer allocator.free(message);
-
     var reader: std.Io.Reader = .fixed(message);
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
-
     const msg_info = try setup.handler.extractMessageInfo(parsed);
-
     var ws = WebSocket{ .ws = null, .ssl = false };
     try setup.handler.handleOpen(&ws);
     defer setup.handler.handleClose(&ws, 1000, "") catch {}; // zwanzig-disable-line: empty-catch-engine
-
     const conn_id = ws.getConnId();
     const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
-
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
     defer if (result.code) |c| allocator.free(c);
-
     try testing.expectEqualStrings("error", result.resp_type);
     try testing.expect(result.code != null);
     try testing.expectEqualStrings("INVALID_ARRAY_ELEMENT", result.code.?);
-
     // Verify no DB write occurred
     try setup.engine.flushPendingWrites();
     const stored = try setup.engine.selectDocument("items", "doc1", "test_ns");
     try testing.expect(stored == null);
 }
-
 test "StoreSet: array field with valid literal array succeeds" {
     const allocator = testing.allocator;
-
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
-
     var context = try schema_helpers.TestContext.init(allocator, "mh-array-valid");
     defer context.deinit();
-
     var setup = try setupHandlerWithArraySchema(allocator, &memory_strategy, &context);
     defer {
         setup.handler.deinit();
@@ -524,9 +501,7 @@ test "StoreSet: array field with valid literal array succeeds" {
         setup.violation_tracker.deinit();
         allocator.destroy(setup.violation_tracker);
         setup.subscription_manager.deinit();
-        allocator.destroy(setup.request_handler);
     }
-
     // Build a valid literal array: ["hello", 42, true]
     const elems = try allocator.alloc(msgpack_utils.Payload, 3);
     elems[0] = try msgpack_utils.Payload.strToPayload("hello", allocator);
@@ -534,7 +509,6 @@ test "StoreSet: array field with valid literal array succeeds" {
     elems[2] = .{ .bool = true };
     const valid_array = msgpack_utils.Payload{ .arr = elems };
     defer valid_array.free(allocator);
-
     const message = try buildStoreSetWithArrayField(
         allocator,
         99,
@@ -545,43 +519,31 @@ test "StoreSet: array field with valid literal array succeeds" {
         valid_array,
     );
     defer allocator.free(message);
-
     var reader: std.Io.Reader = .fixed(message);
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
-
     const msg_info = try setup.handler.extractMessageInfo(parsed);
-
     var ws = WebSocket{ .ws = null, .ssl = false };
     try setup.handler.handleOpen(&ws);
     defer setup.handler.handleClose(&ws, 1000, "") catch {}; // zwanzig-disable-line: empty-catch-engine
-
     const conn_id = ws.getConnId();
     const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
     defer allocator.free(response);
-
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
     defer if (result.code) |c| allocator.free(c);
-
     try testing.expectEqualStrings("ok", result.resp_type);
 }
-
 // ─── Task 7.9: Property 9 — Message handler rejects arrays with non-literal elements ──
-
 // Feature: array-jsonb-storage, Property 9: Message handler rejects arrays with non-literal elements
 test "StoreSet: property 9 - message handler rejects arrays with non-literal elements" {
     const allocator = testing.allocator;
-
     var prng = std.Random.DefaultPrng.init(0xDEAD_C0DE);
     const rand = prng.random();
-
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
-
     var context = try schema_helpers.TestContext.init(allocator, "mh-prop9");
     defer context.deinit();
-
     var setup = try setupHandlerWithArraySchema(allocator, &memory_strategy, &context);
     defer {
         setup.handler.deinit();
@@ -591,14 +553,11 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
         setup.violation_tracker.deinit();
         allocator.destroy(setup.violation_tracker);
         setup.subscription_manager.deinit();
-        allocator.destroy(setup.request_handler);
     }
-
     var ws = WebSocket{ .ws = null, .ssl = false };
     try setup.handler.handleOpen(&ws);
     defer setup.handler.handleClose(&ws, 1000, "") catch {};
     const conn_id = ws.getConnId();
-
     // (a) Invalid arrays → INVALID_ARRAY_ELEMENT
     var invalid_iter: usize = 0;
     while (invalid_iter < 20) : (invalid_iter += 1) {
@@ -609,10 +568,8 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
         nested_map = .nil; // ownership transferred
         const invalid_array = msgpack_utils.Payload{ .arr = inner_arr };
         defer invalid_array.free(allocator);
-
         const doc_id = try std.fmt.allocPrint(allocator, "inv_{d}", .{invalid_iter});
         defer allocator.free(doc_id);
-
         const msg_id: u64 = @intCast(1000 + invalid_iter);
         const message = try buildStoreSetWithArrayField(
             allocator,
@@ -624,24 +581,19 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
             invalid_array,
         );
         defer allocator.free(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-
         const msg_info = try setup.handler.extractMessageInfo(parsed);
         const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
         defer allocator.free(response);
-
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
         defer if (result.code) |c| allocator.free(c);
-
         try testing.expectEqualStrings("error", result.resp_type);
         try testing.expect(result.code != null);
         try testing.expectEqualStrings("INVALID_ARRAY_ELEMENT", result.code.?);
     }
-
     // (b) Valid literal arrays → success
     var valid_iter: usize = 0;
     while (valid_iter < 20) : (valid_iter += 1) {
@@ -652,10 +604,8 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
         }
         const valid_array = msgpack_utils.Payload{ .arr = elems };
         defer valid_array.free(allocator);
-
         const doc_id = try std.fmt.allocPrint(allocator, "val_{d}", .{valid_iter});
         defer allocator.free(doc_id);
-
         const msg_id: u64 = @intCast(2000 + valid_iter);
         const message = try buildStoreSetWithArrayField(
             allocator,
@@ -667,19 +617,15 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
             valid_array,
         );
         defer allocator.free(message);
-
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-
         const msg_info = try setup.handler.extractMessageInfo(parsed);
         const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
         defer allocator.free(response);
-
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
         defer if (result.code) |c| allocator.free(c);
-
         try testing.expectEqualStrings("ok", result.resp_type);
     }
 }

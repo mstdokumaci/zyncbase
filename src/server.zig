@@ -7,7 +7,6 @@ pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
@@ -32,7 +31,6 @@ pub const ZyncBaseServer = struct {
     subscription_manager: *SubscriptionManager,
     checkpoint_manager: *CheckpointManager,
     storage_layer: *CheckpointManager.StorageLayer,
-    request_handler: RequestHandler,
     storage_engine: *StorageEngine,
     websocket_server: *WebSocketServer,
     message_handler: *MessageHandler,
@@ -192,10 +190,6 @@ pub const ZyncBaseServer = struct {
         );
         errdefer checkpoint_manager.deinit();
 
-        // Initialize request handler
-        std.log.debug("Initializing request handler", .{});
-        var request_handler = RequestHandler.init(memory_strategy);
-
         // Initialize WebSocket server
         std.log.debug("Initializing WebSocket server", .{});
         const websocket_server = try WebSocketServer.init(
@@ -213,7 +207,6 @@ pub const ZyncBaseServer = struct {
             memory_strategy.generalAllocator(),
             memory_strategy,
             violation_tracker,
-            &request_handler,
             storage_engine,
             subscription_manager,
         );
@@ -227,14 +220,10 @@ pub const ZyncBaseServer = struct {
         self.subscription_manager = subscription_manager;
         self.checkpoint_manager = checkpoint_manager;
         self.storage_layer = storage_layer;
-        self.request_handler = request_handler;
         self.storage_engine = storage_engine;
         self.websocket_server = websocket_server;
         self.message_handler = message_handler;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
-
-        // Wire request_handler pointer into message_handler since it was passed from our stack
-        self.message_handler.request_handler = &self.request_handler;
 
         return self;
     }

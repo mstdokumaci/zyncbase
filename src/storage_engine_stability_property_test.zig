@@ -74,19 +74,15 @@ test "storage: stability no crashes on concurrent errors" {
     defer memory_strategy.deinit();
     var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema);
     defer storage.deinit();
-
     // Property: Server should not crash when multiple threads encounter errors simultaneously
     const num_threads = 8;
     const operations_per_thread = 50;
-
     var threads: [num_threads]std.Thread = undefined;
-
     const ThreadContext = struct {
         storage: *StorageEngine,
         allocator: std.mem.Allocator,
         thread_id: usize,
     };
-
     const workerThread = struct {
         fn run(ctx: ThreadContext) void {
             var i: usize = 0;
@@ -95,7 +91,6 @@ test "storage: stability no crashes on concurrent errors" {
                 // zwanzig-disable-next-line: swallowed-error
                 const key = std.fmt.allocPrint(ctx.allocator, "thread{}_key{}", .{ ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
                 defer ctx.allocator.free(key);
-
                 // Try to set a value
                 // zwanzig-disable-next-line: swallowed-error
                 const val_payload = msgpack.Payload.strToPayload(key, ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
@@ -103,19 +98,16 @@ test "storage: stability no crashes on concurrent errors" {
                 const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
                 // zwanzig-disable-next-line: swallowed-error
                 ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
-
                 // Try to get the value
                 // zwanzig-disable-next-line: swallowed-error
                 const doc = ctx.storage.selectDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc) |d| d.free(ctx.allocator);
-
                 // Try to delete the value
                 // zwanzig-disable-next-line: swallowed-error
                 ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
-
     // Spawn threads
     for (&threads, 0..) |*thread, i| {
         thread.* = try std.Thread.spawn(.{}, workerThread, .{ThreadContext{
@@ -124,25 +116,20 @@ test "storage: stability no crashes on concurrent errors" {
             .thread_id = i,
         }});
     }
-
     // Wait for all threads to complete
     for (threads) |thread| {
         thread.join();
     }
-
     // If we reach here, the server didn't crash - test passes
     try storage.flushPendingWrites();
 }
-
 test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/transaction_errors";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -154,51 +141,41 @@ test "storage: stability continues after transaction errors" {
             allocator.destroy(s);
         }
     }
-
     // Property: Server should continue operating after transaction errors
-
     // Cause a transaction error by trying to commit without beginning
     _ = storage.commitTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
-
     // Server should still be operational - try normal operations
     const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload.free(allocator);
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
     try storage.insertOrReplace("test", "key1", "test", &cols);
     try storage.flushPendingWrites();
-
     const doc = try storage.selectDocument("test", "key1", "test");
     try testing.expect(doc != null);
     if (doc) |d| d.free(allocator);
-
     // Cause another transaction error
     _ = storage.rollbackTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
-
     // Server should still be operational
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
-
     const doc2 = try storage.selectDocument("test", "key2", "test");
     try testing.expect(doc2 != null);
     if (doc2) |d| d.free(allocator);
 }
-
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/rapid_errors";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema_1: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -210,9 +187,7 @@ test "storage: stability handles rapid error conditions" {
             allocator.destroy(s);
         }
     }
-
     // Property: Server should handle rapid succession of errors without crashing
-
     // Rapidly trigger transaction errors
     var i: usize = 0;
     while (i < 100) : (i += 1) {
@@ -220,28 +195,23 @@ test "storage: stability handles rapid error conditions" {
             try testing.expectEqual(error.NoActiveTransaction, err);
         };
     }
-
     // Server should still be operational
     const val_payload = try msgpack.Payload.strToPayload("value", allocator);
     defer val_payload.free(allocator);
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
     try storage.insertOrReplace("test", "key", "test", &cols);
     try storage.flushPendingWrites();
-
     const doc = try storage.selectDocument("test", "key", "test");
     try testing.expect(doc != null);
     if (doc) |d| d.free(allocator);
 }
-
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/recovery";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema_2: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -253,49 +223,39 @@ test "storage: stability error recovery with valid operations" {
             allocator.destroy(s);
         }
     }
-
     // Property: Server should recover from errors and continue with valid operations
-
     // Interleave errors with valid operations
     var i: usize = 0;
     while (i < 20) : (i += 1) {
         // Valid operation
         const key = try std.fmt.allocPrint(allocator, "key{}", .{i});
         defer allocator.free(key);
-
         const val_payload = try msgpack.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
         try storage.insertOrReplace("test", key, "test", &cols);
-
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
             try testing.expectEqual(error.NoActiveTransaction, err);
         };
-
         // Another valid operation
         const doc = try storage.selectDocument("test", key, "test");
         if (doc) |d| d.free(allocator);
     }
-
     // Flush and verify server is still operational
     try storage.flushPendingWrites();
-
     // Verify some data was persisted
     const doc = try storage.selectDocument("test", "key0", "test");
     try testing.expect(doc != null);
     if (doc) |d| d.free(allocator);
 }
-
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/resource_cleanup";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema_3: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -307,29 +267,22 @@ test "storage: stability resource cleanup after errors" {
             allocator.destroy(s);
         }
     }
-
     // Property: Resources should be properly cleaned up after errors
-
     // Begin a transaction
     try storage.beginTransaction();
-
     // Add some operations
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
-
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
-
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
-
     // Verify transaction state is cleaned up
     try testing.expect(!storage.isTransactionActive());
-
     // Verify we can start a new transaction
     try storage.beginTransaction();
     const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
@@ -337,22 +290,18 @@ test "storage: stability resource cleanup after errors" {
     const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.commitTransaction();
-
     // Verify the committed data is there
     const doc = try storage.selectDocument("test", "key3", "test");
     try testing.expect(doc != null);
     if (doc) |d| d.free(allocator);
 }
-
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/mixed_scenarios";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema_4: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -364,9 +313,7 @@ test "storage: stability mixed error and success scenarios" {
             allocator.destroy(s);
         }
     }
-
     // Property: Server should handle mixed scenarios of errors and successes
-
     // Successful transaction
     try storage.beginTransaction();
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
@@ -374,7 +321,6 @@ test "storage: stability mixed error and success scenarios" {
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
     try storage.commitTransaction();
-
     // Failed transaction (rollback)
     try storage.beginTransaction();
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
@@ -382,43 +328,35 @@ test "storage: stability mixed error and success scenarios" {
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.rollbackTransaction();
-
     // Error (no active transaction)
     _ = storage.commitTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
-
     // Successful operation without transaction
     const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
     defer val_payload3.free(allocator);
     const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.flushPendingWrites();
-
     // Verify first transaction succeeded
     const doc1 = try storage.selectDocument("test", "key1", "test");
     try testing.expect(doc1 != null);
     defer doc1.?.free(allocator);
-
     // Verify second transaction was rolled back
     const doc2 = try storage.selectDocument("test", "key2", "test");
     try testing.expect(doc2 == null);
-
     // Verify third operation succeeded
     const doc3 = try storage.selectDocument("test", "key3", "test");
     try testing.expect(doc3 != null);
     if (doc3) |d| d.free(allocator);
 }
-
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
-
     const tmp_path = "test-artifacts/stability/concurrent_reads";
     // zwanzig-disable-next-line
     std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-
     var test_schema_5: ?*schema_parser.Schema = null;
     var memory_strategy = try MemoryStrategy.init(allocator);
     defer memory_strategy.deinit();
@@ -430,29 +368,23 @@ test "storage: stability concurrent reads during write errors" {
             allocator.destroy(s);
         }
     }
-
     // Property: Reads should continue working even when writes encounter errors
-
     // Set up some initial data
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
-
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
-
     const num_reader_threads = 4;
     var reader_threads: [num_reader_threads]std.Thread = undefined;
-
     const ReaderContext = struct {
         storage: *StorageEngine,
         allocator: std.mem.Allocator,
     };
-
     const readerThread = struct {
         fn run(ctx: ReaderContext) void {
             var i: usize = 0;
@@ -461,17 +393,14 @@ test "storage: stability concurrent reads during write errors" {
                 // zwanzig-disable-next-line: swallowed-error
                 const doc1 = ctx.storage.selectDocument("test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc1) |d| d.free(ctx.allocator);
-
                 // zwanzig-disable-next-line: swallowed-error
                 const doc2 = ctx.storage.selectDocument("test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 if (doc2) |d| d.free(ctx.allocator);
-
                 // Small delay
                 std.Thread.sleep(1 * std.time.ns_per_ms);
             }
         }
     }.run;
-
     // Spawn reader threads
     for (&reader_threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, readerThread, .{ReaderContext{
@@ -479,7 +408,6 @@ test "storage: stability concurrent reads during write errors" {
             .allocator = allocator,
         }});
     }
-
     // Meanwhile, cause some transaction errors
     var i: usize = 0;
     while (i < 20) : (i += 1) {
@@ -488,12 +416,10 @@ test "storage: stability concurrent reads during write errors" {
         };
         std.Thread.sleep(2 * std.time.ns_per_ms);
     }
-
     // Wait for reader threads
     for (reader_threads) |thread| {
         thread.join();
     }
-
     // Verify data is still intact
     const doc1 = try storage.selectDocument("test", "key1", "test");
     try testing.expect(doc1 != null);

@@ -5,7 +5,6 @@ pub const std_options = struct {
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const RequestHandler = @import("request_handler.zig").RequestHandler;
 const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
@@ -57,7 +56,6 @@ pub const MessageHandler = struct {
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
-    request_handler: *RequestHandler,
     storage_engine: *StorageEngine,
     subscription_manager: *SubscriptionManager,
     connection_registry: ConnectionRegistry,
@@ -67,7 +65,6 @@ pub const MessageHandler = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
-        request_handler: *RequestHandler,
         storage_engine: *StorageEngine,
         subscription_manager: *SubscriptionManager,
     ) !*MessageHandler {
@@ -78,7 +75,6 @@ pub const MessageHandler = struct {
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
-            .request_handler = request_handler,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
             .connection_registry = ConnectionRegistry.init(memory_strategy),

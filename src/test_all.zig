@@ -14,7 +14,6 @@ test {
     _ = @import("memory_strategy_test.zig");
     _ = @import("checkpoint_manager_test.zig");
     _ = @import("config_loader_test.zig");
-    _ = @import("request_handler_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("subscription_manager_perf_test.zig");
     _ = @import("storage_crud_test.zig");
