@@ -29,7 +29,8 @@ test "memory: safety and pool invariants" {
 
     // Test 1: GeneralPurposeAllocator for long-lived allocations
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         const gpa_alloc = strategy.generalAllocator();
@@ -45,7 +46,8 @@ test "memory: safety and pool invariants" {
 
     // Test 2: ArenaAllocator for per-request temporary allocations
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         // Simulate multiple requests
@@ -66,7 +68,8 @@ test "memory: safety and pool invariants" {
 
     // Test 3: Object pools for high-churn objects
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         // Test message pool
@@ -116,7 +119,8 @@ test "memory: safety and pool invariants" {
 
     // Test 4: Mixed allocator usage
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         const gpa_alloc = strategy.generalAllocator();
@@ -146,7 +150,8 @@ test "memory: safety and pool invariants" {
 
     // Test 5: Stress test with many allocations
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         var iteration: usize = 0;
@@ -170,7 +175,8 @@ test "memory: safety and pool invariants" {
 
     // Test 6: Verify no use-after-free with arena
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         const arena_ptr = try strategy.acquireArena();
@@ -197,7 +203,8 @@ test "memory: safety and pool invariants" {
 
     // Test 7: Pool capacity limits
     {
-        var strategy = try MemoryStrategy.init(testing.allocator);
+        var strategy: MemoryStrategy = undefined;
+        try strategy.init(testing.allocator);
         defer strategy.deinit();
 
         // Acquire more messages than pool capacity
@@ -223,7 +230,8 @@ test "memory: safety and pool invariants" {
 }
 
 test "memory: concurrent pool access" {
-    var strategy = try MemoryStrategy.init(testing.allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(testing.allocator);
     defer strategy.deinit();
 
     const ThreadContext = struct {
@@ -269,7 +277,8 @@ test "memory: concurrent pool access" {
 }
 
 test "memory: arena isolation between requests" {
-    var strategy = try MemoryStrategy.init(testing.allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(testing.allocator);
     defer strategy.deinit();
 
     const arena_ptr = try strategy.acquireArena();
@@ -302,7 +311,8 @@ test "memory: arena isolation between requests" {
 }
 
 test "memory: GPA allocation tracking" {
-    var strategy = try MemoryStrategy.init(testing.allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(testing.allocator);
     defer strategy.deinit();
 
     const gpa = strategy.generalAllocator();
@@ -326,7 +336,8 @@ test "memory: GPA allocation tracking" {
 }
 
 test "memory: subscription pool reuse" {
-    var strategy = try MemoryStrategy.init(testing.allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(testing.allocator);
     defer strategy.deinit();
 
     // Acquire a message and mark it

@@ -63,7 +63,8 @@ test "StorageEngine: init and deinit" {
     var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields }};
     const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema);
     defer engine.deinit();
@@ -80,7 +81,8 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -107,7 +109,8 @@ test "StorageEngine: selectDocument non-existent key" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -122,7 +125,8 @@ test "StorageEngine: update existing document" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -154,7 +158,8 @@ test "StorageEngine: delete document" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -183,7 +188,8 @@ test "StorageEngine: query collection" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("name", .text, false)};
     const table = schema_parser.Table{ .name = "users", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -210,7 +216,8 @@ test "StorageEngine: multiple namespaces" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -245,7 +252,8 @@ test "StorageEngine: transaction support" {
     var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables_1 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields_1 }};
     const dummy_schema_1 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_1 };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1);
     defer engine.deinit();
@@ -276,7 +284,8 @@ test "StorageEngine: automatic rollback in batch operations" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -306,7 +315,8 @@ test "StorageEngine: concurrent reads" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -350,7 +360,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     {
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
         const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
         const engine = ctx.engine;
@@ -366,7 +377,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     // Reopen the same database and verify every key is present.
     var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy_verify = try MemoryStrategy.init(allocator);
+    var memory_strategy_verify: MemoryStrategy = undefined;
+    try memory_strategy_verify.init(allocator);
     defer memory_strategy_verify.deinit();
     const verify_ctx = try setupEngine(allocator, &memory_strategy_verify, test_dir, table);
     defer verify_ctx.deinit();
@@ -389,7 +401,8 @@ test "StorageEngine: client writes blocked during migration" {
     defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
@@ -415,7 +428,8 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     defer std.fs.cwd().deleteTree(test_dir) catch {};
     var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
     const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();

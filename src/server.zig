@@ -62,7 +62,7 @@ pub const ZyncBaseServer = struct {
         // Initialize memory strategy
         const memory_strategy = try allocator.create(MemoryStrategy);
         errdefer allocator.destroy(memory_strategy);
-        memory_strategy.* = try MemoryStrategy.init(allocator);
+        try memory_strategy.init(allocator);
         errdefer memory_strategy.deinit();
 
         // Load configuration or use provided one
@@ -93,7 +93,7 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Initializing violation tracker", .{});
         const violation_tracker = try allocator.create(ViolationTracker);
         errdefer allocator.destroy(violation_tracker);
-        violation_tracker.* = ViolationTracker.init(
+        violation_tracker.init(
             memory_strategy.generalAllocator(),
             config.security.violation_threshold,
         );

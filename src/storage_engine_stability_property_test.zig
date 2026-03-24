@@ -70,7 +70,8 @@ test "storage: stability no crashes on concurrent errors" {
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
     const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema);
     defer storage.deinit();
@@ -131,7 +132,8 @@ test "storage: stability continues after transaction errors" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema);
     defer {
@@ -177,7 +179,8 @@ test "storage: stability handles rapid error conditions" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema_1: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_1);
     defer {
@@ -213,7 +216,8 @@ test "storage: stability error recovery with valid operations" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema_2: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_2);
     defer {
@@ -257,7 +261,8 @@ test "storage: stability resource cleanup after errors" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema_3: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_3);
     defer {
@@ -303,7 +308,8 @@ test "storage: stability mixed error and success scenarios" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema_4: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_4);
     defer {
@@ -358,7 +364,8 @@ test "storage: stability concurrent reads during write errors" {
     // zwanzig-disable-next-line
     defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
     var test_schema_5: ?*schema_parser.Schema = null;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_5);
     defer {

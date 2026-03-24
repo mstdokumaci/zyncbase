@@ -23,6 +23,7 @@ Valgrind is available as a supplementary tool for C interop paths (uWebSockets, 
 |-----------|-----------|
 | TSan | No data race on `LockFreeCache.entries` pointer or any `CacheEntry` field |
 | TSan | `write_mutex` is always held when mutating cache entries |
+| TSan | **Stable Address**: Types with internal synchronization (atomics/mutexes) must remain address-stable once in use. While bit-copies are often safe during initialization, moving a "live" or locked mutex cause fatal SIGABRT/corruption on Mac. |
 | TSan | `PresenceManager.pending_updates` is only written from the single flush goroutine |
 | GPA safety | Every `alloc` from the GPA has exactly one matching `free` |
 | GPA safety | Arena memory is never accessed after `resetArena()` |

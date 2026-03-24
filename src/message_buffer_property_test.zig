@@ -76,10 +76,12 @@ test "buffer: message deallocation after processing" {
     const allocator = gpa.allocator();
 
     // Initialize components needed for message handler
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     // Create temporary directory for storage engine
@@ -342,10 +344,12 @@ test "buffer: concurrent message deallocation" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     const test_dir = "test-artifacts/message_buffer/concurrent";

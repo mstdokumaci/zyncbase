@@ -25,10 +25,12 @@ test "connection: state deallocation on close" {
 
     // Test 1: Single connection open and close
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
@@ -57,10 +59,12 @@ test "connection: state deallocation on close" {
 
     // Test 2: Multiple connections open and close
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const num_connections = 100;
@@ -92,10 +96,12 @@ test "connection: state deallocation on close" {
 
     // Test 3: Connection with subscriptions
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const conn_id: u64 = 1;
@@ -124,10 +130,12 @@ test "connection: state deallocation on close" {
 
     // Test 4: Clear all connections
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const num_connections = 50;
@@ -156,10 +164,12 @@ test "connection: state deallocation on close" {
 
     // Test 5: Stress test with many connections
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const iterations = 1000;
@@ -182,10 +192,12 @@ test "connection: state deallocation on close" {
 
     // Test 6: Concurrent connection state deallocation
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
 
         const ThreadContext = struct {
@@ -237,9 +249,11 @@ test "connection: state deallocation on close" {
     }
     // Test 7: Registry deinit deallocates all remaining connections
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         const num_connections = 20;
         var i: u64 = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -266,18 +280,22 @@ test "connection: state deallocation edge cases" {
     const allocator = gpa.allocator();
     // Test: Remove non-existent connection (should not crash)
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
         // Try to remove a connection that doesn't exist
         registry.remove(999);
     }
     // Test: Connection with empty subscription list
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -288,9 +306,11 @@ test "connection: state deallocation edge cases" {
     }
     // Test: Connection with large subscription list
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
-        var registry = ConnectionRegistry.init(&memory_strategy);
+        var registry: ConnectionRegistry = undefined;
+        registry.init(&memory_strategy);
         defer registry.deinit();
         const conn_id: u64 = 1;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };

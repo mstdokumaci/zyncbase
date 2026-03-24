@@ -8,8 +8,8 @@ pub const ConnectionViolationTracker = struct {
     threshold: u32,
     mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: Allocator, threshold: u32) ConnectionViolationTracker {
-        return ConnectionViolationTracker{
+    pub fn init(self: *ConnectionViolationTracker, allocator: Allocator, threshold: u32) void {
+        self.* = ConnectionViolationTracker{
             .violations = std.AutoHashMap(u64, u32).init(allocator),
             .allocator = allocator,
             .threshold = threshold,

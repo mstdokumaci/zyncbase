@@ -106,7 +106,7 @@ pub const StorageEngine = struct {
     write_cond: std.Thread.Condition,
     flush_cond: std.Thread.Condition,
     write_thread_ready: std.atomic.Value(bool),
-    node_pool: MemoryStrategy.Pool(WriteQueue.Node),
+    node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
     metadata_cache: *metadata_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
@@ -178,7 +178,7 @@ pub const StorageEngine = struct {
             .db_path = db_path,
             .writer_conn = writer_conn,
             .reader_pool = reader_pool,
-            .node_pool = try MemoryStrategy.Pool(WriteQueue.Node).init(memory_strategy.generalAllocator(), 1024, null, null),
+            .node_pool = undefined,
             .write_queue = undefined, // Initialized below
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
@@ -196,7 +196,10 @@ pub const StorageEngine = struct {
             .write_seq = std.atomic.Value(u64).init(0),
         };
 
-        self.write_queue = try WriteQueue.init(allocator, &self.node_pool);
+        try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
+        errdefer self.node_pool.deinit();
+
+        try self.write_queue.init(allocator, &self.node_pool);
         errdefer self.write_queue.deinit();
 
         // Start write thread
@@ -1689,16 +1692,16 @@ pub const WriteQueue = struct {
     head: *Node,
     tail: std.atomic.Value(*Node),
     allocator: Allocator,
-    pool: *MemoryStrategy.Pool(Node),
+    pool: *MemoryStrategy.IndexPool(Node),
 
-    pub fn init(allocator: Allocator, pool: *MemoryStrategy.Pool(Node)) !WriteQueue {
-        const stub = try pool.acquire();
+    pub fn init(self: *WriteQueue, allocator: std.mem.Allocator, node_pool: *MemoryStrategy.IndexPool(Node)) !void {
+        const stub = try node_pool.acquire();
         stub.next = std.atomic.Value(?*Node).init(null);
-        return WriteQueue{
+        self.* = WriteQueue{
             .head = stub,
             .tail = std.atomic.Value(*Node).init(stub),
             .allocator = allocator,
-            .pool = pool,
+            .pool = node_pool,
         };
     }
 

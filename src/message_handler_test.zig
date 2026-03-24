@@ -1,12 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
+const message_handler = @import("message_handler.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -22,7 +23,8 @@ test "Connection - init and deinit" {
 
 test "Connection - add subscription IDs" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -42,10 +44,12 @@ test "Connection - add subscription IDs" {
 test "ConnectionRegistry - init and deinit" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     {
@@ -58,10 +62,12 @@ test "ConnectionRegistry - init and deinit" {
 test "ConnectionRegistry - add and get connection" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -77,10 +83,12 @@ test "ConnectionRegistry - add and get connection" {
 test "ConnectionRegistry - get non-existent connection" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const result = registry.acquireConnection(999);
@@ -90,10 +98,12 @@ test "ConnectionRegistry - get non-existent connection" {
 test "ConnectionRegistry - remove connection" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -120,10 +130,12 @@ test "ConnectionRegistry - remove connection" {
 test "ConnectionRegistry - clear all connections" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -153,10 +165,12 @@ test "ConnectionRegistry - clear all connections" {
 test "ConnectionRegistry - multiple connections" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add multiple connections
@@ -183,10 +197,12 @@ test "ConnectionRegistry - multiple connections" {
 test "ConnectionRegistry - iterator" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const dummy_ws = WebSocket{ .ws = null, .ssl = false };
@@ -210,10 +226,12 @@ test "ConnectionRegistry - iterator" {
 test "ConnectionRegistry - thread safety simulation" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: message_handler.ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add connections
@@ -405,7 +423,7 @@ fn setupHandlerWithArraySchema(
     const engine = try schema_helpers.setupTestEngine(allocator, memory_strategy, context, schema);
 
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 10);
+    violation_tracker.init(allocator, 10);
 
     const subscription_manager = try SubscriptionManager.init(allocator);
 
@@ -429,7 +447,8 @@ fn setupHandlerWithArraySchema(
 test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEMENT" {
     const allocator = testing.allocator;
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     var context = try schema_helpers.TestContext.init(allocator, "mh-array-invalid");
@@ -488,7 +507,8 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
 }
 test "StoreSet: array field with valid literal array succeeds" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "mh-array-valid");
     defer context.deinit();
@@ -540,7 +560,8 @@ test "StoreSet: property 9 - message handler rejects arrays with non-literal ele
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xDEAD_C0DE);
     const rand = prng.random();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "mh-prop9");
     defer context.deinit();

@@ -13,10 +13,12 @@ const msgpack = @import("msgpack_test_helpers.zig");
 test "store: set field extraction" {
     const allocator = testing.allocator;
 
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     var context = try schema_helpers.TestContext.init(allocator, "store-set-field");
@@ -151,9 +153,11 @@ test "store: set field extraction" {
 }
 test "store: engine set integration" {
     const allocator = testing.allocator;
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "store-engine-set");
     defer context.deinit();
@@ -269,9 +273,11 @@ test "store: engine set integration" {
 }
 test "store: set success response format" {
     const allocator = testing.allocator;
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "store-set-resp");
     defer context.deinit();
@@ -380,9 +386,11 @@ test "store: set success response format" {
 }
 test "store: get field extraction" {
     const allocator = testing.allocator;
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "store-get-field");
     defer context.deinit();
@@ -480,9 +488,11 @@ test "store: get field extraction" {
 }
 test "store: engine get integration" {
     const allocator = testing.allocator;
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "store-engine-get");
     defer context.deinit();
@@ -633,9 +643,11 @@ test "store: engine get integration" {
 }
 test "store: get value response format" {
     const allocator = testing.allocator;
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
     var context = try schema_helpers.TestContext.init(allocator, "store-get-resp");
     defer context.deinit();

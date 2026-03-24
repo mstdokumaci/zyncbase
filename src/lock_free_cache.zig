@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 /// Lock-free cache for parallel reads across all CPU cores.
 /// Generic over type T, allowing specialized storage for AuthResponses, MsgPack payloads, etc.
@@ -35,8 +36,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
 
         const DeferNode = struct {
             resource: Resource,
-            next: ?*DeferNode,
-            next_index: u32 = 0,
+            next: ?*DeferNode = null,
             epoch: u64 = 0,
         };
 
@@ -46,94 +46,10 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
             key: []const u8,
         };
 
-        const TaggedIndex = packed struct {
-            index: u32,
-            tag: u32,
-        };
-
-        const NodePool = struct {
-            nodes: []DeferNode,
-            free_stack: std.atomic.Value(u64),
-            active_count: std.atomic.Value(usize),
-            allocator: Allocator,
-            const null_index = std.math.maxInt(u32);
-
-            fn init(allocator: Allocator, pool_size: usize) !NodePool {
-                const nodes = try allocator.alloc(DeferNode, pool_size);
-                for (nodes, 0..) |*node, i| {
-                    node.next = null;
-                    node.resource = undefined;
-                    node.next_index = if (i + 1 < pool_size) @as(u32, @intCast(i + 1)) else null_index;
-                }
-
-                // Initialize stack with all nodes
-                const head = TaggedIndex{ .index = 0, .tag = 0 };
-
-                // Let's re-read the previous NodePool implementation to be sure.
-                return NodePool{
-                    .nodes = nodes,
-                    .free_stack = std.atomic.Value(u64).init(@bitCast(head)),
-                    .active_count = std.atomic.Value(usize).init(0),
-                    .allocator = allocator,
-                };
-            }
-
-            fn deinit(self: *NodePool) void {
-                self.allocator.free(self.nodes);
-            }
-
-            fn push(self: *NodePool, node: *DeferNode) void {
-                const ptr = @intFromPtr(node);
-                const start = @intFromPtr(self.nodes.ptr);
-                const end = start + self.nodes.len * @sizeOf(DeferNode);
-
-                if (ptr < start or ptr >= end) {
-                    self.allocator.destroy(node);
-                    return;
-                }
-
-                const node_index = @as(u32, @intCast((ptr - start) / @sizeOf(DeferNode)));
-                var current = self.free_stack.load(.acquire);
-                while (true) {
-                    const current_head: TaggedIndex = @bitCast(current);
-                    node.next_index = current_head.index;
-                    const next_head = TaggedIndex{ .index = node_index, .tag = current_head.tag +% 1 };
-                    if (self.free_stack.cmpxchgWeak(current, @bitCast(next_head), .acq_rel, .acquire)) |actual| {
-                        current = actual;
-                    } else {
-                        _ = self.active_count.fetchSub(1, .release);
-                        break;
-                    }
-                }
-            }
-
-            fn pop(self: *NodePool) ?*DeferNode {
-                var current = self.free_stack.load(.acquire);
-                while (true) {
-                    const current_head: TaggedIndex = @bitCast(current);
-                    if (current_head.index == null_index) return null;
-                    const head_node = &self.nodes[current_head.index];
-                    const next_index = head_node.next_index;
-
-                    const next_head = TaggedIndex{ .index = next_index, .tag = current_head.tag +% 1 };
-                    if (self.free_stack.cmpxchgWeak(current, @bitCast(next_head), .acq_rel, .acquire)) |actual| {
-                        current = actual;
-                    } else {
-                        _ = self.active_count.fetchAdd(1, .release);
-                        return head_node;
-                    }
-                }
-            }
-
-            pub fn activeCount(self: *NodePool) usize {
-                return self.active_count.load(.acquire);
-            }
-        };
-
         entries: std.atomic.Value(*std.StringHashMap(*CacheEntry)),
         allocator: Allocator,
         defer_stack: std.atomic.Value(?*DeferNode),
-        pool: NodePool,
+        pool: MemoryStrategy.IndexPool(DeferNode),
         epoch_manager: EpochManager,
         config: Config,
         reclaim_handle: ?std.Thread = null,
@@ -214,12 +130,14 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 .entries = std.atomic.Value(*std.StringHashMap(*CacheEntry)).init(entries),
                 .allocator = allocator,
                 .defer_stack = std.atomic.Value(?*DeferNode).init(null),
-                .pool = try NodePool.init(allocator, config.max_deferred_nodes),
+                .pool = undefined,
                 .epoch_manager = EpochManager.init(),
                 .config = config,
                 .reclaim_active = std.atomic.Value(bool).init(true),
                 .deinit_payload = deinit_payload,
             };
+
+            try cache.pool.init(allocator, @intCast(@as(u32, @intCast(config.max_deferred_nodes))), null, null);
 
             cache.reclaim_handle = try std.Thread.spawn(.{}, reclaimLoop, .{cache});
             return cache;
@@ -611,14 +529,11 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
             const node = self.pool.pop() orelse blk: {
                 // Pool exhausted, try a regular reclamation cycle
                 self.reclaim(false);
-                // If still no nodes, fall back to heap allocation to avoid hanging
-                // nodes allocated this way will be freed in pool.push
-                break :blk self.allocator.create(DeferNode) catch return;
+                break :blk self.pool.acquire() catch return;
             };
 
             node.* = .{
                 .next = null,
-                .next_index = 0,
                 .epoch = self.epoch_manager.current_epoch.load(.acquire),
                 .resource = resource,
             };
@@ -668,7 +583,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                         },
                         .key => |k| self.allocator.free(k),
                     }
-                    self.pool.push(node);
+                    self.pool.release(node);
                 } else {
                     // Still in use, re-push to stack
                     self.pushToDeferStack(node);

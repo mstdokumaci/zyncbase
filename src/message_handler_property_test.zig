@@ -60,11 +60,13 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
 test "connection: open/close is inverse operation" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema: ?*schema_parser.Schema = null;
@@ -196,10 +198,12 @@ fn createMockWebSocket() WebSocket {
 // no data races should occur and all operations should complete successfully.
 test "connection: thread-safe registry access" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     // Spawn multiple threads performing concurrent operations
@@ -267,10 +271,12 @@ fn concurrentRegistryOps(
 // Additional property test: Concurrent reads should not block each other
 test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     // Pre-populate registry with connections
@@ -332,10 +338,12 @@ fn concurrentReads(
 // Additional property test: Mixed concurrent operations
 test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     const num_threads = 8;
@@ -402,10 +410,12 @@ fn mixedConcurrentOps(
 // Property test: Clear operation is thread-safe
 test "connection: clear is thread-safe" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var registry = ConnectionRegistry.init(&memory_strategy);
+    var registry: ConnectionRegistry = undefined;
+    registry.init(&memory_strategy);
     defer registry.deinit();
 
     // Add some initial connections
@@ -462,11 +472,13 @@ fn addConnections(
 
 test "connection: unique monotonically increasing IDs" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_1: ?*schema_parser.Schema = null;
@@ -654,11 +666,13 @@ fn openConnectionsConcurrently(
 
 test "message: all valid frames are parsed" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_2: ?*schema_parser.Schema = null;
@@ -756,9 +770,11 @@ test "message: all valid frames are parsed" {
 test "message: type extraction" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_3: ?*schema_parser.Schema = null;
@@ -897,9 +913,11 @@ test "message: type extraction" {
 test "message: request routing to handlers" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_4: ?*schema_parser.Schema = null;
@@ -1031,9 +1049,11 @@ test "message: request routing to handlers" {
 test "message: response correlation by ID" {
     // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_5: ?*schema_parser.Schema = null;
@@ -1215,11 +1235,13 @@ test "message: response correlation by ID" {
 // should be sent to the client.
 test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     // Initialize all required components for MessageHandler
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     var test_schema_6: ?*schema_parser.Schema = null;

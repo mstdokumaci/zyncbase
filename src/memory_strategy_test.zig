@@ -5,7 +5,8 @@ const Message = @import("memory_strategy.zig").Message;
 
 test "MemoryStrategy: init and deinit" {
     const allocator = testing.allocator;
-    var strategy = try MemoryStrategy.init(allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(allocator);
     defer strategy.deinit();
 
     // Verify allocators are available
@@ -26,7 +27,8 @@ test "MemoryStrategy: init and deinit" {
 
 test "MemoryStrategy: arena allocator pool usage" {
     const allocator = testing.allocator;
-    var strategy = try MemoryStrategy.init(allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(allocator);
     defer strategy.deinit();
 
     const arena1 = try strategy.acquireArena();
@@ -47,7 +49,8 @@ test "MemoryStrategy: arena allocator pool usage" {
 
 test "MemoryStrategy: message pool acquire and release" {
     const allocator = testing.allocator;
-    var strategy = try MemoryStrategy.init(allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(allocator);
     defer strategy.deinit();
 
     // Acquire a message
@@ -69,7 +72,8 @@ test "MemoryStrategy: message pool acquire and release" {
 
 test "MemoryStrategy: buffer pool acquire and release" {
     const allocator = testing.allocator;
-    var strategy = try MemoryStrategy.init(allocator);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.init(allocator);
     defer strategy.deinit();
 
     // Acquire a buffer
@@ -89,7 +93,8 @@ test "MemoryStrategy: buffer pool acquire and release" {
 test "Pool: basic acquire and release" {
     const allocator = testing.allocator;
     // Test standalone Pool if exported, but here it's inside MemoryStrategy
-    var pool = try MemoryStrategy.Pool(u64).init(allocator, 10, null, null);
+    var pool: MemoryStrategy.DynamicPool(u64) = undefined;
+    try pool.init(allocator, 10, null, null);
     defer pool.deinit();
 
     // Acquire an item
@@ -109,7 +114,8 @@ test "Pool: basic acquire and release" {
 
 test "Message: init and reset" {
     const allocator = testing.allocator;
-    var msg = Message.init(allocator);
+    var msg: Message = undefined;
+    msg.init(allocator);
     try testing.expect(msg.len == 0);
 
     msg.len = 100;
@@ -119,16 +125,17 @@ test "Message: init and reset" {
 
 test "Pool: capacity bounding and discarding" {
     const allocator = testing.allocator;
-    const TestPool = MemoryStrategy.Pool(u64);
+    const TestPool = MemoryStrategy.DynamicPool(u64);
 
     const context = struct {
         var deinit_count: usize = 0;
-        fn deinitData(_: std.mem.Allocator, _: *u64) void {
+        fn deinitData(_: *u64, _: std.mem.Allocator) void {
             deinit_count += 1;
         }
     };
 
-    var pool = try TestPool.init(allocator, 2, context.deinitData, null);
+    var pool: TestPool = undefined;
+    try pool.init(allocator, 2, context.deinitData, null);
     defer pool.deinit();
 
     const item1 = try pool.acquire();
@@ -147,7 +154,8 @@ test "MemoryStrategy: arena pool thread safety stress test" {
     const config = MemoryStrategy.Config{
         .arena_pool = .{ .pre_allocate = 1024, .max_capacity = 1024 },
     };
-    var strategy = try MemoryStrategy.initWithConfig(allocator, config);
+    var strategy: MemoryStrategy = undefined;
+    try strategy.initWithConfig(allocator, config);
     defer strategy.deinit();
 
     const num_threads = 8;

@@ -39,7 +39,8 @@ test "Storage: CRUD operations" {
     schema_ptr.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 
     // Initialize memory strategy
-    var memory_strategy = try @import("memory_strategy.zig").MemoryStrategy.init(allocator);
+    var memory_strategy: @import("memory_strategy.zig").MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr);

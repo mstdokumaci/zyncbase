@@ -77,10 +77,12 @@ test "logging: connection events" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var memory_strategy = try MemoryStrategy.init(testing.allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     const test_dir = "test-artifacts/test_connection_logging";
@@ -274,10 +276,12 @@ test "logging: error details" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var memory_strategy = try MemoryStrategy.init(testing.allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(testing.allocator);
     defer memory_strategy.deinit();
 
-    var tracker = ViolationTracker.init(allocator, 10);
+    var tracker: ViolationTracker = undefined;
+    tracker.init(allocator, 10);
     defer tracker.deinit();
 
     const test_dir = "test-artifacts/test_error_logging";
@@ -409,10 +413,12 @@ test "logging: level filtering" {
 
     // Test 1: Verify different log levels are used appropriately
     {
-        var memory_strategy = try MemoryStrategy.init(testing.allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(testing.allocator);
         defer memory_strategy.deinit();
 
-        var tracker = ViolationTracker.init(allocator, 10);
+        var tracker: ViolationTracker = undefined;
+        tracker.init(allocator, 10);
         defer tracker.deinit();
 
         const test_dir = "test-artifacts/test_log_level";
@@ -484,10 +490,12 @@ test "logging: message formatting" {
 
     // Test 1: Verify log messages include required information
     {
-        var memory_strategy = try MemoryStrategy.init(testing.allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(testing.allocator);
         defer memory_strategy.deinit();
 
-        var tracker = ViolationTracker.init(allocator, 10);
+        var tracker: ViolationTracker = undefined;
+        tracker.init(allocator, 10);
         defer tracker.deinit();
 
         const test_dir = "test-artifacts/test_log_format";
@@ -547,10 +555,12 @@ test "logging: message formatting" {
 
     // Test 3: Verify log messages are properly formatted with parameters
     {
-        var memory_strategy = try MemoryStrategy.init(allocator);
+        var memory_strategy: MemoryStrategy = undefined;
+        try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
 
-        var tracker = ViolationTracker.init(allocator, 10);
+        var tracker: ViolationTracker = undefined;
+        tracker.init(allocator, 10);
         defer tracker.deinit();
 
         const test_dir = "test-artifacts/test_log_params";

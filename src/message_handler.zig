@@ -77,8 +77,9 @@ pub const MessageHandler = struct {
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
-            .connection_registry = ConnectionRegistry.init(memory_strategy),
+            .connection_registry = undefined,
         };
+        self.connection_registry.init(memory_strategy);
 
         return self;
     }
@@ -705,8 +706,8 @@ pub const ConnectionRegistry = struct {
     mutex: std.Thread.Mutex,
     memory_strategy: *MemoryStrategy,
 
-    pub fn init(memory_strategy: *MemoryStrategy) ConnectionRegistry {
-        return ConnectionRegistry{
+    pub fn init(self: *ConnectionRegistry, memory_strategy: *MemoryStrategy) void {
+        self.* = ConnectionRegistry{
             .map = Map.init(memory_strategy.generalAllocator()),
             .mutex = .{},
             .memory_strategy = memory_strategy,
@@ -766,10 +767,7 @@ pub const ConnectionRegistry = struct {
         pub fn deinit(self: *Snapshot) void {
             var it = self.map.valueIterator();
             while (it.next()) |conn| {
-                if (conn.*.ref_count.fetchSub(1, .release) == 1) {
-                    _ = conn.*.ref_count.load(.acquire);
-                    self.memory_strategy.releaseConnection(conn.*);
-                }
+                conn.*.release(self.memory_strategy.generalAllocator());
             }
             self.map.deinit();
         }

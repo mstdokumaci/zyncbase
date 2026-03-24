@@ -28,7 +28,7 @@ test "Verification: WebSocket connection lifecycle" {
 
     // Initialize all required components
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    violation_tracker.init(allocator, 3);
     defer {
         violation_tracker.deinit();
         allocator.destroy(violation_tracker);
@@ -37,7 +37,8 @@ test "Verification: WebSocket connection lifecycle" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-lifecycle");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const schema = try schema_helpers.createTestSchema(allocator, &.{
@@ -90,7 +91,7 @@ test "Verification: StoreSet message processing" {
     const allocator = testing.allocator;
 
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    violation_tracker.init(allocator, 3);
     defer {
         violation_tracker.deinit();
         allocator.destroy(violation_tracker);
@@ -99,7 +100,8 @@ test "Verification: StoreSet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeset");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const schema = try schema_helpers.createTestSchema(allocator, &.{
@@ -196,7 +198,7 @@ test "Verification: StoreGet message processing" {
     const allocator = testing.allocator;
 
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    violation_tracker.init(allocator, 3);
     defer {
         violation_tracker.deinit();
         allocator.destroy(violation_tracker);
@@ -205,7 +207,8 @@ test "Verification: StoreGet message processing" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-storeget");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const schema = try schema_helpers.createTestSchema(allocator, &.{
@@ -298,7 +301,7 @@ test "Verification: Error handling for invalid messages" {
     const allocator = testing.allocator;
 
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    violation_tracker.init(allocator, 3);
     defer {
         violation_tracker.deinit();
         allocator.destroy(violation_tracker);
@@ -307,7 +310,8 @@ test "Verification: Error handling for invalid messages" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-errors");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const schema = try schema_helpers.createTestSchema(allocator, &.{
@@ -426,7 +430,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     const allocator = testing.allocator;
 
     const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.* = ViolationTracker.init(allocator, 3);
+    violation_tracker.init(allocator, 3);
     defer {
         violation_tracker.deinit();
         allocator.destroy(violation_tracker);
@@ -435,7 +439,8 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     var context = try schema_helpers.TestContext.init(allocator, "verification-e2e");
     defer context.deinit();
 
-    var memory_strategy = try MemoryStrategy.init(allocator);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
     const schema = try schema_helpers.createTestSchema(allocator, &.{
