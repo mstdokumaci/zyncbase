@@ -163,13 +163,13 @@ const SchemaParser = struct {
     fn isNestedObject(self: *SchemaParser, field_def: json.Value) bool {
         const field_type = field_def.get("type") orelse return false;
         if (!std.mem.eql(u8, field_type.string, "object")) return false;
-        return field_def.get("properties") != null;
+        return field_def.get("fields") != null;
     }
     
     fn flattenNestedObject(self: *SchemaParser, prefix: []const u8, field_def: json.Value) ![]Field {
         var fields = ArrayList(Field).init(self.allocator);
-        const properties = field_def.get("properties") orelse return error.InvalidSchema;
-        for (properties.object.items) |prop_entry| {
+        const nested_fields_obj = field_def.get("fields") orelse return error.InvalidSchema;
+        for (nested_fields_obj.object.items) |prop_entry| {
             const flattened_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ prefix, prop_entry.key });
             const field = try self.parseField(flattened_name, prop_entry.value, null);
             try fields.append(field);
@@ -217,7 +217,7 @@ const DDLGenerator = struct {
 ```
 
 ### Relational Features
-- **Foreign Keys**: Generated from `references` property. Supports `cascade`, `restrict`, and `set_null`.
+- **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.
 - **FTS5**: Virtual tables created for full-text search capability on designated paths.
 
 ---

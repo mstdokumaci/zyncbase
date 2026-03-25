@@ -7,6 +7,7 @@ const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const schema_helpers = @import("schema_test_helpers.zig");
 
 fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
     return .{
@@ -60,14 +61,13 @@ test "storage: engine initialization errors" {
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
     const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
     const result1 = StorageEngine.init(allocator, &memory_strategy, invalid_dir, &raw_dummy_schema);
-    if (result1) |_| {
-        try testing.expect(false); // Should have failed
-    } else |_| {
-        // Any error is acceptable here as long as it failed
-    }
+    try testing.expectError(error.InvalidDataDir, result1);
     // Test 2: Path that is a file, not a directory
-    const test_file = "test_file_not_dir.txt";
-    defer std.fs.cwd().deleteFile(test_file) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context_not_dir = try schema_helpers.TestContext.init(allocator, "storage-not-dir");
+    defer context_not_dir.deinit();
+    const test_file = try std.fs.path.join(allocator, &.{ context_not_dir.test_dir, "test_file_not_dir.txt" });
+    defer allocator.free(test_file);
+
     // Create a file
     const file = try std.fs.cwd().createFile(test_file, .{});
     file.close();
@@ -78,9 +78,10 @@ test "storage: engine initialization errors" {
     const result2 = StorageEngine.init(allocator, &memory_strategy, test_file, &raw_dummy_schema_2);
     try testing.expectError(error.NotDir, result2);
     // Test 3: Valid initialization should succeed
-    const test_dir = "test-artifacts/storage_engine/test_data_init_valid";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context_valid = try schema_helpers.TestContext.init(allocator, "storage-init-valid");
+    defer context_valid.deinit();
+    const test_dir = context_valid.test_dir;
+
     var raw_dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_3 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_3 }};
     const raw_dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_3 };
@@ -95,9 +96,9 @@ test "storage: engine initialization errors" {
 // Storage engine thread safety properties
 test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_thread_safe";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-thread-safe");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -179,9 +180,9 @@ test "storage: thread-safe engine access" {
 }
 test "storage: connection pool reuse and release" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_conn_release";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-conn-release");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -220,9 +221,9 @@ test "storage: connection pool reuse and release" {
 }
 test "storage: persistence round-trip (various types)" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_roundtrip";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-roundtrip");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -268,9 +269,9 @@ test "storage: persistence round-trip (various types)" {
 }
 test "storage: insert/delete inverse consistency" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_inverse";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-inverse");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -313,9 +314,9 @@ test "storage: insert/delete inverse consistency" {
 }
 test "storage: transaction isolation and consistency" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_transaction_isolation";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-txn-isolation");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -414,9 +415,9 @@ test "storage: transaction isolation and consistency" {
 }
 test "storage: automatic transaction rollback on failure" {
     const allocator = testing.allocator;
-    const test_dir = "test-artifacts/storage_engine/test_data_auto_rollback";
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-auto-rollback");
+    defer context.deinit();
+    const test_dir = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -583,10 +584,9 @@ test "storage: document set/get round-trip" {
     const scalar_values = [_][]const u8{ "hello", "world", "foo", "bar", "baz" };
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p13_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p13");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
             makeField("score", .integer, false),
@@ -634,10 +634,9 @@ test "storage: field set/get round-trip" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p14_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p14");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
             makeField("score", .integer, false),
@@ -680,10 +679,9 @@ test "storage: collection get is namespace-scoped" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p15_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p15");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
         var memory_strategy: MemoryStrategy = undefined;
@@ -724,10 +722,9 @@ test "storage: remove then get returns null" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p16_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p16");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
         var memory_strategy: MemoryStrategy = undefined;
@@ -752,10 +749,9 @@ test "storage: schema validation rejects unknown tables and fields" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p17_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p17");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{makeField("title", .text, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
         var memory_strategy: MemoryStrategy = undefined;
@@ -777,10 +773,9 @@ test "storage: updated_at is always refreshed on write" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p18_{}", .{iter});
-        defer allocator.free(test_dir);
-        // zwanzig-disable-next-line
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p18");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
         const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
         var memory_strategy: MemoryStrategy = undefined;
@@ -829,9 +824,9 @@ test "storage: write/read round-trip for array fields" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p10_{}", .{iter});
-        defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p10");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{
             makeField("tags", .array, false),
             makeField("name", .text, false),
@@ -896,9 +891,9 @@ test "storage: non-array fields are unaffected" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p11_{}", .{iter});
-        defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p11");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{
             makeField("title", .text, false),
             makeField("score", .integer, false),
@@ -955,9 +950,9 @@ test "storage: SQLite json_array_length works on stored array columns" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const test_dir = try std.fmt.allocPrint(allocator, "test-artifacts/prop/p12_{}", .{iter});
-        defer allocator.free(test_dir);
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "storage-p12");
+        defer context.deinit();
+        const test_dir = context.test_dir;
         var fields_arr = [_]schema_parser.Field{
             makeField("tags", .array, false),
         };

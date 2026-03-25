@@ -7,6 +7,7 @@ const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -63,9 +64,9 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryS
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifacts/stability/concurrent_errors";
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-concurrent");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
 
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
@@ -126,11 +127,9 @@ test "storage: stability no crashes on concurrent errors" {
 }
 test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/transaction_errors";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-txn-err");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -173,11 +172,9 @@ test "storage: stability continues after transaction errors" {
 }
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/rapid_errors";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-rapid-err");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema_1: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -210,11 +207,9 @@ test "storage: stability handles rapid error conditions" {
 }
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/recovery";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-recovery");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema_2: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -255,11 +250,9 @@ test "storage: stability error recovery with valid operations" {
 }
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/resource_cleanup";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-resource-cleanup");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema_3: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -302,11 +295,9 @@ test "storage: stability resource cleanup after errors" {
 }
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/mixed_scenarios";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-mixed");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema_4: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
@@ -358,11 +349,9 @@ test "storage: stability mixed error and success scenarios" {
 }
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
-    const tmp_path = "test-artifacts/stability/concurrent_reads";
-    // zwanzig-disable-next-line
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    // zwanzig-disable-next-line
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "stability-concurrent-reads");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
     var test_schema_5: ?*schema_parser.Schema = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);

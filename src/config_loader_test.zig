@@ -1,6 +1,7 @@
 const std = @import("std");
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
+const schema_helpers = @import("schema_test_helpers.zig");
 
 test "ConfigLoader loads defaults when file not found" {
     const allocator = std.testing.allocator;
@@ -20,32 +21,39 @@ test "ConfigLoader parses valid JSON config" {
 
     // Create a temporary config file
     const config_content =
-        \\{
-        \\  "server": {
+        \\{{
+        \\  "server": {{
         \\    "port": 8080,
         \\    "host": "127.0.0.1",
         \\    "maxConnections": 50000
-        \\  },
-        \\  "dataDir": "./test-artifacts",
-        \\  "logging": {
+        \\  }},
+        \\  "dataDir": "{s}",
+        \\  "logging": {{
         \\    "level": "debug",
         \\    "format": "text"
-        \\  },
-        \\  "performance": {
+        \\  }},
+        \\  "performance": {{
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
         \\    "batchTimeoutMs": 20
-        \\  },
-        \\  "schema": "test-artifacts/test-config-schema.json"
-        \\}
+        \\  }},
+        \\  "schema": "{s}/test-config-schema.json"
+        \\}}
     ;
 
-    const temp_file = "test-artifacts/test-config.json";
-    const schema_file = "test-artifacts/test-config-schema.json";
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    var context = try schema_helpers.TestContext.init(allocator, "config-parse");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.fmt.allocPrint(allocator, config_content, .{ context.test_dir, context.test_dir });
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -54,7 +62,7 @@ test "ConfigLoader parses valid JSON config" {
     try std.testing.expectEqual(@as(u16, 8080), config.server.port);
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
     try std.testing.expectEqual(@as(usize, 50000), config.server.max_connections);
-    try std.testing.expectEqualStrings("./test-artifacts", config.data_dir);
+    try std.testing.expectEqualStrings(context.test_dir, config.data_dir);
     try std.testing.expectEqual(Config.LoggingConfig.LogLevel.debug, config.logging.level);
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
@@ -66,20 +74,27 @@ test "ConfigLoader validates port range" {
     const allocator = std.testing.allocator;
 
     const config_content =
-        \\{
-        \\  "server": {
+        \\{{
+        \\  "server": {{
         \\    "port": 70000
-        \\  },
-        \\  "schema": "test-artifacts/invalid-port-schema.json"
-        \\}
+        \\  }},
+        \\  "schema": "{s}/invalid-port-schema.json"
+        \\}}
     ;
 
-    const temp_file = "test-artifacts/test-config-invalid-port.json";
-    const schema_file = "test-artifacts/invalid-port-schema.json";
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    var context = try schema_helpers.TestContext.init(allocator, "config-port");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-port.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "invalid-port-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.fmt.allocPrint(allocator, config_content, .{context.test_dir});
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidPort, result);
@@ -89,20 +104,27 @@ test "ConfigLoader validates numeric ranges" {
     const allocator = std.testing.allocator;
 
     const config_content =
-        \\{
-        \\  "performance": {
+        \\{{
+        \\  "performance": {{
         \\    "messageBufferSize": 0
-        \\  },
-        \\  "schema": "test-artifacts/invalid-buffer-schema.json"
-        \\}
+        \\  }},
+        \\  "schema": "{s}/invalid-buffer-schema.json"
+        \\}}
     ;
 
-    const temp_file = "test-artifacts/test-config-invalid-buffer.json";
-    const schema_file = "test-artifacts/invalid-buffer-schema.json";
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    var context = try schema_helpers.TestContext.init(allocator, "config-buffer");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-buffer.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "invalid-buffer-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.fmt.allocPrint(allocator, config_content, .{context.test_dir});
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidBufferSize, result);
@@ -112,25 +134,32 @@ test "ConfigLoader parses auth config" {
     const allocator = std.testing.allocator;
 
     const config_content =
-        \\{
-        \\  "authentication": {
-        \\    "jwt": {
+        \\{{
+        \\  "authentication": {{
+        \\    "jwt": {{
         \\      "secret": "my-secret-key",
         \\      "algorithm": "HS512",
         \\      "issuer": "zyncbase",
         \\      "audience": "api"
-        \\    }
-        \\  },
-        \\  "schema": "test-artifacts/auth-schema.json"
-        \\}
+        \\    }}
+        \\  }},
+        \\  "schema": "{s}/auth-schema.json"
+        \\}}
     ;
 
-    const temp_file = "test-artifacts/test-config-auth.json";
-    const schema_file = "test-artifacts/auth-schema.json";
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    var context = try schema_helpers.TestContext.init(allocator, "config-auth");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-auth.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "auth-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.fmt.allocPrint(allocator, config_content, .{context.test_dir});
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();
@@ -149,24 +178,31 @@ test "ConfigLoader parses security config" {
     const allocator = std.testing.allocator;
 
     const config_content =
-        \\{
-        \\  "security": {
+        \\{{
+        \\  "security": {{
         \\    "allowedOrigins": ["https://example.com", "https://app.example.com"],
         \\    "allowLocalhost": false,
         \\    "rateLimitMessagesPerSecond": 200,
         \\    "rateLimitConnectionsPerIp": 20,
         \\    "maxMessageSize": 2097152
-        \\  },
-        \\  "schema": "test-artifacts/security-schema.json"
-        \\}
+        \\  }},
+        \\  "schema": "{s}/security-schema.json"
+        \\}}
     ;
 
-    const temp_file = "test-artifacts/test-config-security.json";
-    const schema_file = "test-artifacts/security-schema.json";
-    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = config_content });
+    var context = try schema_helpers.TestContext.init(allocator, "config-security");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-security.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "security-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.fmt.allocPrint(allocator, config_content, .{context.test_dir});
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
     try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
-    defer std.fs.cwd().deleteFile(temp_file) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteFile(schema_file) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     var config = try ConfigLoader.load(allocator, temp_file);
     defer config.deinit();

@@ -3,7 +3,7 @@ const schema_parser = @import("schema_parser.zig");
 const SchemaParser = schema_parser.SchemaParser;
 
 // Feature: schema-aware-storage, Property 3: Object field flattening
-// For any schema field definition of type "object" with N properties,
+// For any schema field definition of type "object" with N fields,
 // parse SHALL produce exactly N Field values named <parent>_<property>,
 // none with type object.
 test "schema_parser: object field flattening" {
@@ -22,7 +22,7 @@ test "schema_parser: object field flattening" {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
 
-        try buf.appendSlice(allocator, "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"addr\":{\"type\":\"object\",\"properties\":{");
+        try buf.appendSlice(allocator, "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"addr\":{\"type\":\"object\",\"fields\":{");
         for (0..n_props) |pi| {
             if (pi > 0) try buf.append(allocator, ',');
             try buf.print(allocator, "\"{s}\":{{\"type\":\"string\"}}", .{property_names[pi]});

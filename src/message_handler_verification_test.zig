@@ -501,18 +501,9 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         var resp_reader_any: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &resp_reader_any);
         defer resp_parsed.free(allocator);
-        try testing.expect(resp_parsed == .map);
-        var found_ok = false;
-        var rit = resp_parsed.map.iterator();
-        while (rit.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            if (key == .str and std.mem.eql(u8, key.str.value(), "type")) {
-                try testing.expectEqualStrings("ok", val.str.value());
-                found_ok = true;
-            }
-        }
-        try testing.expect(found_ok);
+
+        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+        try testing.expectEqualStrings("ok", msg_type.str.value());
     }
 
     // Wait for writes to complete

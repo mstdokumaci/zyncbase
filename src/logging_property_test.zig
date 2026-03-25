@@ -12,6 +12,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 fn createTablesFromSchema(allocator: std.mem.Allocator, engine: *StorageEngine, schema: schema_parser.Schema) !void {
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -85,11 +86,9 @@ test "logging: connection events" {
     tracker.init(allocator, 10);
     defer tracker.deinit();
 
-    const test_dir = "test-artifacts/test_connection_logging";
-    std.fs.cwd().makeDir(test_dir) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "logging-conn");
+    defer context.deinit();
+    const test_dir = context.test_dir;
 
     var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables = [_]schema_parser.Table{
@@ -284,11 +283,9 @@ test "logging: error details" {
     tracker.init(allocator, 10);
     defer tracker.deinit();
 
-    const test_dir = "test-artifacts/test_error_logging";
-    std.fs.cwd().makeDir(test_dir) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "logging-err");
+    defer context.deinit();
+    const test_dir = context.test_dir;
 
     var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var dummy_tables_1 = [_]schema_parser.Table{
@@ -421,11 +418,9 @@ test "logging: level filtering" {
         tracker.init(allocator, 10);
         defer tracker.deinit();
 
-        const test_dir = "test-artifacts/test_log_level";
-        std.fs.cwd().makeDir(test_dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "logging-level");
+        defer context.deinit();
+        const test_dir = context.test_dir;
 
         var dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_2 = [_]schema_parser.Table{
@@ -498,11 +493,9 @@ test "logging: message formatting" {
         tracker.init(allocator, 10);
         defer tracker.deinit();
 
-        const test_dir = "test-artifacts/test_log_format";
-        std.fs.cwd().makeDir(test_dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "logging-format");
+        defer context.deinit();
+        const test_dir = context.test_dir;
 
         var dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_3 = [_]schema_parser.Table{
@@ -563,11 +556,9 @@ test "logging: message formatting" {
         tracker.init(allocator, 10);
         defer tracker.deinit();
 
-        const test_dir = "test-artifacts/test_log_params";
-        std.fs.cwd().makeDir(test_dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
-        defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        var context = try schema_helpers.TestContext.init(allocator, "logging-params");
+        defer context.deinit();
+        const test_dir = context.test_dir;
 
         var dummy_fields_4 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
         var dummy_tables_4 = [_]schema_parser.Table{

@@ -5,7 +5,25 @@ import * as path from "path";
 
 const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
+const ARTIFACT_DIR = "tests/e2e/artifacts";
 const SERVER_BIN = "./zig-out/bin/zyncbase";
+
+function log(message: string) {
+  const timeStr = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  console.log(`[${timeStr}] ${message}`);
+}
+
+function ensureArtifactDir() {
+  if (!fs.existsSync(ARTIFACT_DIR)) {
+    fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+  }
+}
+
+function cleanupArtifactDir() {
+  if (fs.existsSync(ARTIFACT_DIR)) {
+    fs.rmSync(ARTIFACT_DIR, { recursive: true, force: true });
+  }
+}
 
 function getLatestSourceTimestamp(dirs: string[]): number {
   let latest = 0;
@@ -39,7 +57,7 @@ function checkBuild() {
 
   if (forceBuild || !binaryStats || latestSource > binaryStats.mtimeMs) {
     const timeStr = new Date().toLocaleTimeString('en-GB', { hour12: false });
-    console.log(`[${timeStr}] Building ZyncBase server (ReleaseFast)...`);
+    log(`Building ZyncBase server (ReleaseFast)...`);
     const start = Date.now();
     const result = spawnSync("zig", ["build", "-Doptimize=ReleaseFast"], { stdio: "inherit" });
     if (result.status !== 0) {
@@ -47,9 +65,9 @@ function checkBuild() {
       process.exit(1);
     }
     const duration = ((Date.now() - start) / 1000).toFixed(1);
-    console.log(`Build finished in ${duration}s.`);
+    log(`Build finished in ${duration}s.`);
   } else {
-    console.log("Server binary up to date, skipping build.");
+    log("Server binary up to date, skipping build.");
   }
 }
 
@@ -108,18 +126,18 @@ import { run as runErrors } from "./test-errors";
 import { run as runPersistence } from "./test-persistence";
 
 async function run_scenario_sync_and_errors() {
-  console.log("--- Bi-directional Sync ---");
+  log("--- Bi-directional Sync ---");
   const schemaPath = "tests/e2e/schema-sync.json";
   const dataDir = path.join(DATA_DIR, "sync");
   const config = { server: { port: PORT }, dataDir: dataDir, schema: schemaPath };
-  const configPath = "test-artifacts/zyncbase-config-sync.json";
+  const configPath = path.join(ARTIFACT_DIR, "zyncbase-config-sync.json");
   fs.writeFileSync(configPath, JSON.stringify(config));
-  console.log(`Starting server with ${schemaPath}...`);
+  log(`Starting server with ${schemaPath}...`);
   const server = await start_server(configPath);
   try {
     await runSync(PORT);
     
-    console.log("--- Error Reporting ---");
+    log("--- Error Reporting ---");
     await runErrors(PORT);
   } finally {
     await stop_server(server);
@@ -127,16 +145,16 @@ async function run_scenario_sync_and_errors() {
 }
 
 async function run_scenario_persistence() {
-  console.log("--- Persistence ---");
+  log("--- Persistence ---");
   const schemaPath = "tests/e2e/schema-persistence.json";
   const config = { server: { port: PORT }, dataDir: DATA_DIR, schema: schemaPath };
-  const configPath = "test-artifacts/zyncbase-config.json";
+  const configPath = path.join(ARTIFACT_DIR, "zyncbase-config.json");
   fs.writeFileSync(configPath, JSON.stringify(config));
 
   // Step 1: Set
   let server = await start_server(configPath);
   try {
-    await runPersistence("set", PORT);
+    await runPersistence("set", PORT, ARTIFACT_DIR);
   } finally {
     await stop_server(server);
   }
@@ -144,7 +162,7 @@ async function run_scenario_persistence() {
   // Step 2: Get
   server = await start_server(configPath);
   try {
-    await runPersistence("get", PORT);
+    await runPersistence("get", PORT, ARTIFACT_DIR);
   } finally {
     await stop_server(server);
   }
@@ -152,22 +170,25 @@ async function run_scenario_persistence() {
 }
 
 async function main() {
-  const timeStr = new Date().toLocaleTimeString('en-GB', { hour12: false });
-  console.log(`[${timeStr}] === ZyncBase E2E Test Suite (Optimized) ===`);
+  log("=== ZyncBase E2E Test Suite (Optimized) ===");
 
   checkBuild();
+  ensureArtifactDir();
 
   if (fs.existsSync(DATA_DIR)) fs.rmSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
   try {
-    console.log("Running consolidated E2E suite...");
+    log("Running consolidated E2E suite...");
     await run_scenario_sync_and_errors();
     await run_scenario_persistence();
-    console.log("=== All E2E Tests Passed! ===");
+    log("Scenario 2 passed.");
+    log("=== All E2E Tests Passed! ===");
   } catch (err) {
     console.error("E2E Test Suite Failed:", err);
     process.exit(1);
+  } finally {
+    cleanupArtifactDir();
   }
 }
 

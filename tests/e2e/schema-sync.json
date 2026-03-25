@@ -6,6 +6,17 @@
         "title": {
           "type": "string"
         },
+        "must_be_complete": {
+          "type": "object",
+          "properties": {
+            "before": {
+              "type": "integer"
+            },
+            "after": {
+              "type": "integer"
+            }
+          }
+        },
         "tags": {
           "type": "array"
         }

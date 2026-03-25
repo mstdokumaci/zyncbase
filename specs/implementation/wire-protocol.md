@@ -106,7 +106,7 @@ Retrieve a value at a path.
 {
   "type":  "ok",
   "id":    1,
-  "value": <any>    // Array for collections, Object for documents, scalar for properties, null if not found
+  "value": <any>    // Array for collections, Object for documents, scalar for fields, null if not found
 }
 ```
 

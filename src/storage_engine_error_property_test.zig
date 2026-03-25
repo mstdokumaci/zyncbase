@@ -5,6 +5,7 @@ const StorageEngine = storage_engine_mod.StorageEngine;
 const ColumnValue = storage_engine_mod.ColumnValue;
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
+const msgpack_test = @import("msgpack_test_helpers.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 // This property test verifies that database operations handle errors gracefully:
@@ -101,12 +102,8 @@ test "storage: error handling constraint violations" {
         try testing.expect(doc != null);
         if (doc) |d| {
             // Document retrieved as map, let's check field "val"
-            var it = d.map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.str.str, "val")) {
-                    try testing.expectEqualStrings("value2", entry.value_ptr.str.str);
-                }
-            }
+            const val = msgpack_test.getMapValue(d, "val") orelse return error.TestExpectedError;
+            try testing.expectEqualStrings("value2", val.str.value());
         }
     }
 }

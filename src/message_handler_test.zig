@@ -348,27 +348,12 @@ fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { r
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    var resp_type: ?[]const u8 = null;
-    var code: ?[]const u8 = null;
-
-    var it = parsed.map.iterator();
-    while (it.next()) |entry| {
-        if (entry.key_ptr.* != .str) continue;
-        const key = entry.key_ptr.*.str.value();
-        if (std.mem.eql(u8, key, "type")) {
-            if (entry.value_ptr.* == .str) {
-                resp_type = try allocator.dupe(u8, entry.value_ptr.*.str.value());
-            }
-        } else if (std.mem.eql(u8, key, "code")) {
-            if (entry.value_ptr.* == .str) {
-                code = try allocator.dupe(u8, entry.value_ptr.*.str.value());
-            }
-        }
-    }
+    const resp_type_val = msgpack_helpers.getMapValue(parsed, "type") orelse return error.MissingType;
+    const resp_code_val = msgpack_helpers.getMapValue(parsed, "code");
 
     return .{
-        .resp_type = resp_type orelse return error.MissingType,
-        .code = code,
+        .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),
+        .code = if (resp_code_val) |v| try allocator.dupe(u8, v.str.value()) else null,
     };
 }
 

@@ -3,9 +3,10 @@ const testing = std.testing;
 const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const ColumnValue = storage_mod.ColumnValue;
-const msgpack = @import("msgpack_utils.zig");
+const msgpack = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // Helper to create a ColumnValue array for a simple user object
 fn createUserCols(allocator: std.mem.Allocator, name: []const u8, age: i64) ![]ColumnValue {
@@ -23,9 +24,9 @@ fn freeUserCols(allocator: std.mem.Allocator, cols: []ColumnValue) void {
 test "Storage: CRUD operations" {
     const allocator = testing.allocator;
 
-    const tmp_path = "test-artifacts/storage_crud";
-    std.fs.cwd().makePath(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteTree(tmp_path) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "storage-crud");
+    defer context.deinit();
+    const tmp_path = context.test_dir;
 
     // Setup schema
     var fields = try allocator.alloc(schema_parser.Field, 2);
@@ -69,15 +70,8 @@ test "Storage: CRUD operations" {
         defer if (doc) |d| d.free(allocator);
         try testing.expect(doc != null);
         if (doc) |d| {
-            var found_name = false;
-            var it = d.map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.str.value(), "name")) {
-                    try testing.expectEqualStrings("Alice", entry.value_ptr.str.value());
-                    found_name = true;
-                }
-            }
-            try testing.expect(found_name);
+            const val = msgpack.getMapValue(d, "name") orelse return error.TestExpectedError;
+            try testing.expectEqualStrings("Alice", val.str.value());
         }
     }
     // 3. Update (InsertOrReplace with new data)
@@ -92,17 +86,13 @@ test "Storage: CRUD operations" {
         const doc = try storage.selectDocument("users", "1", "test_ns");
         defer if (doc) |d| d.free(allocator);
         if (doc) |d| {
-            var it = d.map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.str.value(), "age")) {
-                    const actual_age: i64 = switch (entry.value_ptr.*) {
-                        .int => |v| v,
-                        .uint => |v| @intCast(v),
-                        else => unreachable,
-                    };
-                    try testing.expectEqual(@as(i64, 31), actual_age);
-                }
-            }
+            const val = msgpack.getMapValue(d, "age") orelse return error.TestExpectedError;
+            const actual_age: i64 = switch (val) {
+                .int => |v| v,
+                .uint => |v| @intCast(v),
+                else => unreachable,
+            };
+            try testing.expectEqual(@as(i64, 31), actual_age);
         }
     }
     // 4. Delete

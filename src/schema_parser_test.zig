@@ -20,7 +20,7 @@ test "schema_parser: parse known fixture" {
         \\        "tags":    { "type": "array" },
         \\        "address": {
         \\          "type": "object",
-        \\          "properties": {
+        \\          "fields": {
         \\            "city": { "type": "string" },
         \\            "zip":  { "type": "string" }
         \\          }
@@ -125,7 +125,7 @@ test "schema_parser: unknown field types produce hard error" {
         \\      "fields": {
         \\        "metadata": {
         \\          "type": "object",
-        \\          "properties": {
+        \\          "fields": {
         \\            "legacy_type": { "type": "custom" }
         \\          }
         \\        }

@@ -41,6 +41,10 @@ pub const StorageError = error{
     MigrationInProgress,
     /// Field value type does not match schema
     TypeMismatch,
+    /// Data directory is invalid or empty
+    InvalidDataDir,
+    /// Path is not a directory
+    NotDir,
 };
 
 /// A column name + msgpack value pair for storage inserts/updates.
@@ -120,13 +124,20 @@ pub const StorageEngine = struct {
     }
 
     pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
+        if (data_dir.len == 0) return error.InvalidDataDir;
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
 
         // Ensure data directory exists
-        std.fs.cwd().makePath(data_dir) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
+        if (std.fs.cwd().openDir(data_dir, .{})) |_| {
+            // Already exists and is a directory
+        } else |err| switch (err) {
+            error.FileNotFound => {
+                try std.fs.cwd().makePath(data_dir);
+            },
+            error.NotDir => return error.NotDir,
+            else => return err,
+        }
 
         // Build database path (null-terminated for SQLite)
         const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});

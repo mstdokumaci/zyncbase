@@ -17,7 +17,7 @@ test "config: env var substitution" {
     _ = c.setenv("TEST_PORT", "8080", 1);
     _ = c.setenv("TEST_HOST", "192.168.1.1", 1);
     _ = c.setenv("TEST_JWT_SECRET", "test-secret-key", 1);
-    _ = c.setenv("TEST_DATA_DIR", "/tmp/test-artifacts", 1);
+    _ = c.setenv("TEST_DATA_DIR", "/tmp/test-isolated-dir", 1);
     defer {
         _ = c.unsetenv("TEST_PORT");
         _ = c.unsetenv("TEST_HOST");
@@ -62,7 +62,7 @@ test "config: env var substitution" {
     try std.testing.expectEqualStrings("192.168.1.1", config.server.host);
     try std.testing.expect(config.authentication.jwt_secret != null);
     try std.testing.expectEqualStrings("test-secret-key", config.authentication.jwt_secret.?);
-    try std.testing.expectEqualStrings("/tmp/test-artifacts", config.data_dir);
+    try std.testing.expectEqualStrings("/tmp/test-isolated-dir", config.data_dir);
 }
 
 test "config: env var substitution - missing variable keeps original" {
@@ -80,12 +80,13 @@ test "config: env var substitution - missing variable keeps original" {
     defer allocator.free(schema_file_path);
 
     // Create config with non-existent environment variable
+    // We use context.test_dir to ensure the directory is cleaned up even if substitution fails
     const config_content = try std.fmt.allocPrint(allocator,
         \\{{
-        \\  "dataDir": "test-artifacts/${{NONEXISTENT_VAR}}",
+        \\  "dataDir": "{s}/${{NONEXISTENT_VAR}}",
         \\  "schema": "{s}"
         \\}}
-    , .{schema_file_path});
+    , .{ context.test_dir, schema_file_path });
     defer allocator.free(config_content);
 
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
@@ -95,7 +96,9 @@ test "config: env var substitution - missing variable keeps original" {
     defer config.deinit();
 
     // Verify original pattern is kept when variable doesn't exist
-    try std.testing.expectEqualStrings("test-artifacts/${NONEXISTENT_VAR}", config.data_dir);
+    const expected_data_dir = try std.fmt.allocPrint(allocator, "{s}/${{NONEXISTENT_VAR}}", .{context.test_dir});
+    defer allocator.free(expected_data_dir);
+    try std.testing.expectEqualStrings(expected_data_dir, config.data_dir);
 }
 
 test "config: env var substitution - multiple variables" {

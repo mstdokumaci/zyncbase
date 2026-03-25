@@ -9,6 +9,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bool) schema_parser.Field {
     return .{
@@ -85,11 +86,9 @@ test "buffer: message deallocation after processing" {
     defer tracker.deinit();
 
     // Create temporary directory for storage engine
-    const test_dir = "test-artifacts/message_buffer/dealloc";
-    std.fs.cwd().makePath(test_dir) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "buffer-dealloc");
+    defer context.deinit();
+    const test_dir = context.test_dir;
 
     var test_schema: ?*schema_parser.Schema = null;
     var storage_engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema);
@@ -352,11 +351,9 @@ test "buffer: concurrent message deallocation" {
     tracker.init(allocator, 10);
     defer tracker.deinit();
 
-    const test_dir = "test-artifacts/message_buffer/concurrent";
-    std.fs.cwd().makePath(test_dir) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
-    defer std.fs.cwd().deleteTree(test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "buffer-concurrent");
+    defer context.deinit();
+    const test_dir = context.test_dir;
 
     var test_schema_1: ?*schema_parser.Schema = null;
     var storage_engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_schema_1);

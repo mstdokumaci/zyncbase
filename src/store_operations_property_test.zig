@@ -311,20 +311,10 @@ test "store: set success response format" {
         var reader_resp: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &reader_resp);
         defer resp_parsed.free(allocator);
-        try testing.expect(resp_parsed == .map);
-        var found_ok = false;
-        var found_id = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
-                found_ok = true;
-            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                try testing.expectEqual(@as(u64, 1), entry.value_ptr.*.uint);
-                found_id = true;
-            }
-        }
-        try testing.expect(found_ok and found_id);
+        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+        const msg_id = msgpack.getMapValue(resp_parsed, "id") orelse return error.TestExpectedError;
+        try testing.expectEqualStrings("ok", msg_type.str.value());
+        try testing.expectEqual(@as(u64, 1), msg_id.uint);
     }
     // Test 2: Multiple successful StoreSet operations
     {
@@ -347,16 +337,8 @@ test "store: set success response format" {
             var reader_resp: std.Io.Reader = .fixed(response);
             const resp_parsed = try msgpack.decode(allocator, &reader_resp);
             defer resp_parsed.free(allocator);
-            try testing.expect(resp_parsed == .map);
-            var found_ok = false;
-            var it = resp_parsed.map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                    try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
-                    found_ok = true;
-                }
-            }
-            try testing.expect(found_ok);
+            const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+            try testing.expectEqualStrings("ok", msg_type.str.value());
         }
     }
     // Test 3: Success response format should be consistent
@@ -373,15 +355,8 @@ test "store: set success response format" {
         var reader_resp: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &reader_resp);
         defer resp_parsed.free(allocator);
-        try testing.expect(resp_parsed == .map);
-        var found_type = false;
-        var found_id = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) found_type = true;
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) found_id = true;
-        }
-        try testing.expect(found_type and found_id);
+        try testing.expect(msgpack.getMapValue(resp_parsed, "type") != null);
+        try testing.expect(msgpack.getMapValue(resp_parsed, "id") != null);
     }
 }
 test "store: get field extraction" {
@@ -534,22 +509,13 @@ test "store: engine get integration" {
         const resp_parsed = try msgpack.decode(allocator, &fbs_reader);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
+        const resp_val_payload = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
         var val: ?[]const u8 = null;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                if (entry.value_ptr.* == .str) {
-                    val = entry.value_ptr.*.str.value();
-                } else if (entry.value_ptr.* == .map) {
-                    var doc_it = entry.value_ptr.*.map.iterator();
-                    while (doc_it.next()) |doc_entry| {
-                        if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
-                            if (doc_entry.value_ptr.* == .str) {
-                                val = doc_entry.value_ptr.*.str.value();
-                            }
-                        }
-                    }
-                }
+        if (resp_val_payload == .str) {
+            val = resp_val_payload.str.value();
+        } else if (resp_val_payload == .map) {
+            if (msgpack.getMapValue(resp_val_payload, "val")) |v| {
+                if (v == .str) val = v.str.value();
             }
         }
         try testing.expect(val != null);
@@ -589,22 +555,13 @@ test "store: engine get integration" {
             const resp_parsed = try msgpack.decode(allocator, &resp_reader);
             defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
+            const val_payload = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
             var val: ?[]const u8 = null;
-            var it = resp_parsed.map.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                    if (entry.value_ptr.* == .str) {
-                        val = entry.value_ptr.*.str.value();
-                    } else if (entry.value_ptr.* == .map) {
-                        var doc_it = entry.value_ptr.*.map.iterator();
-                        while (doc_it.next()) |doc_entry| {
-                            if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
-                                if (doc_entry.value_ptr.* == .str) {
-                                    val = doc_entry.value_ptr.*.str.value();
-                                }
-                            }
-                        }
-                    }
+            if (val_payload == .str) {
+                val = val_payload.str.value();
+            } else if (val_payload == .map) {
+                if (msgpack.getMapValue(val_payload, "val")) |v| {
+                    if (v == .str) val = v.str.value();
                 }
             }
             try testing.expect(val != null);
@@ -625,20 +582,10 @@ test "store: engine get integration" {
         var fbs_reader: std.Io.Reader = .fixed(response);
         const resp_parsed = try msgpack.decode(allocator, &fbs_reader);
         defer resp_parsed.free(allocator);
-        try testing.expect(resp_parsed == .map);
-        var found_ok = false;
-        var found_null = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
-                found_ok = true;
-            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                try testing.expect(entry.value_ptr.* == .nil);
-                found_null = true;
-            }
-        }
-        try testing.expect(found_ok and found_null);
+        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+        const msg_val = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+        try testing.expectEqualStrings("ok", msg_type.str.value());
+        try testing.expect(msg_val == .nil);
     }
 }
 test "store: get value response format" {
@@ -691,33 +638,21 @@ test "store: get value response format" {
         const resp_parsed = try msgpack.decode(allocator, &reader_get_resp);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
-        var found_type = false;
-        var found_id = false;
+        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+        const msg_id = msgpack.getMapValue(resp_parsed, "id") orelse return error.TestExpectedError;
+        const resp_val_payload = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+
+        try testing.expectEqualStrings("ok", msg_type.str.value());
+        try testing.expectEqual(@as(u64, 1), msg_id.uint);
+
         var val: ?[]const u8 = null;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                try testing.expectEqualStrings("ok", entry.value_ptr.*.str.value());
-                found_type = true;
-            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                try testing.expectEqual(@as(u64, 1), entry.value_ptr.*.uint);
-                found_id = true;
-            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                if (entry.value_ptr.* == .str) {
-                    val = entry.value_ptr.*.str.value();
-                } else if (entry.value_ptr.* == .map) {
-                    var doc_it = entry.value_ptr.*.map.iterator();
-                    while (doc_it.next()) |doc_entry| {
-                        if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
-                            if (doc_entry.value_ptr.* == .str) {
-                                val = doc_entry.value_ptr.*.str.value();
-                            }
-                        }
-                    }
-                }
+        if (resp_val_payload == .str) {
+            val = resp_val_payload.str.value();
+        } else if (resp_val_payload == .map) {
+            if (msgpack.getMapValue(resp_val_payload, "val")) |v| {
+                if (v == .str) val = v.str.value();
             }
         }
-        try testing.expect(found_type and found_id);
         try testing.expect(val != null);
         try testing.expectEqualStrings("test_value_123", val.?);
     }
@@ -757,22 +692,13 @@ test "store: get value response format" {
             const resp_parsed = try msgpack.decode(allocator, &reader_resp);
             defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
+            const resp_val_payload = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
             var val: ?[]const u8 = null;
-            var it = resp_parsed.map.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                    if (entry.value_ptr.* == .str) {
-                        val = entry.value_ptr.*.str.value();
-                    } else if (entry.value_ptr.* == .map) {
-                        var doc_it = entry.value_ptr.*.map.iterator();
-                        while (doc_it.next()) |doc_entry| {
-                            if (doc_entry.key_ptr.* == .str and std.mem.eql(u8, doc_entry.key_ptr.*.str.value(), "val")) {
-                                if (doc_entry.value_ptr.* == .str) {
-                                    val = doc_entry.value_ptr.*.str.value();
-                                }
-                            }
-                        }
-                    }
+            if (resp_val_payload == .str) {
+                val = resp_val_payload.str.value();
+            } else if (resp_val_payload == .map) {
+                if (msgpack.getMapValue(resp_val_payload, "val")) |v| {
+                    if (v == .str) val = v.str.value();
                 }
             }
             try testing.expect(val != null);
@@ -794,17 +720,10 @@ test "store: get value response format" {
         const resp_parsed = try msgpack.decode(allocator, &reader_resp_get);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
-        var found_ok = false;
-        var found_null = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) {
-                if (std.mem.eql(u8, entry.value_ptr.*.str.value(), "ok")) found_ok = true;
-            } else if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) {
-                if (entry.value_ptr.* == .nil) found_null = true;
-            }
-        }
-        try testing.expect(found_ok and found_null);
+        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+        const msg_val = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+        try testing.expectEqualStrings("ok", msg_type.str.value());
+        try testing.expect(msg_val == .nil);
     }
     // Test 4: Response format should be consistent
     {
@@ -827,15 +746,8 @@ test "store: get value response format" {
         const resp_parsed = try msgpack.decode(allocator, &reader_resp_final);
         defer resp_parsed.free(allocator);
         try testing.expect(resp_parsed == .map);
-        var found_type = false;
-        var found_id = false;
-        var found_value = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "type")) found_type = true;
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) found_id = true;
-            if (std.mem.eql(u8, entry.key_ptr.*.str.value(), "value")) found_value = true;
-        }
-        try testing.expect(found_type and found_id and found_value);
+        try testing.expect(msgpack.getMapValue(resp_parsed, "type") != null);
+        try testing.expect(msgpack.getMapValue(resp_parsed, "id") != null);
+        try testing.expect(msgpack.getMapValue(resp_parsed, "value") != null);
     }
 }

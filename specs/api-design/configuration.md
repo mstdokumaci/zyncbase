@@ -334,7 +334,7 @@ Define your data structure using ZyncBase store-based schema format.
         "email": { "type": "string", "format": "email" },
         "address": {
           "type": "object",
-          "properties": {
+          "fields": {
             "street": { "type": "string" },
             "city": { "type": "string" },
             "zipCode": { "type": "string" }
@@ -398,7 +398,7 @@ ZyncBase automatically flattens nested objects for efficient querying:
         "name": { "type": "string" },
         "address": {
           "type": "object",
-          "properties": {
+          "fields": {
             "street": { "type": "string" },
             "city": { "type": "string" },
             "zipCode": { "type": "string" }
@@ -475,7 +475,7 @@ await zyncbase.set(tasks.task-1', {
           "type": "array",
           "items": {
             "type": "object",  // ❌ Not allowed
-            "properties": {
+            "fields": {
               "userId": { "type": "string" },
               "role": { "type": "string" }
             }

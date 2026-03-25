@@ -2,9 +2,9 @@ import { ZyncBaseClient } from "./client";
 import * as fs from "fs";
 import * as path_pkg from "path";
 
-export async function run(mode: "set" | "get", port: number = 3000) {
+export async function run(mode: "set" | "get", port: number = 3000, artifactDir: string = "test-artifacts") {
   const client = new ZyncBaseClient(`ws://localhost:${port}`);
-  const timestampFile = path_pkg.join(process.cwd(), "test-artifacts", "persistence_timestamp.txt");
+  const timestampFile = path_pkg.join(process.cwd(), artifactDir, "persistence_timestamp.txt");
 
   try {
     await client.connect();

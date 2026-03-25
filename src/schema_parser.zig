@@ -156,7 +156,7 @@ pub const SchemaParser = struct {
 
                     if (std.mem.eql(u8, type_str, "object")) {
                         // Flatten one level deep
-                        if (field_def.object.get("properties")) |props_val| {
+                        if (field_def.object.get("fields")) |props_val| {
                             if (props_val == .object) {
                                 var props_iter = props_val.object.iterator();
                                 while (props_iter.next()) |prop_entry| {
@@ -213,7 +213,7 @@ pub const SchemaParser = struct {
                                 }
                             }
                         }
-                        // object fields without properties produce no columns
+                        // object fields without nested fields produce no columns
                     } else {
                         const sql_type = mapType(type_str) catch |err| {
                             if (err == error.UnknownFieldType) {

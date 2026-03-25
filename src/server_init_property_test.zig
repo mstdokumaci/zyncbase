@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const testing = std.testing;
+const schema_helpers = @import("schema_test_helpers.zig");
 const ZyncBaseServer = @import("server.zig").ZyncBaseServer;
 
 // For any initialized component, calling init() then deinit() should leave no memory leaks
@@ -22,19 +23,20 @@ test "server: initialization is idempotent" {
     }
     const allocator = gpa.allocator();
 
-    // Ensure test data directory is clean
-    std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
-    defer std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
+    var context = try schema_helpers.TestContext.init(allocator, "server-init");
+    defer context.deinit();
+
+    const data_dir = try std.fs.path.join(allocator, &.{ context.test_dir, "test_data_idempotence" });
+    defer allocator.free(data_dir);
 
     // Create a valid test fixture in the test artifacts directory
-    const schema_dir = "test-artifacts/server_init";
-    try std.fs.cwd().makePath(schema_dir);
-    const schema_file_path = "test-artifacts/server_init/schema.json";
+    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "schema.json" });
+    defer allocator.free(schema_file_path);
+
     try std.fs.cwd().writeFile(.{
         .sub_path = schema_file_path,
         .data = "{\"version\":\"1.0.0\",\"store\":{\"test\":{\"fields\":{\"val\":{\"type\":\"string\"}}}}}",
     });
-    defer std.fs.cwd().deleteFile(schema_file_path) catch {}; // zwanzig-disable-line: empty-catch-engine
 
     // Property: Multiple init/deinit cycles should not leak memory
     // Test with 1 cycle first to debug leaks
@@ -42,7 +44,7 @@ test "server: initialization is idempotent" {
     var i: usize = 0;
     while (i < num_cycles) : (i += 1) {
         // Initialize server with unique data directory and custom schema path
-        const server = try ZyncBaseServer.initDetailed(allocator, null, "test-artifacts/server_init/test_data_idempotence", schema_file_path, null);
+        const server = try ZyncBaseServer.initDetailed(allocator, null, data_dir, schema_file_path, null);
         std.log.debug("Server initialized", .{});
         defer {
             std.log.debug("About to call server.deinit()", .{});
@@ -63,7 +65,7 @@ test "server: initialization is idempotent" {
         try testing.expect(!server.shutdown_requested.load(.acquire));
 
         // Clean up database file between cycles
-        std.fs.cwd().deleteTree("test-artifacts/server_init/test_data_idempotence") catch {}; // zwanzig-disable-line: empty-catch-engine
+        std.fs.cwd().deleteTree(data_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
     }
 
     // If we reach here without panicking, the property holds

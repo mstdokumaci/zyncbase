@@ -9,6 +9,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const schema_helpers = @import("schema_test_helpers.zig");
 
 // **Property: Connection open/close is inverse operation**
 // Connection properties
@@ -70,10 +71,12 @@ test "connection: open/close is inverse operation" {
     defer tracker.deinit();
 
     var test_schema: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property4", "test", &test_schema, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p4");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property4") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -482,10 +485,12 @@ test "connection: unique monotonically increasing IDs" {
     defer tracker.deinit();
 
     var test_schema_1: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property5", "test", &test_schema_1, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p5");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_1, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property5") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_1) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -676,10 +681,12 @@ test "message: all valid frames are parsed" {
     defer tracker.deinit();
 
     var test_schema_2: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property7", "test", &test_schema_2, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p7");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_2, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property7") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_2) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -778,10 +785,12 @@ test "message: type extraction" {
     defer tracker.deinit();
 
     var test_schema_3: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property8", "test", &test_schema_3, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p8");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_3, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property8") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_3) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -921,10 +930,12 @@ test "message: request routing to handlers" {
     defer tracker.deinit();
 
     var test_schema_4: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/test_data_property9", "test_table", &test_schema_4, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p9");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test_table", &test_schema_4, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/test_data_property9") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_4) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -1057,10 +1068,12 @@ test "message: response correlation by ID" {
     defer tracker.deinit();
 
     var test_schema_5: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property10", "test_table", &test_schema_5, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p10");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test_table", &test_schema_5, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property10") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_5) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
@@ -1245,10 +1258,12 @@ test "message: error responses for invalid types/fields" {
     defer tracker.deinit();
 
     var test_schema_6: ?*schema_parser.Schema = null;
-    const storage_engine = try setupEngineWithSchema(allocator, "test-artifacts/message_handler/test_data_property11", "test", &test_schema_6, &memory_strategy);
+    var context = try schema_helpers.TestContext.init(allocator, "handler-p11");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_6, &memory_strategy);
     defer {
         storage_engine.deinit();
-        std.fs.cwd().deleteTree("test-artifacts/message_handler/test_data_property11") catch {}; // zwanzig-disable-line: empty-catch-engine
         if (test_schema_6) |s| {
             schema_parser.freeSchema(allocator, s.*);
             allocator.destroy(s);
