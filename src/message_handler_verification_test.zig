@@ -9,6 +9,7 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
+const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -149,11 +150,11 @@ test "Verification: StoreSet message processing" {
     defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const conn_id = ws.getConnId();
-    const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
-    defer allocator.free(response);
+    const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+    defer allocator.free(response_copy);
 
     // Verify response indicates success
-    var resp_reader: std.Io.Reader = .fixed(response);
+    var resp_reader: std.Io.Reader = .fixed(response_copy);
     const resp_parsed = try msgpack.decode(allocator, &resp_reader);
     defer resp_parsed.free(allocator);
 
@@ -261,11 +262,11 @@ test "Verification: StoreGet message processing" {
     defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const conn_id = ws.getConnId();
-    const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
-    defer allocator.free(response);
+    const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+    defer allocator.free(response_copy);
 
     // Verify response contains the value
-    var resp_reader: std.Io.Reader = .fixed(response);
+    var resp_reader: std.Io.Reader = .fixed(response_copy);
     const resp_parsed = try msgpack.decode(allocator, &resp_reader);
     defer resp_parsed.free(allocator);
 
@@ -416,11 +417,10 @@ test "Verification: Error handling for invalid messages" {
 
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
-
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 }
@@ -480,30 +480,32 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     };
 
     for (test_data, 0..) |td, i| {
-        const set_message = try msgpack.createStoreSetMessage(
-            allocator,
-            i + 1,
-            td.namespace,
-            &[_][]const u8{ "data_table", td.id, "val" },
-            td.value,
-        );
-        defer allocator.free(set_message);
+        {
+            const set_message = try msgpack.createStoreSetMessage(
+                allocator,
+                i + 1,
+                td.namespace,
+                &[_][]const u8{ "data_table", td.id, "val" },
+                td.value,
+            );
+            defer allocator.free(set_message);
 
-        var reader_set: std.Io.Reader = .fixed(set_message);
-        const parsed = try msgpack.decode(allocator, &reader_set);
-        defer parsed.free(allocator);
+            var reader_set: std.Io.Reader = .fixed(set_message);
+            const parsed = try msgpack.decode(allocator, &reader_set);
+            defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
-        defer allocator.free(response);
+            const msg_info = try handler.extractMessageInfo(parsed);
+            const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+            defer allocator.free(response_copy);
 
-        // Verify success response
-        var resp_reader_any: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader_any);
-        defer resp_parsed.free(allocator);
+            // Verify success response
+            var resp_reader_any: std.Io.Reader = .fixed(response_copy);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader_any);
+            defer resp_parsed.free(allocator);
 
-        const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
-        try testing.expectEqualStrings("ok", msg_type.str.value());
+            const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+            try testing.expectEqualStrings("ok", msg_type.str.value());
+        }
     }
 
     // Wait for writes to complete
@@ -511,46 +513,49 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
 
     // Retrieve all values
     for (test_data, 0..) |td, i| {
-        const get_message = try msgpack.createStoreGetMessage(
-            allocator,
-            i + 100,
-            td.namespace,
-            &.{ "data_table", td.id, "val" },
-        );
-        defer allocator.free(get_message);
+        {
+            const get_message = try msgpack.createStoreGetMessage(
+                allocator,
+                i + 100,
+                td.namespace,
+                &.{ "data_table", td.id, "val" },
+            );
+            defer allocator.free(get_message);
 
-        var reader: std.Io.Reader = .fixed(get_message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
+            var reader: std.Io.Reader = .fixed(get_message);
+            const parsed = try msgpack.decode(allocator, &reader);
+            defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
-        defer allocator.free(response);
+            const msg_info = try handler.extractMessageInfo(parsed);
+            const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+            defer allocator.free(response_copy);
 
-        // Verify response contains the value
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
-        defer resp_parsed.free(allocator);
-        try testing.expect(resp_parsed == .map);
-        var val: ?[]const u8 = null;
-        var rit = resp_parsed.map.iterator();
-        while (rit.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if (key == .str and std.mem.eql(u8, key.str.value(), "value")) {
-                val = entry.value_ptr.*.str.value();
+            // Verify response contains the value
+            var resp_reader: std.Io.Reader = .fixed(response_copy);
+            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+            defer resp_parsed.free(allocator);
+            try testing.expect(resp_parsed == .map);
+            var val: ?[]const u8 = null;
+            var rit = resp_parsed.map.iterator();
+            while (rit.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (key == .str and std.mem.eql(u8, key.str.value(), "value")) {
+                    val = entry.value_ptr.*.str.value();
+                }
             }
+            try testing.expect(val != null);
+            try testing.expectEqualStrings(td.value, val.?);
         }
-        try testing.expect(val != null);
-        try testing.expectEqualStrings(td.value, val.?);
     }
 
     // Also verify directly in storage engine
     for (test_data) |td| {
         const stored_doc = try storage_engine.selectDocument("data_table", td.id, td.namespace);
         try testing.expect(stored_doc != null);
-        defer stored_doc.?.free(allocator);
+        const doc = stored_doc.?;
+        defer doc.free(allocator);
 
-        const got_val = (try stored_doc.?.mapGet("val")) orelse return error.MissingValue;
+        const got_val = (try doc.mapGet("val")) orelse return error.MissingValue;
         try testing.expectEqualStrings(td.value, got_val.str.value());
     }
 }

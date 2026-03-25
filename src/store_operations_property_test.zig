@@ -8,6 +8,7 @@ const SubscriptionManager = @import("subscription_manager.zig").SubscriptionMana
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
+const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
 
 // **Property: StoreSet field extraction**
 test "store: set field extraction" {
@@ -50,7 +51,7 @@ test "store: set field extraction" {
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
         // Should be able to route and process (which requires field extraction)
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // If we got a response, fields were extracted successfully
         try testing.expect(response.len > 0);
@@ -74,7 +75,7 @@ test "store: set field extraction" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
             try testing.expect(response.len > 0);
         }
@@ -102,7 +103,7 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
     // Test 4: StoreSet missing path should fail
@@ -128,7 +129,7 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &fbs_reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
     // Test 5: StoreSet missing value should fail
@@ -147,7 +148,7 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &fbs_reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
 }
@@ -185,7 +186,7 @@ test "store: engine set integration" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Wait for write to complete
         try engine.flushPendingWrites();
@@ -218,7 +219,7 @@ test "store: engine set integration" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
         // Wait for writes to complete
@@ -247,7 +248,7 @@ test "store: engine set integration" {
         const parsed1 = try msgpack.decode(allocator, &reader1_any);
         defer parsed1.free(allocator);
         const info1 = try handler.extractMessageInfo(parsed1);
-        const response1 = try handler.routeMessage(allocator, 1, info1, parsed1);
+        const response1 = try routeWithArena(handler, allocator, 1, info1, parsed1);
         defer allocator.free(response1);
         std.Thread.sleep(100 * std.time.ns_per_ms);
         // Update value
@@ -257,7 +258,7 @@ test "store: engine set integration" {
         const parsed2 = try msgpack.decode(allocator, &reader2_any);
         defer parsed2.free(allocator);
         const info2 = try handler.extractMessageInfo(parsed2);
-        const response2 = try handler.routeMessage(allocator, 1, info2, parsed2);
+        const response2 = try routeWithArena(handler, allocator, 1, info2, parsed2);
         defer allocator.free(response2);
         try engine.flushPendingWrites();
         // Verify value was updated
@@ -305,7 +306,7 @@ test "store: set success response format" {
         const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should indicate success
         var reader_resp: std.Io.Reader = .fixed(response);
@@ -330,7 +331,7 @@ test "store: set success response format" {
             const parsed = try msgpack.decode(allocator, &reader_msg);
             defer parsed.free(allocator);
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
             try engine.flushPendingWrites();
             // Each should return success
@@ -349,7 +350,7 @@ test "store: set success response format" {
         const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should have expected format
         var reader_resp: std.Io.Reader = .fixed(response);
@@ -394,7 +395,7 @@ test "store: get field extraction" {
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
         // Should be able to route and process (which requires field extraction)
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // If we got a response, fields were extracted successfully
         try testing.expect(response.len > 0);
@@ -417,7 +418,7 @@ test "store: get field extraction" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
             try testing.expect(response.len > 0);
         }
@@ -438,7 +439,7 @@ test "store: get field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
     // Test 4: StoreGet missing path should fail
@@ -457,7 +458,7 @@ test "store: get field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
 }
@@ -502,7 +503,7 @@ test "store: engine get integration" {
         const parsed = try msgpack.decode(allocator, &reader_set);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should contain the value (proving storage engine was called)
         var fbs_reader: std.Io.Reader = .fixed(response);
@@ -548,7 +549,7 @@ test "store: engine get integration" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
             // Response should contain the expected value
             var resp_reader: std.Io.Reader = .fixed(response);
@@ -576,7 +577,7 @@ test "store: engine get integration" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Should get an 'ok' response with value: null
         var fbs_reader: std.Io.Reader = .fixed(response);
@@ -631,7 +632,7 @@ test "store: get value response format" {
         const parsed = try msgpack.decode(allocator, &reader_msg);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should contain the value
         var reader_get_resp: std.Io.Reader = .fixed(response);
@@ -677,7 +678,7 @@ test "store: get value response format" {
             const parsed_set = try msgpack.decode(allocator, &reader_set);
             defer parsed_set.free(allocator);
             const set_info = try handler.extractMessageInfo(parsed_set);
-            const set_resp = try handler.routeMessage(allocator, 1, set_info, parsed_set);
+            const set_resp = try routeWithArena(handler, allocator, 1, set_info, parsed_set);
             defer allocator.free(set_resp);
             try engine.flushPendingWrites();
             const get_msg = try msgpack.createStoreGetMessage(allocator, @intCast(i + 100), td.namespace, td.path);
@@ -686,7 +687,7 @@ test "store: get value response format" {
             const parsed_get = try msgpack.decode(allocator, &reader_get);
             defer parsed_get.free(allocator);
             const get_info = try handler.extractMessageInfo(parsed_get);
-            const get_resp = try handler.routeMessage(allocator, 1, get_info, parsed_get);
+            const get_resp = try routeWithArena(handler, allocator, 1, get_info, parsed_get);
             defer allocator.free(get_resp);
             var reader_resp: std.Io.Reader = .fixed(get_resp);
             const resp_parsed = try msgpack.decode(allocator, &reader_resp);
@@ -713,7 +714,7 @@ test "store: get value response format" {
         const parsed = try msgpack.decode(allocator, &reader_msg_get);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should indicate not found (ok response with nil value)
         var reader_resp_get: std.Io.Reader = .fixed(response);
@@ -739,7 +740,7 @@ test "store: get value response format" {
         const parsed = try msgpack.decode(allocator, &reader_msg_final);
         defer parsed.free(allocator);
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
         // Response should have expected format
         var reader_resp_final: std.Io.Reader = .fixed(response);

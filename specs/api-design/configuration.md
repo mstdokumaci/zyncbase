@@ -325,7 +325,7 @@ Define your data structure using ZyncBase store-based schema format.
 }
 ```
 
-### Example: Nested Fields and Simple Arrays
+### Example: Deeply Nested Fields and Simple Arrays
 
 ```json
 {
@@ -335,12 +335,17 @@ Define your data structure using ZyncBase store-based schema format.
       "fields": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "address": {
+        "preferences": {
           "type": "object",
           "fields": {
-            "street": { "type": "string" },
-            "city": { "type": "string" },
-            "zipCode": { "type": "string" }
+            "notifications": {
+              "type": "object",
+              "fields": {
+                "email": { "type": "boolean" },
+                "browser": { "type": "boolean" }
+              }
+            },
+            "theme": { "type": "string" }
           }
         },
         "roles": {
@@ -354,16 +359,19 @@ Define your data structure using ZyncBase store-based schema format.
 }
 ```
 
-**What ZyncBase generates (you don't need to know this):**
+**What ZyncBase generates (automatic flattening):**
+
+ZyncBase flattens nested objects into column names using a double underscore (`__`) separator. This allows efficient standard SQL queries while maintaining a natural document-like structure for the client.
+
 ```sql
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     namespace_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
-    address__street TEXT,
-    address__city TEXT,
-    address__zipCode TEXT,
+    preferences__notifications__email INTEGER, -- Boolean stored as int
+    preferences__notifications__browser INTEGER,
+    preferences__theme TEXT,
     roles TEXT,  -- JSON: ["admin", "editor"]
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -391,7 +399,7 @@ ZyncBase uses a **store-based** schema format. Define your data store structure:
 
 ### Nested Fields (Automatic Flattening)
 
-ZyncBase automatically flattens nested objects for efficient querying:
+ZyncBase automatically flattens nested objects of any depth for efficient querying:
 
 ```json
 {
@@ -413,34 +421,42 @@ ZyncBase automatically flattens nested objects for efficient querying:
 }
 ```
 
-**Client API (nested objects work naturally):**
+**Client API (recursive nested objects work naturally):**
 ```typescript
-// Set nested field
-await zyncbase.set(users.user-1', {
+// Set nested fields (at any depth)
+await zyncbase.set('users.user-1', {
   name: 'Alice',
   address: {
     street: '123 Main St',
-    city: 'San Francisco',
-    zipCode: '94102'
+    location: {
+      lat: 37.7749,
+      lng: -122.4194
+    }
   }
 })
 
-// Query nested field
-const users = await zyncbase.query(users', {
-  where: { 'address.city': 'San Francisco' }
+// Field-level updates also support recursion
+await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
+
+// Query nested fields using dot notation
+const users = await zyncbase.query('users', {
+  where: { 'address.location.lat': { gte: 37 } }
 })
 ```
 
 **What happens under the hood:**
-- Nested fields are flattened to columns using a double underscore separator: `address__street`, `address__city`, `address__zipCode`
-- Base field names are forbidden from containing `__` to prevent collisions.
-- You can query them efficiently
-- Frontend never needs to know about this
+- Nested fields are recursively flattened to columns using a double underscore separator: `address__location__lat`, etc.
+- Base field names in the schema are forbidden from containing `__` to prevent collisions.
+- The server reconstructs the nested structure for the client automatically on `get` and `query` operations.
+
+**Benefits:**
+- Efficient querying (standard SQLite indexes work on flattened columns)
+- No depth limit for nesting
+- Clean client-side experience (no manual flattening required)
 
 **Limitations:**
-- Only one level of nesting supported
-- Nested objects cannot contain arrays of objects
-- For deeper nesting, use separate store paths with references
+- Nested objects cannot contain arrays of objects (arrays must be at the leaf level)
+- Total recursion depth is limited by the maximum number of SQLite columns (typically 2000)
 
 ### Arrays
 

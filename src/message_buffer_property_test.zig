@@ -7,6 +7,8 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack = @import("msgpack_test_helpers.zig");
+const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
+
 const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
@@ -127,7 +129,7 @@ test "buffer: message deallocation after processing" {
         try testing.expectEqual(@as(u64, 1), msg_info.id);
 
         // Route message (this allocates response buffer)
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be allocated
@@ -156,7 +158,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
 
             try testing.expect(response.len > 0);
@@ -187,7 +189,7 @@ test "buffer: message deallocation after processing" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         try testing.expect(response.len > 0);
@@ -246,7 +248,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -272,7 +274,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
 
@@ -286,7 +288,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -394,8 +396,8 @@ test "buffer: concurrent message deallocation" {
                 defer parsed.free(ctx.allocator);
 
                 const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable; // zwanzig-disable-line: swallowed-error
-                const response = ctx.handler.routeMessage(ctx.allocator, 1, msg_info, parsed) catch |err| {
-                    if (err == error.InvalidOperation) continue; // Skip collection-level sets in this test
+                const response = routeWithArena(ctx.handler, ctx.allocator, 1, msg_info, parsed) catch |err| {
+                    if (err == error.InvalidOperation) continue;
                     unreachable;
                 };
                 defer ctx.allocator.free(response);

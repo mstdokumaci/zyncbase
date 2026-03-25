@@ -283,6 +283,7 @@ const msgpack_utils = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
+const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
 
 /// Build a StoreSet message where the value map contains a field with a msgpack array payload.
 /// The array payload is encoded inline in the msgpack bytes.
@@ -634,4 +635,288 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         defer if (result.code) |c| allocator.free(c);
         try testing.expectEqualStrings("ok", result.resp_type);
     }
+}
+
+// ─── Verification of Schema & Message Parsing Architecture Improvements ──────
+
+test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)" {
+    const allocator = testing.allocator;
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var context = try schema_helpers.TestContext.init(allocator, "mh-resolve-field");
+    defer context.deinit();
+
+    // Create a schema with a flattened multi-segment field
+    const fields = try allocator.alloc(schema_parser.Field, 2);
+    fields[0] = .{
+        .name = try allocator.dupe(u8, "metadata__tags"),
+        .sql_type = .array,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+    fields[1] = .{
+        .name = try allocator.dupe(u8, "name"),
+        .sql_type = .text,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    tables[0] = .{
+        .name = try allocator.dupe(u8, "items"),
+        .fields = fields,
+    };
+
+    const schema = try allocator.create(schema_parser.Schema);
+    schema.* = .{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.init(allocator, 10);
+    const subscription_manager = try SubscriptionManager.init(allocator);
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager);
+    defer {
+        handler.deinit();
+        engine.deinit();
+        schema_parser.freeSchema(allocator, schema.*);
+        allocator.destroy(schema);
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+        subscription_manager.deinit();
+    }
+
+    var ws = WebSocket{ .ws = null, .ssl = false };
+    try handler.handleOpen(&ws);
+    defer handler.handleClose(&ws, 1000, "") catch {};
+    const conn_id = ws.getConnId();
+
+    // 1. Test single segment (name)
+    {
+        const val_payload = try msgpack_utils.Payload.strToPayload("test", allocator);
+        defer val_payload.free(allocator);
+        const msg = try buildStoreSetWithFieldPath(allocator, 1, "items", "doc1", &.{"name"}, val_payload);
+        defer allocator.free(msg);
+        var reader: std.Io.Reader = .fixed(msg);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+        const response = try handler.routeMessage(allocator, conn_id, try handler.extractMessageInfo(parsed), parsed);
+        defer allocator.free(response);
+        const res = try parseResponse(allocator, response);
+        defer allocator.free(res.resp_type);
+        try testing.expectEqualStrings("ok", res.resp_type);
+    }
+
+    // 2. Test multi-segment (metadata.tags)
+    {
+        const tags = try allocator.alloc(msgpack_utils.Payload, 2);
+        tags[0] = try msgpack_utils.Payload.strToPayload("a", allocator);
+        tags[1] = try msgpack_utils.Payload.strToPayload("b", allocator);
+        defer {
+            tags[0].free(allocator);
+            tags[1].free(allocator);
+            allocator.free(tags);
+        }
+        const msg = try buildStoreSetWithFieldPath(allocator, 2, "items", "doc1", &.{ "metadata", "tags" }, .{ .arr = tags });
+        defer allocator.free(msg);
+        var reader: std.Io.Reader = .fixed(msg);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+        const response = try handler.routeMessage(allocator, conn_id, try handler.extractMessageInfo(parsed), parsed);
+        defer allocator.free(response);
+        const res = try parseResponse(allocator, response);
+        defer allocator.free(res.resp_type);
+        try testing.expectEqualStrings("ok", res.resp_type);
+    }
+
+    // 3. Test nested array validation for multi-segment path
+    {
+        // Invalid element (map) in field metadata.tags
+        const inner_arr = try allocator.alloc(msgpack_utils.Payload, 1);
+        inner_arr[0] = msgpack_utils.Payload.mapPayload(allocator);
+        defer {
+            inner_arr[0].free(allocator);
+            allocator.free(inner_arr);
+        }
+        const msg = try buildStoreSetWithFieldPath(allocator, 3, "items", "doc1", &.{ "metadata", "tags" }, .{ .arr = inner_arr });
+        defer allocator.free(msg);
+        var reader: std.Io.Reader = .fixed(msg);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+        const response = try handler.routeMessage(allocator, conn_id, try handler.extractMessageInfo(parsed), parsed);
+        defer allocator.free(response);
+        const res = try parseResponse(allocator, response);
+        defer allocator.free(res.resp_type);
+        defer if (res.code) |c| allocator.free(c);
+        try testing.expectEqualStrings("error", res.resp_type);
+        try testing.expectEqualStrings("INVALID_ARRAY_ELEMENT", res.code.?);
+    }
+}
+
+test "MessageHandler - deep nested schema round-trip (3+ levels)" {
+    const allocator = testing.allocator;
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer memory_strategy.deinit();
+
+    var context = try schema_helpers.TestContext.init(allocator, "mh-deep-nested");
+    defer context.deinit();
+
+    // a.b.c -> a__b__c
+    const fields = try allocator.alloc(schema_parser.Field, 1);
+    fields[0] = .{
+        .name = try allocator.dupe(u8, "a__b__c"),
+        .sql_type = .text,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    tables[0] = .{
+        .name = try allocator.dupe(u8, "deep"),
+        .fields = fields,
+    };
+
+    const schema = try allocator.create(schema_parser.Schema);
+    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+
+    const engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
+    const violation_tracker = try allocator.create(ViolationTracker);
+    violation_tracker.init(allocator, 10);
+    const subscription_manager = try SubscriptionManager.init(allocator);
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager);
+    defer {
+        handler.deinit();
+        engine.deinit();
+        schema_parser.freeSchema(allocator, schema.*);
+        allocator.destroy(schema);
+        violation_tracker.deinit();
+        allocator.destroy(violation_tracker);
+        subscription_manager.deinit();
+    }
+
+    var ws = WebSocket{ .ws = null, .ssl = false };
+    try handler.handleOpen(&ws);
+    defer handler.handleClose(&ws, 1000, "") catch {};
+    const conn_id = ws.getConnId();
+
+    // 1. Set deep field: ["deep", "id1", "a", "b", "c"]
+    {
+        const val_payload = try msgpack_utils.Payload.strToPayload("value", allocator);
+        defer val_payload.free(allocator);
+        const msg = try buildStoreSetWithFieldPath(allocator, 1, "deep", "id1", &.{ "a", "b", "c" }, val_payload);
+        defer allocator.free(msg);
+        var reader: std.Io.Reader = .fixed(msg);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+
+        const response_copy = try routeWithArena(handler, allocator, conn_id, try handler.extractMessageInfo(parsed), parsed);
+        defer allocator.free(response_copy);
+
+        // Verify Set response is "ok"
+        var resp_reader: std.Io.Reader = .fixed(response_copy);
+        const resp_parsed = try msgpack_utils.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
+        const resp_type = msgpack_helpers.getMapValue(resp_parsed, "type") orelse return error.MissingType;
+        try testing.expectEqualStrings("ok", resp_type.str.value());
+    }
+
+    // Flush pending writes so the document is persisted before reading
+    try engine.flushPendingWrites();
+
+    // 2. Get document and verify unflattening: Expect { "a": { "b": { "c": "value" } } }
+    {
+        const msg = try buildStoreGet(allocator, 2, "deep", "id1");
+        defer allocator.free(msg);
+        var reader: std.Io.Reader = .fixed(msg);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+
+        const response_copy = try routeWithArena(handler, allocator, conn_id, try handler.extractMessageInfo(parsed), parsed);
+        defer allocator.free(response_copy);
+
+        // Parse actual value
+        var resp_reader: std.Io.Reader = .fixed(response_copy);
+        const resp_parsed = try msgpack_utils.decode(allocator, &resp_reader);
+        defer resp_parsed.free(allocator);
+        const val = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.MissingValue;
+
+        // Verify structure: val.map["a"].map["b"].map["c"] == "value"
+        const a = msgpack_helpers.getMapValue(val, "a") orelse return error.ValueMismatch;
+        const b = msgpack_helpers.getMapValue(a, "b") orelse return error.ValueMismatch;
+        const c = msgpack_helpers.getMapValue(b, "c") orelse return error.ValueMismatch;
+        try testing.expectEqualStrings("value", c.str.value());
+    }
+}
+
+fn buildStoreSetWithFieldPath(
+    allocator: std.mem.Allocator,
+    id: u64,
+    table: []const u8,
+    doc_id: []const u8,
+    field_segments: []const []const u8,
+    val: msgpack_utils.Payload,
+) ![]u8 {
+    var buf: std.ArrayList(u8) = .{};
+    errdefer buf.deinit(allocator);
+
+    // fixmap(5)
+    try buf.append(allocator, 0x85);
+
+    try msgpack_helpers.writeString(allocator, &buf, "type");
+    try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
+
+    try msgpack_helpers.writeString(allocator, &buf, "id");
+    // encode id as uint64
+    try buf.append(allocator, 0xcf);
+    for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
+
+    try msgpack_helpers.writeString(allocator, &buf, "namespace");
+    try msgpack_helpers.writeString(allocator, &buf, "default");
+
+    try msgpack_helpers.writeString(allocator, &buf, "path");
+    // array length is 2 + field_segments.len
+    const path_len = 2 + field_segments.len;
+    if (path_len < 16) {
+        try buf.append(allocator, @intCast(0x90 | path_len));
+    } else {
+        try buf.append(allocator, 0xdc);
+        try buf.append(allocator, @intCast((path_len >> 8) & 0xFF));
+        try buf.append(allocator, @intCast(path_len & 0xFF));
+    }
+    try msgpack_helpers.writeString(allocator, &buf, table);
+    try msgpack_helpers.writeString(allocator, &buf, doc_id);
+    for (field_segments) |seg| try msgpack_helpers.writeString(allocator, &buf, seg);
+
+    try msgpack_helpers.writeString(allocator, &buf, "value");
+    try msgpack_utils.encode(val, buf.writer(allocator));
+
+    return buf.toOwnedSlice(allocator);
+}
+
+fn buildStoreGet(allocator: std.mem.Allocator, id: u64, table: []const u8, doc_id: []const u8) ![]u8 {
+    var buf: std.ArrayList(u8) = .{};
+    try buf.append(allocator, 0x84); // fixmap(4)
+    try msgpack_helpers.writeString(allocator, &buf, "type");
+    try msgpack_helpers.writeString(allocator, &buf, "StoreGet");
+    try msgpack_helpers.writeString(allocator, &buf, "id");
+    try buf.append(allocator, 0xcf);
+    for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
+    try msgpack_helpers.writeString(allocator, &buf, "namespace");
+    try msgpack_helpers.writeString(allocator, &buf, "default");
+    try msgpack_helpers.writeString(allocator, &buf, "path");
+    try buf.append(allocator, 0x92); // fixarray(2)
+    try msgpack_helpers.writeString(allocator, &buf, table);
+    try msgpack_helpers.writeString(allocator, &buf, doc_id);
+    return buf.toOwnedSlice(allocator);
 }

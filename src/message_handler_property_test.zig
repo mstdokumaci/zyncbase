@@ -10,6 +10,7 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const schema_helpers = @import("schema_test_helpers.zig");
+const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
 
 // **Property: Connection open/close is inverse operation**
 // Connection properties
@@ -966,7 +967,7 @@ test "message: request routing to handlers" {
         const msg_info = try handler.extractMessageInfo(parsed);
 
         // Route the message - should not error for recognized type
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -984,7 +985,7 @@ test "message: request routing to handlers" {
         defer set_parsed.free(allocator);
 
         const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try handler.routeMessage(allocator, 1, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, 1, set_info, set_parsed);
         defer allocator.free(set_response);
 
         // Now get the value
@@ -997,7 +998,7 @@ test "message: request routing to handlers" {
 
         const get_info = try handler.extractMessageInfo(get_parsed);
 
-        const response = try handler.routeMessage(allocator, 1, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, 1, get_info, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the value
@@ -1015,7 +1016,7 @@ test "message: request routing to handlers" {
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
-        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 
@@ -1041,11 +1042,11 @@ test "message: request routing to handlers" {
             const msg_info = try handler.extractMessageInfo(parsed);
 
             if (should_succeed[i]) {
-                const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+                const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
                 defer allocator.free(response);
                 try testing.expect(response.len > 0);
             } else {
-                const result = handler.routeMessage(allocator, 1, msg_info, parsed);
+                const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
                 try testing.expectError(error.UnknownMessageType, result);
             }
         }
@@ -1105,7 +1106,7 @@ test "message: response correlation by ID" {
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -1136,7 +1137,7 @@ test "message: response correlation by ID" {
         defer set_parsed.free(allocator);
 
         const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try handler.routeMessage(allocator, 1, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, 1, set_info, set_parsed);
         defer allocator.free(set_response);
 
         // Now get with specific correlation ID
@@ -1151,7 +1152,7 @@ test "message: response correlation by ID" {
         const get_info = try handler.extractMessageInfo(get_parsed);
         try testing.expectEqual(correlation_id, get_info.id);
 
-        const response = try handler.routeMessage(allocator, 1, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, 1, get_info, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -1186,7 +1187,7 @@ test "message: response correlation by ID" {
             const msg_info = try handler.extractMessageInfo(parsed);
             try testing.expectEqual(corr_id, msg_info.id);
 
-            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
             defer allocator.free(response);
 
             // Each response should contain its specific correlation ID
@@ -1220,7 +1221,7 @@ test "message: response correlation by ID" {
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID even for not found
