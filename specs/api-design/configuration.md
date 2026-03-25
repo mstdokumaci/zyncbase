@@ -270,6 +270,9 @@ Performance tuning.
 
 Define your data structure using ZyncBase store-based schema format.
 
+> [!IMPORTANT]
+> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`). This sequence is reserved for internal flattening of nested objects. Any schema containing `__` in a field name will be rejected by the server with `error.InvalidFieldName`.
+
 ### Example: Collaborative Canvas
 
 ```json
