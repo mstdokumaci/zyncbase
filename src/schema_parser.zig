@@ -143,6 +143,7 @@ pub const SchemaParser = struct {
                 var fields_iter = fields_val.object.iterator();
                 while (fields_iter.next()) |field_entry| {
                     const field_name = field_entry.key_ptr.*;
+                    if (std.mem.containsAtLeast(u8, field_name, 1, "__")) return error.InvalidFieldName;
                     const field_def = field_entry.value_ptr.*;
 
                     if (field_def != .object) return error.InvalidFieldDefinition;
@@ -161,7 +162,8 @@ pub const SchemaParser = struct {
                                 var props_iter = props_val.object.iterator();
                                 while (props_iter.next()) |prop_entry| {
                                     const prop_name = prop_entry.key_ptr.*;
-                                    const flat_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ field_name, prop_name });
+                                    if (std.mem.containsAtLeast(u8, prop_name, 1, "__")) return error.InvalidFieldName;
+                                    const flat_name = try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ field_name, prop_name });
                                     errdefer self.allocator.free(flat_name);
 
                                     const prop_def = prop_entry.value_ptr.*;
@@ -171,7 +173,7 @@ pub const SchemaParser = struct {
                                             if (pt == .string) {
                                                 prop_sql_type = mapType(pt.string) catch |err| {
                                                     if (err == error.UnknownFieldType) {
-                                                        std.log.warn("schema: unknown type \"{s}\" for field \"{s}_{s}\"", .{ pt.string, field_name, prop_name });
+                                                        std.log.warn("schema: unknown type \"{s}\" for field \"{s}__{s}\"", .{ pt.string, field_name, prop_name });
                                                     }
                                                     return err;
                                                 };

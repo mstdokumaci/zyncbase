@@ -358,9 +358,9 @@ CREATE TABLE users (
     namespace_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
-    address_street TEXT,
-    address_city TEXT,
-    address_zipCode TEXT,
+    address__street TEXT,
+    address__city TEXT,
+    address__zipCode TEXT,
     roles TEXT,  -- JSON: ["admin", "editor"]
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -429,7 +429,8 @@ const users = await zyncbase.query(users', {
 ```
 
 **What happens under the hood:**
-- Nested fields are flattened to columns: `address_street`, `address_city`, `address_zipCode`
+- Nested fields are flattened to columns using a double underscore separator: `address__street`, `address__city`, `address__zipCode`
+- Base field names are forbidden from containing `__` to prevent collisions.
 - You can query them efficiently
 - Frontend never needs to know about this
 

@@ -54,10 +54,16 @@ pub fn createMessage(
     if (value) |val| {
         // "value" key
         try writeString(allocator, &buf, "value");
-        // value value (map with "val" field)
-        try buf.append(allocator, 0x81); // fixmap with 1 element
-        try writeString(allocator, &buf, "val"); // field name
-        try writeString(allocator, &buf, val); // field value
+        if (path.len == 2) {
+            // Document-level update: wrap in a map with a default field "val"
+            // to maintain compatibility with existing tests.
+            try buf.append(allocator, 0x81); // fixmap with 1 element
+            try writeString(allocator, &buf, "val"); // field name
+            try writeString(allocator, &buf, val); // field value
+        } else {
+            // Field-level or other update: send value directly as a string
+            try writeString(allocator, &buf, val);
+        }
     }
 
     return buf.toOwnedSlice(allocator);

@@ -477,7 +477,7 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
     try setup.handler.handleOpen(&ws);
     defer setup.handler.handleClose(&ws, 1000, "") catch {}; // zwanzig-disable-line: empty-catch-engine
     const conn_id = ws.getConnId();
-    const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
+    const response = try setup.handler.routeMessage(allocator, conn_id, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -532,7 +532,7 @@ test "StoreSet: array field with valid literal array succeeds" {
     try setup.handler.handleOpen(&ws);
     defer setup.handler.handleClose(&ws, 1000, "") catch {}; // zwanzig-disable-line: empty-catch-engine
     const conn_id = ws.getConnId();
-    const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
+    const response = try setup.handler.routeMessage(allocator, conn_id, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -591,7 +591,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try setup.handler.extractMessageInfo(parsed);
-        const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
+        const response = try setup.handler.routeMessage(allocator, conn_id, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -627,7 +627,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try setup.handler.extractMessageInfo(parsed);
-        const response = try setup.handler.routeMessage(conn_id, msg_info, parsed);
+        const response = try setup.handler.routeMessage(allocator, conn_id, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);

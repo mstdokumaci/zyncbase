@@ -158,7 +158,7 @@ pub const MessageHandler = struct {
         };
 
         // Route to appropriate handler
-        const response = self.routeMessage(conn_id, msg_info, parsed) catch |err| {
+        const response = self.routeMessage(arena_allocator, conn_id, msg_info, parsed) catch |err| {
             std.log.debug("Failed to process message from connection {}: {}", .{ conn_id, err });
             try self.sendError(ws, "PROCESSING_FAILED", "Failed to process request");
             return;
@@ -308,17 +308,18 @@ pub const MessageHandler = struct {
 
     pub fn routeMessage(
         self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
         conn_id: u64,
         msg_info: MessageInfo,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(conn_id, msg_info.id, parsed);
+            return try self.handleStoreSet(arena_allocator, conn_id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreGet")) {
-            return try self.handleStoreGet(conn_id, msg_info.id, parsed);
+            return try self.handleStoreGet(arena_allocator, conn_id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
-            return try self.handleStoreRemove(msg_info.id, parsed);
+            return try self.handleStoreRemove(arena_allocator, msg_info.id, parsed);
         } else {
             return error.UnknownMessageType;
         }
@@ -326,6 +327,7 @@ pub const MessageHandler = struct {
 
     fn handleStoreSet(
         self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
         conn_id: u64,
         msg_id: u64,
         parsed: msgpack.Payload,
@@ -432,22 +434,19 @@ pub const MessageHandler = struct {
                 // value is guaranteed to be non-null by the check above
                 if ((value orelse unreachable) != .map) return error.InvalidPayload;
 
-                // Convert map to ColumnValue array
+                // Recursively flatten nested objects into field_prop columns
                 var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
                 defer columns.deinit(self.allocator);
 
-                // value is guaranteed to be non-null by the check above
-                var val_it = (value orelse unreachable).map.iterator();
-                while (val_it.next()) |entry| {
-                    if (entry.key_ptr.* != .str) continue;
-                    try columns.append(self.allocator, .{
-                        .name = entry.key_ptr.*.str.str,
-                        .value = entry.value_ptr.*,
-                    });
-                }
+                try self.flattenPayloadMap(arena_allocator, "", (value orelse unreachable).map, &columns);
 
                 // namespace is guaranteed to be non-null by the check above
                 self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+
+                // Free the column names allocated by flattenPayloadMap
+                for (columns.items) |col| {
+                    arena_allocator.free(col.name);
+                }
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
@@ -457,7 +456,7 @@ pub const MessageHandler = struct {
                     self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
                     // Note: Implement deep flattening if needed, or join with _
-                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace and value are guaranteed to be non-null by the check above
                     self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
@@ -472,10 +471,12 @@ pub const MessageHandler = struct {
 
     fn handleStoreGet(
         self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
         conn_id: u64,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
+        _ = arena_allocator;
         _ = conn_id;
 
         // Extract namespace and path from message
@@ -525,7 +526,7 @@ pub const MessageHandler = struct {
                 if (f.fields.len == 1) {
                     break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
-                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
                     break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 }
@@ -546,9 +547,11 @@ pub const MessageHandler = struct {
 
     fn handleStoreRemove(
         self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
+        _ = arena_allocator;
         // Extract namespace and path
         var namespace: ?[]const u8 = null;
         var parsed_path: ?ParsedPath = null;
@@ -590,7 +593,7 @@ pub const MessageHandler = struct {
                     // namespace is guaranteed to be non-null by the check above
                     self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
                 } else if (f.fields.len > 1) {
-                    const flattened_field = try std.mem.join(self.allocator, "_", f.fields);
+                    const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace is guaranteed to be non-null by the check above
                     self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
@@ -696,6 +699,39 @@ pub const MessageHandler = struct {
         type: []const u8,
         id: u64,
     };
+
+    /// Recursively flatten a MessagePack map into a flat list of ColumnValue pairs.
+    /// Nested objects result in keys joined by '__', matching the schema parser's flattening.
+    fn flattenPayloadMap(
+        self: *MessageHandler,
+        allocator: std.mem.Allocator,
+        prefix: []const u8,
+        map: anytype,
+        columns: *std.ArrayListUnmanaged(storage_mod.ColumnValue),
+    ) !void {
+        var it = map.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* != .str) continue;
+            const key = entry.key_ptr.*.str.value();
+            const value = entry.value_ptr.*;
+
+            const name = if (prefix.len > 0)
+                try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, key })
+            else
+                try allocator.dupe(u8, key);
+
+            switch (value) {
+                .map => |m| {
+                    try self.flattenPayloadMap(allocator, name, m, columns);
+                    allocator.free(name);
+                },
+                else => try columns.append(self.allocator, .{
+                    .name = name,
+                    .value = value,
+                }),
+            }
+        }
+    }
 };
 
 /// Thread-safe registry for tracking active WebSocket connections.

@@ -128,7 +128,7 @@ test "Verification: StoreSet message processing" {
         allocator,
         1,
         "test_namespace",
-        &[_][]const u8{ "data_table", "key" },
+        &[_][]const u8{ "data_table", "key", "val" },
         "test_value",
     );
     defer allocator.free(message);
@@ -149,7 +149,7 @@ test "Verification: StoreSet message processing" {
     defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const conn_id = ws.getConnId();
-    const response = try handler.routeMessage(conn_id, msg_info, parsed);
+    const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
     defer allocator.free(response);
 
     // Verify response indicates success
@@ -261,7 +261,7 @@ test "Verification: StoreGet message processing" {
     defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
 
     const conn_id = ws.getConnId();
-    const response = try handler.routeMessage(conn_id, msg_info, parsed);
+    const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
     defer allocator.free(response);
 
     // Verify response contains the value
@@ -420,7 +420,7 @@ test "Verification: Error handling for invalid messages" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = handler.routeMessage(1, msg_info, parsed);
+        const result = handler.routeMessage(allocator, 1, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 }
@@ -484,7 +484,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             allocator,
             i + 1,
             td.namespace,
-            &[_][]const u8{ "data_table", td.id },
+            &[_][]const u8{ "data_table", td.id, "val" },
             td.value,
         );
         defer allocator.free(set_message);
@@ -494,7 +494,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(conn_id, msg_info, parsed);
+        const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
         defer allocator.free(response);
 
         // Verify success response
@@ -524,7 +524,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(conn_id, msg_info, parsed);
+        const response = try handler.routeMessage(allocator, conn_id, msg_info, parsed);
         defer allocator.free(response);
 
         // Verify response contains the value

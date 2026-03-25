@@ -48,6 +48,36 @@ export async function run(port: number = 3000) {
 
     console.log("Collection verification passed.");
 
+    // 6. Test nested object (must_be_complete)
+    console.log("Testing nested object (must_be_complete)...");
+    const beforeTs = Math.floor(Date.now() / 1000);
+    const afterTs = beforeTs + 3600;
+    await clientA.set(namespace, ["tasks", "3"], {
+      title: "Nested Task",
+      must_be_complete: { before: beforeTs, after: afterTs }
+    });
+
+    const task3 = await clientB.waitFor(namespace, ["tasks", "3"], (val) => {
+      return val?.must_be_complete__before === beforeTs && val?.must_be_complete__after === afterTs ? val : null;
+    });
+    console.log("Client B received task 3 with flattened fields:", JSON.stringify(task3));
+
+    // Verify field-level update still works for nested fields
+    console.log("Verifying field-level update for nested field...");
+    const newAfterTs = afterTs + 60;
+    await clientB.set(namespace, ["tasks", "3", "must_be_complete", "after"], newAfterTs);
+
+    const finalTask3 = await clientA.waitFor(namespace, ["tasks", "3"], (val) => {
+      return val?.must_be_complete__after === newAfterTs ? val : null;
+    });
+    console.log("Client A received field-level update for task 3:", JSON.stringify(finalTask3));
+
+    // 7. Test deep path fetch as well
+    console.log("Testing deep path fetch for nested field...");
+    const deepValue = await clientA.get(namespace, ["tasks", "3", "must_be_complete", "after"]);
+    if (deepValue !== newAfterTs) throw new Error(`Deep path fetch failed. Expected ${newAfterTs}, got ${deepValue}`);
+    console.log("Deep path fetch passed.");
+
     console.log("E2E Sync test passed successfully!");
   } catch (err) {
     console.error("Test failed:", err);

@@ -5,7 +5,7 @@ import * as path from "path";
 
 const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
-const ARTIFACT_DIR = "tests/e2e/artifacts";
+const ARTIFACT_DIR = "test-artifacts/e2e";
 const SERVER_BIN = "./zig-out/bin/zyncbase";
 
 function log(message: string) {
@@ -30,7 +30,7 @@ function getLatestSourceTimestamp(dirs: string[]): number {
   for (const dir of dirs) {
     const fullDir = path.resolve(dir);
     if (!fs.existsSync(fullDir)) continue;
-    
+
     const scan = (d: string) => {
       const entries = fs.readdirSync(d, { withFileTypes: true });
       for (const entry of entries) {
@@ -104,7 +104,7 @@ async function start_server(configPath: string): Promise<ChildProcess> {
   try {
     const { execSync } = require("child_process");
     execSync(`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`);
-  } catch (e) {}
+  } catch (e) { }
 
   const server = spawn(SERVER_BIN, ["--config", configPath], {
     stdio: "inherit",
@@ -136,7 +136,7 @@ async function run_scenario_sync_and_errors() {
   const server = await start_server(configPath);
   try {
     await runSync(PORT);
-    
+
     log("--- Error Reporting ---");
     await runErrors(PORT);
   } finally {

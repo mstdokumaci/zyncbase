@@ -127,7 +127,7 @@ test "buffer: message deallocation after processing" {
         try testing.expectEqual(@as(u64, 1), msg_info.id);
 
         // Route message (this allocates response buffer)
-        const response = try handler.routeMessage(1, msg_info, parsed);
+        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be allocated
@@ -156,7 +156,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(1, msg_info, parsed);
+            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
             defer allocator.free(response);
 
             try testing.expect(response.len > 0);
@@ -187,7 +187,7 @@ test "buffer: message deallocation after processing" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const response = try handler.routeMessage(1, msg_info, parsed);
+        const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
         defer allocator.free(response);
 
         try testing.expect(response.len > 0);
@@ -246,7 +246,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(1, msg_info, parsed);
+            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -272,7 +272,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(1, msg_info, parsed);
+            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
 
@@ -286,7 +286,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response = try handler.routeMessage(1, msg_info, parsed);
+            const response = try handler.routeMessage(allocator, 1, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -394,7 +394,7 @@ test "buffer: concurrent message deallocation" {
                 defer parsed.free(ctx.allocator);
 
                 const msg_info = ctx.handler.extractMessageInfo(parsed) catch unreachable; // zwanzig-disable-line: swallowed-error
-                const response = ctx.handler.routeMessage(1, msg_info, parsed) catch |err| {
+                const response = ctx.handler.routeMessage(ctx.allocator, 1, msg_info, parsed) catch |err| {
                     if (err == error.InvalidOperation) continue; // Skip collection-level sets in this test
                     unreachable;
                 };

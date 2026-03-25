@@ -37,7 +37,7 @@ test "schema_parser: object field flattening" {
         try std.testing.expectEqual(n_props, table.fields.len);
 
         for (0..n_props) |pi| {
-            const expected = try std.fmt.allocPrint(allocator, "addr_{s}", .{property_names[pi]});
+            const expected = try std.fmt.allocPrint(allocator, "addr__{s}", .{property_names[pi]});
             defer allocator.free(expected);
             var found = false;
             for (table.fields) |f| {
@@ -188,4 +188,41 @@ test "schema_parser: parse/print round-trip" {
             }
         }
     }
+}
+
+// Feature: schema-aware-storage, Property 7: Forbidden "__" in field names
+// For any schema JSON with a field name or property name containing "__",
+// parse SHALL return error.InvalidFieldName.
+test "schema_parser: forbidden double underscore" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json1 =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": { "my__field": { "type": "string" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidFieldName, parser.parse(json1));
+
+    const json2 =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": {
+        \\        "nested": {
+        \\          "type": "object",
+        \\          "fields": { "bad__prop": { "type": "string" } }
+        \\        }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidFieldName, parser.parse(json2));
 }

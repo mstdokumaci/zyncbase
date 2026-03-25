@@ -53,6 +53,7 @@ test "schema_parser: parse known fixture" {
     var found_zip = false;
 
     for (table.fields) |f| {
+        std.debug.print("Found field: {s}\n", .{f.name});
         if (std.mem.eql(u8, f.name, "name")) {
             found_name = true;
             try std.testing.expectEqual(FieldType.text, f.sql_type);
@@ -70,10 +71,10 @@ test "schema_parser: parse known fixture" {
         } else if (std.mem.eql(u8, f.name, "tags")) {
             found_tags = true;
             try std.testing.expectEqual(FieldType.array, f.sql_type);
-        } else if (std.mem.eql(u8, f.name, "address_city")) {
+        } else if (std.mem.eql(u8, f.name, "address__city")) {
             found_city = true;
             try std.testing.expectEqual(FieldType.text, f.sql_type);
-        } else if (std.mem.eql(u8, f.name, "address_zip")) {
+        } else if (std.mem.eql(u8, f.name, "address__zip")) {
             found_zip = true;
             try std.testing.expectEqual(FieldType.text, f.sql_type);
         }

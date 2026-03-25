@@ -8,7 +8,7 @@
         },
         "must_be_complete": {
           "type": "object",
-          "properties": {
+          "fields": {
             "before": {
               "type": "integer"
             },
