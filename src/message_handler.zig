@@ -390,7 +390,7 @@ pub const MessageHandler = struct {
                                 if (std.mem.eql(u8, field.name, field_name)) {
                                     if (field.sql_type == .array) {
                                         msgpack.ensureLiteralArray(entry.value_ptr.*) catch {
-                                            return try self.buildErrorResponse(msg_id, "INVALID_ARRAY_ELEMENT");
+                                            return try self.buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
                                         };
                                     }
                                     break;
@@ -412,11 +412,11 @@ pub const MessageHandler = struct {
                             // is best-effort here; the write path will handle the actual name.
                             break :blk f.fields[0];
                         };
-                        for (t.fields) |field| {
-                            if (std.mem.eql(u8, field.name, effective_field)) {
-                                if (field.sql_type == .array) {
+                        for (t.fields) |fld| {
+                            if (std.mem.eql(u8, fld.name, effective_field)) {
+                                if (fld.sql_type == .array) {
                                     msgpack.ensureLiteralArray(value orelse unreachable) catch {
-                                        return try self.buildErrorResponse(msg_id, "INVALID_ARRAY_ELEMENT");
+                                        return try self.buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
                                     };
                                 }
                                 break;
@@ -441,7 +441,7 @@ pub const MessageHandler = struct {
                 try self.flattenPayloadMap(arena_allocator, "", (value orelse unreachable).map, &columns);
 
                 // namespace is guaranteed to be non-null by the check above
-                self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                self.storage_engine.insertOrReplace(doc.table, doc.id, namespace orelse unreachable, columns.items) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
 
                 // Free the column names allocated by flattenPayloadMap
                 for (columns.items) |col| {
@@ -453,20 +453,20 @@ pub const MessageHandler = struct {
                 // For now, only support single depth or simple join
                 if (f.fields.len == 1) {
                     // namespace and value are guaranteed to be non-null by the check above
-                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], value orelse unreachable) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 } else if (f.fields.len > 1) {
                     // Note: Implement deep flattening if needed, or join with _
                     const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace and value are guaranteed to be non-null by the check above
-                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, value orelse unreachable) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot set on a collection
         }
 
         // Build success response
-        return try self.buildSuccessResponse(msg_id);
+        return try self.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreGet(
@@ -476,7 +476,6 @@ pub const MessageHandler = struct {
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        _ = arena_allocator;
         _ = conn_id;
 
         // Extract namespace and path from message
@@ -512,7 +511,7 @@ pub const MessageHandler = struct {
         const result_payload: ?msgpack.Payload = switch (parsed_path orelse unreachable) {
             .document => |doc| blk: {
                 // namespace is guaranteed to be non-null by the check above
-                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                const stored_doc = self.storage_engine.selectDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
 
                 if (stored_doc == null) {
                     std.log.debug("handleStoreGet: selectDocument returned null for {s}:{s} in {s}", .{ doc.table, doc.id, namespace orelse unreachable });
@@ -524,25 +523,45 @@ pub const MessageHandler = struct {
             .field => |f| blk: {
                 // namespace is guaranteed to be non-null by the check above
                 if (f.fields.len == 1) {
-                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, f.fields[0]) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
-                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    break :blk self.storage_engine.selectField(f.table, f.id, namespace orelse unreachable, flattened_field) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 }
                 break :blk null;
             },
             .collection => |c| blk: {
                 // namespace is guaranteed to be non-null by the check above
                 // Return all documents in the collection
-                break :blk self.storage_engine.selectCollection(c.table, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                break :blk self.storage_engine.selectCollection(c.table, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
             },
         };
+        defer if (result_payload) |p| p.free(self.allocator);
+
+        const final_result = if (result_payload) |p| blk: {
+            switch (p) {
+                .map => break :blk try self.unflattenPayloadMap(arena_allocator, p.map),
+                .arr => |arr| {
+                    // Possible collection result
+                    const unflattened_arr = try arena_allocator.alloc(msgpack.Payload, arr.len);
+                    for (arr, 0..) |item, i| {
+                        if (item == .map) {
+                            unflattened_arr[i] = try self.unflattenPayloadMap(arena_allocator, item.map);
+                        } else {
+                            unflattened_arr[i] = try msgpack.clonePayload(item, arena_allocator);
+                        }
+                    }
+                    break :blk msgpack.Payload{ .arr = unflattened_arr };
+                },
+                else => break :blk try msgpack.clonePayload(p, arena_allocator),
+            }
+        } else .nil;
 
         // Build response
         // If the result is null (e.g., document not found), return success with null value
         // instead of an error, per the finalized error taxonomy spec.
-        return try self.buildDataResponse(msg_id, result_payload orelse .nil);
+        return try self.buildDataResponse(arena_allocator, msg_id, final_result);
     }
 
     fn handleStoreRemove(
@@ -551,7 +570,6 @@ pub const MessageHandler = struct {
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        _ = arena_allocator;
         // Extract namespace and path
         var namespace: ?[]const u8 = null;
         var parsed_path: ?ParsedPath = null;
@@ -585,33 +603,34 @@ pub const MessageHandler = struct {
         switch (parsed_path orelse unreachable) {
             .document => |doc| {
                 // namespace is guaranteed to be non-null by the check above
-                self.storage_engine.deleteDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                self.storage_engine.deleteDocument(doc.table, doc.id, namespace orelse unreachable) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
             },
             .field => |f| {
                 // If nested fields, we currently flatten them: field1/field2 -> field1_field2
                 if (f.fields.len == 1) {
                     // namespace is guaranteed to be non-null by the check above
-                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, f.fields[0], .nil) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 } else if (f.fields.len > 1) {
                     const flattened_field = try std.mem.join(self.allocator, "__", f.fields);
                     defer self.allocator.free(flattened_field);
                     // namespace is guaranteed to be non-null by the check above
-                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil) catch |err| return self.sendStorageErrorResponse(msg_id, err);
+                    self.storage_engine.updateField(f.table, f.id, namespace orelse unreachable, flattened_field, .nil) catch |err| return self.sendStorageErrorResponse(arena_allocator, msg_id, err);
                 }
             },
             .collection => return error.InvalidOperation, // Cannot remove a whole collection yet
         }
 
-        return try self.buildSuccessResponse(msg_id);
+        return try self.buildSuccessResponse(arena_allocator, msg_id);
     }
-    fn buildDataResponse(self: *MessageHandler, msg_id: u64, result_payload: msgpack.Payload) ![]const u8 {
+
+    fn buildDataResponse(self: *MessageHandler, msgpack_allocator: Allocator, msg_id: u64, result_payload: msgpack.Payload) ![]const u8 {
         var list: std.ArrayList(u8) = .{};
         defer list.deinit(self.allocator);
 
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
+        var payload = msgpack.Payload.mapPayload(msgpack_allocator);
+        defer payload.free(msgpack_allocator);
 
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", msgpack_allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
         try payload.mapPut("value", result_payload); // Note: result_payload is now part of the map, deinit of payload will handle it
 
@@ -620,46 +639,49 @@ pub const MessageHandler = struct {
     }
 
     /// Build an error response with a code string.
-    fn buildErrorResponse(self: *MessageHandler, msg_id: u64, code: []const u8) ![]const u8 {
+    fn buildErrorResponse(self: *MessageHandler, msgpack_allocator: Allocator, msg_id: u64, code: []const u8) ![]const u8 {
         var list: std.ArrayList(u8) = .{};
         defer list.deinit(self.allocator);
 
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
+        var payload = msgpack.Payload.mapPayload(msgpack_allocator);
+        defer payload.free(msgpack_allocator);
 
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", msgpack_allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
+        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, msgpack_allocator));
 
         try msgpack.encode(payload, list.writer(self.allocator));
         return try list.toOwnedSlice(self.allocator);
     }
 
     /// Build success response for StoreSet
-    fn buildSuccessResponse(self: *MessageHandler, msg_id: u64) ![]const u8 {
+    fn buildSuccessResponse(self: *MessageHandler, msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
         var list: std.ArrayList(u8) = .{};
         defer list.deinit(self.allocator);
 
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
+        var payload = msgpack.Payload.mapPayload(msgpack_allocator);
+        defer payload.free(msgpack_allocator);
 
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", self.allocator));
+        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", msgpack_allocator));
         try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
 
         try msgpack.encode(payload, list.writer(self.allocator));
         return try list.toOwnedSlice(self.allocator);
     }
-    fn sendStorageErrorResponse(self: *MessageHandler, msg_id: u64, err: anyerror) ![]const u8 {
+
+    fn sendStorageErrorResponse(self: *MessageHandler, msgpack_allocator: Allocator, msg_id: u64, err: anyerror) ![]const u8 {
         const code = if (err == error.UnknownTable)
             "COLLECTION_NOT_FOUND"
         else if (err == error.UnknownField)
             "FIELD_NOT_FOUND"
         else if (err == error.TypeMismatch)
             "SCHEMA_VALIDATION_FAILED"
+        else if (err == error.InvalidFieldName)
+            "INVALID_FIELD_NAME"
         else
             return err;
 
-        return try self.buildErrorResponse(msg_id, code);
+        return try self.buildErrorResponse(msgpack_allocator, msg_id, code);
     }
 
     /// Send error response to client
@@ -715,6 +737,13 @@ pub const MessageHandler = struct {
             const key = entry.key_ptr.*.str.value();
             const value = entry.value_ptr.*;
 
+            // Security/Protocol: Forbid "__" in client-provided keys to avoid internal collisions.
+            if (std.mem.containsAtLeast(u8, key, 1, "__")) {
+                // Since this is a recursive function and we want to return a clean error to the client,
+                // we'll let this propogate. MessageHandler should handle it.
+                return error.InvalidFieldName;
+            }
+
             const name = if (prefix.len > 0)
                 try std.fmt.allocPrint(allocator, "{s}__{s}", .{ prefix, key })
             else
@@ -731,6 +760,89 @@ pub const MessageHandler = struct {
                 }),
             }
         }
+    }
+
+    /// Unflatten a MessagePack map where keys joined by '__' are converted back to nested objects.
+    /// The unflattened structure is allocated in the provided allocator.
+    fn unflattenPayloadMap(
+        self: *MessageHandler,
+        allocator: std.mem.Allocator,
+        flattened: msgpack.Map,
+    ) !msgpack.Payload {
+        _ = self;
+        var root_map = msgpack.Map.init(allocator);
+        errdefer root_map.deinit();
+
+        var it = flattened.iterator();
+        while (it.next()) |entry| {
+            // Skip NULL values from unset SQLite columns. Clients never set these;
+            // they're storage artifacts. Omitting them keeps wire payloads clean and
+            // prevents phantom nested objects (e.g. {"before":null,"after":null}).
+            if (entry.value_ptr.* == .nil) continue;
+
+            if (entry.key_ptr.* != .str) {
+                const val = try msgpack.clonePayload(entry.value_ptr.*, allocator);
+                try root_map.put(entry.key_ptr.*, val);
+                continue;
+            }
+
+            const full_key = entry.key_ptr.*.str.value();
+            if (std.mem.indexOf(u8, full_key, "__") == null) {
+                const val = try msgpack.clonePayload(entry.value_ptr.*, allocator);
+                try root_map.put(entry.key_ptr.*, val);
+                continue;
+            }
+
+            var segment_it = std.mem.splitSequence(u8, full_key, "__");
+            var current_map_ptr = &root_map;
+
+            var first = true;
+            var prev_segment: []const u8 = undefined;
+
+            while (segment_it.next()) |segment| {
+                if (first) {
+                    prev_segment = segment;
+                    first = false;
+                    continue;
+                }
+
+                // prev_segment is a directory node.
+                // We use a temporary payload for lookup.
+                const lookup_key = try msgpack.Payload.strToPayload(prev_segment, allocator);
+                defer lookup_key.free(allocator);
+
+                if (current_map_ptr.map.getPtr(lookup_key)) |existing_payload_ptr| {
+                    if (existing_payload_ptr.* == .map) {
+                        current_map_ptr = &existing_payload_ptr.map;
+                    } else {
+                        return error.UnflatteningConflict;
+                    }
+                } else {
+                    // Not found, we need to create a new nested map.
+                    // Here we MUST clone the segment because the map will own it.
+                    const dirname_payload = try msgpack.Payload.strToPayload(prev_segment, allocator);
+                    errdefer dirname_payload.free(allocator);
+
+                    const new_nested = msgpack.Map.init(allocator);
+                    try current_map_ptr.put(dirname_payload, .{ .map = new_nested });
+
+                    // Navigate into the newly created map
+                    if (current_map_ptr.map.getPtr(dirname_payload)) |new_payload_ptr| {
+                        current_map_ptr = &new_payload_ptr.map;
+                    } else unreachable;
+                }
+                prev_segment = segment;
+            }
+
+            // Put the final value using the last segment
+            const final_key_payload = try msgpack.Payload.strToPayload(prev_segment, allocator);
+            errdefer final_key_payload.free(allocator);
+            const val = try msgpack.clonePayload(entry.value_ptr.*, allocator);
+            errdefer val.free(allocator);
+            try current_map_ptr.put(final_key_payload, val);
+        }
+
+        return .{ .map = root_map };
     }
 };
 

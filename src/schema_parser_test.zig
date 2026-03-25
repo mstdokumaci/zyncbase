@@ -89,6 +89,26 @@ test "schema_parser: parse known fixture" {
     try std.testing.expect(found_zip);
 }
 
+test "schema_parser: print() reconstructs nested objects" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{"version":"1.0.0","store":{"users":{"fields":{"address":{"type":"object","fields":{"city":{"type":"string"}}},"name":{"type":"string"}},"required":["address","name"]}}}
+    ;
+
+    const schema = try parser.parse(json);
+    defer parser.deinit(schema);
+
+    const printed = try parser.print(schema);
+    defer allocator.free(printed);
+
+    // Verify printed JSON contains nested objects and no double underscores
+    try std.testing.expect(std.mem.indexOf(u8, printed, "address\":{\"type\":\"object\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "city\":{\"type\":\"string\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "__") == null);
+}
+
 test "schema_parser: missing file path returns error" {
     // parse() takes JSON text; the caller is responsible for reading the file.
     // Verify that opening a nonexistent path produces an error.

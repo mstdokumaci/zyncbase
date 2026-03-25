@@ -689,6 +689,7 @@ All errors follow a consistent envelope:
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
 | `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
+| `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |
 | `PERMISSION_DENIED` | authorization | `authorization.json` or Hook Server rejected the operation |
 | `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
 | `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |

@@ -124,7 +124,8 @@ pub const SchemaParser = struct {
                 if (req_val == .array) {
                     for (req_val.array.items) |item| {
                         if (item == .string) {
-                            try required_set.put(item.string, {});
+                            const normalized = try std.mem.replaceOwned(u8, self.allocator, item.string, ".", "__");
+                            try required_set.put(normalized, {});
                         }
                     }
                 }
@@ -138,133 +139,93 @@ pub const SchemaParser = struct {
             }
 
             if (table_def.object.get("fields")) |fields_val| {
-                if (fields_val != .object) return error.InvalidFields;
-
-                var fields_iter = fields_val.object.iterator();
-                while (fields_iter.next()) |field_entry| {
-                    const field_name = field_entry.key_ptr.*;
-                    if (std.mem.containsAtLeast(u8, field_name, 1, "__")) return error.InvalidFieldName;
-                    const field_def = field_entry.value_ptr.*;
-
-                    if (field_def != .object) return error.InvalidFieldDefinition;
-
-                    const type_val = field_def.object.get("type") orelse {
-                        return error.MissingFieldType;
-                    };
-                    if (type_val != .string) return error.InvalidFieldType;
-
-                    const type_str = type_val.string;
-
-                    if (std.mem.eql(u8, type_str, "object")) {
-                        // Flatten one level deep
-                        if (field_def.object.get("fields")) |props_val| {
-                            if (props_val == .object) {
-                                var props_iter = props_val.object.iterator();
-                                while (props_iter.next()) |prop_entry| {
-                                    const prop_name = prop_entry.key_ptr.*;
-                                    if (std.mem.containsAtLeast(u8, prop_name, 1, "__")) return error.InvalidFieldName;
-                                    const flat_name = try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ field_name, prop_name });
-                                    errdefer self.allocator.free(flat_name);
-
-                                    const prop_def = prop_entry.value_ptr.*;
-                                    var prop_sql_type: FieldType = .text;
-                                    if (prop_def == .object) {
-                                        if (prop_def.object.get("type")) |pt| {
-                                            if (pt == .string) {
-                                                prop_sql_type = mapType(pt.string) catch |err| {
-                                                    if (err == error.UnknownFieldType) {
-                                                        std.log.warn("schema: unknown type \"{s}\" for field \"{s}__{s}\"", .{ pt.string, field_name, prop_name });
-                                                    }
-                                                    return err;
-                                                };
-                                            }
-                                        }
-                                    }
-
-                                    const is_required = required_set.contains(flat_name) or required_set.contains(field_name);
-                                    const is_indexed = if (prop_def == .object) blk: {
-                                        if (prop_def.object.get("indexed")) |iv| {
-                                            break :blk iv == .bool and iv.bool;
-                                        }
-                                        break :blk false;
-                                    } else false;
-
-                                    const refs = if (prop_def == .object) blk: {
-                                        if (prop_def.object.get("references")) |rv| {
-                                            if (rv == .string) break :blk try self.allocator.dupe(u8, rv.string);
-                                        }
-                                        break :blk null;
-                                    } else null;
-                                    errdefer if (refs) |r| self.allocator.free(r);
-
-                                    const on_del = if (prop_def == .object) blk: {
-                                        if (prop_def.object.get("onDelete")) |odv| {
-                                            if (odv == .string) break :blk parseOnDelete(odv.string);
-                                        }
-                                        break :blk null;
-                                    } else null;
-
-                                    try fields.append(self.allocator, .{
-                                        .name = flat_name,
-                                        .sql_type = prop_sql_type,
-                                        .required = is_required,
-                                        .indexed = is_indexed,
-                                        .references = refs,
-                                        .on_delete = on_del,
-                                    });
-                                }
-                            }
-                        }
-                        // object fields without nested fields produce no columns
-                    } else {
-                        const sql_type = mapType(type_str) catch |err| {
-                            if (err == error.UnknownFieldType) {
-                                std.log.warn("schema: unknown type \"{s}\" for field \"{s}\"", .{ type_str, field_name });
-                            }
-                            return err;
-                        };
-                        const is_required = required_set.contains(field_name);
-                        const is_indexed = if (field_def.object.get("indexed")) |iv|
-                            iv == .bool and iv.bool
-                        else
-                            false;
-
-                        const refs = if (field_def.object.get("references")) |rv|
-                            if (rv == .string) try self.allocator.dupe(u8, rv.string) else null
-                        else
-                            null;
-                        errdefer if (refs) |r| self.allocator.free(r);
-
-                        const on_del = if (field_def.object.get("onDelete")) |odv|
-                            if (odv == .string) parseOnDelete(odv.string) else null
-                        else
-                            null;
-
-                        const owned_name = try self.allocator.dupe(u8, field_name);
-                        errdefer self.allocator.free(owned_name);
-
-                        try fields.append(self.allocator, .{
-                            .name = owned_name,
-                            .sql_type = sql_type,
-                            .required = is_required,
-                            .indexed = is_indexed,
-                            .references = refs,
-                            .on_delete = on_del,
-                        });
-                    }
-                }
+                try self.parseFields(fields_val, &fields, &required_set, "");
             }
 
             try tables.append(self.allocator, .{
                 .name = table_name,
                 .fields = try fields.toOwnedSlice(self.allocator),
             });
+
+            // Clean up normalized required names
+            var req_it = required_set.keyIterator();
+            while (req_it.next()) |k| {
+                self.allocator.free(k.*);
+            }
         }
 
         return Schema{
             .version = version,
             .tables = try tables.toOwnedSlice(self.allocator),
         };
+    }
+
+    fn parseFields(
+        self: *SchemaParser,
+        fields_val: std.json.Value,
+        fields: *std.ArrayList(Field),
+        required_set: *std.StringHashMap(void),
+        prefix: []const u8,
+    ) !void {
+        if (fields_val != .object) return error.InvalidSchema;
+
+        var it = fields_val.object.iterator();
+        while (it.next()) |entry| {
+            const field_name = entry.key_ptr.*;
+            const field_def = entry.value_ptr.*;
+
+            if (field_def != .object) return error.InvalidFieldDefinition;
+
+            const type_val = field_def.object.get("type") orelse return error.MissingFieldType;
+            if (type_val != .string) return error.InvalidFieldType;
+            const type_str = type_val.string;
+
+            // Validate field name before allocating: reject empty names and internal separator.
+            if (field_name.len == 0 or std.mem.containsAtLeast(u8, field_name, 1, "__")) return error.InvalidFieldName;
+
+            // Generate the flattened full name
+            const full_name = if (prefix.len > 0)
+                try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ prefix, field_name })
+            else
+                try self.allocator.dupe(u8, field_name);
+            errdefer self.allocator.free(full_name);
+
+            if (std.mem.eql(u8, type_str, "object")) {
+                if (field_def.object.get("fields")) |nested_fields| {
+                    try self.parseFields(nested_fields, fields, required_set, full_name);
+                }
+                self.allocator.free(full_name); // prefix is no longer needed after recursion
+            } else {
+                // Leaf field
+                const sql_type = try mapType(type_str);
+                const is_required = required_set.contains(full_name);
+
+                const is_indexed = if (field_def.object.get("indexed")) |iv|
+                    iv == .bool and iv.bool
+                else
+                    false;
+
+                const refs = if (field_def.object.get("references")) |rv| blk: {
+                    if (rv == .string) break :blk try self.allocator.dupe(u8, rv.string);
+                    break :blk null;
+                } else null;
+                errdefer if (refs) |r| self.allocator.free(r);
+
+                const on_del = if (field_def.object.get("onDelete")) |odv| blk: {
+                    if (odv == .string) break :blk parseOnDelete(odv.string);
+                    break :blk null;
+                } else null;
+
+                try fields.append(self.allocator, .{
+                    .name = full_name,
+                    .sql_type = sql_type,
+                    .required = is_required,
+                    .indexed = is_indexed,
+                    .references = refs,
+                    .on_delete = on_del,
+                });
+            }
+        }
     }
 
     /// Serialise an in-memory Schema back to canonical JSON.
@@ -280,39 +241,94 @@ pub const SchemaParser = struct {
         for (schema.tables, 0..) |table, ti| {
             if (ti > 0) try buf.append(self.allocator, ',');
             try writeJsonString(&buf, self.allocator, table.name);
-            try buf.appendSlice(self.allocator, ":{\"fields\":{");
-
-            for (table.fields, 0..) |field, fi| {
-                if (fi > 0) try buf.append(self.allocator, ',');
-                try writeJsonString(&buf, self.allocator, field.name);
-                try buf.appendSlice(self.allocator, ":{\"type\":");
-                try writeJsonString(&buf, self.allocator, fieldTypeName(field.sql_type));
-                if (field.indexed) try buf.appendSlice(self.allocator, ",\"indexed\":true");
-                if (field.references) |ref| {
-                    try buf.appendSlice(self.allocator, ",\"references\":");
-                    try writeJsonString(&buf, self.allocator, ref);
-                }
-                if (field.on_delete) |od| {
-                    try buf.appendSlice(self.allocator, ",\"onDelete\":");
-                    try writeJsonString(&buf, self.allocator, onDeleteName(od));
-                }
-                try buf.append(self.allocator, '}');
-            }
-
-            try buf.appendSlice(self.allocator, "},\"required\":[");
-            var first_req = true;
-            for (table.fields) |field| {
-                if (field.required) {
-                    if (!first_req) try buf.append(self.allocator, ',');
-                    try writeJsonString(&buf, self.allocator, field.name);
-                    first_req = false;
-                }
-            }
-            try buf.appendSlice(self.allocator, "]}");
+            try buf.appendSlice(self.allocator, ":{");
+            try self.printObjectContent(&buf, table.fields, "");
+            try buf.append(self.allocator, '}');
         }
 
         try buf.appendSlice(self.allocator, "}}");
         return buf.toOwnedSlice(self.allocator);
+    }
+
+    fn printObjectContent(self: *SchemaParser, buf: *std.ArrayList(u8), fields: []const Field, prefix: []const u8) !void {
+        try buf.appendSlice(self.allocator, "\"fields\":{");
+
+        var first_field = true;
+        var processed_segments = std.StringHashMap(void).init(self.allocator);
+        defer processed_segments.deinit();
+
+        for (fields) |field| {
+            if (prefix.len > 0) {
+                if (!std.mem.startsWith(u8, field.name, prefix)) continue;
+                if (field.name.len <= prefix.len + 2) continue; // Should not happen for valid flattened names
+                if (!std.mem.eql(u8, field.name[prefix.len .. prefix.len + 2], "__")) continue;
+            }
+
+            const remaining = if (prefix.len > 0) field.name[prefix.len + 2 ..] else field.name;
+            const dot_idx = std.mem.indexOf(u8, remaining, "__");
+
+            if (dot_idx) |idx| {
+                const segment = remaining[0..idx];
+                if (processed_segments.contains(segment)) continue;
+                try processed_segments.put(segment, {});
+
+                if (!first_field) try buf.append(self.allocator, ',');
+                try writeJsonString(buf, self.allocator, segment);
+                try buf.appendSlice(self.allocator, ":{\"type\":\"object\",");
+
+                const new_prefix = if (prefix.len > 0)
+                    try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ prefix, segment })
+                else
+                    try self.allocator.dupe(u8, segment);
+                defer self.allocator.free(new_prefix);
+
+                try self.printObjectContent(buf, fields, new_prefix);
+                try buf.append(self.allocator, '}');
+                first_field = false;
+            } else {
+                // Leaf field
+                if (!first_field) try buf.append(self.allocator, ',');
+                try writeJsonString(buf, self.allocator, remaining);
+                try buf.appendSlice(self.allocator, ":{\"type\":");
+                try writeJsonString(buf, self.allocator, fieldTypeName(field.sql_type));
+                if (field.indexed) try buf.appendSlice(self.allocator, ",\"indexed\":true");
+                if (field.references) |ref| {
+                    try buf.appendSlice(self.allocator, ",\"references\":");
+                    try writeJsonString(buf, self.allocator, ref);
+                }
+                if (field.on_delete) |od| {
+                    try buf.appendSlice(self.allocator, ",\"onDelete\":");
+                    try writeJsonString(buf, self.allocator, onDeleteName(od));
+                }
+                try buf.append(self.allocator, '}');
+                first_field = false;
+            }
+        }
+
+        try buf.appendSlice(self.allocator, "},\"required\":[");
+        var first_req = true;
+        processed_segments.clearRetainingCapacity();
+
+        for (fields) |field| {
+            if (!field.required) continue;
+            if (prefix.len > 0) {
+                if (!std.mem.startsWith(u8, field.name, prefix)) continue;
+                if (field.name.len <= prefix.len + 2) continue;
+                if (!std.mem.eql(u8, field.name[prefix.len .. prefix.len + 2], "__")) continue;
+            }
+
+            const remaining = if (prefix.len > 0) field.name[prefix.len + 2 ..] else field.name;
+            const dot_idx = std.mem.indexOf(u8, remaining, "__");
+            const segment = if (dot_idx) |idx| remaining[0..idx] else remaining;
+
+            if (processed_segments.contains(segment)) continue;
+            try processed_segments.put(segment, {});
+
+            if (!first_req) try buf.append(self.allocator, ',');
+            try writeJsonString(buf, self.allocator, segment);
+            first_req = false;
+        }
+        try buf.appendSlice(self.allocator, "]");
     }
 
     /// Free a Schema produced by `parse`.

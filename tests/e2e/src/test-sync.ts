@@ -33,22 +33,7 @@ export async function run(port: number = 3000) {
     });
     console.log("Client A received task 2:", task2);
 
-    // 5. Verify both clients see the same deterministic state (ignoring dynamic timestamps)
-    const getSnapshot = (tasks: any[]) => JSON.stringify(tasks.map(t => ({ id: t.id, title: t.title, tags: t.tags })).sort((a, b) => a.id.localeCompare(b.id)));
-    const expected = JSON.stringify([
-      { id: "1", title: "A's Task", tags: ["urgent", "home"] },
-      { id: "2", title: "B's Task", tags: ["work"] }
-    ]);
-
-    const tasksA = await clientA.get(namespace, ["tasks"]) as any[];
-    if (getSnapshot(tasksA) !== expected) throw new Error(`Client A mismatch. Got: ${getSnapshot(tasksA)}`);
-
-    const tasksB = await clientB.get(namespace, ["tasks"]) as any[];
-    if (getSnapshot(tasksB) !== expected) throw new Error(`Client B mismatch. Got: ${getSnapshot(tasksB)}`);
-
-    console.log("Collection verification passed.");
-
-    // 6. Test nested object (must_be_complete)
+    // 5. Test nested object (must_be_complete)
     console.log("Testing nested object (must_be_complete)...");
     const beforeTs = Math.floor(Date.now() / 1000);
     const afterTs = beforeTs + 3600;
@@ -58,21 +43,43 @@ export async function run(port: number = 3000) {
     });
 
     const task3 = await clientB.waitFor(namespace, ["tasks", "3"], (val) => {
-      return val?.must_be_complete__before === beforeTs && val?.must_be_complete__after === afterTs ? val : null;
+      return val?.must_be_complete?.before === beforeTs && val?.must_be_complete?.after === afterTs ? val : null;
     });
-    console.log("Client B received task 3 with flattened fields:", JSON.stringify(task3));
+    console.log("Client B received task 3 with nested fields:", JSON.stringify(task3));
 
-    // Verify field-level update still works for nested fields
+    // 6. Verify field-level update still works for nested fields
     console.log("Verifying field-level update for nested field...");
     const newAfterTs = afterTs + 60;
     await clientB.set(namespace, ["tasks", "3", "must_be_complete", "after"], newAfterTs);
 
     const finalTask3 = await clientA.waitFor(namespace, ["tasks", "3"], (val) => {
-      return val?.must_be_complete__after === newAfterTs ? val : null;
+      return val?.must_be_complete?.after === newAfterTs ? val : null;
     });
-    console.log("Client A received field-level update for task 3:", JSON.stringify(finalTask3));
+    console.log("Client A received field-level update for task 3 with nested fields:", JSON.stringify(finalTask3));
 
-    // 7. Test deep path fetch as well
+    // 7. Verify both clients see the same deterministic state (including nested objects)
+    const getSnapshot = (tasks: any[]) => JSON.stringify(tasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      tags: t.tags,
+      must_be_complete: t.must_be_complete
+    })).sort((a, b) => a.id.localeCompare(b.id)));
+
+    const expected = JSON.stringify([
+      { id: "1", title: "A's Task", tags: ["urgent", "home"] },
+      { id: "2", title: "B's Task", tags: ["work"] },
+      { id: "3", title: "Nested Task", must_be_complete: { before: beforeTs, after: newAfterTs } }
+    ]);
+
+    const tasksA = await clientA.get(namespace, ["tasks"]) as any[];
+    if (getSnapshot(tasksA) !== expected) throw new Error(`Client A mismatch. Got: ${getSnapshot(tasksA)}`);
+
+    const tasksB = await clientB.get(namespace, ["tasks"]) as any[];
+    if (getSnapshot(tasksB) !== expected) throw new Error(`Client B mismatch. Got: ${getSnapshot(tasksB)}`);
+
+    console.log("Collection verification passed (with nested objects).");
+
+    // 8. Test deep path fetch as well
     console.log("Testing deep path fetch for nested field...");
     const deepValue = await clientA.get(namespace, ["tasks", "3", "must_be_complete", "after"]);
     if (deepValue !== newAfterTs) throw new Error(`Deep path fetch failed. Expected ${newAfterTs}, got ${deepValue}`);

@@ -96,6 +96,7 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
 }
 
 pub const Payload = msgpack.Payload;
+pub const Map = msgpack.Map;
 
 // Copied from upstream zig-msgpack fn clonePayload (private). Replace with upstream call once made pub.
 /// Deep clone a Payload (allocates new memory for dynamic types).
