@@ -143,7 +143,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     "batchTimeout": 10
   }
 }
-```schema.json data structure ZyncBase schema Collaborative Canvas```json
+```schema.json Define data structure ZyncBase schema format **Naming Restriction** Field names double underscore sequence (`__`). sequence internal flattening nested objects schema `__` rejected `error.InvalidFieldName` Example Collaborative Canvas```json
 {
   "version": "1.0.0",
   "store": {
@@ -197,7 +197,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
         "email": { "type": "string", "format": "email" },
         "address": {
           "type": "object",
-          "properties": {
+          "fields": {
             "street": { "type": "string" },
             "city": { "type": "string" },
             "zipCode": { "type": "string" }
@@ -218,9 +218,9 @@ CREATE TABLE users (
     namespace_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
-    address_street TEXT,
-    address_city TEXT,
-    address_zipCode TEXT,
+    address__street TEXT,
+    address__city TEXT,
+    address__zipCode TEXT,
     roles TEXT,  -- JSON: ["admin", "editor"]
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -246,7 +246,7 @@ CREATE TABLE users (
         "name": { "type": "string" },
         "address": {
           "type": "object",
-          "properties": {
+          "fields": {
             "street": { "type": "string" },
             "city": { "type": "string" },
             "zipCode": { "type": "string" }
@@ -271,7 +271,7 @@ await zyncbase.set(users.user-1', {
 const users = await zyncbase.query(users', {
   where: { 'address.city': 'San Francisco' }
 })
-```under hood Nested fields flattened to columns_street_city_zipCode query efficiently Frontend **Limitations one level nesting Nested objects contain arrays deeper nesting use separate store paths references Arrays ZyncBase supports arrays specific constraints Simple arrays```json
+```under hood Nested fields flattened to columns double underscore separator Base field names forbidden `__` prevent collisions query efficiently Frontend **Limitations one level nesting Nested objects contain arrays deeper nesting use separate store paths references Arrays ZyncBase supports arrays specific constraints Simple arrays```json
 {
   "store": {
     "tasks": {
@@ -300,7 +300,7 @@ await zyncbase.set(tasks.task-1', {
           "type": "array",
           "items": {
             "type": "object",  // ❌ Not allowed
-            "properties": {
+            "fields": {
               "userId": { "type": "string" },
               "role": { "type": "string" }
             }
