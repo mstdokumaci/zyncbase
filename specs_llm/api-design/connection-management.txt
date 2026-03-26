@@ -61,7 +61,7 @@ client.on('error', (error: ZyncBaseError) => {
 
 client.on('tokenExpired', async () => {
   const newToken = await refreshAuthToken()
-  await client.reauthenticate(newToken)
+  await client.authRefresh(newToken)
 })
 ```Events Callback Signature Description `connected`() => void` WebSocket established `Connected push received `disconnected`() => void Connection closed retries `reconnecting`() => void` reconnect disconnect `error` ZyncBaseError) => void Error fire-and-forget write subscription `tokenExpired`() => void Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
 client.on('statusChange', (status, detail) => {
@@ -80,9 +80,9 @@ Attempt 3: ~4s
 Attempt 4: ~8s
 Attempt 5: ~16s
 Attempt 6+: ~30s (capped)
-```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh.reauthenticate(token Update session new external JWT without disconnecting```typescript
+```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh.authRefresh(token Update session new external JWT without disconnecting```typescript
 client.on('tokenExpired', async () => {
   const newToken = await myAuthService.refresh()
-  await client.reauthenticate(newToken)
+  await client.authRefresh(newToken)
 })
 ````token new external JWT `Promise<void>` sends `AuthRefresh wire message See [Wire Protocol#authrefresh details API Persistent state operations [Presence API Ephemeral user awareness [Error Handling Error types retry behavior [Wire Protocol Full wire-level connection lifecycle

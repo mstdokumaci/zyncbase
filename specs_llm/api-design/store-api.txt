@@ -1,6 +1,6 @@
 Store API Reference handles synchronized data validated against [Schema persisted to SQLite synchronized across clients Table of Contents Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access Target items properties dot-notation arrays `store.get(path) Read value state tree```typescript
 const element = client.store.get('elements.rect-1')
-```**Returns** by path **Array of Objects** path points to collection'elements **Single specific document'elements.rect-1 **Scalar specific field.rect-1 `undefined path not found `store.set(path, value) Write value **Optimistic applied locally synced Reverted if server rejects **Conflict Resolution** Server-Time Last-Write-Wins (LWW) at Path level```typescript
+```**Returns** by path depth): **Array of Objects** path points to collection.store.get('users `Array<User> **Single specific document'users.u1 **Scalar value** path specific field.u1.name `string `undefined path not found `store.set(path, value)` Write value applied locally synced Reverted if server rejects **Conflict Resolution** Server-Time Last-Write-Wins (LWW) at Path level```typescript
 client.store.set('user.name', 'Alice')
 ````set()` fire-and-forget errors reported via `client.on('error) See [Error Handling-propagation). calling `set()` document path `elements.rect-1 SDK extracts ID merges into stored object include `id` in value `void` `store.remove(path) Removes value specified path```typescript
 client.store.remove('elements.rect-1')
