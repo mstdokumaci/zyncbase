@@ -20,7 +20,11 @@ Read a value from the state tree.
 ```typescript
 const element = client.store.get('elements.rect-1')
 ```
-**Returns**: The value at the path, or `undefined` if not found.
+**Returns** (varies by path depth):
+- **Array of Objects**: If the path points to a collection (e.g., `'elements'`)
+- **Single Object**: If the path points to a specific document (e.g., `'elements.rect-1'`)
+- **Scalar value**: If the path points to a specific field (e.g., `'elements.rect-1.x'`)
+- `undefined`: If the path is not found
 
 ### `store.set(path, value)`
 Write a value. **Optimistic by default**: applied locally first, then synced. Reverted if the server rejects it.
@@ -28,6 +32,12 @@ Write a value. **Optimistic by default**: applied locally first, then synced. Re
 ```typescript
 client.store.set('user.name', 'Alice')
 ```
+
+**Error Handling**: Since `set()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
+
+**ID Extraction**: When calling `set()` on a document path (e.g., `elements.rect-1`), the SDK automatically extracts the ID (`rect-1`) from the path and merges it into the stored object. You do not need to include `id` in the value.
+
+**Returns**: `void`
 
 ### `store.remove(path)`
 Removes a value at the specified path.
@@ -42,6 +52,12 @@ const unsubscribe = client.store.subscribe('elements', (elements) => {
   render(elements)
 })
 ```
+
+**Callback receives** (same shape as `store.get()` return values):
+- **Array** when subscribed to a collection
+- **Object** when subscribed to a document
+- **Scalar** when subscribed to a field
+
 **Returns**: An unsubscribe function.
 
 ---
@@ -160,3 +176,5 @@ client.store.get(['users', userId, 'name'])
 - [Presence API](./presence-api.md) - For user awareness features
 - [Query Language Reference](./query-language.md) - Detailed query syntax
 - [Configuration & Schema](./configuration.md) - For schema definitions
+- [Connection Management](./connection-management.md) - Client lifecycle and events
+- [Error Handling](./error-handling.md) - Error types and optimistic revert behavior

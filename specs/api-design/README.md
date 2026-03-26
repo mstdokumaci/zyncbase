@@ -19,12 +19,31 @@ For ephemeral, transient user awareness (cursors, typing indicators). Data is ke
 
 ## Lifecycle & Setup
 
+### Connection Management ([connection-management.md](./connection-management.md))
+SDK client lifecycle:
+- Creating clients (`createClient` options)
+- Connecting, disconnecting, reconnection strategy
+- Namespace switching at runtime
+- Event listeners and connection status
+
 ### Configuration ([configuration.md](./configuration.md))
 Complete guide to server configuration, including:
 - Server settings (port, host, security)
 - Schema definitions and migrations
 - Authorization rules (`authorization.json`)
 - Namespaces and multi-tenancy
+
+## Error Handling ([error-handling.md](./error-handling.md))
+- `ZyncBaseError` interface and error codes
+- Error propagation model (try/catch vs events)
+- Optimistic revert behavior
+- Auto-retry summary
+
+## Framework Integrations ([framework-integrations.md](./framework-integrations.md))
+Planned React and Vue bindings:
+- React hooks (`useStore`, `useQuery`, `usePresence`, `useConnectionStatus`)
+- Vue composables
+- Common loading/error/data patterns
 
 ---
 

@@ -21,10 +21,21 @@ client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
 ### `presence.subscribe(callback)`
 Subscribe to real-time changes (joins, leaves, updates) for all users in the namespace.
 ```typescript
-client.presence.subscribe((users) => {
+const unsubscribe = client.presence.subscribe((users) => {
   renderCursors(users)
 })
 ```
+
+**Callback receives**: `Array<PresenceEntry>` where each entry contains:
+```typescript
+{
+  userId: string,        // Authenticated user ID
+  data: object,          // User's presence data (cursor, status, etc.)
+  joinedAt: number       // Unix timestamp of when the user joined
+}
+```
+
+**Returns**: An unsubscribe function.
 
 ### `presence.get(userId)`
 Get a specific user's current presence data.
@@ -42,6 +53,12 @@ Returns all users' presence data in the namespace. Excludes self by default.
 > Like `get()`, this is a **synchronous local lookup**. It returns an empty array if no active subscription exists.
 ```typescript
 const everyone = client.presence.getAll({ includeSelf: true })
+```
+
+### `presence.remove()`
+Remove your presence data. Called automatically on disconnect, but can be called manually.
+```typescript
+client.presence.remove()
 ```
 
 ---
@@ -83,6 +100,41 @@ input.addEventListener('input', () => {
 
 ---
 
+## Throttling
+
+- **Client-side**: The SDK automatically throttles high-frequency `presence.set()` calls to ~60fps
+- **Server-side**: The server batches presence broadcasts every 50ms for efficiency
+
+---
+
+## Presence Schema
+
+Define the structure of presence data in `schema.json`:
+
+```json
+{
+  "version": "1.0.0",
+  "store": { ... },
+  "presence": {
+    "fields": {
+      "cursor": {
+        "type": "object",
+        "properties": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "status": {
+        "type": "string",
+        "enum": ["active", "away", "idle"]
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Best Practices
 
 1. **Keep Data Minimal**: Presence updates are frequent (~60fps). Only include essential transient state.
@@ -92,5 +144,7 @@ input.addEventListener('input', () => {
 ---
 
 ## See Also
-- [Store API Reference](./store-api.md) - For persistent state management.
-- [Configuration](./configuration.md) - Defining presence fields in schema.
+- [Store API Reference](./store-api.md) - For persistent state management
+- [Configuration](./configuration.md) - Defining presence fields in schema
+- [Connection Management](./connection-management.md) - Client lifecycle and namespace switching
+- [Error Handling](./error-handling.md) - Error types and handling
