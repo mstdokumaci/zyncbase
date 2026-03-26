@@ -553,7 +553,10 @@ const PropTestContext = struct {
         self.engine.deinit();
         freeSchema(self.allocator, self.schema);
         self.allocator.free(self.test_dir);
-        std.fs.cwd().deleteTree(self.test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        std.fs.cwd().deleteTree(self.test_dir) catch |err| {
+            // Log failure to delete test directory
+            std.log.warn("failed to delete test directory {s}: {}", .{ self.test_dir, err });
+        };
     }
 };
 fn setupPropTestEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir_base: []const u8, table: schema_parser.Table) !PropTestContext {

@@ -109,7 +109,7 @@ fn setupTest(
             .optimize = optimize,
         }),
         .filters = if (test_filter) |filter|
-            b.allocator.dupe([]const u8, &.{filter}) catch unreachable
+            b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}))
         else
             &.{},
     });
@@ -198,7 +198,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-I",
         "vendor/bun/packages",
         b.fmt("-I{s}", .{b_b_include}),
-    } }) catch unreachable;
+    } }) catch |err| @panic(b.fmt("Failed to concat uws_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
         .file = b.path("vendor/bun/src/deps/libuwsockets.cpp"),
@@ -217,7 +217,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
             "-Wno-nullability-completeness",
             b.fmt("-I{s}", .{b_b_include}),
         },
-    }) catch unreachable;
+    }) catch |err| @panic(b.fmt("Failed to concat usockets_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFiles(.{
         .files = &.{
@@ -241,7 +241,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-DLIBUS_USE_BORINGSSL=1",
         "-DWITH_BORINGSSL=1",
         b.fmt("-I{s}", .{b_b_include}),
-    } }) catch unreachable;
+    } }) catch |err| @panic(b.fmt("Failed to concat sni_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
         .file = b.path("vendor/bun/packages/bun-usockets/src/crypto/sni_tree.cpp"),
@@ -250,7 +250,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     const stubs_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
         "-std=c11",
-    } }) catch unreachable;
+    } }) catch |err| @panic(b.fmt("Failed to concat stubs_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
         .file = b.path("src/uws_stubs.c"),

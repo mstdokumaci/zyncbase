@@ -74,6 +74,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
             fn init() EpochManager {
                 var self = EpochManager{
                     .current_epoch = std.atomic.Value(u64).init(1),
+                    // SAFETY: thread_epochs is initialized in the loop below
                     .thread_epochs = undefined,
                 };
                 for (&self.thread_epochs) |*s| {
@@ -97,7 +98,10 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                         }
                         return i;
                     }
-                    std.Thread.yield() catch {}; // zwanzig-disable-line: empty-catch-engine
+                    std.Thread.yield() catch |err| {
+                        // yielded or not, we continue the wait loop
+                        std.log.debug("yield failed: {}", .{err});
+                    };
                 }
             }
 
@@ -130,6 +134,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 .entries = std.atomic.Value(*std.StringHashMap(*CacheEntry)).init(entries),
                 .allocator = allocator,
                 .defer_stack = std.atomic.Value(?*DeferNode).init(null),
+                // SAFETY: pool is initialized via cache.pool.init below
                 .pool = undefined,
                 .epoch_manager = EpochManager.init(),
                 .config = config,

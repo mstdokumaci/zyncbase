@@ -374,7 +374,7 @@ const CallbackContext = struct {
 fn testOnOpenProperty(ws: *WebSocket, user_data: ?*anyopaque) void {
     _ = ws;
     if (user_data) |data| {
-        const ctx = @as(*CallbackContext, @ptrCast(@alignCast(data)));
+        const ctx: *CallbackContext = @ptrCast(@alignCast(data));
         ctx.open_called += 1;
         ctx.received_user_data = data;
     }
@@ -383,7 +383,7 @@ fn testOnOpenProperty(ws: *WebSocket, user_data: ?*anyopaque) void {
 fn testOnMessageProperty(ws: *WebSocket, message: []const u8, msg_type: MessageType, user_data: ?*anyopaque) void {
     _ = ws;
     if (user_data) |data| {
-        const ctx = @as(*CallbackContext, @ptrCast(@alignCast(data)));
+        const ctx: *CallbackContext = @ptrCast(@alignCast(data));
         ctx.message_called += 1;
         ctx.last_message = message;
         ctx.last_message_type = msg_type;
@@ -394,7 +394,7 @@ fn testOnMessageProperty(ws: *WebSocket, message: []const u8, msg_type: MessageT
 fn testOnCloseProperty(ws: *WebSocket, code: i32, message: []const u8, user_data: ?*anyopaque) void {
     _ = ws;
     if (user_data) |data| {
-        const ctx = @as(*CallbackContext, @ptrCast(@alignCast(data)));
+        const ctx: *CallbackContext = @ptrCast(@alignCast(data));
         ctx.close_called += 1;
         ctx.last_close_code = code;
         ctx.last_close_message = message;
@@ -405,7 +405,7 @@ fn testOnCloseProperty(ws: *WebSocket, code: i32, message: []const u8, user_data
 fn testOnErrorProperty(ws: *WebSocket, user_data: ?*anyopaque) void {
     _ = ws;
     if (user_data) |data| {
-        const ctx = @as(*CallbackContext, @ptrCast(@alignCast(data)));
+        const ctx: *CallbackContext = @ptrCast(@alignCast(data));
         ctx.error_called += 1;
         ctx.received_user_data = data;
     }

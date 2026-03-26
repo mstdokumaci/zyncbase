@@ -297,10 +297,13 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
     const server: *WebSocketServer = @ptrCast(@alignCast(upgrade_context.?));
     const ssl: c_int = if (server.ssl) 1 else 0;
 
+    // SAFETY: These pointers are initialized by the calls to uws_req_get_header below
     var key: [*c]const u8 = undefined;
     const key_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-key", "sec-websocket-key".len, &key);
+    // SAFETY: proto is initialized by the c.uws_req_get_header call below
     var proto: [*c]const u8 = undefined;
     const proto_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-protocol", "sec-websocket-protocol".len, &proto);
+    // SAFETY: ext is initialized by the c.uws_req_get_header call below
     var ext: [*c]const u8 = undefined;
     const ext_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-extensions", "sec-websocket-extensions".len, &ext);
 

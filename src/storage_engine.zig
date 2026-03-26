@@ -189,7 +189,9 @@ pub const StorageEngine = struct {
             .db_path = db_path,
             .writer_conn = writer_conn,
             .reader_pool = reader_pool,
+            // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
+            // SAFETY: Initialized below via .write_queue.init().
             .write_queue = undefined, // Initialized below
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
@@ -317,7 +319,7 @@ pub const StorageEngine = struct {
         }
 
         const wal_size_after = try self.getWalSize();
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const duration: u64 = @intCast(std.time.milliTimestamp() - start_time);
 
         std.log.info("Checkpoint completed: mode={s}, duration={}ms, frames_checkpointed={}, frames_in_wal={}, wal_before={}, wal_after={}", .{
             @tagName(mode),
@@ -465,7 +467,8 @@ pub const StorageEngine = struct {
                     std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
 
                     // Calculate next backoff with exponential increase
-                    const next_backoff = @as(u64, @intFromFloat(@as(f64, @floatFromInt(backoff_ms)) * self.reconnection_config.backoff_multiplier));
+                    const float_backoff: f64 = @floatFromInt(backoff_ms);
+                    const next_backoff: u64 = @intFromFloat(float_backoff * self.reconnection_config.backoff_multiplier);
                     backoff_ms = @min(next_backoff, self.reconnection_config.max_backoff_ms);
                 }
             }
@@ -1355,7 +1358,11 @@ pub const StorageEngine = struct {
                 // Wait for new work or timeout (for batch flushing), instead of busy-sleeping
                 self.write_mutex.lock();
                 defer self.write_mutex.unlock();
-                self.write_cond.timedWait(&self.write_mutex, 1 * std.time.ns_per_ms) catch {}; // zwanzig-disable-line: empty-catch-engine
+                self.write_cond.timedWait(&self.write_mutex, 1 * std.time.ns_per_ms) catch |err| {
+                    if (err != error.Timeout) {
+                        std.log.err("write_cond.timedWait failed: {}", .{err});
+                    }
+                };
             }
         }
 
@@ -1402,8 +1409,11 @@ pub const StorageEngine = struct {
             eviction_keys.deinit(self.allocator);
         }
         for (batch.items) |op| {
+            // SAFETY: Initialized in the switch below.
             var table: []const u8 = undefined;
+            // SAFETY: Initialized in the switch below.
             var id: []const u8 = undefined;
+            // SAFETY: Initialized in the switch below.
             var ns: []const u8 = undefined;
             const has_affected = switch (op) {
                 .insert => |o| blk: {

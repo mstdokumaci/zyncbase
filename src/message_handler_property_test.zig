@@ -106,7 +106,7 @@ test "connection: open/close is inverse operation" {
         try handler.handleOpen(&ws);
 
         // Verify connection was added
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
         const state = try handler.connection_registry.acquireConnection(conn_id);
         defer state.release(allocator);
         try testing.expectEqual(conn_id, state.id);
@@ -162,7 +162,7 @@ test "connection: open/close is inverse operation" {
 
         // Open connection
         try handler.handleOpen(&ws);
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
 
         // Add some subscriptions to the connection state
         const state = try handler.connection_registry.acquireConnection(conn_id);

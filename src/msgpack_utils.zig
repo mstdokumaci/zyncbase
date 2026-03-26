@@ -57,6 +57,7 @@ fn tightPacker(comptime W: type, comptime R: type, comptime limits: msgpack.Pars
 pub fn decode(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
     const tp = tightPacker(void, @TypeOf(reader), wire_limits);
     var packer = tp.init(
+        // SAFETY: reader Context is provided, writer is not used for decoding
         undefined,
         .{ .reader = reader },
     );
@@ -67,6 +68,7 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
 pub fn decodeTrusted(allocator: std.mem.Allocator, reader: anytype) !msgpack.Payload {
     const tp = tightPacker(void, @TypeOf(reader), msgpack.DEFAULT_LIMITS);
     var packer = tp.init(
+        // SAFETY: reader Context is provided, writer is not used for decoding
         undefined,
         .{ .reader = reader },
     );
@@ -79,6 +81,7 @@ pub fn encode(payload: msgpack.Payload, writer: anytype) !void {
     const tp = tightPacker(@TypeOf(writer), void, wire_limits);
     var packer = tp.init(
         .{ .writer = writer },
+        // SAFETY: writer Context is provided, reader is not used for encoding
         undefined,
     );
     return packer.write(payload);
@@ -90,6 +93,7 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
     const tp = tightPacker(@TypeOf(writer), void, msgpack.DEFAULT_LIMITS);
     var packer = tp.init(
         .{ .writer = writer },
+        // SAFETY: writer Context is provided, reader is not used for encoding
         undefined,
     );
     return packer.write(payload);

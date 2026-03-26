@@ -77,6 +77,7 @@ pub const MessageHandler = struct {
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
+            // SAFETY: connection_registry is initialized via self.connection_registry.init below
             .connection_registry = undefined,
         };
         self.connection_registry.init(memory_strategy);
@@ -856,6 +857,7 @@ fn putRecursive(allocator: std.mem.Allocator, current_map: *msgpack.Map, full_ke
     const dirname = full_key[0..sep_idx.?];
     const basename = full_key[sep_idx.? + 2 ..];
 
+    // SAFETY: next_map is initialized in either the if or else block below
     var next_map: *msgpack.Map = undefined;
     if (findNestedMap(current_map, dirname)) |m| {
         next_map = m;

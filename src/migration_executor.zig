@@ -74,7 +74,7 @@ pub const MigrationExecutor = struct {
         }
 
         // Begin transaction
-        self.db.exec("BEGIN", .{}, .{}) catch |err| return err;
+        try self.db.exec("BEGIN", .{}, .{});
 
         // Apply each change
         for (plan.changes) |change| {

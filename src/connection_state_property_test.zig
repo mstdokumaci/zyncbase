@@ -176,7 +176,7 @@ test "connection: state deallocation on close" {
         var iter: usize = 0;
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         while (iter < iterations) : (iter += 1) {
-            const conn_id = @as(u64, iter);
+            const conn_id: u64 = iter;
             const state = try memory_strategy.createConnection(conn_id, dummy_ws);
 
             // Add some subscriptions

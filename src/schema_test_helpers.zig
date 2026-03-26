@@ -86,7 +86,10 @@ pub const TestContext = struct {
     }
 
     pub fn deinit(self: *TestContext) void {
-        std.fs.cwd().deleteTree(self.test_dir) catch {}; // zwanzig-disable-line: empty-catch-engine
+        std.fs.cwd().deleteTree(self.test_dir) catch |err| {
+            // Log failure to delete test artifacts directory
+            std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
+        };
         self.allocator.free(self.test_dir);
     }
 };

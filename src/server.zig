@@ -36,9 +36,9 @@ pub const ZyncBaseServer = struct {
     message_handler: *MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     /// Loaded schema (owned).
-    loaded_schema: schema_parser.Schema = undefined,
+    loaded_schema: schema_parser.Schema,
     /// Parser used to free loaded_schema on deinit.
-    schema_parser_instance: SchemaParser = undefined,
+    schema_parser_instance: SchemaParser,
     schema_loaded: bool = false,
 
     /// Initialize the ZyncBase server with all components
@@ -222,6 +222,7 @@ pub const ZyncBaseServer = struct {
         self.storage_layer = storage_layer;
         self.storage_engine = storage_engine;
         self.websocket_server = websocket_server;
+        self.websocket_server = websocket_server;
         self.message_handler = message_handler;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
 
@@ -369,7 +370,7 @@ fn handleSignal(sig: c_int) callconv(.c) void {
 }
 
 fn onWebSocketOpen(ws: *WebSocket, user_data: ?*anyopaque) void {
-    const server = @as(*ZyncBaseServer, @ptrCast(@alignCast(user_data.?)));
+    const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
     server.message_handler.handleOpen(ws) catch |err| {
         std.log.err("Error handling WebSocket open: {}", .{err});
     };
@@ -381,7 +382,7 @@ fn onWebSocketMessage(
     msg_type: MessageType,
     user_data: ?*anyopaque,
 ) void {
-    const server = @as(*ZyncBaseServer, @ptrCast(@alignCast(user_data.?)));
+    const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
     server.message_handler.handleMessage(ws, message, msg_type) catch |err| {
         std.log.err("Error handling WebSocket message: {}", .{err});
     };
@@ -393,7 +394,7 @@ fn onWebSocketClose(
     message: []const u8,
     user_data: ?*anyopaque,
 ) void {
-    const server = @as(*ZyncBaseServer, @ptrCast(@alignCast(user_data.?)));
+    const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
     server.message_handler.handleClose(ws, code, message) catch |err| {
         std.log.err("Error handling WebSocket close: {}", .{err});
     };

@@ -216,7 +216,7 @@ pub const CheckpointManager = struct {
         const size_exceeded = current_wal_size >= self.config.wal_size_threshold;
 
         // Check time threshold
-        const time_elapsed = @as(u64, @intCast(now - last_checkpoint));
+        const time_elapsed: u64 = @intCast(now - last_checkpoint);
         const time_exceeded = time_elapsed >= self.config.time_threshold_sec;
 
         // Checkpoint if either threshold exceeded
@@ -259,7 +259,7 @@ pub const CheckpointManager = struct {
 
         // Update metrics
         const end_time = std.time.milliTimestamp();
-        const duration = @as(u64, @intCast(end_time - start_time));
+        const duration: u64 = @intCast(end_time - start_time);
 
         self.last_checkpoint.store(std.time.timestamp(), .release);
         _ = self.checkpoint_count.fetchAdd(1, .acq_rel);
@@ -372,7 +372,11 @@ pub const CheckpointManager = struct {
         defer self.shutdown_mutex.unlock();
         while (!self.shutdown_requested.load(.acquire)) {
             // Wait for configured interval or shutdown signal
-            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch {}; // zwanzig-disable-line: swallowed-error empty-catch-engine
+            self.shutdown_cond.timedWait(&self.shutdown_mutex, self.config.check_interval_sec * std.time.ns_per_s) catch |err| {
+                if (err != error.Timeout) {
+                    std.log.err("shutdown_cond.timedWait failed: {}", .{err});
+                }
+            };
 
             if (self.shutdown_requested.load(.acquire)) break;
 

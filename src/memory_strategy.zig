@@ -60,9 +60,13 @@ pub const MemoryStrategy = struct {
         self.* = .{
             .parent_allocator = allocator,
             .gpa = gpa_ptr,
+            // SAFETY: Initialized below via the .init() calls.
             .arena_pool = undefined,
+            // SAFETY: Initialized below via the .init() calls.
             .message_pool = undefined,
+            // SAFETY: Initialized below via the .init() calls.
             .buffer_pool = undefined,
+            // SAFETY: Initialized below via the .init() calls.
             .connection_pool = undefined,
         };
 
@@ -483,6 +487,7 @@ pub const MemoryStrategy = struct {
                 if (self.initData) |initData| {
                     initData(&node.data, self.allocator);
                 } else {
+                    // SAFETY: Data will be initialized by the caller.
                     node.data = undefined;
                     if (comptime @typeInfo(T) != .pointer) {
                         @memset(std.mem.asBytes(&node.data), 0);
@@ -500,7 +505,7 @@ pub const MemoryStrategy = struct {
 
                 if (ptr >= start and ptr < end) {
                     // Fast path: push back to array stack
-                    const node_index = @as(u32, @intCast((ptr - start) / @sizeOf(Node)));
+                    const node_index: u32 = @intCast((ptr - start) / @sizeOf(Node));
                     var current = self.free_stack.load(.acquire);
                     while (true) {
                         const head: TaggedIndex = @bitCast(current);

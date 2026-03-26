@@ -317,7 +317,10 @@ pub const HookServerClient = struct {
         self.state.store(.connected, .release);
 
         if (self.auth_cache) |cache| {
-            cache.put(req, result) catch {}; // zwanzig-disable-line: empty-catch-engine
+            cache.put(req, result) catch |err| {
+                // Log and ignore cache failure to avoid suppressed-error warning
+                std.log.debug("auth cache put failed: {}", .{err});
+            };
         }
 
         return result;
@@ -434,7 +437,10 @@ pub const AuthCache = struct {
 
         var resp = auth.response;
         if (resp.reason) |r| {
-            resp.reason = self.allocator.dupe(u8, r) catch null; // zwanzig-disable-line: empty-catch-engine
+            resp.reason = self.allocator.dupe(u8, r) catch |err| {
+                std.log.debug("failed to dupe response reason: {}", .{err});
+                return null;
+            };
         }
         return resp;
     }
@@ -483,7 +489,10 @@ pub const AuthCache = struct {
         var it = map.map.iterator();
         while (it.next()) |entry| {
             if (now >= entry.value_ptr.*.data.expires_at) {
-                const k = self.allocator.dupe(u8, entry.key_ptr.*) catch continue;
+                const k = self.allocator.dupe(u8, entry.key_ptr.*) catch |err| {
+                    std.log.debug("failed to dupe key for eviction: {}", .{err});
+                    continue;
+                };
                 to_evict.append(self.allocator, k) catch {
                     self.allocator.free(k);
                     continue;

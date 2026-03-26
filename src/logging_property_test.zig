@@ -129,7 +129,7 @@ test "logging: connection events" {
         try handler.handleOpen(&ws);
 
         // Verify connection was registered
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
         const conn_state = try handler.connection_registry.acquireConnection(conn_id);
         defer conn_state.release(allocator);
         try testing.expectEqual(conn_id, conn_state.id);
@@ -149,7 +149,7 @@ test "logging: connection events" {
 
         // Open connection first
         try handler.handleOpen(&ws);
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
 
         // Close connection - this should log "WebSocket connection closed: id={}, code={}, message={s}"
         try handler.handleClose(&ws, 1000, "Normal closure");
@@ -185,7 +185,7 @@ test "logging: connection events" {
         defer seen_ids.deinit();
 
         for (&connections) |*ws| {
-            const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+            const conn_id: u64 = @intFromPtr(ws.getUserData());
             try testing.expect(!seen_ids.contains(conn_id));
             try seen_ids.put(conn_id, {});
         }
@@ -207,7 +207,7 @@ test "logging: connection events" {
 
         // Open connection
         try handler.handleOpen(&ws);
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
 
         // Handle error - this should log "WebSocket error on connection: id={}"
         try handler.handleError(&ws);
@@ -236,6 +236,7 @@ test "logging: connection events" {
                     var ws = WebSocket{
                         .ws = null,
                         .ssl = false,
+                        // SAFETY: user_data is not used in this test path
                         .user_data = undefined,
                     };
                     ws.user_data = &ws;
@@ -526,7 +527,7 @@ test "logging: message formatting" {
 
         // Connection logging includes connection ID
         try handler.handleOpen(&ws);
-        const conn_id = @as(u64, @intFromPtr(ws.getUserData()));
+        const conn_id: u64 = @intFromPtr(ws.getUserData());
         try testing.expect(conn_id > 0);
 
         // Error logging includes error details
