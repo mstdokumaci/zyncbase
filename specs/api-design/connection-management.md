@@ -158,7 +158,7 @@ client.on('error', (error: ZyncBaseError) => {
 
 client.on('tokenExpired', async () => {
   const newToken = await refreshAuthToken()
-  await client.reauthenticate(newToken)
+  await client.authRefresh(newToken)
 })
 ```
 
@@ -213,14 +213,14 @@ The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emi
 
 ## Token Refresh
 
-### `client.reauthenticate(token)`
+### `client.authRefresh(token)`
 
 Update the connection's session with a new external JWT without disconnecting.
 
 ```typescript
 client.on('tokenExpired', async () => {
   const newToken = await myAuthService.refresh()
-  await client.reauthenticate(newToken)
+  await client.authRefresh(newToken)
 })
 ```
 

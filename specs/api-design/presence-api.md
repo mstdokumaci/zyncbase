@@ -1,6 +1,6 @@
 # Presence API Reference
 
-The Presence API tracks ephemeral user state in real-time, such as cursor positions, selections, and typing indicators. This data is stored in-memory and automatically cleaned up on disconnect.
+The Presence API tracks ephemeral user state in real-time, such as cursor positions, selections, and typing indicators. This data is stored in-memory, is schemaless (not validated against `schema.json`), and automatically cleaned up on disconnect.
 
 ## Table of Contents
 1. [Methods](#presence-methods)
@@ -106,32 +106,6 @@ input.addEventListener('input', () => {
 - **Server-side**: The server batches presence broadcasts every 50ms for efficiency
 
 ---
-
-## Presence Schema
-
-Define the structure of presence data in `schema.json`:
-
-```json
-{
-  "version": "1.0.0",
-  "store": { ... },
-  "presence": {
-    "fields": {
-      "cursor": {
-        "type": "object",
-        "properties": {
-          "x": { "type": "number" },
-          "y": { "type": "number" }
-        }
-      },
-      "status": {
-        "type": "string",
-        "enum": ["active", "away", "idle"]
-      }
-    }
-  }
-}
-```
 
 ---
 

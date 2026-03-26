@@ -26,95 +26,47 @@ This directory contains the formal specifications and architectural decisions fo
 
 ## Implementation Roadmap
 
-### Phase 1: Core
-**Goal**: Basic real-time state sync
-- [ ] uWebSockets integration (with C++ wrapper)
-- [ ] Multi-threaded core engine
-- [ ] Lock-free cache implementation
-- [ ] SQLite integration with WAL
-- [ ] MessagePack serialization
-- [ ] Memory management strategy (Arena/GPA/Pool)
-- [ ] Reliability sanitizers (TSan/ASan/LSan)
+### Phase 1: Core Engine (Complete)
+**Goal**: High-performance multi-threaded core
+- [x] uWebSockets integration (with C++ wrapper)
+- [x] Multi-threaded core engine (SWMR model)
+- [x] Lock-free cache implementation (Atomic ref-counting)
+- [x] SQLite integration with WAL
+- [x] MessagePack serialization (Iterative parser)
+- [x] Memory management strategy (Duality Pool)
+- [x] Reliability sanitizers (TSan/GPA)
 
-**Deliverable**: Echo server with real-time sync
-
----
-
-### Phase 2: Store API
+### Phase 2: Store API (Complete)
 **Goal**: Path-based state access
-- [ ] Store.get() implementation
-- [ ] Store.set() and Store.remove() implementation
-- [ ] Store.subscribe() implementation
-- [ ] Store.batch() implementation (Atomic multi-path)
-- [ ] Schema validation (Server-side)
-- [ ] Namespace isolation
-- [ ] Authorization engine (Basic)
+- [x] Store.get() / Store.set() / Store.remove()
+- [x] Store.subscribe() implementation
+- [x] Store.batch() atomic operations
+- [x] Schema validation (Strict/Server-side)
+- [x] Namespace isolation
 
-**Deliverable**: Collaborative whiteboard demo
-
----
-
-### Phase 3: Query API
-**Goal**: Collection filtering and sorting (MVP Scope)
-- [ ] Query parser
-- [ ] Query executor (SQLite)
-- [ ] MVP Operators (`eq`, `in`, `gt`/`lt`, `startsWith`)
-- [ ] Sorting (Single-field)
-- [ ] Pagination (Cursor-based)
+### Phase 3: Query & Presence (Complete)
+**Goal**: Filtering and User Awareness
+- [ ] Query parser & SQLite executor
+- [ ] Standard operators (`eq`, `in`, `gt`/`lt`, `startsWith`)
 - [ ] Real-time query subscriptions
+- [ ] Presence.set() / Presence.subscribe()
+- [ ] Ephemeral in-memory storage
 
-**Deliverable**: Multi-tenant dashboard demo
-
----
-
-### Phase 4: Presence API
-**Goal**: User awareness
-- [ ] Presence.set() implementation
-- [ ] Presence.getAll() implementation (self-excluded by default)
-- [ ] Presence.subscribe() implementation
-- [ ] Ephemeral storage (RAM only)
-- [ ] Automatic cleanup on disconnect
-
-**Deliverable**: Collaborative editor with cursors
-
----
-
-### Phase 5: Client SDK
-**Goal**: TypeScript client library
-- [ ] Core client implementation
-- [ ] Connection management
-- [ ] Reconnection logic
-- [ ] TypeScript types generation
-- [ ] React integration
-
-**Deliverable**: npm package @zyncbase/client
-
----
-
-### Phase 6: Production Ready
-**Goal**: Production hardening
+### Phase 4: Production Hardening (In-Progress)
+**Goal**: V1 Stability
+- [/] Error taxonomy & retry strategies (Implemented in core)
+- [/] Documentation alignment (This task)
+- [ ] Connection management optimizations
+- [ ] TypeScript types generation refinement
 - [ ] Security audit
-- [ ] Performance optimization
-- [ ] Monitoring (Prometheus metrics)
-- [ ] Health check endpoint
-- [ ] Graceful shutdown logic
-- [ ] Error taxonomy & retry strategies
-- [ ] Version compatibility & maintenance
-- [ ] Documentation
-- [ ] Examples
-
-**Deliverable**: v1.0.0 release
 
 ---
 
 ## Out of V1 Scope
 
-To focus on a rock-solid core, the following features are explicitly deferred:
+To focus on a rock-solid core, the following features are explicitly deferred or rejected:
 
-- **Frameworks**: Vue and Svelte integrations (Roadmap: post-v1)
-- **Tooling**: Admin UI & detailed Firebase/Supabase migration guides (Roadmap: post-v1)
-- **Features**: Full-text search (FTS5), and Aggregation queries (Roadmap: post-v1)
-- **Advanced Queries**: Multi-field sorting (Roadmap: post-v1)
-- **DevOps**: Kubernetes official deployment guide (Roadmap: post-v1)
-- **DX**: Hot reload for server configuration (v1: server restart is minimum)
-- **Strategic**: **Offline Support** (Local storage strategy, sync queue, client-side conflict resolution)
+- **Horizontal Scaling**: **Rejected for V1**. ZyncBase is designed for vertical scaling to 100k+ connections on a single node. Distributed state complexity is avoided to maintain predictability (See [ADR-006](./architecture/adrs.md)).
+- **Offline Support**: Deferred. (Sync queue, client-side conflict resolution).
+- **Advanced Queries**: Multi-field sorting, Aggregations, Regex (Roadmap: post-v1).
+- **Frameworks**: Vue/Svelte integrations (V1 focuses on React/Vanilla).

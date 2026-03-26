@@ -21,9 +21,9 @@ Read a value from the state tree.
 const element = client.store.get('elements.rect-1')
 ```
 **Returns** (varies by path depth):
-- **Array of Objects**: If the path points to a collection (e.g., `'elements'`)
-- **Single Object**: If the path points to a specific document (e.g., `'elements.rect-1'`)
-- **Scalar value**: If the path points to a specific field (e.g., `'elements.rect-1.x'`)
+- **Array of Objects**: If the path points to a collection (e.g., `client.store.get('users')` -> `Array<User>`)
+- **Single Object**: If the path points to a specific document (e.g., `client.store.get('users.u1')` -> `User`)
+- **Scalar value**: If the path points to a specific field (e.g., `client.store.get('users.u1.name')` -> `string`)
 - `undefined`: If the path is not found
 
 ### `store.set(path, value)`

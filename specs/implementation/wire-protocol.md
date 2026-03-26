@@ -106,7 +106,7 @@ Retrieve a value at a path.
 {
   "type":  "ok",
   "id":    1,
-  "value": <any>    // Array for collections, Object for documents, scalar for fields, null if not found
+  "value": <any>    // Array for collections, Object for documents, scalar for fields, null if not found (See Store API for details)
 }
 ```
 
@@ -790,7 +790,7 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | C→S | `PresenceRemove` | `presence.remove()` | `ok` |
 | C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` |
 | C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` |
-| C→S | `AuthRefresh` | `client.reauthenticate(token)` | `ok` with `session` |
+| C→S | `AuthRefresh` | `client.authRefresh(token)` | `ok` with `session` |
 | S→C | `Connected` | — | Push (no `id`) |
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |
