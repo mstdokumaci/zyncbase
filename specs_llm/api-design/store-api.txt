@@ -1,14 +1,14 @@
 Store API Reference handles synchronized data validated against [Schema persisted to SQLite synchronized across clients Table of Contents Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access Target items properties dot-notation arrays `store.get(path) Read value state tree```typescript
 const element = client.store.get('elements.rect-1')
-```value path `undefined not found `store.set(path value) Write value applied locally synced Reverted if server rejects Server-Time Last-Write-Wins) Path level```typescript
+```**Returns** by path **Array of Objects** path points to collection'elements **Single specific document'elements.rect-1 **Scalar specific field.rect-1 `undefined path not found `store.set(path, value) Write value **Optimistic applied locally synced Reverted if server rejects **Conflict Resolution** Server-Time Last-Write-Wins (LWW) at Path level```typescript
 client.store.set('user.name', 'Alice')
-````store.remove(path) Removes value path```typescript
+````set()` fire-and-forget errors reported via `client.on('error) See [Error Handling-propagation). calling `set()` document path `elements.rect-1 SDK extracts ID merges into stored object include `id` in value `void` `store.remove(path) Removes value specified path```typescript
 client.store.remove('elements.rect-1')
 ````store.subscribe(path callback real-time updates path```typescript
 const unsubscribe = client.store.subscribe('elements', (elements) => {
   render(elements)
 })
-```unsubscribe function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(path options) one-off query-real```typescript
+```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unsubscribe function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(path options) one-off query (non-real```typescript
 const users = await client.store.query('users', {
   where: { age: { gte: 18 }, status: { eq: 'active' } },
   orderBy: { created_at: 'desc' },
@@ -45,4 +45,4 @@ client.store.get(`users.${userId}.name`)
 
 // ✅ Array handles it safely
 client.store.get(['users', userId, 'name'])
-```See [Presence API-api.md user awareness features Language Reference-language.md Detailed query syntax [Configuration Schema.md schema definitions
+```[Presence API.md user awareness features [Query Language Reference Detailed query syntax [Configuration Schema schema definitions Management Client lifecycle events [Error Handling Error types optimistic revert behavior

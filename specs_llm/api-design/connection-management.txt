@@ -1,0 +1,88 @@
+Connection Management SDK client lifecycle creating clients connecting switching reconnection event handling Table of Contents [Creating Client [Connection Lifecycle [Namespace Switching Listeners [Reconnection Strategy [Token Refresh Creating Client```typescript
+import { createClient } from '@zyncbase/client'
+
+const client = createClient({
+  url: 'ws://localhost:3000',
+  auth: { token: userJWT },
+  storeNamespace: 'tenant:acme',
+  presenceNamespace: 'tenant:acme:document:doc-123',
+  reconnect: true,
+  reconnectDelay: 1000,
+  maxReconnectDelay: 30000,
+  maxReconnectAttempts: Infinity,
+  reconnectJitter: true
+})
+```Options Reference Option Default Description `url` string(required WebSocket server URL `auth.token` string(required External JWT authentication `storeNamespace`'public' Namespace store operations derived JWT server `presenceNamespace` same `storeNamespace` Namespace presence specific document-scoped). `reconnect` `true` Auto-reconnect unexpected disconnect `reconnectDelay` `1000` Base delay reconnect attempts `maxReconnectDelay` `30000` Maximum delay cap exponential backoff `maxReconnectAttempts` `Infinity` Max retry attempts before giving up `reconnectJitter` `true` Add ±10% randomness retry timing (prevents thundering Namespace Examples```typescript
+// Simple app (defaults to public namespace)
+const client = createClient({
+  url: 'ws://localhost:3000',
+  auth: { token }
+})
+// storeNamespace: 'public', presenceNamespace: 'public'
+
+// Multi-tenant (JWT-derived on server)
+const client = createClient({
+  url: 'ws://localhost:3000',
+  auth: { token }  // JWT contains tenantId; server derives namespace
+})
+
+// Explicit namespaces
+const client = createClient({
+  url: 'ws://localhost:3000',
+  auth: { token },
+  storeNamespace: 'tenant:acme:workspace:ws-1',
+  presenceNamespace: 'tenant:acme:workspace:ws-1:document:doc-123'
+})
+```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT **WebSocket /ws?ticket=... opens WebSocket connection`Connected` server sends message `userId active namespaces SDK wait `Connected push before resolving() promise```typescript
+await client.connect()
+// Connection is fully established, ready to use store and presence APIs
+````Promise<void> `ZyncBaseError `AUTH_FAILED `CONNECTION_FAILED `client.disconnect() closes connection clears active namespace```typescript
+client.disconnect()
+```wire-level details connection lifecycle (ticket format `Connected payload heartbeat see [Wire Protocol#connection Namespace Switching `client.setStoreNamespace(namespace Switch active store namespace runtime subscriptions invalidated client re-subscribe```typescript
+await client.setStoreNamespace('tenant:acme:workspace:ws-2')
+````namespace `Promise<void> `ZyncBaseError` `NAMESPACE_UNAUTHORIZED permitted `client.setPresenceNamespace(namespace) Switch active presence namespace clears presence old joins new```typescript
+await client.setPresenceNamespace('tenant:acme:document:doc-456')
+````namespace `Promise<void> Event Listeners `client.on(event callback connection lifecycle events```typescript
+client.on('connected', () => {
+  console.log('Connected to server')
+})
+
+client.on('disconnected', () => {
+  console.log('Disconnected from server')
+})
+
+client.on('reconnecting', () => {
+  console.log('Reconnecting...')
+})
+
+client.on('error', (error: ZyncBaseError) => {
+  console.error('Error:', error.code, error.message)
+})
+
+client.on('tokenExpired', async () => {
+  const newToken = await refreshAuthToken()
+  await client.reauthenticate(newToken)
+})
+```Events Callback Signature Description `connected`() => void` WebSocket established `Connected push received `disconnected`() => void Connection closed retries `reconnecting`() => void` reconnect disconnect `error` ZyncBaseError) => void Error fire-and-forget write subscription `tokenExpired`() => void Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
+client.on('statusChange', (status, detail) => {
+  // status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  // detail.previousStatus: the state before this transition
+  // detail.retryCount: current attempt number (0 when first connecting)
+  // detail.retryIn: ms until next attempt (null if not reconnecting)
+  // detail.error: last error, if any
+})
+```Reconnection Strategy connection lost SDK uses backoff optional jitter```
+delay = min(reconnectDelay × 2^attempt + jitter, maxReconnectDelay)
+````jitter delay 0.1 random(-1 1) defaults):```
+Attempt 1: ~1s
+Attempt 2: ~2s
+Attempt 3: ~4s
+Attempt 4: ~8s
+Attempt 5: ~16s
+Attempt 6+: ~30s (capped)
+```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh.reauthenticate(token Update session new external JWT without disconnecting```typescript
+client.on('tokenExpired', async () => {
+  const newToken = await myAuthService.refresh()
+  await client.reauthenticate(newToken)
+})
+````token new external JWT `Promise<void>` sends `AuthRefresh wire message See [Wire Protocol#authrefresh details API Persistent state operations [Presence API Ephemeral user awareness [Error Handling Error types retry behavior [Wire Protocol Full wire-level connection lifecycle

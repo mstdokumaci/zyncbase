@@ -1,13 +1,21 @@
 Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory cleaned on disconnect Table of Contents [Methods#presence-methods [Namespaces-namespaces [Use Cases Examples [Best Practices Presence Methods `presence.set(data) Set presence data broadcast users same```typescript
 client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
 ````presence.subscribe Subscribe real-time changes leaves updates users namespace```typescript
-client.presence.subscribe((users) => {
+const unsubscribe = client.presence.subscribe((users) => {
   renderCursors(users)
 })
-````presence.get(userId)` specific user's current presence data **synchronous local lookup** SDK's internal cache returns values active [Subscription] namespace```typescript
+```<PresenceEntry> each entry contains```typescript
+{
+  userId: string,        // Authenticated user ID
+  data: object,          // User's presence data (cursor, status, etc.)
+  joinedAt: number       // Unix timestamp of when the user joined
+}
+```**Returns** unsubscribe function `presence.get(userId) specific user's current presence data **synchronous local lookup** SDK's internal cache returns values active [Subscription] namespace```typescript
 const alice = client.presence.get('user-123')
 ````presence.getAll Returns users presence data namespace Excludes self Like `get() **synchronous local returns empty array no active subscription```typescript
 const everyone = client.presence.getAll({ includeSelf: true })
+````presence.remove() presence data Called automatically disconnect manually```typescript
+client.presence.remove()
 ```Presence Namespaces scoped [Client Initialization/configuration users same namespace see each other Document-Scoped Presence**```typescript
 const client = createClient({
   presenceNamespace: 'workspace:acme:doc:123'
@@ -26,4 +34,24 @@ input.addEventListener('input', () => {
   client.presence.set({ typing: true })
   setTimeout(() => client.presence.set({ typing: false }), 3000)
 })
-```Best Practices **Keep Data Presence updates frequent include essential transient state **Namespace Granularity** Use specific namespaces `doc:123 reduce unneeded broadcasts **Handle Late joining receive last 5s updates automatically See API Reference-api.md persistent state management [Configuration/configuration.md Defining presence fields schema
+```Throttling SDK throttles-frequency.set() calls to ~60fps server batches presence broadcasts every 50ms Presence Schema structure presence data `schema.json```json
+{
+  "version": "1.0.0",
+  "store": { ... },
+  "presence": {
+    "fields": {
+      "cursor": {
+        "type": "object",
+        "properties": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "status": {
+        "type": "string",
+        "enum": ["active", "away", "idle"]
+      }
+    }
+  }
+}
+```Best Practices **Keep Data Presence updates frequent~60fps). include essential transient state **Namespace Granularity** Use specific namespaces `doc:123 reduce unneeded broadcasts **Handle Late Joiners** joining namespace receive last 5s updates API Reference persistent state management [Configuration Defining presence fields schema [Connection Management Client lifecycle switching [Error Handling Error types handling

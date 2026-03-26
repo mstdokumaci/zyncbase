@@ -187,7 +187,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Nested Fields Arrays```json
+```Nested Fields Simple Arrays```json
 {
   "version": "1.0.0",
   "store": {
@@ -195,12 +195,17 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
       "fields": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "address": {
+        "preferences": {
           "type": "object",
           "fields": {
-            "street": { "type": "string" },
-            "city": { "type": "string" },
-            "zipCode": { "type": "string" }
+            "notifications": {
+              "type": "object",
+              "fields": {
+                "email": { "type": "boolean" },
+                "browser": { "type": "boolean" }
+              }
+            },
+            "theme": { "type": "string" }
           }
         },
         "roles": {
@@ -212,15 +217,15 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```ZyncBase generates don need```sql
+```ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries natural document structure```sql
 CREATE TABLE users (
     id TEXT PRIMARY KEY,
     namespace_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
-    address__street TEXT,
-    address__city TEXT,
-    address__zipCode TEXT,
+    preferences__notifications__email INTEGER, -- Boolean stored as int
+    preferences__notifications__browser INTEGER,
+    preferences__theme TEXT,
     roles TEXT,  -- JSON: ["admin", "editor"]
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -238,7 +243,7 @@ CREATE TABLE users (
     }
   }
 }
-```Nested Fields Flattening ZyncBase flattens querying```json
+```Nested Fields Flattening ZyncBase flattens objects querying```json
 {
   "store": {
     "users": {
@@ -256,22 +261,27 @@ CREATE TABLE users (
     }
   }
 }
-```API objects work```typescript
-// Set nested field
-await zyncbase.set(users.user-1', {
+```API nested objects work```typescript
+// Set nested fields (at any depth)
+await zyncbase.set('users.user-1', {
   name: 'Alice',
   address: {
     street: '123 Main St',
-    city: 'San Francisco',
-    zipCode: '94102'
+    location: {
+      lat: 37.7749,
+      lng: -122.4194
+    }
   }
 })
 
-// Query nested field
-const users = await zyncbase.query(users', {
-  where: { 'address.city': 'San Francisco' }
+// Field-level updates also support recursion
+await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
+
+// Query nested fields using dot notation
+const users = await zyncbase.query('users', {
+  where: { 'address.location.lat': { gte: 37 } }
 })
-```under hood Nested fields flattened to columns double underscore separator Base field names forbidden `__` prevent collisions query efficiently Frontend **Limitations one level nesting Nested objects contain arrays deeper nesting use separate store paths references Arrays ZyncBase supports arrays specific constraints Simple arrays```json
+```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations Efficient querying SQLite indexes on flattened columns No depth limit nesting Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 ZyncBase supports arrays with constraints Simple arrays```json
 {
   "store": {
     "tasks": {

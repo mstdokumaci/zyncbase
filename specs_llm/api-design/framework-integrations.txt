@@ -1,0 +1,76 @@
+Framework Integrations specifications** framework bindings SDK patterns define developer experience Table of Contents [React] 2. [Vue]( [Common Patterns]( React Package `@zyncbase/react` `useStore(path)` Subscribe store path automatic cleanup unmount```typescript
+const { data, loading, error } = useStore('elements')
+```data T undefined loading boolean error ZyncBaseError options Subscribe filtered query results pagination support```typescript
+const { data, loading, error, hasMore, loadMore, loadingMore } = useQuery('tasks', {
+  where: { status: { eq: 'active' } },
+  orderBy: { created_at: 'desc' },
+  limit: 20
+})
+```data T loading boolean error ZyncBaseError null boolean Promise<void> loadingMore boolean `usePresence() Subscribe presence updates current```typescript
+const others = usePresence()
+// Array<{ userId, data, joinedAt }>
+```( Reactive UI feedback```typescript
+const { status, error, retryCount, retryIn } = useConnectionStatus()
+```**Returns status 'connecting 'disconnected error null retryCount number number null Example Connection Status Banner```tsx
+function ConnectionBanner() {
+  const { status, retryCount, retryIn } = useConnectionStatus()
+
+  if (status === 'connected') return null
+  if (status === 'connecting') return <Banner>Connecting...</Banner>
+
+  if (status === 'reconnecting') {
+    return (
+      <Banner>
+        Reconnecting (attempt {retryCount})...
+        {retryIn && ` Retrying in ${Math.ceil(retryIn / 1000)}s`}
+      </Banner>
+    )
+  }
+
+  return <Banner variant="error">Disconnected</Banner>
+}
+```Infinite Scroll```tsx
+function ActivityFeed() {
+  const { data, hasMore, loadMore, loadingMore } = useQuery('activities', {
+    orderBy: { created_at: 'desc' },
+    limit: 20
+  })
+
+  return (
+    <ScrollArea onBottomReached={() => hasMore && loadMore()}>
+      {data.map(item => <ActivityItem key={item.id} {...item} />)}
+      {loadingMore && <LoadingSpinner />}
+    </ScrollArea>
+  )
+}
+```Vue Package@zyncbase/vue Composables(path)```typescript
+const { data, loading, error } = useStore('elements')
+// All return values are Vue refs
+```options```typescript
+const { data, loading, error, hasMore, loadMore } = useQuery('tasks', {
+  where: { status: { eq: 'active' } }
+})
+```
+
+#### `usePresence()`
+
+```typescript
+const others = usePresence()
+```composables return refs clean subscriptions unmounted Common Patterns Loading Error Data hooks follow consistent data loading error pattern```typescript
+// React
+const { data, loading, error } = useStore('tasks')
+if (loading) return <Spinner />
+if (error) return <ErrorView error={error} />
+return <TaskList tasks={data} />
+```Auto-cleanup hooks unsubscribe store query presence subscriptions unmounts No manual cleanup Client Provider instance app root:```tsx
+// React
+import { ZyncBaseProvider } from '@zyncbase/react'
+
+function App() {
+  return (
+    <ZyncBaseProvider client={client}>
+      <MyApp />
+    </ZyncBaseProvider>
+  )
+}
+```See [Store API-api.md store methods [Presence API-api.md methods [Connection Management.md events status [Error Handling].md `ZyncBaseError` interface hook error states
