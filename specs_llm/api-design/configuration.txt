@@ -14,6 +14,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 }
 ```Configuration```json
 {
+  "environment": "development", // [PLANNED]
   "server": {
     "port": 3000,
     "host": "0.0.0.0",
@@ -33,7 +34,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   
   "dataDir": "./data",
   
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [
       {
         "pattern": "public",
@@ -56,11 +57,10 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
       "https://app.yourdomain.com"
     ],
     "allowLocalhost": true,
-    "rateLimit": {
-      "messagesPerSecond": 100,
-      "connectionsPerIP": 10,
-      "maxMessageSize": 1048576
-    }
+    "maxMessagesPerSecond": 100,
+    "maxConnectionsPerIP": 10,
+    "maxMessageSize": 1048576,
+    "violationThreshold": 10
   },
   
   "logging": {
@@ -84,7 +84,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 }
 ````schema Path JSON migration settings```json
 {
-  "schema": {
+  "schema": { // [PLANNED]
     "file": "./schema.json",
     "version": "1.0.0",
     "autoMigrate": true,
@@ -95,7 +95,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 {
   "schema": "./schema.json"
 }
-```**Migration `autoMigrate `true Auto-migrate all changes"additive-only auto-migrate additive changes `false` Require migrations `allowDestructive `true Allow destructive changes with confirmation `false` Block destructive changes `version` Semantic version schema Major changes require migrations Minor/patch versions auto-migrate `authorization `authorization.json file rules```json
+```**Migration `autoMigrate `true Auto-migrate all changes"additive-only auto-migrate additive changes `false Require migrations `allowDestructive `true Allow destructive changes with confirmation `false` Block destructive changes `version` Semantic version schema Major changes require migrations Minor/patch versions auto-migrate `authorization` [PLANNED [UNENFORCED] `authorization.json file current engine enforce authorization rules server boot without rule enforcement```json
 {
   "authorization": "./authorization.json"
 }
@@ -103,7 +103,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 {
   "dataDir": "./data"
 }
-````namespaces definitions```json
+````namespaces Namespace definitions```json
 {
   "namespaces": {
     "patterns": [
@@ -121,11 +121,10 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
       "https://yourdomain.com"
     ],
     "allowLocalhost": true,
-    "rateLimit": {
-      "messagesPerSecond": 100,
-      "connectionsPerIP": 10,
-      "maxMessageSize": 1048576
-    }
+    "maxMessagesPerSecond": 100,
+    "maxConnectionsPerIP": 10,
+    "maxMessageSize": 1048576,
+    "violationThreshold": 10
   }
 }
 ````logging configuration```json
@@ -728,7 +727,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "port": "${PORT}",
     "host": "${HOST}"
   },
-  "auth": {
+  "authentication": {
     "jwt": {
       "secret": "${JWT_SECRET}"
     }
@@ -742,11 +741,11 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
-  "auth": {
+  "authentication": {
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [{ "pattern": "room:*" }]
   }
 }
@@ -782,11 +781,11 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
-  "auth": {
+  "authentication": {
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [{ "pattern": "tenant:*" }]
   }
 }
