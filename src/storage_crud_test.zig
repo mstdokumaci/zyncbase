@@ -44,7 +44,7 @@ test "Storage: CRUD operations" {
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr);
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr, .{});
     defer {
         storage.deinit();
         schema_parser.freeSchema(allocator, schema_ptr.*);

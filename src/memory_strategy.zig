@@ -536,6 +536,11 @@ pub const MemoryStrategy = struct {
 pub const Connection = struct {
     allocator: Allocator,
     memory_strategy: ?*MemoryStrategy,
+
+    // Rate limiting state
+    request_tokens: f64,
+    last_request_time: ?i64,
+
     id: u64,
     user_id: ?[]const u8,
     namespace: []const u8,
@@ -564,6 +569,8 @@ pub const Connection = struct {
         self.ref_count = std.atomic.Value(usize).init(1);
         self.mutex = .{};
         self.memory_strategy = null;
+        self.request_tokens = 0.0;
+        self.last_request_time = null;
     }
 
     pub fn deinit(self: *Connection, allocator: Allocator) void {
@@ -602,6 +609,8 @@ pub const Connection = struct {
         self.ws = .{ .ws = null, .ssl = false };
         self.ref_count.store(1, .monotonic);
         // Mutex remains initialized and doesn't need to be reassigned
+        self.request_tokens = 0.0;
+        self.last_request_time = null;
     }
 };
 

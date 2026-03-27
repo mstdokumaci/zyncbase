@@ -127,7 +127,7 @@ test "config: env var substitution - multiple variables" {
         \\{{
         \\  "security": {{
         \\    "allowedOrigins": ["${{TEST_ORIGIN_1}}", "${{TEST_ORIGIN_2}}"],
-        \\    "rateLimitMessagesPerSecond": ${{TEST_RATE_LIMIT}}
+        \\    "maxMessagesPerSecond": ${{TEST_RATE_LIMIT}}
         \\  }},
         \\  "schema": "{s}"
         \\}}
@@ -144,7 +144,7 @@ test "config: env var substitution - multiple variables" {
     try std.testing.expectEqual(@as(usize, 2), config.security.allowed_origins.len);
     try std.testing.expectEqualStrings("https://example.com", config.security.allowed_origins[0]);
     try std.testing.expectEqualStrings("https://app.example.com", config.security.allowed_origins[1]);
-    try std.testing.expectEqual(@as(u32, 200), config.security.rate_limit_messages_per_second);
+    try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
 }
 
 // Server configuration properties
@@ -392,8 +392,7 @@ test "config: round-trip - server config" {
         \\{{
         \\  "server": {{
         \\    "port": 8080,
-        \\    "host": "127.0.0.1",
-        \\    "maxConnections": 50000
+        \\    "host": "127.0.0.1"
         \\  }},
         \\  "schema": "{s}"
         \\}}
@@ -409,7 +408,6 @@ test "config: round-trip - server config" {
     // Verify values match original
     try std.testing.expectEqual(@as(u16, 8080), config.server.port);
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
-    try std.testing.expectEqual(@as(usize, 50000), config.server.max_connections);
 }
 
 test "config: round-trip - auth config" {
@@ -470,8 +468,8 @@ test "config: round-trip - security config" {
         \\  "security": {{
         \\    "allowedOrigins": ["https://example.com", "https://app.example.com"],
         \\    "allowLocalhost": false,
-        \\    "rateLimitMessagesPerSecond": 200,
-        \\    "rateLimitConnectionsPerIp": 20,
+        \\    "maxMessagesPerSecond": 200,
+        \\    "maxConnectionsPerIP": 20,
         \\    "maxMessageSize": 2097152
         \\  }},
         \\  "schema": "{s}"
@@ -490,8 +488,8 @@ test "config: round-trip - security config" {
     try std.testing.expectEqualStrings("https://example.com", config.security.allowed_origins[0]);
     try std.testing.expectEqualStrings("https://app.example.com", config.security.allowed_origins[1]);
     try std.testing.expectEqual(false, config.security.allow_localhost);
-    try std.testing.expectEqual(@as(u32, 200), config.security.rate_limit_messages_per_second);
-    try std.testing.expectEqual(@as(u32, 20), config.security.rate_limit_connections_per_ip);
+    try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
+    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections_per_ip);
     try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 }
 
@@ -544,7 +542,7 @@ test "config: round-trip - performance config" {
         \\  "performance": {{
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
-        \\    "batchTimeoutMs": 20
+        \\    "batchTimeout": 20
         \\  }},
         \\  "schema": "{s}"
         \\}}
@@ -560,7 +558,8 @@ test "config: round-trip - performance config" {
     // Verify values match original
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
     try std.testing.expectEqual(false, config.performance.batch_writes);
-    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout_ms);
+    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
+    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 }
 
 test "config: round-trip - complete config" {
@@ -578,8 +577,7 @@ test "config: round-trip - complete config" {
         \\{{
         \\  "server": {{
         \\    "port": 8080,
-        \\    "host": "127.0.0.1",
-        \\    "maxConnections": 50000
+        \\    "host": "127.0.0.1"
         \\  }},
         \\  "authentication": {{
         \\    "jwt": {{
@@ -592,8 +590,8 @@ test "config: round-trip - complete config" {
         \\  "security": {{
         \\    "allowedOrigins": ["https://example.com"],
         \\    "allowLocalhost": false,
-        \\    "rateLimitMessagesPerSecond": 200,
-        \\    "rateLimitConnectionsPerIp": 20,
+        \\    "maxMessagesPerSecond": 200,
+        \\    "maxConnectionsPerIP": 20,
         \\    "maxMessageSize": 2097152
         \\  }},
         \\  "logging": {{
@@ -603,7 +601,7 @@ test "config: round-trip - complete config" {
         \\  "performance": {{
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
-        \\    "batchTimeoutMs": 20
+        \\    "batchTimeout": 20
         \\  }},
         \\  "dataDir": "{s}",
         \\  "schema": "{s}"
@@ -620,7 +618,6 @@ test "config: round-trip - complete config" {
     // Verify all values match original
     try std.testing.expectEqual(@as(u16, 8080), config.server.port);
     try std.testing.expectEqualStrings("127.0.0.1", config.server.host);
-    try std.testing.expectEqual(@as(usize, 50000), config.server.max_connections);
 
     try std.testing.expect(config.authentication.jwt_secret != null);
     try std.testing.expectEqualStrings("my-secret-key", config.authentication.jwt_secret.?);
@@ -635,6 +632,7 @@ test "config: round-trip - complete config" {
 
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
     try std.testing.expectEqual(false, config.performance.batch_writes);
+    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 
     try std.testing.expectEqualStrings(context.test_dir, config.data_dir);
 }

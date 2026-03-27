@@ -52,13 +52,7 @@ test "Verification: WebSocket connection lifecycle" {
     defer storage_engine.deinit(); // Note: context.deinit() handles directory cleanup
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        violation_tracker,
-        storage_engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     // Test connection open
@@ -115,13 +109,7 @@ test "Verification: StoreSet message processing" {
     defer storage_engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        violation_tracker,
-        storage_engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     // Create a proper MessagePack StoreSet message
@@ -221,13 +209,7 @@ test "Verification: StoreGet message processing" {
     defer storage_engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        violation_tracker,
-        storage_engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     // First, store a value (typed storage)
@@ -325,13 +307,7 @@ test "Verification: Error handling for invalid messages" {
     defer storage_engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        violation_tracker,
-        storage_engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     // Test 1: Invalid MessagePack should fail parsing
@@ -452,13 +428,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     defer storage_engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        violation_tracker,
-        storage_engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     // Open a connection

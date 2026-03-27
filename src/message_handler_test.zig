@@ -410,7 +410,6 @@ fn setupHandlerWithArraySchema(
 
     const violation_tracker = try allocator.create(ViolationTracker);
     violation_tracker.init(allocator, 10);
-
     const subscription_manager = try SubscriptionManager.init(allocator);
 
     const handler = try MessageHandler.init(
@@ -419,6 +418,7 @@ fn setupHandlerWithArraySchema(
         violation_tracker,
         engine,
         subscription_manager,
+        .{},
     );
 
     return .{
@@ -683,7 +683,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
     const violation_tracker = try allocator.create(ViolationTracker);
     violation_tracker.init(allocator, 10);
     const subscription_manager = try SubscriptionManager.init(allocator);
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager);
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager, .{});
     defer {
         handler.deinit();
         engine.deinit();
@@ -794,7 +794,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     const violation_tracker = try allocator.create(ViolationTracker);
     violation_tracker.init(allocator, 10);
     const subscription_manager = try SubscriptionManager.init(allocator);
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager);
+    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, engine, subscription_manager, .{});
     defer {
         handler.deinit();
         engine.deinit();

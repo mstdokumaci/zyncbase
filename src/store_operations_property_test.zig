@@ -34,13 +34,7 @@ test "store: set field extraction" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: Basic StoreSet message field extraction
     {
@@ -170,13 +164,7 @@ test "store: engine set integration" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: StoreSet should call storage engine and persist data
     {
@@ -290,13 +278,7 @@ test "store: set success response format" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: Successful StoreSet should return success response
     {
@@ -378,13 +360,7 @@ test "store: get field extraction" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: Basic StoreGet message field extraction
     {
@@ -480,13 +456,7 @@ test "store: engine get integration" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: StoreGet should call storage engine get
     {
@@ -608,13 +578,7 @@ test "store: get value response format" {
     defer engine.deinit();
     const subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        engine,
-        subscription_manager,
-    );
+    const handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, engine, subscription_manager, .{});
     defer handler.deinit();
     // Test 1: StoreGet should return value in response
     {

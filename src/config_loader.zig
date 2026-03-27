@@ -9,13 +9,13 @@ pub const Config = struct {
     performance: PerformanceConfig,
     data_dir: []const u8,
     schema_file: []const u8,
+    schema_content: ?[]const u8 = null,
     authorization_file: ?[]const u8,
     allocator: Allocator,
 
     pub const ServerConfig = struct {
         port: u16 = 3000,
         host: []const u8 = "0.0.0.0",
-        max_connections: usize = 100_000,
     };
 
     pub const AuthConfig = struct {
@@ -28,8 +28,8 @@ pub const Config = struct {
     pub const SecurityConfig = struct {
         allowed_origins: []const []const u8 = &.{},
         allow_localhost: bool = true,
-        rate_limit_messages_per_second: u32 = 100,
-        rate_limit_connections_per_ip: u32 = 10,
+        max_messages_per_second: u32 = 100,
+        max_connections_per_ip: u32 = 100,
         violation_threshold: u32 = 10,
         max_message_size: usize = 1024 * 1024, // 1MB
     };
@@ -54,7 +54,7 @@ pub const Config = struct {
     pub const PerformanceConfig = struct {
         message_buffer_size: usize = 1000,
         batch_writes: bool = true,
-        batch_timeout_ms: u32 = 10,
+        batch_timeout: u32 = 10,
     };
 
     pub fn deinit(self: *Config) void {
@@ -76,6 +76,9 @@ pub const Config = struct {
         self.allocator.free(self.server.host);
         self.allocator.free(self.data_dir);
         self.allocator.free(self.schema_file);
+        if (self.schema_content) |content| { // Added deinit for schema_content
+            self.allocator.free(content);
+        }
         if (self.authorization_file) |file| {
             self.allocator.free(file);
         }
@@ -223,12 +226,6 @@ pub const ConfigLoader = struct {
                         config.server.host = try allocator.dupe(u8, host.string);
                     }
                 }
-
-                if (server_obj.get("maxConnections")) |max_conn| {
-                    if (max_conn == .integer) {
-                        config.server.max_connections = @intCast(max_conn.integer);
-                    }
-                }
             }
         }
 
@@ -283,6 +280,8 @@ pub const ConfigLoader = struct {
             if (schema == .string) {
                 allocator.free(config.schema_file);
                 config.schema_file = try allocator.dupe(u8, schema.string);
+            } else if (schema == .object) {
+                config.schema_content = try std.json.Stringify.valueAlloc(allocator, schema, .{});
             }
         }
 
@@ -316,21 +315,21 @@ pub const ConfigLoader = struct {
                     }
                 }
 
-                if (security_obj.get("rateLimitMessagesPerSecond")) |rate_limit| {
-                    if (rate_limit == .integer) {
-                        config.security.rate_limit_messages_per_second = @intCast(rate_limit.integer);
+                if (security_obj.get("maxMessagesPerSecond")) |limit| {
+                    if (limit == .integer) {
+                        config.security.max_messages_per_second = @intCast(limit.integer);
                     }
                 }
 
-                if (security_obj.get("rateLimitConnectionsPerIp")) |rate_limit| {
-                    if (rate_limit == .integer) {
-                        config.security.rate_limit_connections_per_ip = @intCast(rate_limit.integer);
+                if (security_obj.get("maxConnectionsPerIP")) |limit| {
+                    if (limit == .integer) {
+                        config.security.max_connections_per_ip = @intCast(limit.integer);
                     }
                 }
 
-                if (security_obj.get("maxMessageSize")) |max_size| {
-                    if (max_size == .integer) {
-                        config.security.max_message_size = @intCast(max_size.integer);
+                if (security_obj.get("maxMessageSize")) |size| {
+                    if (size == .integer) {
+                        config.security.max_message_size = @intCast(size.integer);
                     }
                 }
 
@@ -390,9 +389,9 @@ pub const ConfigLoader = struct {
                     }
                 }
 
-                if (performance_obj.get("batchTimeoutMs")) |batch_timeout| {
+                if (performance_obj.get("batchTimeout")) |batch_timeout| {
                     if (batch_timeout == .integer) {
-                        config.performance.batch_timeout_ms = @intCast(batch_timeout.integer);
+                        config.performance.batch_timeout = @intCast(batch_timeout.integer);
                     }
                 }
             }
@@ -414,13 +413,15 @@ pub const ConfigLoader = struct {
             }
         };
 
-        if (config.schema_file.len == 0) {
-            return error.InvalidSchemaFile;
-        }
+        if (config.schema_content == null) {
+            if (config.schema_file.len == 0) {
+                return error.InvalidSchemaFile;
+            }
 
-        std.fs.cwd().access(config.schema_file, .{}) catch {
-            return error.SchemaFileNotFound;
-        };
+            std.fs.cwd().access(config.schema_file, .{}) catch {
+                return error.SchemaFileNotFound;
+            };
+        }
 
         // Validate authorization rules file exists if specified
         if (config.authorization_file) |auth_file| {

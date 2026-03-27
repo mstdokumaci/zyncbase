@@ -137,6 +137,7 @@ pub const ZyncBaseServer = struct {
             memory_strategy,
             config.data_dir,
             &self.loaded_schema,
+            config.performance,
         );
         errdefer storage_engine.deinit();
 
@@ -209,6 +210,7 @@ pub const ZyncBaseServer = struct {
             violation_tracker,
             storage_engine,
             subscription_manager,
+            config.security,
         );
         errdefer message_handler.deinit();
 

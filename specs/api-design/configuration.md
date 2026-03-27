@@ -60,8 +60,7 @@ Main server configuration file.
   "environment": "development", // [PLANNED]
   "server": {
     "port": 3000,
-    "host": "0.0.0.0",
-    "maxConnections": 100000
+    "host": "0.0.0.0"
   },
   
   "schema": "./schema.json",
@@ -129,8 +128,7 @@ Server network configuration.
 {
   "server": {
     "port": 3000,              // Port to listen on
-    "host": "0.0.0.0",         // Host to bind to
-    "maxConnections": 100000   // Max concurrent connections
+    "host": "0.0.0.0"          // Host to bind to
   }
 }
 ```

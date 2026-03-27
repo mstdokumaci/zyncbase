@@ -46,7 +46,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, tab
 
     out_schema.* = schema;
 
-    const engine = try @import("storage_engine.zig").StorageEngine.init(allocator, memory_strategy, test_dir, schema);
+    const engine = try @import("storage_engine.zig").StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -94,6 +94,7 @@ test "connection: open/close is inverse operation" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -508,6 +509,7 @@ test "connection: unique monotonically increasing IDs" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -612,6 +614,7 @@ test "connection: unique monotonically increasing IDs" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler2.deinit();
 
@@ -704,6 +707,7 @@ test "message: all valid frames are parsed" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -807,6 +811,7 @@ test "message: type extraction" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -952,6 +957,7 @@ test "message: request routing to handlers" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -1090,6 +1096,7 @@ test "message: response correlation by ID" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 
@@ -1280,6 +1287,7 @@ test "message: error responses for invalid types/fields" {
         &tracker,
         storage_engine,
         subscription_manager,
+        .{},
     );
     defer handler.deinit();
 

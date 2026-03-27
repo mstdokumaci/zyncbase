@@ -63,6 +63,9 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `CIRCUIT_BREAKER_OPEN` | Hook Server | Circuit breaker is open | Too many Hook Server failures | 503 | Yes - Wait for timeout |
 | `SUBSCRIPTION_LIMIT_EXCEEDED` | Rate-Limit | Too many subscriptions | Client exceeded max subscriptions | 429 | No - Reduce subscriptions |
 | `WAL_SIZE_EXCEEDED` | Server | WAL file too large | WAL file exceeded threshold | 500 | Yes - Automatic checkpoint |
+| `MAX_CONNECTIONS_REACHED` | Connection | Server at capacity | Pool exhausted | 503 | No - Try later |
+| `INVALID_MESSAGE_FORMAT` | Validation | Missing fields | Message missing `type` or `id` | 400 | No - Fix payload |
+| `INVALID_ARRAY_ELEMENT` | Validation | Non-literal in array | Array contains map or nested array | 400 | No - Fix data |
 
 ---
 

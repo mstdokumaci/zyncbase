@@ -41,7 +41,7 @@ fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, t
         .tables = tables,
     };
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -67,7 +67,7 @@ test "StorageEngine: init and deinit" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema);
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema, .{});
     defer engine.deinit();
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
@@ -256,7 +256,7 @@ test "StorageEngine: transaction support" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1);
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1, .{});
     defer engine.deinit();
     // Initially no transaction should be active
     try testing.expect(!engine.isTransactionActive());

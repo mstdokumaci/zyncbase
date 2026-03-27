@@ -106,6 +106,8 @@ Error codes relevant to SDK consumers, grouped by category:
 | `INVALID_FIELD_NAME` | Field name contains forbidden `__` sequence | No |
 | `INVALID_ARRAY_ELEMENT` | Array contains non-literal value (e.g., nested object) | No — fix data |
 | `INVALID_MESSAGE` | Malformed message or missing `type` field | No |
+| `INVALID_MESSAGE_FORMAT` | Missing required fields: type or id | No |
+| `INVALID_MESSAGE_ID` | Correlation ID is negative or out of range | No |
 
 ### Rate Limiting
 
@@ -119,6 +121,7 @@ Error codes relevant to SDK consumers, grouped by category:
 | Code | Description | Auto-retry? |
 |------|-------------|-------------|
 | `CONNECTION_FAILED` | Transport failure (WebSocket closed) | Yes — reconnect |
+| `MAX_CONNECTIONS_REACHED` | Server at capacity | No — try later |
 | `TIMEOUT` | Operation timed out | Yes — retry with backoff |
 | `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
 

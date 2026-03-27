@@ -12,6 +12,7 @@ const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("memory_strategy.zig").Connection;
+const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 
 /// Structured path parsed from a MessagePack array payload.
 pub const ParsedPath = union(enum) {
@@ -58,6 +59,7 @@ pub const MessageHandler = struct {
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
     subscription_manager: *SubscriptionManager,
+    security_config: SecurityConfig,
     connection_registry: ConnectionRegistry,
 
     /// Initialize message handler with all required components
@@ -67,6 +69,7 @@ pub const MessageHandler = struct {
         violation_tracker: *ViolationTracker,
         storage_engine: *StorageEngine,
         subscription_manager: *SubscriptionManager,
+        security_config: SecurityConfig,
     ) !*MessageHandler {
         const self = try allocator.create(MessageHandler);
         errdefer allocator.destroy(self);
@@ -77,6 +80,7 @@ pub const MessageHandler = struct {
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
+            .security_config = security_config,
             // SAFETY: connection_registry is initialized via self.connection_registry.init below
             .connection_registry = undefined,
         };
@@ -95,6 +99,15 @@ pub const MessageHandler = struct {
     /// Uses WebSocket pointer as unique connection ID and adds to registry
     pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
         const conn_id = ws.getConnId();
+
+        // Enforce maximum connections
+        const current_count = self.connection_registry.map.count();
+        if (current_count >= 100_000) {
+            std.log.warn("Rejecting connection {}: max connections (100000) reached", .{conn_id});
+            try self.sendError(ws, "MAX_CONNECTIONS_REACHED", "Server has reached the maximum number of concurrent connections");
+            ws.close();
+            return;
+        }
 
         // Acquire connection state strongly initialized from the pool
         const conn = try self.memory_strategy.createConnection(conn_id, ws.*);
@@ -124,10 +137,47 @@ pub const MessageHandler = struct {
         };
         defer conn.release(self.allocator);
 
-        // Process message under connection mutex
-        conn.mutex.lock();
-        defer conn.mutex.unlock();
+        // 1. Enforce rate limiting under isolated lock
+        if (self.security_config.max_messages_per_second > 0) {
+            const is_rate_limited = blk: {
+                conn.mutex.lock();
+                defer conn.mutex.unlock();
 
+                const now_us = std.time.microTimestamp();
+                const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
+
+                if (conn.last_request_time == null) {
+                    // First request for this connection: grant full burst
+                    conn.request_tokens = burst_capacity;
+                    conn.last_request_time = now_us;
+                } else {
+                    const elapsed_us = now_us - conn.last_request_time.?;
+                    // Basic token bucket / leak rate
+                    const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
+                    const tokens_to_add: f64 = @as(f64, @floatFromInt(@max(@as(i64, 0), elapsed_us))) * (rate_limit / 1_000_000.0);
+
+                    conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
+                    conn.last_request_time = now_us;
+                }
+
+                if (conn.request_tokens < 1.0) break :blk true;
+                conn.request_tokens -= 1.0;
+                break :blk false;
+            };
+
+            if (is_rate_limited) {
+                std.log.warn("Rate limit exceeded for connection {}: tokens={d:.2} (limit={d}/s, burst={d})", .{
+                    conn_id,
+                    conn.request_tokens,
+                    self.security_config.max_messages_per_second,
+                    self.security_config.max_messages_per_second * 2,
+                });
+                try self.sendError(ws, "RATE_LIMITED", "Too many requests");
+                return;
+            }
+        }
+
+        // 2. Message processing (Independent of connection state currently)
         // Acquire dynamic parsing arena from the pool
         const arena = try self.memory_strategy.acquireArena();
         defer self.memory_strategy.releaseArena(arena);
@@ -159,13 +209,15 @@ pub const MessageHandler = struct {
         };
 
         // Route to appropriate handler
+        // Note: Currently none of the handlers access Connection state under the lock.
+        // If they start doing so, we should acquire the lock specifically inside those handlers.
         const response = self.routeMessage(arena_allocator, conn_id, msg_info, parsed) catch |err| {
             std.log.debug("Failed to process message from connection {}: {}", .{ conn_id, err });
-            try self.sendError(ws, "PROCESSING_FAILED", "Failed to process request");
+            try self.sendError(ws, "INTERNAL_ERROR", "Failed to process request");
             return;
         };
 
-        // Send response
+        // Send response (Outside lock to avoid blocking on backpressure)
         ws.send(response, .binary);
     }
 

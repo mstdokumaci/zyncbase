@@ -8,6 +8,7 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
+const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
 
 const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
@@ -118,12 +119,13 @@ pub const StorageEngine = struct {
     /// before the DB read and only populate the cache if it hasn't advanced,
     /// preventing stale values from racing into the cache.
     write_seq: std.atomic.Value(u64),
+    performance_config: PerformanceConfig,
 
     fn deinitPayload(allocator: Allocator, payload: *msgpack.Payload) void {
         payload.free(allocator);
     }
 
-    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema) !*StorageEngine {
+    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema, performance_config: PerformanceConfig) !*StorageEngine {
         if (data_dir.len == 0) return error.InvalidDataDir;
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
@@ -198,6 +200,7 @@ pub const StorageEngine = struct {
             .transaction_active = std.atomic.Value(bool).init(false),
             .manual_transaction_active = std.atomic.Value(bool).init(false),
             .migration_active = std.atomic.Value(bool).init(false),
+            .performance_config = performance_config,
             .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
             .write_mutex = .{},
@@ -1219,8 +1222,8 @@ pub const StorageEngine = struct {
         self.write_cond.signal();
         self.write_mutex.unlock();
 
-        const batch_size = 100;
-        const batch_timeout_ms = 10;
+        const batch_size = 200;
+        const batch_timeout = self.performance_config.batch_timeout;
 
         var batch = std.ArrayListUnmanaged(WriteOp){};
         try batch.ensureTotalCapacity(self.allocator, batch_size);
@@ -1350,7 +1353,7 @@ pub const StorageEngine = struct {
             const time_since_last = now - last_batch_time;
 
             const should_flush = batch.items.len >= batch_size or
-                (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
+                (batch.items.len > 0 and time_since_last >= batch_timeout);
 
             if (should_flush) {
                 try self.flushBatch(&batch, &last_batch_time);

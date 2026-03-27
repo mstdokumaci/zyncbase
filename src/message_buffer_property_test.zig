@@ -47,7 +47,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryS
 
     out_schema.* = schema_ptr;
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema_ptr);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema_ptr, .{});
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -111,6 +111,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -144,6 +145,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -173,6 +175,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -203,6 +206,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -227,6 +231,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -261,6 +266,7 @@ test "buffer: message deallocation after processing" {
             &tracker,
             storage_engine,
             subscription_manager,
+            .{},
         );
         defer handler.deinit();
 
@@ -368,7 +374,7 @@ test "buffer: concurrent message deallocation" {
     }
     var subscription_manager = try SubscriptionManager.init(allocator);
     defer subscription_manager.deinit();
-    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, storage_engine, subscription_manager);
+    var handler = try MessageHandler.init(allocator, &memory_strategy, &tracker, storage_engine, subscription_manager, .{});
     defer handler.deinit();
 
     const ThreadContext = struct {

@@ -698,6 +698,9 @@ All errors follow a consistent envelope:
 | `CONNECTION_FAILED` | connection | Transport-level failure (WebSocket closed) |
 | `TIMEOUT` | connection | Server-side processing exceeded timeout |
 | `INTERNAL_ERROR` | server | Unexpected server failure (crash/bug) |
+| `MAX_CONNECTIONS_REACHED` | connection | Server at capacity |
+| `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
+| `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `HOOK_SERVER_UNAVAILABLE` | hook-server | Zig cannot reach the Bun Hook Server process |
 | `HOOK_DENIED` | hook-server | Developer's TypeScript hook explicitly returned an error |
 | `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |

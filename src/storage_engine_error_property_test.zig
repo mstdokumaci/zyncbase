@@ -25,7 +25,7 @@ test "storage: error handling invalid database path" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const result = StorageEngine.init(allocator, &memory_strategy, "/invalid/nonexistent/path/that/cannot/be/created", schema);
+    const result = StorageEngine.init(allocator, &memory_strategy, "/invalid/nonexistent/path/that/cannot/be/created", schema, .{});
     // Verify we get an error
     if (result) |_| {
         return error.ExpectedError;
