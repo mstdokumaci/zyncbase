@@ -57,6 +57,7 @@ Main server configuration file.
 
 ```json
 {
+  "environment": "development", // [PLANNED]
   "server": {
     "port": 3000,
     "host": "0.0.0.0",
@@ -76,7 +77,7 @@ Main server configuration file.
   
   "dataDir": "./data",
   
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [
       {
         "pattern": "public",
@@ -99,11 +100,10 @@ Main server configuration file.
       "https://app.yourdomain.com"
     ],
     "allowLocalhost": true,
-    "rateLimit": {
-      "messagesPerSecond": 100,
-      "connectionsPerIP": 10,
-      "maxMessageSize": 1048576
-    }
+    "maxMessagesPerSecond": 100,
+    "maxConnectionsPerIP": 10,
+    "maxMessageSize": 1048576,
+    "violationThreshold": 10
   },
   
   "logging": {
@@ -141,7 +141,7 @@ Path to JSON Schema file and migration settings.
 
 ```json
 {
-  "schema": {
+  "schema": { // [PLANNED]
     "file": "./schema.json",
     "version": "1.0.0",
     "autoMigrate": true,
@@ -173,9 +173,12 @@ Or simple string format:
   - Major version changes require migrations
   - Minor/patch versions can auto-migrate
 
-#### `authorization`
+#### `authorization` [PLANNED] / [UNENFORCED]
 
-Path to the `authorization.json` file containing authorization rules.
+Path to the `authorization.json` file.
+
+> [!WARNING]
+> The current engine does not yet enforce authorization rules. The server will boot and operate without rule enforcement even if aspecified.
 
 ```json
 {
@@ -200,7 +203,7 @@ Directory for SQLite database and other data files.
 }
 ```
 
-#### `namespaces`
+#### `namespaces` [PLANNED]
 
 Namespace pattern definitions.
 
@@ -228,11 +231,10 @@ Security settings.
       "https://yourdomain.com"
     ],
     "allowLocalhost": true,
-    "rateLimit": {
-      "messagesPerSecond": 100,
-      "connectionsPerIP": 10,
-      "maxMessageSize": 1048576
-    }
+    "maxMessagesPerSecond": 100,
+    "maxConnectionsPerIP": 10,
+    "maxMessageSize": 1048576,
+    "violationThreshold": 10
   }
 }
 ```
@@ -1089,7 +1091,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "port": "${PORT}",
     "host": "${HOST}"
   },
-  "auth": {
+  "authentication": {
     "jwt": {
       "secret": "${JWT_SECRET}"
     }
@@ -1112,11 +1114,11 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
-  "auth": {
+  "authentication": {
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [{ "pattern": "room:*" }]
   }
 }
@@ -1162,11 +1164,11 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 {
   "server": { "port": 3000 },
   "schema": "./schema.json",
-  "auth": {
+  "authentication": {
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": {
+  "namespaces": { // [PLANNED]
     "patterns": [{ "pattern": "tenant:*" }]
   }
 }
