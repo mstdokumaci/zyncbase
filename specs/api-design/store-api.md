@@ -45,18 +45,18 @@ Removes a value at the specified path.
 client.store.remove('elements.rect-1')
 ```
 
-### `store.subscribe(path, callback)`
-Subscribe to real-time updates at a path.
+### `store.listen(path, callback)`
+Listen to real-time updates at a specific path.
 ```typescript
-const unsubscribe = client.store.subscribe('elements', (elements) => {
-  render(elements)
+const unsubscribe = client.store.listen('elements.rect-1', (element) => {
+  render(element)
 })
 ```
 
 **Callback receives** (same shape as `store.get()` return values):
-- **Array** when subscribed to a collection
-- **Object** when subscribed to a document
-- **Scalar** when subscribed to a field
+- **Array** when listening to a collection
+- **Object** when listening to a document
+- **Scalar** when listening to a field
 
 **Returns**: An unsubscribe function.
 
@@ -71,7 +71,7 @@ For filtering, sorting, and searching through data collections.
 - Server-side rendering (initial load)
 - Filtered real-time subscriptions
 
-### `store.query(path, options)`
+### `store.query(collection, options)`
 Execute a one-off query (non-real-time).
 
 ```typescript
@@ -91,7 +91,7 @@ if (users.nextCursor) {
 ```
 
 **Parameters:**
-- `path` (string) - Path to query (e.g., 'users', 'events')
+- `collection` (string) - Name of the collection to query (e.g., 'users', 'events')
 - `options` (object) - Query options:
   - `where` (object) - Filter conditions
   - `orderBy` (object) - Sort order
@@ -100,7 +100,7 @@ if (users.nextCursor) {
 
 **Returns**: `Promise<Array & { nextCursor: string | null }>` - A standard JavaScript Array with an additional `nextCursor` property.
 
-### `store.subscribe(path, options, callback)`
+### `store.subscribe(collection, options, callback)`
 Subscribe to filtered query results (real-time).
 
 ```typescript
@@ -116,7 +116,7 @@ if (hasMore) await loadMore()
 ```
 
 **Parameters:**
-- `path` (string) - Path to query
+- `collection` (string) - Name of the collection to query
 - `options` (object) - Query options (same as `query()`)
 - `callback` (function) - Called when results change
 

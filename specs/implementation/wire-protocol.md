@@ -194,13 +194,13 @@ On failure, the `details` object in the error response will include `batchIndex`
 
 ---
 
-#### `StoreSubscribe`
+#### `StoreListen`
 
-Start receiving real-time updates for a path.
+Start receiving real-time updates for a path. (Maps to `store.listen(path, cb)`)
 
 ```
 {
-  "type": "StoreSubscribe",
+  "type": "StoreListen",
   "id":   4,
   "path": ["elements"]
 }
@@ -212,24 +212,24 @@ Start receiving real-time updates for a path.
 {
   "type":  "ok",
   "id":    4,
-  "subId": "sub-abc-123",      // Server-assigned subscription ID (used for unsubscribe and delta matching)
+  "listenId":"lst-abc-123",      // Server-assigned listen ID (used for unlisten and delta matching)
   "value": [ ... ]             // Current snapshot at path
 }
 ```
 
-After subscription, the server pushes `StoreDelta` messages (see [Server→Client Pushes](#server-push-messages)).
+After listening, the server pushes `StoreDelta` messages (see [Server→Client Pushes](#server-push-messages)).
 
 ---
 
-#### `StoreUnsubscribe`
+#### `StoreUnlisten`
 
-Stop receiving updates for a subscription.
+Stop receiving updates for a listen subscription.
 
 ```
 {
-  "type":  "StoreUnsubscribe",
+  "type":  "StoreUnlisten",
   "id":    5,
-  "subId": "sub-abc-123"
+  "listenId": "lst-abc-123"
 }
 ```
 
@@ -246,13 +246,13 @@ Stop receiving updates for a subscription.
 
 #### `StoreQuery`
 
-Execute a one-off filtered query (non-real-time).
+Execute a one-off filtered query (non-real-time) on a collection.
 
 ```
 {
   "type":  "StoreQuery",
   "id":    6,
-  "path":  ["users"],
+  "collection": "users",
   "where": {
     "age":    { "gte": 18 },
     "status": { "eq": "active" }
@@ -276,15 +276,15 @@ Execute a one-off filtered query (non-real-time).
 
 ---
 
-#### `StoreQuerySubscribe`
+#### `StoreSubscribe`
 
-Subscribe to a filtered query's results in real-time.
+Subscribe to a filtered query's results in real-time. (Maps to `store.subscribe(collection, opts, cb)`)
 
 ```
 {
-  "type":    "StoreQuerySubscribe",
+  "type":    "StoreSubscribe",
   "id":      7,
-  "path":    ["tasks"],
+  "collection": "tasks",
   "where":   { "status": { "eq": "active" } },
   "orderBy": { "created_at": "desc" },
   "limit":   50
@@ -520,12 +520,13 @@ These are unsolicited messages from the server. They do not have a request `id`.
 
 #### `StoreDelta`
 
-Notifies a subscribed client that the data at their subscribed path or query has changed.
+Notifies a subscribed client that the data at their listened path or query has changed.
 
 ```
 {
   "type":  "StoreDelta",
-  "subId": "sub-abc-123",              // Which subscription this delta belongs to
+  "listenId": "lst-abc-123",           // Present if this delta is for a store.listen() caller
+  "subId":    "sub-def-456",           // Present if this delta is for a store.subscribe() caller
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
@@ -782,10 +783,10 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | C→S | `StoreSet` | `store.set(path, value)` | `ok` |
 | C→S | `StoreRemove` | `store.remove(path)` | `ok` |
 | C→S | `StoreBatch` | `store.batch(ops)` | `ok` |
-| C→S | `StoreSubscribe` | `store.subscribe(path, cb)` | `ok` with `subId` + `value` |
-| C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
-| C→S | `StoreQuery` | `store.query(path, opts)` | `ok` with `value` + `nextCursor` |
-| C→S | `StoreQuerySubscribe` | `store.subscribe(path, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
+| C→S | `StoreListen` | `store.listen(path, cb)` | `ok` with `listenId` + `value` |
+| C→S | `StoreUnlisten` | (unsubscribe function) | `ok` |
+| C→S | `StoreQuery` | `store.query(collection, opts)` | `ok` with `value` + `nextCursor` |
+| C→S | `StoreSubscribe` | `store.subscribe(collection, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
 | C→S | `StoreLoadMore` | `subscription.loadMore()` | `ok` followed by `StoreDelta` |
 | C→S | `PresenceSet` | `presence.set(data)` | `ok` |
 | C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId` + `users` |
