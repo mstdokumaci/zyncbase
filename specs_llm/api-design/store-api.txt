@@ -4,11 +4,11 @@ const element = client.store.get('elements.rect-1')
 client.store.set('user.name', 'Alice')
 ````set()` fire-and-forget errors reported via `client.on('error) See [Error Handling-propagation). calling `set()` document path `elements.rect-1 SDK extracts ID merges into stored object include `id` in value `void` `store.remove(path) Removes value specified path```typescript
 client.store.remove('elements.rect-1')
-````store.subscribe(path callback real-time updates path```typescript
-const unsubscribe = client.store.subscribe('elements', (elements) => {
-  render(elements)
+````store.listen(path callback updates specific path```typescript
+const unsubscribe = client.store.listen('elements.rect-1', (element) => {
+  render(element)
 })
-```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unsubscribe function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(path options) one-off query (non-real```typescript
+```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unsubscribe function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(collection options) one-off query-real-time).```typescript
 const users = await client.store.query('users', {
   where: { age: { gte: 18 }, status: { eq: 'active' } },
   orderBy: { created_at: 'desc' },
@@ -22,7 +22,7 @@ if (users.nextCursor) {
     limit: 50
   })
 }
-```**Parameters `path query `options` Query options `where Filter conditions `orderBy Sort order `limit` Max results return `after` Opaque token next page **Returns** `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(path options callback) Subscribe filtered query results-time).```typescript
+```**Parameters `collection Name query 'users 'events `options` Query options `where` Filter conditions `orderBy Sort order `limit` Max results return `after` Opaque token next page `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(collection options callback) Subscribe filtered query results-time).```typescript
 const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
   where: { status: { eq: 'active' } },
   limit: 50
@@ -32,7 +32,7 @@ const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
 
 // Load older history into the live view
 if (hasMore) await loadMore()
-```**Parameters `path (string to query `options (object() `callback (function Called when results change unsubscribe void loadMore Promise<void> hasMore boolean See [Query Language Reference/query-language.md operators`eq `gte `contains `in Batch Operations Perform multiple write operations`set `remove atomically `store.batch(operations) If operation fails batch rejected reverted).```typescript
+```**Parameters `collection (string Name query `options` (object `query() `callback` (function Called when results change unsubscribe void loadMore Promise<void> hasMore boolean See [Query Language Reference]-language.md operators`eq `gte `contains `in Batch Operations Perform multiple write operations`set `remove atomically `store.batch(operations)` If operation fails batch reverted).```typescript
 await client.store.batch([
   { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
   { op: 'remove', path: 'temporary_locks.123' }

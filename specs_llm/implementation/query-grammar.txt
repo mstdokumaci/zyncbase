@@ -1,0 +1,39 @@
+Query Language Grammar SQL Translation v1 Implementation Specification document specifies ZyncBase JSON query language Zig `QueryFilter` Abstract Syntax Tree translated SQLite `SELECT` queries API specification definitive source truth backend systems executing queries `StorageEngine Abstract Syntax Tree query language parsed conditions implicit `AND` optional `OR` group```zig
+pub const QueryFilter = struct {
+    conditions: []const Condition,
+    or_conditions: ?[]const Condition = null,
+};
+
+pub const Condition = struct {
+    field: []const u8,
+    op: Operator,
+    value: Condition.Value,
+};
+
+pub const Operator = enum {
+    eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
+};
+```Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects as flat columns query nested structure message payload flattened joining keys with `__` `Condition.field"address__city" SQLite JSON Extractors `json_extract() operators for reading document properties Property queries run against `__` delimited flat columns SQLite Translation Rules Core Selection standard collection queries operate on `namespace boundaries```sql
+SELECT value_msgpack 
+FROM "collection_name" 
+WHERE _namespace = ? 
+  [AND ...conditions] 
+  [AND (...or_conditions)]
+ORDER BY sort_col DESC
+LIMIT ?
+```Parameter Binding ZyncBase separate query layout data injection parameterized queries user-input values formatted SQL strings Operator SQLite WHERE fragment `eq` `column_name = ? `ne` `column_name ? `gt` `column_name > ?` `lt` `column_name <`_name >= ?` `column_name <= ?` `startsWith` `column_name LIKE%' `endsWith` `column_name LIKE '%' `in` `column_name IN `notIn` `column_name NOT IN `isNull` `column_name NULL` NULL `isNotNull` `column_name NOT NULL` JSONB Array Fields SQLite storing arrays serialized/JSON bytes array properties queried operators `>` `LIKE`ZyncBase restricts array fields subset Operator Action Array Field SQLite Subquery Mapping `contains Array contains `EXISTS (SELECT 1 json_each(column_name value = ? `eq array equality `column_name = ? match MessagePack bytes `isNull Undefined/Missing `column_name NULL `isNotNull `startsWith `gt array field `SCHEMA_VALIDATION_FAILED error Combining Conditions standard filter contains `conditions optional `or_conditions array Example Payload```json
+{
+  "where": {
+    "priority": { "eq": "high" },
+    "or": [
+      { "status": { "eq": "active" } },
+      { "status": { "eq": "pending" } }
+    ]
+  }
+}
+```SQL Form Generation translation engine `AND` root-level items isolating `OR` group parenthetical block```sql
+SELECT value_msgpack FROM "tasks"
+WHERE _namespace = ?
+  AND priority = ?
+  AND (status = ? OR status = ?)
+```SQLite parameter array push namespace bound parameter first followed variables standard `conditions variables `or_conditions`

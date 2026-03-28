@@ -1,0 +1,23 @@
+Cursor Pagination Implementation Spec v1 ZyncBase exposes cursor-driven pagination topology offset-based equivalents Cursor pagination scales provides deterministic sequence navigation positions document implementation specification `nextCursor` token encoding layout SQLite execution logic real-time cursor windowing Defining Determinism Tie-Breaking Cursors high-throughput queries ordered by singular column unsafe Millions rows share timestamp Standard cursors risk "infinite loops skipped pages collision overlap ZyncBase utilizes **Compound Cursors** compound cursor encodes primary sorting column unique Doc generated `nextCursor` string `StoreQuery` responses opaque Base64 literal tuple constraint```typescript
+const cursorTuple = [sort_value, document_id];
+const opaqueToken = btoa(JSON.stringify(cursorTuple)); 
+// "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+```SQLite Execution `StorageEngine interprets `after string token Step 1: Cursor Decoding Base64 decodes token sort variable ID constraints 2: Compound Translation cursor compounded combination requires `OR` logic boundary tie-break skipping traversing`ascending sort sequence translation```sql
+SELECT * FROM collection
+WHERE ...
+  AND (
+    sort_column > ? 
+    OR (sort_column = ? AND id > ?)
+  )
+ORDER BY sort_column ASC, id ASC
+LIMIT x
+```(Parameter matches `[sort_value document_id] navigating`descending sequence translation inverted```sql
+SELECT * FROM collection
+WHERE ...
+  AND (
+    sort_column < ? 
+    OR (sort_column = ? AND id < ?)
+  )
+ORDER BY sort_column DESC, id DESC
+LIMIT x
+```ZyncBase SQLite queries force `ORDER BY id DESC/ASC across calls Without appending `id` final instruction SQLite organize colliding timestamps OR tiebreaker Real-time Live Windowing`loadMore` `StoreSubscribe model allows query stream results loading historic items cache via `loadMore() `MessageHandler accepts `StoreLoadMore request fetch historical elements without destroying sequence integrity `StoreDelta internal logic sequence bounds difference in UI representation client-side wrapper isolates initial `limit bounds applies deterministic sorting new items slide array top `loadMore()` fetches elements from final active element bottom client array

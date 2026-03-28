@@ -65,9 +65,9 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": "ok",
   "id":   4
 }
-```failure `details` object error include `batchIndex` first operation failure `StoreSubscribe` receiving real-time updates path```
+```failure `details` object error response include `batchIndex first operation failure `StoreListen` real-time updates path `store.listen(path cb)```
 {
-  "type": "StoreSubscribe",
+  "type": "StoreListen",
   "id":   4,
   "path": ["elements"]
 }
@@ -75,25 +75,25 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type":  "ok",
   "id":    4,
-  "subId": "sub-abc-123",      // Server-assigned subscription ID (used for unsubscribe and delta matching)
+  "listenId":"lst-abc-123",      // Server-assigned listen ID (used for unlisten and delta matching)
   "value": [ ... ]             // Current snapshot at path
 }
-```subscription server pushes `StoreDelta messages Pushes `StoreUnsubscribe Stop updates subscription```
+```listening server pushes `StoreDelta messages Pushes `StoreUnlisten Stop updates listen subscription```
 {
-  "type":  "StoreUnsubscribe",
+  "type":  "StoreUnlisten",
   "id":    5,
-  "subId": "sub-abc-123"
+  "listenId": "lst-abc-123"
 }
 ```"ok"```
 {
   "type": "ok",
   "id":   5
 }
-````StoreQuery-off filtered query-real-time).```
+````StoreQuery` Execute-off filtered query-real-time collection```
 {
   "type":  "StoreQuery",
   "id":    6,
-  "path":  ["users"],
+  "collection": "users",
   "where": {
     "age":    { "gte": 18 },
     "status": { "eq": "active" }
@@ -109,11 +109,11 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "value":      [ ... ],    // Array of matching items
   "nextCursor": "eyJpZCI6... " // Opaque token for next page, null if end
 }
-````StoreQuerySubscribe filtered query results real-time```
+````StoreSubscribe filtered query results real `store.subscribe(collection opts cb```
 {
-  "type":    "StoreQuerySubscribe",
+  "type":    "StoreSubscribe",
   "id":      7,
-  "path":    ["tasks"],
+  "collection": "tasks",
   "where":   { "status": { "eq": "active" } },
   "orderBy": { "created_at": "desc" },
   "limit":   50
@@ -216,10 +216,11 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": "ok",
   "id":   13
 }
-```Server→Client Messages Response messages client requests use "ok"` or "error"` `type` `"ok"` Request succeeded Fields depend on original request type `"error"` Request failed [Error Format] include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies subscribed client data path query changed```
+```Server→Client Messages Response messages responses client requests use "ok"` or "error"` `type` `"ok"` Request succeeded Fields depend original request type `"error"` Request failed [Error Format] include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies client data listened path query changed```
 {
   "type":  "StoreDelta",
-  "subId": "sub-abc-123",              // Which subscription this delta belongs to
+  "listenId": "lst-abc-123",           // Present if this delta is for a store.listen() caller
+  "subId":    "sub-def-456",           // Present if this delta is for a store.subscribe() caller
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
@@ -302,4 +303,4 @@ Origin: https://app.example.com
   "type":    "ok",
   "allowed": true
 }
-```Message Summary Direction SDK method Response C→S `StoreGet `store.get(path) `ok with `value C→S `StoreSet `store.set(path value `ok C→S `StoreRemove `store(path) `ok C→S `StoreBatch `store.batch(ops) `ok C→S `StoreSubscribe(path `ok with `subId `value` C→S `StoreUnsubscribe` `ok C→S `StoreQuery.query(path `ok with `value `nextCursor C→S `StoreQuerySubscribe `store.subscribe(path with `subId `value `hasMore C→S `StoreLoadMore` `subscription.loadMore( `StoreDelta` C→S `PresenceSet` `presence.set(data) `ok C→S `PresenceSubscribe.subscribe(cb) `ok with `subId `users` C→S `PresenceUnsubscribe` function `ok C→S `PresenceRemove` `presence.remove() `ok` C→S `StoreSetNamespace `client.setStoreNamespace(ns) `ok C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
+```Message Type Summary Direction SDK method Response C→S `StoreGet `store.get(path) `ok with `value C→S `StoreSet `store.set(path value `ok C→S `StoreRemove `store(path) `ok C→S `StoreBatch `store.batch `ok C→S `StoreListen` `store.listen(path `ok with `listenId `value C→S `StoreUnlisten` (unsubscribe function `ok C→S `StoreQuery` `ok with `value `nextCursor C→S `StoreSubscribe` `ok with `subId `value C→S `StoreLoadMore`.loadMore( `ok `StoreDelta` C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe(cb) `ok with `subId `users` C→S `PresenceUnsubscribe` function `ok C→S `PresenceRemove` `presence.remove() `ok` C→S `StoreSetNamespace `client.setStoreNamespace(ns) `ok C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
