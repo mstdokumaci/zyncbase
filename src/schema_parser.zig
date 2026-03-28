@@ -24,7 +24,7 @@ pub const FieldType = enum {
 pub const OnDelete = enum { cascade, restrict, set_null };
 
 pub const Field = struct {
-    name: []const u8, // flattened name, e.g. "address_city"
+    name: []const u8, // flattened name, e.g. "address__city"
     sql_type: FieldType,
     required: bool,
     indexed: bool,
@@ -119,6 +119,10 @@ pub const SchemaParser = struct {
             // required list
             var required_set = std.StringHashMap(void).init(self.allocator);
             defer required_set.deinit();
+            errdefer {
+                var it = required_set.keyIterator();
+                while (it.next()) |k| self.allocator.free(k.*);
+            }
 
             if (table_def.object.get("required")) |req_val| {
                 if (req_val == .array) {
@@ -211,10 +215,18 @@ pub const SchemaParser = struct {
                 } else null;
                 errdefer if (refs) |r| self.allocator.free(r);
 
-                const on_del = if (field_def.object.get("onDelete")) |odv| blk: {
-                    if (odv == .string) break :blk parseOnDelete(odv.string);
-                    break :blk null;
-                } else null;
+                const on_del: ?OnDelete = if (field_def.object.get("onDelete")) |odv| blk: {
+                    if (odv != .string) return error.InvalidOnDelete;
+                    break :blk try parseOnDelete(odv.string);
+                } else if (refs != null)
+                    .restrict // default per spec when references is set
+                else
+                    null;
+
+                // Validate: set_null on a required field is invalid
+                if (on_del) |od| {
+                    if (od == .set_null and is_required) return error.InvalidOnDelete;
+                }
 
                 try fields.append(self.allocator, .{
                     .name = full_name,
@@ -360,11 +372,11 @@ pub fn fieldTypeName(ft: FieldType) []const u8 {
     };
 }
 
-pub fn parseOnDelete(s: []const u8) ?OnDelete {
+pub fn parseOnDelete(s: []const u8) !OnDelete {
     if (std.mem.eql(u8, s, "cascade")) return .cascade;
     if (std.mem.eql(u8, s, "restrict")) return .restrict;
     if (std.mem.eql(u8, s, "set_null")) return .set_null;
-    return null;
+    return error.InvalidOnDelete;
 }
 
 pub fn onDeleteName(od: OnDelete) []const u8 {

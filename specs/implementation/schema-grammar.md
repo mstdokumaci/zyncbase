@@ -16,7 +16,7 @@ This document defines the formal grammar and property specification for `schema.
 | Key | Type | Description |
 |:---|:---:|:---|
 | `fields` | `object` | Map of field names to field definitions. |
-| `required` | `array<string>` | `[PLANNED]` List of required field names (supports dot notation for nested fields). |
+| `required` | `array<string>` | List of required field names (supports dot notation for nested fields). |
 
 ### Table Name Constraints
 
@@ -48,7 +48,7 @@ A field definition MUST contain a `type` property.
 | `type` | `string` | - | One of the types listed above. |
 | `indexed` | `boolean` | `false` | Creates a SQLite index for this column. |
 | `references` | `string` | `null` | Target table name for a foreign key relationship. |
-| `onDelete` | `string` | `"RESTRICT"` | `SET_NULL`, `CASCADE`, `RESTRICT`. Note: `SET_NULL` requires the field to be optional. |
+| `onDelete` | `string` | `"restrict"` | `set_null`, `cascade`, `restrict`. Note: `set_null` requires the field to be optional (not in `required`). |
 
 ---
 
@@ -101,7 +101,10 @@ The following errors are returned by `SchemaParser`:
 | `InvalidVersion` | `version` is not a string. |
 | `MissingStore` | `store` key is missing. |
 | `InvalidStore` | `store` is not an object. |
+| `InvalidTableDefinition` | A table value in `store` is not an object. |
 | `MissingFieldType` | A field definition lacks the `type` property. |
+| `InvalidFieldDefinition` | A field value is not an object. |
+| `InvalidFieldType` | `type` value is not a string. |
 | `InvalidFieldName` | Field name is empty or contains `__`. |
 | `UnknownFieldType` | `type` string is not recognized. |
-| `InvalidOnDelete` | `[PLANNED]` `onDelete: SET_NULL` used on a `required` field. |
+| `InvalidOnDelete` | `onDelete` value is not one of `cascade`, `restrict`, `set_null`; or `set_null` is used on a `required` field. |

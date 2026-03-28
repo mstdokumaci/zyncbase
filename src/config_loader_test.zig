@@ -181,24 +181,30 @@ test "ConfigLoader parses inline schema configuration" {
     defer config.deinit();
 
     try std.testing.expect(config.schema_content != null);
-    
+
     // Parse the generated JSON back to verify correctness
     var parsed_schema = try std.json.parseFromSlice(std.json.Value, allocator, config.schema_content.?, .{});
     defer parsed_schema.deinit();
 
     try std.testing.expect(parsed_schema.value == .object);
     const schema_obj = parsed_schema.value.object;
-    try std.testing.expect(schema_obj.get("tables") != null);
-    try std.testing.expect(schema_obj.get("tables").? == .array);
-    
-    const tables = schema_obj.get("tables").?.array;
+    const tables_val = schema_obj.get("tables") orelse unreachable;
+    try std.testing.expect(tables_val == .array);
+
+    const tables = tables_val.array;
     try std.testing.expectEqual(@as(usize, 1), tables.items.len);
-    
+
     const user_table = tables.items[0].object;
-    try std.testing.expectEqualStrings("users", user_table.get("name").?.string);
-    
-    const fields = user_table.get("fields").?.array;
+    const name_val = user_table.get("name") orelse unreachable;
+    try std.testing.expectEqualStrings("users", name_val.string);
+
+    const fields_val = user_table.get("fields") orelse unreachable;
+    const fields = fields_val.array;
     try std.testing.expectEqual(@as(usize, 2), fields.items.len);
-    try std.testing.expectEqualStrings("id", fields.items[0].object.get("name").?.string);
-    try std.testing.expectEqualStrings("name", fields.items[1].object.get("name").?.string);
+
+    const f0_name = fields.items[0].object.get("name") orelse unreachable;
+    try std.testing.expectEqualStrings("id", f0_name.string);
+
+    const f1_name = fields.items[1].object.get("name") orelse unreachable;
+    try std.testing.expectEqualStrings("name", f1_name.string);
 }

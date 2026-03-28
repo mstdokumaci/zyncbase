@@ -159,3 +159,160 @@ test "schema_parser: unknown field types produce hard error" {
     const result_flat = parser.parse(json_flat);
     try std.testing.expectError(error.UnknownFieldType, result_flat);
 }
+
+test "schema_parser: parse valid onDelete values" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId1": { "type": "string", "references": "users", "onDelete": "cascade" },
+        \\        "userId2": { "type": "string", "references": "users", "onDelete": "restrict" },
+        \\        "userId3": { "type": "string", "references": "users", "onDelete": "set_null" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const schema = try parser.parse(json);
+    defer parser.deinit(schema);
+
+    const table = schema.tables[0];
+    for (table.fields) |f| {
+        if (std.mem.eql(u8, f.name, "userId1")) {
+            try std.testing.expectEqual(schema_parser.OnDelete.cascade, f.on_delete.?);
+        } else if (std.mem.eql(u8, f.name, "userId2")) {
+            try std.testing.expectEqual(schema_parser.OnDelete.restrict, f.on_delete.?);
+        } else if (std.mem.eql(u8, f.name, "userId3")) {
+            try std.testing.expectEqual(schema_parser.OnDelete.set_null, f.on_delete.?);
+        }
+    }
+}
+
+test "schema_parser: default onDelete to restrict when references is set" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "users" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const schema = try parser.parse(json);
+    defer parser.deinit(schema);
+
+    try std.testing.expectEqual(schema_parser.OnDelete.restrict, schema.tables[0].fields[0].on_delete.?);
+}
+
+test "schema_parser: unknown onDelete returns error" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    // 1. Bogus string
+    const json_bogus =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "users", "onDelete": "delete" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidOnDelete, parser.parse(json_bogus));
+
+    // 2. Uppercase (inconsistent with spec now)
+    const json_upper =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "users", "onDelete": "CASCADE" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidOnDelete, parser.parse(json_upper));
+}
+
+test "schema_parser: set_null on required field returns error" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "users", "onDelete": "set_null" }
+        \\      },
+        \\      "required": ["userId"]
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    try std.testing.expectError(error.InvalidOnDelete, parser.parse(json));
+}
+
+test "schema_parser: set_null on optional field succeeds" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "users", "onDelete": "set_null" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const schema = try parser.parse(json);
+    defer parser.deinit(schema);
+    try std.testing.expectEqual(schema_parser.OnDelete.set_null, schema.tables[0].fields[0].on_delete.?);
+}
+
+test "schema_parser: no references no onDelete keeps on_delete null" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "title": { "type": "string" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    const schema = try parser.parse(json);
+    defer parser.deinit(schema);
+    try std.testing.expect(schema.tables[0].fields[0].on_delete == null);
+}
