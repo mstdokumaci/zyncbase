@@ -18,6 +18,12 @@ The query language is structurally parsed down to an array of conditions via an 
 pub const QueryFilter = struct {
     conditions: []const Condition,
     or_conditions: ?[]const Condition = null,
+    sorts: []const SortDescriptor,
+};
+
+pub const SortDescriptor = struct {
+    field: []const u8,
+    desc: bool,
 };
 
 pub const Condition = struct {
@@ -51,7 +57,7 @@ FROM "collection_name"
 WHERE _namespace = ? 
   [AND ...conditions] 
   [AND (...or_conditions)]
-ORDER BY sort_col DESC
+ORDER BY [sorts...], id DESC
 LIMIT ?
 ```
 
@@ -118,4 +124,17 @@ WHERE _namespace = ?
   AND (status = ? OR status = ?)
 ```
 
-_Note_: The SQLite parameter binding array must push the namespace bound parameter first, followed by the variables defined in standard `conditions`, followed finally by variables declared in the `or_conditions`.
+---
+
+## Sorting Rules
+
+ZyncBase supports sorting by multiple fields. If the `orderBy` parameter is a string, it maps to a single sort descriptor. If it is a map or an array of maps, it maps to multiple sort descriptors.
+
+### Tie-breaking
+To ensure deterministic pagination (Cursor Stability), ZyncBase ALWAYS appends `id DESC` (or `id ASC` if the last sort field was ASC) as a final tie-breaker if `id` was not already the primary sort field.
+
+### Mapping to SQL
+Each `SortDescriptor` translates to a comma-separated fragment in the `ORDER BY` clause:
+```sql
+ORDER BY priority DESC, created_at ASC, id DESC
+```

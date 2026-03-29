@@ -48,7 +48,7 @@ client.store.remove('elements.rect-1')
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
 ```typescript
-const unsubscribe = client.store.listen('elements.rect-1', (element) => {
+const unlisten = client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
 ```
@@ -58,7 +58,7 @@ const unsubscribe = client.store.listen('elements.rect-1', (element) => {
 - **Object** when listening to a document
 - **Scalar** when listening to a field
 
-**Returns**: An unsubscribe function.
+**Returns**: An unlisten function.
 
 ---
 
