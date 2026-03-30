@@ -53,6 +53,18 @@ pub const ColumnValue = struct {
     value: msgpack.Payload,
 };
 
+/// A typed value for asynchronous storage binding.
+/// This structure holds the native SQLite-compatible representation of a field.
+/// Strings and blobs (for JSON arrays) are duplicated and owned by the WriteOp.
+pub const TypedValue = union(enum) {
+    integer: i64,
+    real: f64,
+    text: []const u8, // Owned
+    boolean: bool,
+    blob: []const u8, // Owned (for arrays/complex)
+    nil: void,
+};
+
 /// SQLite checkpoint modes
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers
@@ -155,7 +167,6 @@ pub const StorageEngine = struct {
                 error.NotDir => return error.NotDir,
                 else => return err,
             }
-
             const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
             defer allocator.free(db_path_buf);
             break :blk try allocator.dupeZ(u8, db_path_buf);
@@ -613,6 +624,22 @@ pub const StorageEngine = struct {
         return try std.fmt.allocPrint(self.allocator, "{s}:{s}:{s}", .{ table, namespace, id });
     }
 
+    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
+    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
+    fn payloadToTypedValue(self: *StorageEngine, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
+        if (value == .nil) return .nil;
+        return switch (ft) {
+            .text => switch (value) {
+                .str => |s| TypedValue{ .text = try self.allocator.dupe(u8, s.value()) },
+                else => StorageError.TypeMismatch,
+            },
+            .integer => TypedValue{ .integer = try msgpack.payloadAsInt(value) },
+            .real => TypedValue{ .real = try msgpack.payloadAsFloat(value) },
+            .boolean => TypedValue{ .boolean = try msgpack.payloadAsBool(value) },
+            .array => TypedValue{ .blob = try msgpack.payloadToJson(value, self.allocator) },
+        };
+    }
+
     // ─── Storage methods ──────────────────────────────────────────────────
 
     /// INSERT OR REPLACE a document into a table.
@@ -671,30 +698,29 @@ pub const StorageEngine = struct {
         const sql = try sql_buf.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(sql);
 
-        // Serialize columns to msgpack bytes (or JSON for array fields) for storage
-        const col_bytes = try self.allocator.alloc([]const u8, columns.len);
+        const values = try self.allocator.alloc(TypedValue, columns.len);
+        var initialized_count: usize = 0;
         errdefer {
-            for (col_bytes) |b| self.allocator.free(b);
-            self.allocator.free(col_bytes);
+            for (values[0..initialized_count]) |v| {
+                switch (v) {
+                    .text => |s| self.allocator.free(s),
+                    .blob => |b| self.allocator.free(b),
+                    else => {},
+                }
+            }
+            self.allocator.free(values);
         }
         for (columns, 0..) |col, i| {
-            // Find the field schema to check if it's an array type
-            var is_array = false;
+            // Find the field schema to check its type
+            var field_type: schema_parser.FieldType = .text;
             for (table_schema.fields) |f| {
                 if (std.mem.eql(u8, f.name, col.name)) {
-                    is_array = f.sql_type == .array;
+                    field_type = f.sql_type;
                     break;
                 }
             }
-            if (is_array) {
-                // Convert array payload to JSON bytes for jsonb(?) storage
-                col_bytes[i] = try msgpack.payloadToJson(col.value, self.allocator);
-            } else {
-                var list: std.ArrayList(u8) = .{};
-                errdefer list.deinit(self.allocator);
-                try msgpack.encodeTrusted(col.value, list.writer(self.allocator));
-                col_bytes[i] = try list.toOwnedSlice(self.allocator);
-            }
+            values[i] = try self.payloadToTypedValue(field_type, col.value);
+            initialized_count += 1;
         }
 
         const now = std.time.timestamp();
@@ -712,8 +738,7 @@ pub const StorageEngine = struct {
                 .id = id_owned,
                 .namespace = ns_owned,
                 .sql = sql,
-                .col_bytes = col_bytes,
-                .col_count = columns.len,
+                .values = values,
                 .timestamp = now,
                 .completion_signal = null,
             },
@@ -747,16 +772,17 @@ pub const StorageEngine = struct {
             }
         }
 
-        const val_bytes: []const u8 = if (field_sql_type == .array) blk: {
-            // Convert array payload to JSON bytes for jsonb(?) storage
-            break :blk try msgpack.payloadToJson(value, self.allocator);
-        } else blk: {
-            var list: std.ArrayList(u8) = .{};
-            errdefer list.deinit(self.allocator);
-            try msgpack.encodeTrusted(value, list.writer(self.allocator));
-            break :blk try list.toOwnedSlice(self.allocator);
-        };
-        errdefer self.allocator.free(val_bytes);
+        const values = try self.allocator.alloc(TypedValue, 1);
+        values[0] = .nil;
+        errdefer {
+            switch (values[0]) {
+                .text => |s| self.allocator.free(s),
+                .blob => |b| self.allocator.free(b),
+                else => {},
+            }
+            self.allocator.free(values);
+        }
+        values[0] = try self.payloadToTypedValue(field_sql_type, value);
 
         // Use jsonb(?) placeholder for array fields, ? for others
         const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
@@ -777,9 +803,6 @@ pub const StorageEngine = struct {
         const table_owned = try self.allocator.dupe(u8, table);
         errdefer self.allocator.free(table_owned);
 
-        const col_bytes_owned = try self.allocator.alloc([]const u8, 1);
-        col_bytes_owned[0] = val_bytes;
-
         const now = std.time.timestamp();
         const op = WriteOp{
             .update = .{
@@ -787,8 +810,7 @@ pub const StorageEngine = struct {
                 .id = id_owned,
                 .namespace = ns_owned,
                 .sql = sql,
-                .col_bytes = col_bytes_owned,
-                .col_count = 1,
+                .values = values,
                 .timestamp = now,
                 .completion_signal = null,
             },
@@ -1025,7 +1047,13 @@ pub const StorageEngine = struct {
             return msgpack.jsonToPayload(s, self.allocator);
         }
         return switch (col_type) {
-            sqlite.c.SQLITE_INTEGER => msgpack.Payload.intToPayload(sqlite.c.sqlite3_column_int64(stmt.stmt, i)),
+            sqlite.c.SQLITE_INTEGER => {
+                const val = sqlite.c.sqlite3_column_int64(stmt.stmt, i);
+                if (field != null and field.?.sql_type == .boolean) {
+                    return msgpack.Payload{ .bool = val != 0 };
+                }
+                return msgpack.Payload.intToPayload(val);
+            },
             sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt.stmt, i) },
             sqlite.c.SQLITE_TEXT => blk: {
                 const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
@@ -1160,6 +1188,17 @@ pub const StorageEngine = struct {
 
     // ─── Internal write helpers ───────────────────────────────────────────────
 
+    fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) void {
+        switch (value) {
+            .integer => |v| _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
+            .real => |v| _ = sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
+            .text => |s| _ = sqlite.c.sqlite3_bind_text(stmt.stmt, index, s.ptr, @intCast(s.len), sqlite.c.SQLITE_STATIC),
+            .boolean => |b| _ = sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
+            .blob => |b| _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, index, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC),
+            .nil => _ = sqlite.c.sqlite3_bind_null(stmt.stmt, index),
+        }
+    }
+
     fn executeInsert(self: *StorageEngine, op: anytype) !void {
         const sql = op.sql;
         std.log.debug("executeInsert: sql='{s}', id='{s}', namespace='{s}', timestamp={}", .{ sql, op.id, op.namespace, op.timestamp });
@@ -1178,8 +1217,8 @@ pub const StorageEngine = struct {
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
         bind_idx += 1;
 
-        for (op.col_bytes[0..op.col_count]) |b| {
-            _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, bind_idx, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC);
+        for (op.values) |val| {
+            bindTypedValue(stmt, bind_idx, val);
             bind_idx += 1;
         }
 
@@ -1206,12 +1245,10 @@ pub const StorageEngine = struct {
         defer self.allocator.free(id_z);
         const ns_z = try self.allocator.dupeZ(u8, op.namespace);
         defer self.allocator.free(ns_z);
-        const val = op.col_bytes[0];
-
         // Bind: 1: id, 2: namespace_id, 3: value, 4: created_at, 5: updated_at
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
-        _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, 3, val.ptr, @intCast(val.len), sqlite.c.SQLITE_STATIC);
+        bindTypedValue(stmt, 3, op.values[0]);
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp);
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp);
 
@@ -1648,8 +1685,7 @@ pub const WriteOp = union(enum) {
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
-        col_bytes: [][]const u8,
-        col_count: usize,
+        values: []TypedValue,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
     },
@@ -1658,8 +1694,7 @@ pub const WriteOp = union(enum) {
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
-        col_bytes: [][]const u8,
-        col_count: usize,
+        values: []TypedValue,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
     },
@@ -1728,16 +1763,28 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
-                for (op.col_bytes[0..op.col_count]) |b| allocator.free(b);
-                allocator.free(op.col_bytes);
+                for (op.values) |val| {
+                    switch (val) {
+                        .text => |s| allocator.free(s),
+                        .blob => |b| allocator.free(b),
+                        else => {},
+                    }
+                }
+                allocator.free(op.values);
             },
             .update => |op| {
                 allocator.free(op.namespace);
                 allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
-                for (op.col_bytes[0..op.col_count]) |b| allocator.free(b);
-                allocator.free(op.col_bytes);
+                for (op.values) |val| {
+                    switch (val) {
+                        .text => |s| allocator.free(s),
+                        .blob => |b| allocator.free(b),
+                        else => {},
+                    }
+                }
+                allocator.free(op.values);
             },
             .delete => |op| {
                 allocator.free(op.namespace);

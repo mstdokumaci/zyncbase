@@ -175,8 +175,6 @@ pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8
         switch (elem) {
             .nil => try buf.appendSlice(allocator, "null"),
             .bool => |b| try buf.appendSlice(allocator, if (b) "true" else "false"),
-            .int => |v| try std.fmt.format(buf.writer(allocator), "{}", .{v}),
-            .uint => |v| try std.fmt.format(buf.writer(allocator), "{}", .{v}),
             .float => |v| {
                 // Always emit a decimal point so JSON parsers treat this as a float,
                 // not an integer. e.g. 50.0 → "50.0" not "50".
@@ -203,11 +201,40 @@ pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8
                 }
                 try buf.append(allocator, '"');
             },
+            .int => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
+            .uint => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
             else => unreachable, // ensureLiteralArray already validated
         }
     }
     try buf.append(allocator, ']');
     return buf.toOwnedSlice(allocator);
+}
+
+/// Helper to extract an i64 from a Payload (supports .int and .uint).
+pub fn payloadAsInt(payload: Payload) !i64 {
+    return switch (payload) {
+        .int => |v| v,
+        .uint => |v| @intCast(v),
+        else => error.NotAnInteger,
+    };
+}
+
+/// Helper to extract an f64 from a Payload (supports .float, .int, and .uint).
+pub fn payloadAsFloat(payload: Payload) !f64 {
+    return switch (payload) {
+        .float => |v| v,
+        .int => |v| @floatFromInt(v),
+        .uint => |v| @floatFromInt(v),
+        else => error.NotAFloat,
+    };
+}
+
+/// Helper to extract a bool from a Payload.
+pub fn payloadAsBool(payload: Payload) !bool {
+    return switch (payload) {
+        .bool => |v| v,
+        else => error.NotABoolean,
+    };
 }
 
 /// Parses a JSON array string and returns a Literal_Array Payload.

@@ -7,7 +7,7 @@
           "type": "string"
         },
         "timestamp": {
-          "type": "number"
+          "type": "integer"
         }
       }
     }
