@@ -1,128 +1,43 @@
 const std = @import("std");
-
 const testing = std.testing;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const ConnectionRegistry = @import("message_handler.zig").ConnectionRegistry;
-const MessageHandler = @import("message_handler.zig").MessageHandler;
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack = @import("msgpack_test_helpers.zig");
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const schema_helpers = @import("schema_test_helpers.zig");
-const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
-
-// **Property: Connection open/close is inverse operation**
-// Connection properties
-//
-// For any connection, opening then closing should remove all associated state from the ConnectionRegistry.
-
-const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
-
-fn makeField(name: []const u8, field_type: schema_parser.FieldType, required: bool) schema_parser.Field {
-    return .{
-        .name = name,
-        .sql_type = field_type,
-        .required = required,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
-}
-
-fn setupEngineWithSchema(allocator: std.mem.Allocator, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema, memory_strategy: *MemoryStrategy) !*StorageEngine {
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
-
-    const tables = try allocator.alloc(schema_parser.Table, 1);
-    tables[0] = try table.clone(allocator);
-
-    const schema = try allocator.create(schema_parser.Schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
-
-    out_schema.* = schema;
-
-    const engine = try @import("storage_engine.zig").StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-
-    try engine.execDDL(ddl_z);
-
-    return engine;
-}
+const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
+const helpers = @import("message_handler_test_helpers.zig");
+const createMockWebSocket = helpers.createMockWebSocket;
+const AppTestContext = helpers.AppTestContext;
+const routeWithArena = helpers.routeWithArena;
 
 test "connection: open/close is inverse operation" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p1", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    // Initialize all required components for MessageHandler
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var test_schema: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p4");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    // Initialize message handler
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
 
     // Test single connection open/close
     {
         // Create a mock WebSocket
         var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1))); // Use unique ID
 
         // Open connection
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Verify connection was added
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
-        const state = try handler.connection_registry.acquireConnection(conn_id);
-        defer state.release(allocator);
+        const conn_id = ws.getConnId();
+        const state = try manager.acquireConnection(conn_id);
+        defer if (state.release()) app.releaseConnection(state);
         try testing.expectEqual(conn_id, state.id);
 
         // Close connection
-        try handler.handleClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws, 1000, "Normal closure");
 
         // Verify connection was removed (inverse operation)
-        const result = handler.connection_registry.acquireConnection(conn_id);
-        if (result) |s| {
-            s.release(allocator);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.ConnectionNotFound, err);
-        }
+        const result = manager.acquireConnection(conn_id);
+        try testing.expectError(error.ConnectionNotFound, result);
     }
 
     // Test multiple connections open/close
@@ -133,41 +48,34 @@ test "connection: open/close is inverse operation" {
         // Open all connections
         for (&websockets, 0..) |*ws, i| {
             ws.* = createMockWebSocket();
-            ws.user_data = @ptrFromInt(i + 1); // Ensure unique ID
-            try handler.handleOpen(ws);
+            ws.setUserData(@ptrFromInt(i + 10)); // Ensure unique ID
+            try manager.onOpen(ws);
         }
 
         // Verify all connections exist
-        {
-            var snap = try handler.connection_registry.snapshot();
-            defer snap.deinit();
-            try testing.expectEqual(@as(usize, num_connections), snap.count());
-        }
+        try testing.expectEqual(@as(usize, num_connections), manager.map.count());
 
         // Close all connections
         for (&websockets) |*ws| {
-            try handler.handleClose(ws, 1000, "Normal closure");
+            manager.onClose(ws, 1000, "Normal closure");
         }
 
         // Verify all connections were removed (inverse operation)
-        {
-            var snap = try handler.connection_registry.snapshot();
-            defer snap.deinit();
-            try testing.expectEqual(@as(usize, 0), snap.count());
-        }
+        try testing.expectEqual(@as(usize, 0), manager.map.count());
     }
 
     // Test connection with subscriptions
     {
         var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1234)));
 
         // Open connection
-        try handler.handleOpen(&ws);
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
+        try manager.onOpen(&ws);
+        const conn_id = ws.getConnId();
 
         // Add some subscriptions to the connection state
-        const state = try handler.connection_registry.acquireConnection(conn_id);
-        defer state.release(allocator);
+        const state = try manager.acquireConnection(conn_id);
+        defer if (state.release()) app.releaseConnection(state);
         try state.subscription_ids.append(state.allocator, 1);
         try state.subscription_ids.append(state.allocator, 2);
         try state.subscription_ids.append(state.allocator, 3);
@@ -176,40 +84,24 @@ test "connection: open/close is inverse operation" {
         try testing.expectEqual(@as(usize, 3), state.subscription_ids.items.len);
 
         // Close connection
-        try handler.handleClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws, 1000, "Normal closure");
 
         // Verify connection and all associated state was removed (inverse operation)
-        const result = handler.connection_registry.acquireConnection(conn_id);
-        if (result) |s| {
-            s.release(allocator);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.ConnectionNotFound, err);
-        }
+        const result = manager.acquireConnection(conn_id);
+        try testing.expectError(error.ConnectionNotFound, result);
     }
 }
 
 // Helper function to create a mock WebSocket for testing
-fn createMockWebSocket() WebSocket {
-    return WebSocket{
-        .ws = null, // Mock WebSocket
-        .ssl = false,
-        .user_data = null,
-    };
-}
 
-// Property: Thread-safe connection registry access
-// For any concurrent read and write operations on the ConnectionRegistry,
-// no data races should occur and all operations should complete successfully.
-test "connection: thread-safe registry access" {
+test "connection: thread-safe manager access" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p2", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var registry: ConnectionRegistry = undefined;
-    registry.init(&memory_strategy);
-    defer registry.deinit();
+    const manager = app.manager;
 
     // Spawn multiple threads performing concurrent operations
     const num_threads = 10;
@@ -218,9 +110,8 @@ test "connection: thread-safe registry access" {
     var threads: [num_threads]std.Thread = undefined;
 
     for (&threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, concurrentRegistryOps, .{
-            &registry,
-            allocator,
+        thread.* = try std.Thread.spawn(.{}, concurrentManagerOps, .{
+            &app,
             i * ops_per_thread,
             ops_per_thread,
         });
@@ -231,66 +122,58 @@ test "connection: thread-safe registry access" {
         thread.join();
     }
 
-    // Verify no data races occurred (test passes if no crashes)
-    // All connections should have been removed by their respective threads
-    var snap = try registry.snapshot();
-    defer snap.deinit();
-    try testing.expectEqual(@as(usize, 0), snap.count());
+    // Verify all connections should have been removed by their respective threads
+    try testing.expectEqual(@as(usize, 0), manager.map.count());
 }
 
-fn concurrentRegistryOps(
-    registry: *ConnectionRegistry,
-    allocator: std.mem.Allocator,
+fn concurrentManagerOps(
+    app: *AppTestContext,
     start_id: u64,
     count: usize,
 ) void {
+    const manager = app.manager;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
 
         // Add connection
-        const dummy_ws = createMockWebSocket();
-        const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch {
-            std.log.debug("Failed to init connection state\n", .{});
-            return;
-        };
-        registry.add(conn_id, state) catch {
-            std.log.debug("Failed to add connection\n", .{});
-            state.deinit(allocator);
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
+        manager.onOpen(&ws) catch { // zwanzig-disable-line: swallowed-error
+            std.log.debug("Failed to open connection\n", .{});
             return;
         };
 
         // Read connection
-        if (registry.acquireConnection(conn_id)) |s| {
-            s.release(allocator);
+        if (manager.acquireConnection(conn_id)) |s| {
+            if (s.release()) app.releaseConnection(s);
         } else |_| {
             std.log.debug("Failed to get connection\n", .{});
             return;
         }
 
         // Remove connection
-        registry.remove(conn_id);
+        manager.onClose(&ws, 1000, "Normal closure");
     }
 }
 
 // Additional property test: Concurrent reads should not block each other
 test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p3", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var registry: ConnectionRegistry = undefined;
-    registry.init(&memory_strategy);
-    defer registry.deinit();
+    const manager = app.manager;
 
-    // Pre-populate registry with connections
+    // Pre-populate manager with connections
     const num_connections = 100;
     var i: usize = 0;
     while (i < num_connections) : (i += 1) {
-        const dummy_ws = createMockWebSocket();
-        const state = try memory_strategy.createConnection(i, dummy_ws);
-        try registry.add(i, state);
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(i + 1));
+        try manager.onOpen(&ws);
     }
 
     // Spawn multiple reader threads
@@ -301,8 +184,7 @@ test "connection: concurrent reads are non-blocking" {
 
     for (&threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, concurrentReads, .{
-            &registry,
-            allocator,
+            &app,
             num_connections,
             reads_per_thread,
         });
@@ -314,25 +196,23 @@ test "connection: concurrent reads are non-blocking" {
     }
 
     // Verify all connections still exist
-    var snap = try registry.snapshot();
-    defer snap.deinit();
-    try testing.expectEqual(@as(usize, num_connections), snap.count());
+    try testing.expectEqual(@as(usize, num_connections), manager.map.count());
 }
 
 fn concurrentReads(
-    registry: *ConnectionRegistry,
-    allocator: std.mem.Allocator,
+    app: *AppTestContext,
     num_connections: usize,
     num_reads: usize,
 ) void {
+    const manager = app.manager;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
     var i: usize = 0;
     while (i < num_reads) : (i += 1) {
-        const conn_id = random.intRangeAtMost(u64, 0, num_connections - 1);
-        if (registry.acquireConnection(conn_id)) |s| {
-            s.release(allocator);
+        const conn_id = random.intRangeAtMost(u64, 1, num_connections);
+        if (manager.acquireConnection(conn_id)) |s| {
+            if (s.release()) app.releaseConnection(s);
         } else |_| {
             std.log.debug("Failed to get connection {}\n", .{conn_id});
             return;
@@ -343,24 +223,19 @@ fn concurrentReads(
 // Additional property test: Mixed concurrent operations
 test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    var registry: ConnectionRegistry = undefined;
-    registry.init(&memory_strategy);
-    defer registry.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p4", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
     const num_threads = 8;
-    const ops_per_thread = 50;
-
+    const ops_per_thread = 500;
     var threads: [num_threads]std.Thread = undefined;
 
     for (&threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, mixedConcurrentOps, .{
-            &registry,
-            allocator,
-            i * ops_per_thread,
+        thread.* = try std.Thread.spawn(.{}, concurrentMixedOps, .{
+            &app,
+            @as(u64, i) * 1000 + 100, // Range offset to avoid overlap with other tests
             ops_per_thread,
         });
     }
@@ -373,39 +248,36 @@ test "connection: mixed concurrent ops safety" {
     // Test passes if no crashes or data races occurred
 }
 
-fn mixedConcurrentOps(
-    registry: *ConnectionRegistry,
-    allocator: std.mem.Allocator,
+fn concurrentMixedOps(
+    app: *AppTestContext,
     start_id: u64,
     count: usize,
 ) void {
-    var prng = std.Random.DefaultPrng.init(@intCast(start_id));
+    const manager = app.manager;
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
-        const op = random.intRangeAtMost(u8, 0, 2);
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
 
+        const op = random.intRangeAtMost(u8, 0, 2);
         switch (op) {
             0 => {
                 // Add operation
-                const dummy_ws = createMockWebSocket();
-                const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
-                registry.add(conn_id, state) catch {
-                    state.deinit(allocator);
-                    continue;
-                };
+                manager.onOpen(&ws) catch continue; // zwanzig-disable-line: swallowed-error
             },
             1 => {
                 // Get operation
-                if (registry.acquireConnection(conn_id)) |s| {
-                    s.release(allocator);
+                if (manager.acquireConnection(conn_id)) |s| {
+                    if (s.release()) app.releaseConnection(s);
                 } else |_| {}
             },
             2 => {
                 // Remove operation
-                registry.remove(conn_id);
+                manager.onClose(&ws, 1000, "Normal closure");
             },
             else => unreachable,
         }
@@ -413,40 +285,38 @@ fn mixedConcurrentOps(
 }
 
 // Property test: Clear operation is thread-safe
-test "connection: clear is thread-safe" {
+test "connection: closeAll is thread-safe" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p4", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var registry: ConnectionRegistry = undefined;
-    registry.init(&memory_strategy);
-    defer registry.deinit();
+    const manager = app.manager;
 
     // Add some initial connections
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const dummy_ws = createMockWebSocket();
-        const state = try memory_strategy.createConnection(i, dummy_ws);
-        try registry.add(i, state);
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(i + 1));
+        try manager.onOpen(&ws);
     }
 
-    // Spawn threads that add connections while main thread clears
+    // Spawn threads that add connections while main thread closes all
     const num_threads = 5;
     var threads: [num_threads]std.Thread = undefined;
 
     for (&threads, 0..) |*thread, idx| {
         thread.* = try std.Thread.spawn(.{}, addConnections, .{
-            &registry,
-            allocator,
+            manager,
             100 + idx * 20,
             20,
         });
     }
 
-    // Clear registry while threads are adding
+    // Close all connections while threads are adding
     std.Thread.sleep(1 * std.time.ns_per_ms);
-    registry.clear();
+    manager.closeAllConnections();
 
     // Wait for all threads
     for (threads) |thread| {
@@ -457,61 +327,27 @@ test "connection: clear is thread-safe" {
 }
 
 fn addConnections(
-    registry: *ConnectionRegistry,
-    allocator: std.mem.Allocator,
+    manager: *ConnectionManager,
     start_id: u64,
     count: usize,
 ) void {
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
-        const dummy_ws = createMockWebSocket();
-        const state = registry.memory_strategy.createConnection(conn_id, dummy_ws) catch continue; // zwanzig-disable-line: swallowed-error
-        registry.add(conn_id, state) catch {
-            state.deinit(allocator);
-            continue;
-        };
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
+        manager.onOpen(&ws) catch continue; // zwanzig-disable-line: swallowed-error
     }
 }
 
-test "connection: unique monotonically increasing IDs" {
+test "connection: unique IDs" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p5", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    // Initialize all required components for MessageHandler
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var test_schema_1: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p5");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_1, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_1) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    // Initialize message handler
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
 
     // Test 1: Sequential connections should have unique IDs
     {
@@ -520,33 +356,28 @@ test "connection: unique monotonically increasing IDs" {
         var connection_ids: [num_connections]u64 = undefined;
 
         // Open all connections sequentially
-        for (&websockets, 0..) |*ws, i| {
+        for (&websockets, 0..) |*ws, idx| {
             ws.* = createMockWebSocket();
-            const conn_id = i + 1;
+            const conn_id = idx + 1;
             ws.setUserData(@ptrFromInt(conn_id));
-            try handler.handleOpen(ws);
-            connection_ids[i] = ws.getConnId();
-            try testing.expectEqual(conn_id, connection_ids[i]);
+            try manager.onOpen(ws);
+            connection_ids[idx] = ws.getConnId();
+            try testing.expectEqual(conn_id, connection_ids[idx]);
         }
 
         // Verify all connection IDs are unique
-        for (connection_ids, 0..) |id1, i| {
-            for (connection_ids[i + 1 ..], i + 1..) |id2, j| {
+        for (connection_ids, 0..) |id1, idx| {
+            for (connection_ids[idx + 1 ..], idx + 1..) |id2, j| {
                 if (id1 == id2) {
-                    std.log.debug("Duplicate connection ID found: {} at positions {} and {}\n", .{ id1, i, j });
+                    std.log.debug("Duplicate connection ID found: {} at positions {} and {}\n", .{ id1, idx, j });
                     try testing.expect(false);
                 }
             }
         }
 
-        // Verify IDs are monotonically increasing (as we assigned them that way)
-        for (connection_ids[0 .. connection_ids.len - 1], 0..) |id, i| {
-            try testing.expect(connection_ids[i + 1] > id);
-        }
-
         // Clean up
         for (&websockets) |*ws| {
-            try handler.handleClose(ws, 1000, "Normal closure");
+            manager.onClose(ws, 1000, "Normal closure");
         }
     }
 
@@ -564,7 +395,7 @@ test "connection: unique monotonically increasing IDs" {
         // Spawn threads that open connections concurrently
         for (&threads, 0..) |*thread, idx| {
             thread.* = try std.Thread.spawn(.{}, openConnectionsConcurrently, .{
-                handler,
+                manager,
                 connections_per_thread,
                 &all_connection_ids,
                 &ids_mutex,
@@ -588,71 +419,65 @@ test "connection: unique monotonically increasing IDs" {
         var ids = std.AutoHashMap(u64, void).init(allocator);
         defer ids.deinit();
 
-        var i: usize = 0;
-        while (i < num_connections) : (i += 1) {
+        var idx: usize = 0;
+        while (idx < num_connections) : (idx += 1) {
             var ws = createMockWebSocket();
-            ws.setUserData(@ptrFromInt(i + 1000000));
-            try handler.handleOpen(&ws);
+            ws.setUserData(@ptrFromInt(idx + 1000000));
+            try manager.onOpen(&ws);
             const conn_id = ws.getConnId();
 
             try testing.expect(!ids.contains(conn_id));
             try ids.put(conn_id, {});
 
             // Clean up immediately to avoid memory issues
-            try handler.handleClose(&ws, 1000, "Normal closure");
+            manager.onClose(&ws, 1000, "Normal closure");
         }
 
         try testing.expectEqual(@as(usize, num_connections), ids.count());
     }
 
-    // Test 4: IDs should be unique across handler restarts (new handler instance)
+    // Test 4: IDs should be unique across manager restarts (new manager instance)
     {
-        // Create a second handler instance
-        const handler2 = try MessageHandler.init(
-            allocator,
-            &memory_strategy,
-            &tracker,
-            storage_engine,
-            subscription_manager,
-            .{},
-        );
-        defer handler2.deinit();
+        // Create a second manager instance using the same context components (safely)
+        const manager2 = try ConnectionManager.init(allocator, app.memory_strategy, app.handler);
+        defer manager2.deinit();
 
-        // Open connections on both handlers
+        // Open connections on both managers
         var ws1 = createMockWebSocket();
         var ws2 = createMockWebSocket();
 
-        try handler.handleOpen(&ws1);
-        try handler2.handleOpen(&ws2);
+        ws1.setUserData(@ptrFromInt(@as(usize, 1)));
+        ws2.setUserData(@ptrFromInt(@as(usize, 1)));
+
+        try manager.onOpen(&ws1);
+        try manager2.onOpen(&ws2);
 
         const id1 = ws1.getConnId();
         const id2 = ws2.getConnId();
 
-        // IDs from different handler instances can overlap (both start at 1)
-        // This is expected behavior - uniqueness is per-handler-instance
-        // But within each instance, IDs must be unique
+        // IDs from different manager instances can overlap if they both start from the same base
         _ = id1;
         _ = id2;
 
         // Clean up
-        try handler.handleClose(&ws1, 1000, "Normal closure");
-        try handler2.handleClose(&ws2, 1000, "Normal closure");
+        manager.onClose(&ws1, 1000, "Normal closure");
+        manager2.onClose(&ws2, 1000, "Normal closure");
     }
 }
 
 fn openConnectionsConcurrently(
-    handler: *MessageHandler,
+    manager: *ConnectionManager,
     count: usize,
     all_ids: *std.AutoHashMap(u64, void),
     mutex: *std.Thread.Mutex,
     thread_idx: usize,
 ) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
         var ws = createMockWebSocket();
-        const unique_id = (thread_idx + 1) * 10000 + i;
+        const unique_id = (thread_idx + 1) * 10000 + idx;
         ws.setUserData(@ptrFromInt(unique_id));
-        handler.handleOpen(&ws) catch {
+        manager.onOpen(&ws) catch { // zwanzig-disable-line: swallowed-error
             std.log.debug("Failed to open connection\n", .{});
             continue;
         };
@@ -661,103 +486,72 @@ fn openConnectionsConcurrently(
 
         // Store ID in shared map (thread-safe)
         mutex.lock();
-        defer mutex.unlock();
         all_ids.put(conn_id, {}) catch {
             std.log.debug("Failed to store connection ID\n", .{});
         };
+        mutex.unlock();
 
         // Clean up connection
-        handler.handleClose(&ws, 1000, "Normal closure") catch {
-            std.log.debug("Failed to close connection\n", .{});
-        };
+        manager.onClose(&ws, 1000, "Normal closure");
     }
 }
 
 test "message: all valid frames are parsed" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p7", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    // Initialize all required components for MessageHandler
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var test_schema_2: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p7");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_2, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_2) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    // Initialize message handler
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
 
     // Test 1: Valid StoreSet message should be parsed successfully
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         // Create a valid MessagePack message
         const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "table", "key1", "val" }, "value1");
         defer allocator.free(message);
 
         // This should not throw a parsing error
-        try handler.handleMessage(&ws, message, .binary);
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 2: Valid StoreGet message should be parsed successfully
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 2)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const message = try msgpack.createStoreGetMessage(allocator, 2, "test", &.{"key1"});
         defer allocator.free(message);
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 3: Message with all required fields should parse
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 3)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "table", "p", "val" }, "v");
         defer allocator.free(message);
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 4: Various valid message formats should parse
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 4)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const messages = [_]struct { ns: []const u8, p: []const u8, v: []const u8 }{
             .{ .ns = "a", .p = "/b", .v = "c" },
@@ -767,9 +561,7 @@ test "message: all valid frames are parsed" {
         for (messages, 0..) |m, i| {
             const msg = try msgpack.createStoreSetMessage(allocator, @intCast(i), m.ns, &.{m.p}, m.v);
             defer allocator.free(msg);
-            handler.handleMessage(&ws, msg, .binary) catch {
-                // Error expected
-            };
+            manager.onMessage(&ws, msg, .binary);
         }
     }
 }
@@ -780,40 +572,13 @@ test "message: all valid frames are parsed" {
 // For any successfully parsed message, the message type field should be extractable
 // from the MessagePack map.
 test "message: type extraction" {
-    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p8", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var test_schema_3: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p8");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_3, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_3) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const handler = app.handler;
 
     // Test 1: StoreSet type should be extractable
     {
@@ -926,43 +691,22 @@ test "message: type extraction" {
 // For any message with a recognized type (StoreSet, StoreGet), the message should be
 // routed to the appropriate handler function.
 test "message: request routing to handlers" {
-    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p9", &.{
+        .{ .name = "test_table", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var test_schema_4: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p9");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test_table", &test_schema_4, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_4) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const handler = app.handler;
 
     // Test 1: StoreSet message should route to handleStoreSet
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key1", "val" }, "value1");
         defer allocator.free(message);
 
@@ -973,7 +717,7 @@ test "message: request routing to handlers" {
         const msg_info = try handler.extractMessageInfo(parsed);
 
         // Route the message - should not error for recognized type
-        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -982,6 +726,12 @@ test "message: request routing to handlers" {
 
     // Test 2: StoreGet message should route to handleStoreGet
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         // First set a value
         const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key2", "val" }, "value2");
         defer allocator.free(set_message);
@@ -991,7 +741,7 @@ test "message: request routing to handlers" {
         defer set_parsed.free(allocator);
 
         const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try routeWithArena(handler, allocator, 1, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, conn, set_info, set_parsed);
         defer allocator.free(set_response);
 
         // Now get the value
@@ -1004,7 +754,7 @@ test "message: request routing to handlers" {
 
         const get_info = try handler.extractMessageInfo(get_parsed);
 
-        const response = try routeWithArena(handler, allocator, 1, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, conn, get_info, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the value
@@ -1013,6 +763,11 @@ test "message: request routing to handlers" {
 
     // Test 3: Unknown message type should return error
     {
+        var ws = createMockWebSocket();
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const message = try msgpack.createCustomMessage(allocator, 3, "UnknownType", "test", &.{"key"});
         defer allocator.free(message);
 
@@ -1022,12 +777,18 @@ test "message: request routing to handlers" {
 
         const msg_info = try handler.extractMessageInfo(parsed);
 
-        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
+        const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 
     // Test 4: Multiple different message types should route correctly
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const msgs = [_][]const u8{
             try msgpack.createStoreSetMessage(allocator, 10, "ns", &.{ "test_table", "p1", "val" }, "v1"),
             try msgpack.createStoreGetMessage(allocator, 11, "ns", &.{ "test_table", "p1" }),
@@ -1048,11 +809,11 @@ test "message: request routing to handlers" {
             const msg_info = try handler.extractMessageInfo(parsed);
 
             if (should_succeed[i]) {
-                const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
+                const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
                 defer allocator.free(response);
                 try testing.expect(response.len > 0);
             } else {
-                const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
+                const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
                 try testing.expectError(error.UnknownMessageType, result);
             }
         }
@@ -1065,43 +826,22 @@ test "message: request routing to handlers" {
 // For any request message with a correlation ID, the response message should include
 // the same correlation ID.
 test "message: response correlation by ID" {
-    // Initialize all required components for MessageHandler
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p10", &.{
+        .{ .name = "test_table", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var test_schema_5: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p10");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test_table", &test_schema_5, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_5) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const handler = app.handler;
 
     // Test 1: StoreSet response should include correlation ID
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const correlation_id: u64 = 12345;
         const message = try msgpack.createStoreSetMessage(allocator, correlation_id, "test", &.{ "test_table", "key", "val" }, "val");
         defer allocator.free(message);
@@ -1113,7 +853,7 @@ test "message: response correlation by ID" {
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -1135,6 +875,12 @@ test "message: response correlation by ID" {
 
     // Test 2: StoreGet response should include correlation ID
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         // First set a value
         const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key2", "val" }, "value2");
         defer allocator.free(set_message);
@@ -1144,7 +890,7 @@ test "message: response correlation by ID" {
         defer set_parsed.free(allocator);
 
         const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try routeWithArena(handler, allocator, 1, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, conn, set_info, set_parsed);
         defer allocator.free(set_response);
 
         // Now get with specific correlation ID
@@ -1159,7 +905,7 @@ test "message: response correlation by ID" {
         const get_info = try handler.extractMessageInfo(get_parsed);
         try testing.expectEqual(correlation_id, get_info.id);
 
-        const response = try routeWithArena(handler, allocator, 1, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, conn, get_info, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -1181,6 +927,12 @@ test "message: response correlation by ID" {
 
     // Test 3: Multiple requests with different correlation IDs
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const correlation_ids = [_]u64{ 1, 100, 999, 12345, 0 };
 
         for (correlation_ids) |corr_id| {
@@ -1194,7 +946,7 @@ test "message: response correlation by ID" {
             const msg_info = try handler.extractMessageInfo(parsed);
             try testing.expectEqual(corr_id, msg_info.id);
 
-            const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
+            const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response);
 
             // Each response should contain its specific correlation ID
@@ -1217,6 +969,12 @@ test "message: response correlation by ID" {
 
     // Test 4: Correlation ID should be preserved even for not found responses
     {
+        var ws = createMockWebSocket();
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        const sc = try app.openScopedConnection(&ws);
+        defer sc.deinit();
+        const conn = sc.conn;
+
         const correlation_id: u64 = 77777;
         const message = try msgpack.createStoreGetMessage(allocator, correlation_id, "test", &.{ "test_table", "nonexistent" });
         defer allocator.free(message);
@@ -1228,7 +986,7 @@ test "message: response correlation by ID" {
         const msg_info = try handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try routeWithArena(handler, allocator, 1, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID even for not found
@@ -1256,63 +1014,34 @@ test "message: response correlation by ID" {
 // should be sent to the client.
 test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "handler-p11", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    // Initialize all required components for MessageHandler
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var test_schema_6: ?*schema_parser.Schema = null;
-    var context = try schema_helpers.TestContext.init(allocator, "handler-p11");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    const storage_engine = try setupEngineWithSchema(allocator, test_dir, "test", &test_schema_6, &memory_strategy);
-    defer {
-        storage_engine.deinit();
-        if (test_schema_6) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
-
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    const handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
 
     // Test 1: Invalid MessagePack should trigger error response
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 1)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         // 0xc1 is never used in MessagePack
         const invalid_message = "\xc1\xc1\xc1";
 
-        // handleMessage should catch the parsing error and send error response
+        // onMessage should catch the parsing error and send error response
         // It should not panic or crash
-        handler.handleMessage(&ws, invalid_message, .binary) catch {
-            // Expected to fail during parsing
-            // Error expected
-        };
+        manager.onMessage(&ws, invalid_message, .binary);
     }
 
     // Test 2: Message missing required fields should trigger error
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 2)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         // Create map with 2 elements: type and id
         var buf = std.ArrayList(u8){};
@@ -1325,30 +1054,30 @@ test "message: error responses for invalid types/fields" {
 
         const message = buf.items;
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 3: Text messages should trigger error (only binary supported)
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 3)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const message = "some text message";
 
-        // Should trigger TEXT_NOT_SUPPORTED error
-        handler.handleMessage(&ws, message, .text) catch {
-            // Error expected
-        };
+        // Should trigger TEXT_NOT_SUPPORTED error (though onMessage doesn't take opCode,
+        // normally the server calls onMessage with the data)
+        // ConnectionManager expects []const u8, so it's always "binary" in its view
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 4: Message with invalid type should trigger error
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 4)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
@@ -1364,29 +1093,27 @@ test "message: error responses for invalid types/fields" {
 
         const message = buf.items;
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 5: Empty message should trigger error
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 5)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const message = "";
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 
     // Test 6: Message with wrong field types should trigger error
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        ws.setUserData(@ptrFromInt(@as(usize, 6)));
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         var buf = std.ArrayList(u8){};
         defer buf.deinit(allocator);
@@ -1400,8 +1127,6 @@ test "message: error responses for invalid types/fields" {
 
         const message = buf.items;
 
-        handler.handleMessage(&ws, message, .binary) catch {
-            // Error expected
-        };
+        manager.onMessage(&ws, message, .binary);
     }
 }

@@ -1,80 +1,48 @@
 const std = @import("std");
 const testing = std.testing;
 
-const MessageHandler = @import("message_handler.zig").MessageHandler;
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const it_storage_mod = @import("storage_engine.zig");
-const storage_mod = it_storage_mod;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const storage_mod = @import("storage_engine.zig");
+const helpers = @import("message_handler_test_helpers.zig");
+const createMockWebSocket = helpers.createMockWebSocket;
+const AppTestContext = helpers.AppTestContext;
+const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
-const routeWithArena = @import("message_handler_test_helpers.zig").routeWithArena;
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-
-var next_mock_ws_id = std.atomic.Value(u64).init(1);
-
-// Helper function to create a mock WebSocket for testing
-fn createMockWebSocket() WebSocket {
-    return WebSocket{
-        .ws = null,
-        .ssl = false,
-        .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
-    };
-}
 
 // Task 14 Verification: WebSocket connection lifecycle
 test "Verification: WebSocket connection lifecycle" {
     const allocator = testing.allocator;
-
-    // Initialize all required components
-    const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.init(allocator, 3);
-    defer {
-        violation_tracker.deinit();
-        allocator.destroy(violation_tracker);
-    }
-
-    var context = try schema_helpers.TestContext.init(allocator, "verification-lifecycle");
-    defer context.deinit();
-
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var app = try AppTestContext.init(allocator, "verification-lifecycle", &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer app.deinit();
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
-    defer storage_engine.deinit(); // Note: context.deinit() handles directory cleanup
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
-    defer handler.deinit();
+    const manager = app.manager;
 
     // Test connection open
     var ws = createMockWebSocket();
-    try handler.handleOpen(&ws);
+    try manager.onOpen(&ws);
+    // Explicit close for middle-test state verification, plus defer for early failures
+    var closed = false;
+    defer if (!closed) manager.onClose(&ws, 1000, "Cleanup");
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
 
-    // Verify connection exists in registry
-    const state = try handler.connection_registry.acquireConnection(conn_id);
-    defer state.release(allocator);
+    // Verify connection exists in manager
+    const state = try manager.acquireConnection(conn_id);
+    defer if (state.release()) app.memory_strategy.releaseConnection(state);
     try testing.expectEqual(conn_id, state.id);
     try testing.expectEqualStrings("default", state.namespace);
 
     // Test connection close
-    try handler.handleClose(&ws, 1000, "Normal closure");
+    manager.onClose(&ws, 1000, "Normal closure");
+    closed = true;
 
     // Verify connection was removed
-    const result = handler.connection_registry.acquireConnection(conn_id);
+    const result = manager.acquireConnection(conn_id);
     if (result) |s| {
-        s.release(allocator);
+        _ = s.release();
         return error.TestExpectedError;
     } else |err| {
         try testing.expectEqual(error.ConnectionNotFound, err);
@@ -85,32 +53,15 @@ test "Verification: WebSocket connection lifecycle" {
 test "Verification: StoreSet message processing" {
     const allocator = testing.allocator;
 
-    const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.init(allocator, 3);
-    defer {
-        violation_tracker.deinit();
-        allocator.destroy(violation_tracker);
-    }
-
-    var context = try schema_helpers.TestContext.init(allocator, "verification-storeset");
-    defer context.deinit();
-
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var app = try AppTestContext.init(allocator, "verification-storeset", &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer app.deinit();
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
-    defer storage_engine.deinit();
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
-    defer handler.deinit();
+    const handler = app.handler;
+    const manager = app.manager;
+    const storage_engine = app.storage_engine;
 
     // Create a proper MessagePack StoreSet message
     const message = try msgpack.createStoreSetMessage(
@@ -134,11 +85,12 @@ test "Verification: StoreSet message processing" {
 
     // Route and process the message
     var ws = createMockWebSocket();
-    try handler.handleOpen(&ws);
-    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+    try manager.onOpen(&ws);
+    defer manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn_id = ws.getConnId();
-    const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+    const conn = try manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response_copy);
 
     // Verify response indicates success
@@ -186,31 +138,14 @@ test "Verification: StoreSet message processing" {
 test "Verification: StoreGet message processing" {
     const allocator = testing.allocator;
 
-    const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.init(allocator, 3);
-    defer {
-        violation_tracker.deinit();
-        allocator.destroy(violation_tracker);
-    }
-
-    var context = try schema_helpers.TestContext.init(allocator, "verification-storeget");
-    defer context.deinit();
-
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var app = try AppTestContext.init(allocator, "verification-storeget", &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer app.deinit();
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
-    defer storage_engine.deinit();
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
-    defer handler.deinit();
+    const handler = app.handler;
+    const manager = app.manager;
+    const storage_engine = app.storage_engine;
 
     // First, store a value (typed storage)
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
@@ -240,11 +175,12 @@ test "Verification: StoreGet message processing" {
 
     // Route and process the message
     var ws = createMockWebSocket();
-    try handler.handleOpen(&ws);
-    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+    try manager.onOpen(&ws);
+    defer manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn_id = ws.getConnId();
-    const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+    const conn = try manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response_copy);
 
     // Verify response contains the value
@@ -272,6 +208,13 @@ test "Verification: StoreGet message processing" {
                 if (val == .str) {
                     try testing.expectEqualStrings("stored_value", val.str.value());
                     found_value = true;
+                } else if (val == .map) {
+                    if (msgpack.getMapValue(val, "val")) |f| {
+                        if (f == .str) {
+                            try testing.expectEqualStrings("stored_value", f.str.value());
+                            found_value = true;
+                        }
+                    }
                 }
             }
         }
@@ -283,32 +226,14 @@ test "Verification: StoreGet message processing" {
 test "Verification: Error handling for invalid messages" {
     const allocator = testing.allocator;
 
-    const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.init(allocator, 3);
-    defer {
-        violation_tracker.deinit();
-        allocator.destroy(violation_tracker);
-    }
-
-    var context = try schema_helpers.TestContext.init(allocator, "verification-errors");
-    defer context.deinit();
-
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var app = try AppTestContext.init(allocator, "verification-errors", &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer app.deinit();
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
-    defer storage_engine.deinit();
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
-    defer handler.deinit();
+    const handler = app.handler;
+    const manager = app.manager;
 
     // Test 1: Invalid MessagePack should fail parsing
     {
@@ -349,13 +274,14 @@ test "Verification: Error handling for invalid messages" {
     // Test 3: Text messages should be rejected
     {
         var ws = createMockWebSocket();
-        try handler.handleOpen(&ws);
-        defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
 
         const text_message = "text message";
 
-        // Should handle error gracefully (not crash)
-        handler.handleMessage(&ws, text_message, .text) catch {}; // zwanzig-disable-line: empty-catch-engine
+        // Should handle error gracefully (not crash) and reject by returning early
+        // from manager.onMessage due to non-binary type.
+        manager.onMessage(&ws, text_message, .text);
     }
 
     // Test 4: Unknown message type should fail routing
@@ -396,7 +322,14 @@ test "Verification: Error handling for invalid messages" {
         defer parsed.free(allocator);
 
         const msg_info = try handler.extractMessageInfo(parsed);
-        const result = routeWithArena(handler, allocator, 1, msg_info, parsed);
+
+        var ws = createMockWebSocket();
+        try manager.onOpen(&ws);
+        defer manager.onClose(&ws, 1000, "Normal closure");
+        const conn = try manager.acquireConnection(ws.getConnId());
+        defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+        const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 }
@@ -405,38 +338,22 @@ test "Verification: Error handling for invalid messages" {
 test "Verification: End-to-end StoreSet and StoreGet flow" {
     const allocator = testing.allocator;
 
-    const violation_tracker = try allocator.create(ViolationTracker);
-    violation_tracker.init(allocator, 3);
-    defer {
-        violation_tracker.deinit();
-        allocator.destroy(violation_tracker);
-    }
-
-    var context = try schema_helpers.TestContext.init(allocator, "verification-e2e");
-    defer context.deinit();
-
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var app = try AppTestContext.init(allocator, "verification-e2e", &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer app.deinit();
 
-    const storage_engine = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, schema);
-    defer storage_engine.deinit();
-    const subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-    const handler = try MessageHandler.init(allocator, &memory_strategy, violation_tracker, storage_engine, subscription_manager, .{});
-    defer handler.deinit();
+    const handler = app.handler;
+    const manager = app.manager;
+    const storage_engine = app.storage_engine;
 
     // Open a connection
     var ws = createMockWebSocket();
-    try handler.handleOpen(&ws);
-    defer handler.handleClose(&ws, 1000, "Normal closure") catch {}; // zwanzig-disable-line: empty-catch-engine
+    try manager.onOpen(&ws);
+    defer manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn_id = ws.getConnId();
+    const conn = try manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
 
     // Store multiple values
     const test_data = [_]struct {
@@ -465,7 +382,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+            const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response_copy);
 
             // Verify success response
@@ -497,7 +414,7 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             defer parsed.free(allocator);
 
             const msg_info = try handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(handler, allocator, conn_id, msg_info, parsed);
+            const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response_copy);
 
             // Verify response contains the value
@@ -510,7 +427,14 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             while (rit.next()) |entry| {
                 const key = entry.key_ptr.*;
                 if (key == .str and std.mem.eql(u8, key.str.value(), "value")) {
-                    val = entry.value_ptr.*.str.value();
+                    const v = entry.value_ptr.*;
+                    if (v == .str) {
+                        val = v.str.value();
+                    } else if (v == .map) {
+                        if (msgpack.getMapValue(v, "val")) |f| {
+                            if (f == .str) val = f.str.value();
+                        }
+                    }
                 }
             }
             try testing.expect(val != null);

@@ -8,10 +8,9 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
-const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const Connection = @import("memory_strategy.zig").Connection;
+const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 
 /// Structured path parsed from a MessagePack array payload.
@@ -60,7 +59,6 @@ pub const MessageHandler = struct {
     storage_engine: *StorageEngine,
     subscription_manager: *SubscriptionManager,
     security_config: SecurityConfig,
-    connection_registry: ConnectionRegistry,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -81,61 +79,25 @@ pub const MessageHandler = struct {
             .storage_engine = storage_engine,
             .subscription_manager = subscription_manager,
             .security_config = security_config,
-            // SAFETY: connection_registry is initialized via self.connection_registry.init below
-            .connection_registry = undefined,
         };
-        self.connection_registry.init(memory_strategy);
 
         return self;
     }
 
     /// Clean up message handler resources
     pub fn deinit(self: *MessageHandler) void {
-        self.connection_registry.deinit();
         self.allocator.destroy(self);
-    }
-
-    /// Handle WebSocket connection open event
-    /// Uses WebSocket pointer as unique connection ID and adds to registry
-    pub fn handleOpen(self: *MessageHandler, ws: *WebSocket) !void {
-        const conn_id = ws.getConnId();
-
-        // Enforce maximum connections
-        const current_count = self.connection_registry.map.count();
-        if (current_count >= 100_000) {
-            std.log.warn("Rejecting connection {}: max connections (100000) reached", .{conn_id});
-            try self.sendError(ws, "MAX_CONNECTIONS_REACHED", "Server has reached the maximum number of concurrent connections");
-            ws.close();
-            return;
-        }
-
-        // Acquire connection state strongly initialized from the pool
-        const conn = try self.memory_strategy.createConnection(conn_id, ws.*);
-
-        // Store in registry
-        try self.connection_registry.add(conn_id, conn);
-
-        std.log.info("WebSocket connection opened: id={}", .{conn_id});
     }
 
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
     pub fn handleMessage(
         self: *MessageHandler,
-        ws: *WebSocket,
+        conn: *Connection,
         message: []const u8,
-        msg_type: MessageType,
     ) !void {
-        _ = msg_type;
-        // Get stable unique connection ID
-        const conn_id = ws.getConnId();
-
-        // Get connection state (increments refcount)
-        const conn = self.connection_registry.acquireConnection(conn_id) catch |err| {
-            std.log.warn("Connection {} not found in registry during message: {}", .{ conn_id, err });
-            return;
-        };
-        defer conn.release(self.allocator);
+        const ws = &conn.ws;
+        const conn_id = conn.id;
 
         // 1. Enforce rate limiting under isolated lock
         if (self.security_config.max_messages_per_second > 0) {
@@ -211,7 +173,7 @@ pub const MessageHandler = struct {
         // Route to appropriate handler
         // Note: Currently none of the handlers access Connection state under the lock.
         // If they start doing so, we should acquire the lock specifically inside those handlers.
-        const response = self.routeMessage(arena_allocator, conn_id, msg_info, parsed) catch |err| {
+        const response = self.routeMessage(arena_allocator, conn, msg_info, parsed) catch |err| {
             std.log.debug("Failed to process message from connection {}: {}", .{ conn_id, err });
             try self.sendError(ws, "INTERNAL_ERROR", "Failed to process request");
             return;
@@ -221,101 +183,20 @@ pub const MessageHandler = struct {
         ws.send(response, .binary);
     }
 
-    /// Handle WebSocket connection close event
-    /// Removes subscriptions and connection state
-    pub fn handleClose(self: *MessageHandler, ws: *WebSocket, code: i32, message: []const u8) !void {
-        const conn_id = ws.getConnId();
+    /// Perform logical teardown of a session (unsubscriptions) and free related memory.
+    pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
+        conn.mutex.lock();
+        defer conn.mutex.unlock();
 
-        std.log.debug("WebSocket closed: id={}, code={}, reason={s}", .{
-            conn_id,
-            code,
-            message,
-        });
-
-        // Get connection state (increments refcount)
-        const conn_state = self.connection_registry.acquireConnection(conn_id) catch |err| {
-            std.log.debug("Connection {} not found in registry during close: {}", .{ conn_id, err });
-            return;
-        };
-        defer conn_state.release(self.allocator);
-
-        // Cleanup under mutex
-        {
-            conn_state.mutex.lock();
-            defer conn_state.mutex.unlock();
-
-            // Remove all subscriptions for this connection
-            for (conn_state.subscription_ids.items) |sub_id| {
-                self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                    std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn_id, err });
-                };
-            }
+        // 1. Unsubscribe from all topics using the connection's current list
+        for (conn.subscription_ids.items) |sub_id| {
+            self.subscription_manager.unsubscribe(sub_id) catch |err| {
+                std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn.id, err });
+            };
         }
 
-        // Remove from registry (decrements registry's refcount)
-        self.connection_registry.remove(conn_id);
-    }
-
-    /// Handle WebSocket error event
-    /// Cleans up connection state
-    pub fn handleError(self: *MessageHandler, ws: *WebSocket) !void {
-        const conn_id = ws.getConnId();
-
-        std.log.debug("WebSocket error on connection: id={}", .{conn_id});
-
-        // Clean up connection state if it exists
-        if (self.connection_registry.acquireConnection(conn_id)) |conn_state| {
-            defer conn_state.release(self.allocator);
-
-            // Cleanup under mutex
-            {
-                conn_state.mutex.lock();
-                defer conn_state.mutex.unlock();
-
-                // Remove subscriptions
-                for (conn_state.subscription_ids.items) |sub_id| {
-                    self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                        std.log.warn("Failed to unsubscribe {} during error cleanup: {}", .{ sub_id, err });
-                    };
-                }
-            }
-
-            // Remove from registry
-            self.connection_registry.remove(conn_id);
-        } else |_| {
-            // Connection not in registry, nothing to clean up
-        }
-    }
-
-    /// Close all active connections for graceful shutdown
-    pub fn closeAllConnections(self: *MessageHandler) !void {
-        var snap = try self.connection_registry.snapshot();
-        defer snap.deinit();
-
-        var it = snap.valueIterator();
-        while (it.next()) |state| {
-            const conn_state = state.*;
-
-            // Cleanup under mutex
-            {
-                conn_state.mutex.lock();
-                defer conn_state.mutex.unlock();
-
-                // Remove subscriptions
-                for (conn_state.subscription_ids.items) |sub_id| {
-                    self.subscription_manager.unsubscribe(sub_id) catch |err| {
-                        std.log.warn("Failed to unsubscribe {} during shutdown: {}", .{ sub_id, err });
-                    };
-                }
-
-                // Close the WebSocket connection
-                conn_state.ws.close();
-            }
-
-            std.log.info("Closed connection: id={}", .{conn_state.id});
-        }
-
-        self.connection_registry.clear();
+        // 2. Clear session-specific memory (user_id, namespace, and list pointers)
+        conn.resetSession();
     }
 
     /// Extract message type and correlation ID from parsed MessagePack
@@ -361,15 +242,15 @@ pub const MessageHandler = struct {
     pub fn routeMessage(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
-        conn_id: u64,
+        conn: *Connection,
         msg_info: MessageInfo,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(arena_allocator, conn_id, msg_info.id, parsed);
+            return try self.handleStoreSet(arena_allocator, conn.id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreGet")) {
-            return try self.handleStoreGet(arena_allocator, conn_id, msg_info.id, parsed);
+            return try self.handleStoreGet(arena_allocator, conn.id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
             return try self.handleStoreRemove(arena_allocator, msg_info.id, parsed);
         } else {
@@ -644,7 +525,7 @@ pub const MessageHandler = struct {
     }
 
     /// Send error response to client
-    fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
+    pub fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8) !void {
         var list: std.ArrayList(u8) = .{};
         defer list.deinit(self.allocator);
 
@@ -719,108 +600,6 @@ pub const MessageHandler = struct {
                 }),
             }
         }
-    }
-};
-
-/// Thread-safe registry for tracking active WebSocket connections.
-pub const ConnectionRegistry = struct {
-    const Map = std.AutoHashMap(u64, *Connection);
-
-    map: Map,
-    mutex: std.Thread.Mutex,
-    memory_strategy: *MemoryStrategy,
-
-    pub fn init(self: *ConnectionRegistry, memory_strategy: *MemoryStrategy) void {
-        self.* = ConnectionRegistry{
-            .map = Map.init(memory_strategy.generalAllocator()),
-            .mutex = .{},
-            .memory_strategy = memory_strategy,
-        };
-    }
-
-    pub fn deinit(self: *ConnectionRegistry) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        var it = self.map.valueIterator();
-        while (it.next()) |conn| {
-            conn.*.release(self.memory_strategy.generalAllocator());
-        }
-        self.map.deinit();
-    }
-
-    pub fn add(self: *ConnectionRegistry, id: u64, conn: *Connection) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        try self.map.put(id, conn);
-    }
-
-    pub fn remove(self: *ConnectionRegistry, id: u64) void {
-        self.mutex.lock();
-        const maybe_conn = self.map.fetchRemove(id);
-        self.mutex.unlock();
-
-        if (maybe_conn) |entry| {
-            entry.value.release(self.memory_strategy.generalAllocator());
-        }
-    }
-
-    pub fn acquireConnection(self: *ConnectionRegistry, id: u64) !*Connection {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        const conn = self.map.get(id) orelse {
-            return error.ConnectionNotFound;
-        };
-        _ = conn.ref_count.fetchAdd(1, .monotonic);
-        return conn;
-    }
-
-    pub fn clear(self: *ConnectionRegistry) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        var it = self.map.valueIterator();
-        while (it.next()) |conn| {
-            conn.*.release(self.memory_strategy.generalAllocator());
-        }
-        self.map.clearRetainingCapacity();
-    }
-
-    pub const Snapshot = struct {
-        map: Map,
-        memory_strategy: *MemoryStrategy,
-
-        pub fn deinit(self: *Snapshot) void {
-            var it = self.map.valueIterator();
-            while (it.next()) |conn| {
-                conn.*.release(self.memory_strategy.generalAllocator());
-            }
-            self.map.deinit();
-        }
-
-        pub fn count(self: Snapshot) usize {
-            return self.map.count();
-        }
-
-        pub fn iterator(self: *Snapshot) Map.Iterator {
-            return self.map.iterator();
-        }
-
-        pub fn valueIterator(self: *Snapshot) Map.ValueIterator {
-            return self.map.valueIterator();
-        }
-    };
-
-    pub fn snapshot(self: *ConnectionRegistry) !Snapshot {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        var new_map = try self.map.clone();
-        var it = new_map.valueIterator();
-        while (it.next()) |conn| {
-            _ = conn.*.ref_count.fetchAdd(1, .monotonic);
-        }
-        return Snapshot{
-            .map = new_map,
-            .memory_strategy = self.memory_strategy,
-        };
     }
 };
 

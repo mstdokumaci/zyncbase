@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const Connection = @import("connection.zig").Connection;
 
 /// MemoryStrategy provides different allocator strategies for different use cases in ZyncBase.
 /// It combines GeneralPurposeAllocator for long-lived allocations, ArenaAllocator for
@@ -119,14 +119,17 @@ pub const MemoryStrategy = struct {
 
     /// Deinitialize the memory strategy and free all resources
     pub fn deinit(self: *MemoryStrategy) void {
-
         // Deinit pools (this frees the Nodes and cleans up contents via deinitData callbacks)
         self.arena_pool.deinit();
         self.message_pool.deinit();
         self.buffer_pool.deinit();
         self.connection_pool.deinit();
 
-        _ = self.gpa.deinit();
+        const status = self.gpa.deinit();
+        if (builtin.is_test and status == .leak) {
+            // In tests, we want to know if the strategy itself leaked
+            std.debug.print("MemoryStrategy internal leak detected!\n", .{});
+        }
         self.parent_allocator.destroy(self.gpa);
     }
 
@@ -143,12 +146,12 @@ pub const MemoryStrategy = struct {
         msg.reset();
     }
 
-    fn deinitConnection(conn: *Connection, allocator: Allocator) void {
-        conn.deinit(allocator);
+    fn deinitConnection(conn: *Connection, _: Allocator) void {
+        conn.deinit();
     }
 
     fn initConnection(conn: *Connection, allocator: Allocator) void {
-        conn.init(allocator);
+        conn.initPool(allocator);
     }
 
     /// Access the general-purpose allocator
@@ -197,16 +200,6 @@ pub const MemoryStrategy = struct {
     /// Release a connection back to the pool
     pub fn releaseConnection(self: *MemoryStrategy, connection: *Connection) void {
         self.connection_pool.release(connection);
-    }
-
-    pub fn createConnection(self: *MemoryStrategy, id: u64, ws: WebSocket) !*Connection {
-        var conn = try self.acquireConnection();
-        conn.reset();
-        conn.memory_strategy = self;
-        conn.id = id;
-        conn.ws = ws;
-        conn.created_at = std.time.timestamp();
-        return conn;
     }
 
     /// Generic object pool for reusing fixed-size objects.
@@ -482,17 +475,33 @@ pub const MemoryStrategy = struct {
             pub fn acquire(self: *Self) !*T {
                 if (self.pop()) |data| return data;
 
-                // Overflow path: dynamic allocation if pool is exhausted
+                // Try to initialize a next node from the array if we haven't reached capacity
+                const idx = self.initialized_count.fetchAdd(1, .monotonic);
+                if (idx < self.nodes.len) {
+                    const node = &self.nodes[idx];
+                    node.next_index = std.atomic.Value(u32).init(null_index);
+                    if (self.initData) |initData| {
+                        initData(&node.data, self.allocator);
+                    } else {
+                        if (comptime @typeInfo(T) != .pointer) {
+                            @memset(std.mem.asBytes(&node.data), 0);
+                        }
+                    }
+                    _ = self.active_count.fetchAdd(1, .release);
+                    return &node.data;
+                }
+
+                // Actually overflow: real heap allocation because array is full
                 const node = try self.allocator.create(Node);
+                node.next_index = std.atomic.Value(u32).init(null_index);
                 if (self.initData) |initData| {
                     initData(&node.data, self.allocator);
                 } else {
-                    // SAFETY: Data will be initialized by the caller.
-                    node.data = undefined;
                     if (comptime @typeInfo(T) != .pointer) {
                         @memset(std.mem.asBytes(&node.data), 0);
                     }
                 }
+                _ = self.active_count.fetchAdd(1, .release);
                 return &node.data;
             }
 
@@ -520,8 +529,11 @@ pub const MemoryStrategy = struct {
                     }
                 } else {
                     // Overflow path: destroy heap-allocated node
-                    if (self.deinitData) |deinit_fn| deinit_fn(data, self.allocator);
+                    if (self.deinitData) |deinit_fn| {
+                        deinit_fn(data, self.allocator);
+                    }
                     self.allocator.destroy(node);
+                    _ = self.active_count.fetchSub(1, .release);
                 }
             }
 
@@ -529,88 +541,6 @@ pub const MemoryStrategy = struct {
                 return self.active_count.load(.acquire);
             }
         };
-    }
-};
-
-/// Connection state for pooling
-pub const Connection = struct {
-    allocator: Allocator,
-    memory_strategy: ?*MemoryStrategy,
-
-    // Rate limiting state
-    request_tokens: f64,
-    last_request_time: ?i64,
-
-    id: u64,
-    user_id: ?[]const u8,
-    namespace: []const u8,
-    subscription_ids: std.ArrayListUnmanaged(u64),
-    ws: WebSocket,
-    ref_count: std.atomic.Value(usize),
-    mutex: std.Thread.Mutex,
-    created_at: i64,
-
-    pub fn create(allocator: Allocator, id: u64, ws: WebSocket) !*Connection {
-        const self = try allocator.create(Connection);
-        self.init(allocator);
-        self.id = id;
-        self.ws = ws;
-        self.created_at = std.time.timestamp();
-        return self;
-    }
-
-    pub fn init(self: *Connection, allocator: Allocator) void {
-        self.allocator = allocator;
-        self.id = 0;
-        self.user_id = null;
-        self.namespace = "default";
-        self.subscription_ids = .empty;
-        self.ws = .{ .ws = null, .ssl = false };
-        self.ref_count = std.atomic.Value(usize).init(1);
-        self.mutex = .{};
-        self.memory_strategy = null;
-        self.request_tokens = 0.0;
-        self.last_request_time = null;
-    }
-
-    pub fn deinit(self: *Connection, allocator: Allocator) void {
-        _ = allocator;
-        if (self.user_id) |uid| self.allocator.free(uid);
-        self.subscription_ids.deinit(self.allocator);
-    }
-
-    pub fn acquire(self: *Connection) void {
-        _ = self.ref_count.fetchAdd(1, .monotonic);
-    }
-
-    pub fn release(self: *Connection, allocator: Allocator) void {
-        _ = allocator; // ignore passed allocator, use self.allocator
-        if (self.ref_count.fetchSub(1, .release) == 1) {
-            _ = self.ref_count.load(.acquire);
-            if (self.user_id) |uid| self.allocator.free(uid);
-            self.user_id = null;
-            self.subscription_ids.clearRetainingCapacity();
-
-            if (self.memory_strategy) |ms| {
-                ms.releaseConnection(self);
-            } else {
-                self.deinit(self.allocator);
-                self.allocator.destroy(self);
-            }
-        }
-    }
-
-    pub fn reset(self: *Connection) void {
-        self.id = 0;
-        if (self.user_id) |uid| self.allocator.free(uid);
-        self.user_id = null;
-        self.namespace = "default";
-        self.subscription_ids.clearRetainingCapacity();
-        self.ws = .{ .ws = null, .ssl = false };
-        self.ref_count.store(1, .monotonic);
-        // Mutex remains initialized and doesn't need to be reassigned
-        self.request_tokens = 0.0;
-        self.last_request_time = null;
     }
 };
 

@@ -3,7 +3,12 @@ const schema_parser = @import("schema_parser.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const ddl_generator = @import("ddl_generator.zig");
 
-pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const struct { name: []const u8, fields: []const []const u8 }) !*schema_parser.Schema {
+pub const TableDef = struct {
+    name: []const u8,
+    fields: []const []const u8,
+};
+
+pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !*schema_parser.Schema {
     var tables = try allocator.alloc(schema_parser.Table, tables_def.len);
     errdefer allocator.free(tables);
 

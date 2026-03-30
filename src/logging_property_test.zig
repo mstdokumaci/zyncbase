@@ -4,26 +4,18 @@ const testing = std.testing;
 pub var global_capture: ?*LogCapture = null;
 
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
+const helpers = @import("message_handler_test_helpers.zig");
+const createMockWebSocket = helpers.createMockWebSocket;
+const AppTestContext = helpers.AppTestContext;
 const schema_helpers = @import("schema_test_helpers.zig");
-
-fn createTablesFromSchema(allocator: std.mem.Allocator, engine: *StorageEngine, schema: schema_parser.Schema) !void {
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (schema.tables) |table| {
-        const ddl = try gen.generateDDL(table);
-        defer allocator.free(ddl);
-        const ddl_z = try allocator.dupeZ(u8, ddl);
-        defer allocator.free(ddl_z);
-        try engine.execDDL(ddl_z);
-    }
-}
+const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
+const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -77,92 +69,50 @@ test "logging: connection events" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize components
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(testing.allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "logging-conn", &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var context = try schema_helpers.TestContext.init(allocator, "logging-conn");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-
-    var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var dummy_tables = [_]schema_parser.Table{
-        .{ .name = "_dummy", .fields = &dummy_fields },
-        .{ .name = "data_table", .fields = &dummy_fields },
-    };
-    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables };
-    var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema, .{});
-    defer storage_engine.deinit();
-    try createTablesFromSchema(allocator, storage_engine, dummy_schema);
-
-    var subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    var handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
+    const memory_strategy = app.memory_strategy;
 
     // Test 1: Connection open logs connection ID
     // Note: We can't easily intercept std.log in tests, but we can verify
-    // the behavior by checking that handleOpen completes successfully
+    // the behavior by checking that onOpen completes successfully
     // and the connection is registered
     {
         // Create a mock WebSocket (we'll use a stub)
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-        };
-        ws.user_data = &ws;
+        // Create a mock WebSocket
+        var ws = createMockWebSocket();
 
         // Handle open - this should log "WebSocket connection opened: id={}"
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Verify connection was registered
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
-        const conn_state = try handler.connection_registry.acquireConnection(conn_id);
-        defer conn_state.release(allocator);
+        const conn_id = ws.getConnId();
+        const conn_state = try manager.acquireConnection(conn_id);
+        defer if (conn_state.release()) memory_strategy.releaseConnection(conn_state);
         try testing.expectEqual(conn_id, conn_state.id);
 
         // Clean up
-        handler.connection_registry.remove(conn_id);
+        manager.onClose(&ws, 1000, "normal");
     }
 
     // Test 2: Connection close logs connection ID
     {
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-        };
-        ws.user_data = &ws;
+        var ws = createMockWebSocket();
 
         // Open connection first
-        try handler.handleOpen(&ws);
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
+        try manager.onOpen(&ws);
+        const conn_id = ws.getConnId();
 
         // Close connection - this should log "WebSocket connection closed: id={}, code={}, message={s}"
-        try handler.handleClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws, 1000, "Normal closure");
 
         // Verify connection was removed
-        const result = handler.connection_registry.acquireConnection(conn_id);
-        if (result) |s| {
-            s.release(allocator);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.ConnectionNotFound, err);
-        }
+        const result = manager.acquireConnection(conn_id);
+        try testing.expectError(error.ConnectionNotFound, result);
     }
 
     // Test 3: Multiple connections log unique IDs
@@ -172,13 +122,8 @@ test "logging: connection events" {
 
         // Open all connections
         for (&connections) |*ws| {
-            ws.* = WebSocket{
-                .ws = null,
-                .ssl = false,
-                .user_data = undefined,
-            };
-            ws.user_data = ws;
-            try handler.handleOpen(ws);
+            ws.* = createMockWebSocket();
+            try manager.onOpen(ws);
         }
 
         // Verify all have unique IDs
@@ -186,47 +131,37 @@ test "logging: connection events" {
         defer seen_ids.deinit();
 
         for (&connections) |*ws| {
-            const conn_id: u64 = @intFromPtr(ws.getUserData());
+            const conn_id = ws.getConnId();
             try testing.expect(!seen_ids.contains(conn_id));
             try seen_ids.put(conn_id, {});
         }
 
         // Close all connections
         for (&connections) |*ws| {
-            try handler.handleClose(ws, 1000, "Test close");
+            manager.onClose(ws, 1000, "Test close");
         }
     }
 
     // Test 4: Error handling logs connection ID
     {
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-        };
-        ws.user_data = &ws;
+        var ws = createMockWebSocket();
 
         // Open connection
-        try handler.handleOpen(&ws);
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
+        try manager.onOpen(&ws);
+        const conn_id = ws.getConnId();
 
         // Handle error - this should log "WebSocket error on connection: id={}"
-        try handler.handleError(&ws);
+        manager.onClose(&ws, 1006, "Abnormal closure");
 
         // Verify connection was cleaned up
-        const result = handler.connection_registry.acquireConnection(conn_id);
-        if (result) |s| {
-            s.release(allocator);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.ConnectionNotFound, err);
-        }
+        const result = manager.acquireConnection(conn_id);
+        try testing.expectError(error.ConnectionNotFound, result);
     }
 
     // Test 5: Concurrent connections all log
     {
         const ThreadContext = struct {
-            handler: *MessageHandler,
+            manager: *ConnectionManager,
             iterations: usize,
         };
 
@@ -234,17 +169,11 @@ test "logging: connection events" {
             fn run(ctx: *ThreadContext) void {
                 var i: usize = 0;
                 while (i < ctx.iterations) : (i += 1) {
-                    var ws = WebSocket{
-                        .ws = null,
-                        .ssl = false,
-                        // SAFETY: user_data is not used in this test path
-                        .user_data = undefined,
-                    };
-                    ws.user_data = &ws;
+                    var ws = createMockWebSocket();
 
                     // Open and close connection
-                    ctx.handler.handleOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
-                    ctx.handler.handleClose(&ws, 1000, "Test") catch unreachable; // zwanzig-disable-line: swallowed-error
+                    ctx.manager.onOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    ctx.manager.onClose(&ws, 1000, "Test");
                 }
             }
         }.run;
@@ -254,7 +183,7 @@ test "logging: connection events" {
 
         for (&contexts, 0..) |*ctx, idx| {
             ctx.* = .{
-                .handler = handler,
+                .manager = manager,
                 .iterations = 25,
             };
             threads[idx] = try std.Thread.spawn(.{}, worker, .{ctx});
@@ -277,40 +206,14 @@ test "logging: error details" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(testing.allocator);
-    defer memory_strategy.deinit();
+    var app = try AppTestContext.init(allocator, "logging-messages", &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer app.deinit();
 
-    var tracker: ViolationTracker = undefined;
-    tracker.init(allocator, 10);
-    defer tracker.deinit();
-
-    var context = try schema_helpers.TestContext.init(allocator, "logging-err");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-
-    var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var dummy_tables_1 = [_]schema_parser.Table{
-        .{ .name = "_dummy", .fields = &dummy_fields_1 },
-        .{ .name = "data_table", .fields = &dummy_fields_1 },
-    };
-    const dummy_schema_1 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_1 };
-    var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1, .{});
-    defer storage_engine.deinit();
-    try createTablesFromSchema(allocator, storage_engine, dummy_schema_1);
-
-    var subscription_manager = try SubscriptionManager.init(allocator);
-    defer subscription_manager.deinit();
-
-    var handler = try MessageHandler.init(
-        allocator,
-        &memory_strategy,
-        &tracker,
-        storage_engine,
-        subscription_manager,
-        .{},
-    );
-    defer handler.deinit();
+    const manager = app.manager;
+    const storage_engine = app.storage_engine;
 
     // Test 1: Message parsing errors are logged
     // We can't easily intercept logs, but we can verify the error path is taken
@@ -323,16 +226,16 @@ test "logging: error details" {
         ws.user_data = &ws;
 
         // Open connection
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Send invalid message (not MessagePack)
         const invalid_msg = "not valid messagepack";
         // This should log: "Failed to parse message from connection {}: {}"
         // The error is caught and logged, but doesn't propagate
-        try handler.handleMessage(&ws, invalid_msg, .binary);
+        manager.onMessage(&ws, invalid_msg, .binary);
 
         // Clean up
-        try handler.handleClose(&ws, 1000, "Test");
+        manager.onClose(&ws, 1000, "Test");
     }
 
     // Test 2: Missing required fields logs error
@@ -344,7 +247,7 @@ test "logging: error details" {
         };
         ws.user_data = &ws;
 
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Create message with missing fields (id, namespace, path, value)
         var buf: std.ArrayList(u8) = .{};
@@ -356,9 +259,9 @@ test "logging: error details" {
         const incomplete_msg = buf.items;
 
         // This should log: "Failed to extract message info from connection {}: {}"
-        try handler.handleMessage(&ws, incomplete_msg, .binary);
+        manager.onMessage(&ws, incomplete_msg, .binary);
 
-        try handler.handleClose(&ws, 1000, "Test");
+        manager.onClose(&ws, 1000, "Test");
     }
 
     // Test 3: Database errors are logged
@@ -379,7 +282,7 @@ test "logging: error details" {
         };
         ws.user_data = &ws;
 
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Test various error conditions
         const test_cases = [_][]const u8{
@@ -389,14 +292,14 @@ test "logging: error details" {
         };
 
         for (test_cases) |test_msg| {
-            try handler.handleMessage(&ws, test_msg, .binary);
+            manager.onMessage(&ws, test_msg, .binary);
         }
 
         // Also test an empty map
         const empty_map = &[_]u8{0x80};
-        try handler.handleMessage(&ws, empty_map, .binary);
+        manager.onMessage(&ws, empty_map, .binary);
 
-        try handler.handleClose(&ws, 1000, "Test");
+        manager.onClose(&ws, 1000, "Test");
     }
 }
 
@@ -445,22 +348,20 @@ test "logging: level filtering" {
         );
         defer handler.deinit();
 
+        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        defer manager.deinit();
+
         // Trigger different log levels
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-        };
-        ws.user_data = &ws;
+        var ws = createMockWebSocket();
 
         // Info level: connection open
-        try handler.handleOpen(&ws);
+        try manager.onOpen(&ws);
 
         // Warn level: invalid message
-        try handler.handleMessage(&ws, "invalid", .binary);
+        manager.onMessage(&ws, "invalid", .binary);
 
         // Error level: error handling
-        try handler.handleError(&ws);
+        manager.onClose(&ws, 1006, "Abnormal closure");
     }
 
     // Test 2: Verify log levels are consistent across components
@@ -521,24 +422,22 @@ test "logging: message formatting" {
         );
         defer handler.deinit();
 
+        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        defer manager.deinit();
+
         // Trigger various log messages
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-        };
-        ws.user_data = &ws;
+        var ws = createMockWebSocket();
 
         // Connection logging includes connection ID
-        try handler.handleOpen(&ws);
-        const conn_id: u64 = @intFromPtr(ws.getUserData());
+        try manager.onOpen(&ws);
+        const conn_id = ws.getConnId();
         try testing.expect(conn_id > 0);
 
         // Error logging includes error details
-        try handler.handleMessage(&ws, "invalid", .binary);
+        manager.onMessage(&ws, "invalid", .binary);
 
         // Close logging includes connection ID and close code
-        try handler.handleClose(&ws, 1000, "Normal");
+        manager.onClose(&ws, 1000, "Normal");
     }
 
     // Test 2: Verify log format consistency
@@ -585,24 +484,27 @@ test "logging: message formatting" {
         );
         defer handler.deinit();
 
+        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        defer manager.deinit();
+
         // Test multiple connections to verify ID formatting
         const num_connections = 5;
         var connections: [num_connections]WebSocket = undefined;
 
-        for (&connections) |*ws| {
+        for (&connections, 0..) |*ws, i| {
             ws.* = WebSocket{
-                .ws = null,
+                .ws = @ptrFromInt(i + 7000),
                 .ssl = false,
                 .user_data = undefined,
             };
             ws.user_data = ws;
-            try handler.handleOpen(ws);
+            try manager.onOpen(ws);
         }
 
         // Close all with different codes
         for (&connections, 0..) |*ws, i| {
             const code: i32 = @intCast(1000 + i);
-            try handler.handleClose(ws, code, "Test close");
+            manager.onClose(ws, code, "Test close");
         }
     }
 }

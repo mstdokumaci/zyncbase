@@ -11,6 +11,7 @@ const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
+const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const SchemaParser = @import("schema_parser.zig").SchemaParser;
 const schema_parser = @import("schema_parser.zig");
@@ -33,6 +34,7 @@ pub const ZyncBaseServer = struct {
     storage_layer: *CheckpointManager.StorageLayer,
     storage_engine: *StorageEngine,
     websocket_server: *WebSocketServer,
+    connection_manager: *ConnectionManager,
     message_handler: *MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     /// Loaded schema (owned).
@@ -202,8 +204,6 @@ pub const ZyncBaseServer = struct {
         );
         errdefer websocket_server.deinit();
 
-        // Initialize message handler
-        std.log.debug("Initializing message handler", .{});
         const message_handler = try MessageHandler.init(
             memory_strategy.generalAllocator(),
             memory_strategy,
@@ -213,6 +213,15 @@ pub const ZyncBaseServer = struct {
             config.security,
         );
         errdefer message_handler.deinit();
+
+        // Initialize connection manager
+        std.log.debug("Initializing connection manager", .{});
+        const connection_manager = try ConnectionManager.init(
+            memory_strategy.generalAllocator(),
+            memory_strategy,
+            message_handler,
+        );
+        errdefer connection_manager.deinit();
 
         std.log.debug("Setting up ZyncBaseServer struct", .{});
 
@@ -224,7 +233,7 @@ pub const ZyncBaseServer = struct {
         self.storage_layer = storage_layer;
         self.storage_engine = storage_engine;
         self.websocket_server = websocket_server;
-        self.websocket_server = websocket_server;
+        self.connection_manager = connection_manager;
         self.message_handler = message_handler;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
 
@@ -279,7 +288,7 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.close();
 
         // Close all active connections
-        try self.message_handler.closeAllConnections();
+        self.connection_manager.closeAllConnections();
 
         // Wake up the event loop to ensure it notices the closed handles
         if (uws_c.uws_get_loop()) |loop| {
@@ -322,6 +331,8 @@ pub const ZyncBaseServer = struct {
         std.log.debug("ZyncBaseServer.deinit() called", .{});
 
         // Deinitialize components in reverse order
+        std.log.debug("Deinitializing connection_manager", .{});
+        self.connection_manager.deinit();
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
         std.log.debug("Deinitializing websocket_server", .{});
@@ -373,7 +384,7 @@ fn handleSignal(sig: c_int) callconv(.c) void {
 
 fn onWebSocketOpen(ws: *WebSocket, user_data: ?*anyopaque) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
-    server.message_handler.handleOpen(ws) catch |err| {
+    server.connection_manager.onOpen(ws) catch |err| {
         std.log.err("Error handling WebSocket open: {}", .{err});
     };
 }
@@ -385,9 +396,7 @@ fn onWebSocketMessage(
     user_data: ?*anyopaque,
 ) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
-    server.message_handler.handleMessage(ws, message, msg_type) catch |err| {
-        std.log.err("Error handling WebSocket message: {}", .{err});
-    };
+    server.connection_manager.onMessage(ws, message, msg_type);
 }
 
 fn onWebSocketClose(
@@ -397,7 +406,5 @@ fn onWebSocketClose(
     user_data: ?*anyopaque,
 ) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
-    server.message_handler.handleClose(ws, code, message) catch |err| {
-        std.log.err("Error handling WebSocket close: {}", .{err});
-    };
+    server.connection_manager.onClose(ws, code, message);
 }
