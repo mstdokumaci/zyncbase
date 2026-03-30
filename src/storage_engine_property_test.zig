@@ -35,7 +35,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryS
 
     out_schema.* = schema;
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -60,7 +60,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
     const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    const result1 = StorageEngine.init(allocator, &memory_strategy, invalid_dir, &raw_dummy_schema, .{});
+    const result1 = StorageEngine.init(allocator, &memory_strategy, invalid_dir, &raw_dummy_schema, .{}, .{ .in_memory = false });
     try testing.expectError(error.InvalidDataDir, result1);
     // Test 2: Path that is a file, not a directory
     var context_not_dir = try schema_helpers.TestContext.init(allocator, "storage-not-dir");
@@ -75,7 +75,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_2 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_2 }};
     const raw_dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_2 };
-    const result2 = StorageEngine.init(allocator, &memory_strategy, test_file, &raw_dummy_schema_2, .{});
+    const result2 = StorageEngine.init(allocator, &memory_strategy, test_file, &raw_dummy_schema_2, .{}, .{ .in_memory = false });
     try testing.expectError(error.NotDir, result2);
     // Test 3: Valid initialization should succeed
     var context_valid = try schema_helpers.TestContext.init(allocator, "storage-init-valid");
@@ -85,7 +85,7 @@ test "storage: engine initialization errors" {
     var raw_dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
     var raw_dummy_tables_3 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_3 }};
     const raw_dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_3 };
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &raw_dummy_schema_3, .{});
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &raw_dummy_schema_3, .{}, .{ .in_memory = false });
     defer engine.deinit();
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
@@ -564,7 +564,7 @@ fn setupPropTestEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStr
     errdefer allocator.free(test_dir); // zwanzig-disable-line: deinit-lifecycle
     const schema = try makeSchema(allocator, table.name, table.fields);
     errdefer freeSchema(allocator, schema);
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
     errdefer engine.deinit();
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);

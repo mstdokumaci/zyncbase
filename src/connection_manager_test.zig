@@ -77,7 +77,7 @@ test "ConnectionManager - acquire and release" {
     // 2. Owned by the ScopedConnection (sc)
     // 3. Owned by this 'conn' pointer (manual acquire)
     // All 3 must be released for the memory to return to the pool.
-    
+
     // sc.deinit() will drop its reference (sc.conn.release()) and call onClose.
     // onClose will drop manager's reference.
     // The connection will still exist until we drop our manual reference.

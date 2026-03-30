@@ -99,8 +99,8 @@ pub const TestContext = struct {
     }
 };
 
-pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, schema: *const schema_parser.Schema) !*StorageEngine {
-    const engine = try StorageEngine.init(allocator, memory_strategy, context.test_dir, schema, .{});
+pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, schema: *const schema_parser.Schema, options: StorageEngine.Options) !*StorageEngine {
+    const engine = try StorageEngine.init(allocator, memory_strategy, context.test_dir, schema, .{}, options);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);

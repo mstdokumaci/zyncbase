@@ -334,7 +334,7 @@ test "logging: level filtering" {
             .{ .name = "table", .fields = &dummy_fields_2 },
         };
         const dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_2, .{});
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_2, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
@@ -408,7 +408,7 @@ test "logging: message formatting" {
             .{ .name = "table", .fields = &dummy_fields_3 },
         };
         const dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_3, .{});
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_3, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();
@@ -470,7 +470,7 @@ test "logging: message formatting" {
             .{ .name = "table", .fields = &dummy_fields_4 },
         };
         const dummy_schema_4 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_4, .{});
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_4, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_manager = try SubscriptionManager.init(allocator);
         defer subscription_manager.deinit();

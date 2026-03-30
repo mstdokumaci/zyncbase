@@ -8,9 +8,8 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
-const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
-
 const metadata_cache_type = lockFreeCache(msgpack.Payload);
+var unique_id_counter = std.atomic.Value(usize).init(0);
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -94,6 +93,12 @@ pub const ReconnectionConfig = struct {
 };
 
 pub const StorageEngine = struct {
+    pub const Options = struct {
+        in_memory: bool = false,
+    };
+
+    pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
+
     allocator: Allocator,
     db_path: [:0]const u8,
     writer_conn: sqlite.Db,
@@ -120,31 +125,41 @@ pub const StorageEngine = struct {
     /// preventing stale values from racing into the cache.
     write_seq: std.atomic.Value(u64),
     performance_config: PerformanceConfig,
+    options: Options,
 
     fn deinitPayload(allocator: Allocator, payload: *msgpack.Payload) void {
         payload.free(allocator);
     }
 
-    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema, performance_config: PerformanceConfig) !*StorageEngine {
-        if (data_dir.len == 0) return error.InvalidDataDir;
+    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema, performance_config: PerformanceConfig, options: Options) !*StorageEngine {
+        if (data_dir.len == 0 and !options.in_memory) return error.InvalidDataDir;
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
 
-        // Ensure data directory exists
-        if (std.fs.cwd().openDir(data_dir, .{})) |_| {
-            // Already exists and is a directory
-        } else |err| switch (err) {
-            error.FileNotFound => {
-                try std.fs.cwd().makePath(data_dir);
-            },
-            error.NotDir => return error.NotDir,
-            else => return err,
-        }
+        const db_path: [:0]const u8 = if (options.in_memory) uri: {
+            // Use shared-cache in-memory database with a unique name to avoid crosstalk
+            // file:zync_mem_{id}?mode=memory&cache=shared
+            const id = unique_id_counter.fetchAdd(1, .seq_cst);
+            const ts = std.time.nanoTimestamp();
+            const uri_fmt = try std.fmt.allocPrint(allocator, "file:zync_mem_{d}_{d}?mode=memory&cache=shared", .{ ts, id });
+            defer allocator.free(uri_fmt);
+            break :uri try allocator.dupeZ(u8, uri_fmt);
+        } else blk: {
+            // Ensure data directory exists
+            if (std.fs.cwd().openDir(data_dir, .{})) |_| {
+                // Already exists and is a directory
+            } else |err| switch (err) {
+                error.FileNotFound => {
+                    try std.fs.cwd().makePath(data_dir);
+                },
+                error.NotDir => return error.NotDir,
+                else => return err,
+            }
 
-        // Build database path (null-terminated for SQLite)
-        const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
-        defer allocator.free(db_path_buf);
-        const db_path = try allocator.dupeZ(u8, db_path_buf);
+            const db_path_buf = try std.fmt.allocPrint(allocator, "{s}/zyncbase.db", .{data_dir});
+            defer allocator.free(db_path_buf);
+            break :blk try allocator.dupeZ(u8, db_path_buf);
+        };
         errdefer allocator.free(db_path); // zwanzig-disable-line: deinit-lifecycle
 
         // Open writer connection
@@ -154,11 +169,12 @@ pub const StorageEngine = struct {
                 .write = true,
                 .create = true,
             },
+            .shared_cache = options.in_memory,
         });
         errdefer writer_conn.deinit();
 
         // Configure WAL mode and pragmas
-        try configureDatabase(&writer_conn);
+        try configureDatabase(&writer_conn, true);
 
         // Create reader pool (one per CPU core)
         const num_readers = try std.Thread.getCpuCount();
@@ -181,7 +197,9 @@ pub const StorageEngine = struct {
                 .open_flags = .{
                     .write = false,
                 },
+                .shared_cache = options.in_memory,
             });
+            try configureDatabase(&node.conn, false);
             node.mutex = .{};
             initialized_readers += 1;
         }
@@ -191,16 +209,17 @@ pub const StorageEngine = struct {
             .db_path = db_path,
             .writer_conn = writer_conn,
             .reader_pool = reader_pool,
+            .performance_config = performance_config,
+            .options = options,
             // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
             // SAFETY: Initialized below via .write_queue.init().
-            .write_queue = undefined, // Initialized below
+            .write_queue = undefined,
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
             .manual_transaction_active = std.atomic.Value(bool).init(false),
             .migration_active = std.atomic.Value(bool).init(false),
-            .performance_config = performance_config,
             .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
             .write_mutex = .{},
@@ -345,6 +364,11 @@ pub const StorageEngine = struct {
 
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
+        // In-memory databases use URIs (e.g. file:...) and do not have a WAL file on disk.
+        // We must guard this to prevent nonsensical path construction below.
+        if (self.options.in_memory) {
+            return 0;
+        }
         // Try to get WAL file size from filesystem
         const wal_path_buf = try std.fmt.allocPrint(self.allocator, "{s}-wal", .{self.db_path});
         defer self.allocator.free(wal_path_buf);
@@ -496,10 +520,11 @@ pub const StorageEngine = struct {
                 .write = true,
                 .create = true,
             },
+            .shared_cache = self.options.in_memory,
         });
 
         // Reconfigure database
-        try configureDatabase(&self.writer_conn);
+        try configureDatabase(&self.writer_conn, true);
 
         // Reopen reader connections
         for (self.reader_pool) |*reader| {
@@ -508,7 +533,9 @@ pub const StorageEngine = struct {
                 .open_flags = .{
                     .write = false,
                 },
+                .shared_cache = self.options.in_memory,
             });
+            try configureDatabase(&reader.conn, false);
         }
     }
 
@@ -1559,11 +1586,35 @@ pub const StorageEngine = struct {
         }
     }
 
-    fn configureDatabase(db: *sqlite.Db) !void {
-        // journal_mode = WAL returns "wal", so we use void to consume the result row.
-        _ = db.pragma(void, .{}, "journal_mode", "wal") catch |err| {
+    fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
+        if (is_writer) {
+            // journal_mode = WAL returns "wal", so we use void to consume the result row.
+            _ = db.pragma(void, .{}, "journal_mode", "wal") catch |err| {
+                const classified_err = classifyError(err);
+                logDatabaseError("configureDatabase journal_mode", classified_err, "");
+                return classified_err;
+            };
+
+            _ = db.pragma(void, .{}, "wal_autocheckpoint", "1000") catch |err| {
+                const classified_err = classifyError(err);
+                logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
+                return classified_err;
+            };
+        }
+
+        // busy_timeout = 5000ms: wait for locks instead of failing immediately.
+        // This is crucial for shared-cache mode in-memory.
+        _ = db.pragma(void, .{}, "busy_timeout", "5000") catch |err| {
             const classified_err = classifyError(err);
-            logDatabaseError("configureDatabase journal_mode", classified_err, "");
+            logDatabaseError("configureDatabase busy_timeout", classified_err, "");
+            return classified_err;
+        };
+
+        // read_uncommitted = true: in shared-cache mode, this disables table-level locking
+        // and relies on WAL's snapshot isolation. This resolves SQLITE_LOCKED issues.
+        _ = db.pragma(void, .{}, "read_uncommitted", "true") catch |err| {
+            const classified_err = classifyError(err);
+            logDatabaseError("configureDatabase read_uncommitted", classified_err, "");
             return classified_err;
         };
 
@@ -1582,11 +1633,6 @@ pub const StorageEngine = struct {
         _ = db.pragma(void, .{}, "mmap_size", "268435456") catch |err| {
             const classified_err = classifyError(err);
             logDatabaseError("configureDatabase mmap_size", classified_err, "");
-            return classified_err;
-        };
-        _ = db.pragma(void, .{}, "wal_autocheckpoint", "1000") catch |err| {
-            const classified_err = classifyError(err);
-            logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
             return classified_err;
         };
     }

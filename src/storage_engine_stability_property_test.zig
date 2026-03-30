@@ -49,7 +49,7 @@ fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryS
 
     out_schema.* = schema;
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -74,7 +74,7 @@ test "storage: stability no crashes on concurrent errors" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema, .{});
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema, .{}, .{ .in_memory = true });
     defer storage.deinit();
     // Property: Server should not crash when multiple threads encounter errors simultaneously
     const num_threads = 8;

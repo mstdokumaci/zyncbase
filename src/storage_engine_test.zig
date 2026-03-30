@@ -33,6 +33,10 @@ const EngineTestContext = struct {
 };
 
 fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_parser.Table) !EngineTestContext {
+    return setupEngineWithOptions(allocator, memory_strategy, test_dir, table, .{ .in_memory = true });
+}
+
+fn setupEngineWithOptions(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_parser.Table, options: StorageEngine.Options) !EngineTestContext {
     const tables = try allocator.alloc(schema_parser.Table, 1);
     tables[0] = try table.clone(allocator);
     const schema = try allocator.create(schema_parser.Schema);
@@ -41,7 +45,7 @@ fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, t
         .tables = tables,
     };
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{});
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, options);
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -67,7 +71,7 @@ test "StorageEngine: init and deinit" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema, .{});
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema, .{}, .{ .in_memory = false });
     defer engine.deinit();
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
@@ -256,7 +260,7 @@ test "StorageEngine: transaction support" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1, .{});
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1, .{}, .{ .in_memory = true });
     defer engine.deinit();
     // Initially no transaction should be active
     try testing.expect(!engine.isTransactionActive());
@@ -364,7 +368,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         var memory_strategy: MemoryStrategy = undefined;
         try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
-        const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
+        const ctx = try setupEngineWithOptions(allocator, &memory_strategy, test_dir, table, .{ .in_memory = false });
         const engine = ctx.engine;
         // Enqueue a burst of writes without waiting — deinit must flush them.
         for (0..num_keys) |i| {
@@ -381,7 +385,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     var memory_strategy_verify: MemoryStrategy = undefined;
     try memory_strategy_verify.init(allocator);
     defer memory_strategy_verify.deinit();
-    const verify_ctx = try setupEngine(allocator, &memory_strategy_verify, test_dir, table);
+    const verify_ctx = try setupEngineWithOptions(allocator, &memory_strategy_verify, test_dir, table, .{ .in_memory = false });
     defer verify_ctx.deinit();
     const verify_engine = verify_ctx.engine;
     for (0..num_keys) |i| {

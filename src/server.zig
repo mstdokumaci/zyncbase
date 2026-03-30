@@ -140,6 +140,7 @@ pub const ZyncBaseServer = struct {
             config.data_dir,
             &self.loaded_schema,
             config.performance,
+            .{},
         );
         errdefer storage_engine.deinit();
 

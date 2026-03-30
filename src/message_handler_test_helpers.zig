@@ -47,12 +47,20 @@ pub const AppTestContext = struct {
     test_context: schema_helpers.TestContext,
 
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !AppTestContext {
+        return initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true });
+    }
+
+    pub fn initWithOptions(allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef, options: StorageEngine.Options) !AppTestContext {
         const schema = try schema_helpers.createTestSchema(allocator, table_defs);
         errdefer schema_helpers.freeTestSchema(allocator, schema);
-        return initWithSchema(allocator, prefix, schema);
+        return initWithSchemaAndOptions(allocator, prefix, schema, options);
     }
 
     pub fn initWithSchema(allocator: std.mem.Allocator, prefix: []const u8, schema: *schema_parser.Schema) !AppTestContext {
+        return initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
+    }
+
+    pub fn initWithSchemaAndOptions(allocator: std.mem.Allocator, prefix: []const u8, schema: *schema_parser.Schema, options: StorageEngine.Options) !AppTestContext {
         // 1. Initialize Memory Strategy
         const ms = try allocator.create(MemoryStrategy);
         errdefer allocator.destroy(ms);
@@ -70,7 +78,7 @@ pub const AppTestContext = struct {
         errdefer tc.deinit();
 
         // 4. Initialize Storage Engine
-        const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, schema);
+        const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, schema, options);
         errdefer se.deinit();
 
         // 5. Initialize Subscription Manager
