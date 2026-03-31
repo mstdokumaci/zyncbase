@@ -1,7 +1,89 @@
-Query Language Grammar SQL Translation v1 Implementation Specification document specifies ZyncBase JSON query language Zig `QueryFilter` Abstract Syntax Tree translated SQLite `SELECT` queries API specification definitive source truth backend systems executing queries `StorageEngine Abstract Syntax Tree query language parsed conditions implicit `AND` optional `OR` group```zig
+Query Language Grammar SQL Translation v1 Implementation Specification specifies full query translation pipeline **SDK → Wire** Prisma SDK syntax pre-compiled into compact positional tuples ADR-019) **Wire → AST** Zig server deserializes wire tuples into `QueryFilter AST **AST → SQL** AST translated into SQLite `SELECT` queries specification definitive source truth for backend systems executing queries storage engine Wire Encoding (SDK → Wire) SDK transforms developer-friendly Prisma query into compact positional arrays before transmission follows same principle as path encoding (ADR-019) SDK-friendly syntax developer compact arrays wire Operator Codes query operator maps to fixed integer code Zig `Operator` enum Operator `startsWith `endsWith `notIn` `isNull` `lte `isNotNull` `contains` Condition Tuples condition encoded as positional array```
+[field: string, op: int, value: any]
+````field` Flattened field name [Flattening Rules `op` Integer operator code `value comparison value Omitted `isNull `isNotNull Sort Tuples descriptor encoded positional array```
+[field: string, desc: int]
+````field` name `desc `0` ascending descending Transformation Examples query```typescript
+// SDK input
+{ where: { age: { gte: 18 }, status: { eq: 'active' } } }
+
+// Wire output
+{ "conditions": [["age", 4, 18], ["status", 0, "active"]] }
+```
+
+**Query with OR:**
+
+```typescript
+// SDK input
+{
+  where: {
+    priority: { eq: 'high' },
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } }
+    ]
+  }
+}
+
+// Wire output
+{
+  "conditions": [["priority", 0, "high"]],
+  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
+}
+```**Null check```typescript
+// SDK input
+{ where: { deleted_at: { isNull: true } } }
+
+// Wire output
+{ "conditions": [["deleted_at", 11]] }
+```
+
+**Array operator:**
+
+```typescript
+// SDK input
+{ where: { role: { in: ['admin', 'editor'] } } }
+
+// Wire output
+{ "conditions": [["role", 9, ["admin", "editor"]]] }
+```**Nested field```typescript
+// SDK input
+{ where: { address: { city: { eq: 'NYC' } } } }
+
+// Wire output
+{ "conditions": [["address__city", 0, "NYC"]] }
+```pagination```typescript
+// SDK input
+{ orderBy: { created_at: 'desc' }, limit: 50, after: 'eyJpZCI6...' }
+
+// Wire output
+{ "orderBy": ["created_at", 1], "limit": 50, "after": "eyJpZCI6..." }
+```Full Wire Message complete `StoreQuery```
+{
+  "type":  "StoreQuery",
+  "id":    6,
+  "collection": "users",
+  "conditions": [
+    ["age", 4, 18],
+    ["status", 0, "active"]
+  ],
+  "orConditions": [
+    ["role", 0, "admin"],
+    ["role", 0, "editor"]
+  ],
+  "orderBy": ["created_at", 1],
+  "limit":   50,
+  "after":   "eyJpZCI6..."
+}
+```Encoding Rules SDK field Wire key Encoding `where` conditions `conditions` Array[field op value` tuples `where.or` `orConditions` tuples `orderBy`[field desc]` tuple `limit` Integer (unchanged `after` String (unchanged Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure"address SDK flattens field path joining keys with `__` condition tuple field `"address__city"` SQLite JSON Extractors `json_extract()->>` operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map Zig AST minimal transformation server reads positional array elements into fields```zig
 pub const QueryFilter = struct {
     conditions: []const Condition,
     or_conditions: ?[]const Condition = null,
+    sorts: []const SortDescriptor,
+};
+
+pub const SortDescriptor = struct {
+    field: []const u8,
+    desc: bool,
 };
 
 pub const Condition = struct {
@@ -13,27 +95,24 @@ pub const Condition = struct {
 pub const Operator = enum {
     eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
 };
-```Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects as flat columns query nested structure message payload flattened joining keys with `__` `Condition.field"address__city" SQLite JSON Extractors `json_extract() operators for reading document properties Property queries run against `__` delimited flat columns SQLite Translation Rules Core Selection standard collection queries operate on `namespace boundaries```sql
+```Wire AST Mapping server deserializes condition tuple into `Condition struct Tuple AST field[0]` `Condition.field String flattened SDK `[1]` `Condition.op` Integer `Operator enum `[2]` `Condition.value` Absent Sort tuples map `SortDescriptor Tuple AST field `[0]` `SortDescriptor.field` String `[1]` `SortDescriptor.desc` `1` `true `0 `false` SQLite Translation Rules Core Selection collection queries operate `namespace boundaries```sql
 SELECT value_msgpack 
 FROM "collection_name" 
 WHERE _namespace = ? 
   [AND ...conditions] 
   [AND (...or_conditions)]
-ORDER BY sort_col DESC
+ORDER BY [sorts...], id DESC
 LIMIT ?
-```Parameter Binding ZyncBase separate query layout data injection parameterized queries user-input values formatted SQL strings Operator SQLite WHERE fragment `eq` `column_name = ? `ne` `column_name ? `gt` `column_name > ?` `lt` `column_name <`_name >= ?` `column_name <= ?` `startsWith` `column_name LIKE%' `endsWith` `column_name LIKE '%' `in` `column_name IN `notIn` `column_name NOT IN `isNull` `column_name NULL` NULL `isNotNull` `column_name NOT NULL` JSONB Array Fields SQLite storing arrays serialized/JSON bytes array properties queried operators `>` `LIKE`ZyncBase restricts array fields subset Operator Action Array Field SQLite Subquery Mapping `contains Array contains `EXISTS (SELECT 1 json_each(column_name value = ? `eq array equality `column_name = ? match MessagePack bytes `isNull Undefined/Missing `column_name NULL `isNotNull `startsWith `gt array field `SCHEMA_VALIDATION_FAILED error Combining Conditions standard filter contains `conditions optional `or_conditions array Example Payload```json
+```Parameter Binding ZyncBase separate query layout data injection parameterized queries user-input values formatted SQL strings Operator SQLite WHERE fragment `eq` `column_name = ? `ne` `column_name ? `gt` `column_name > ?` `lt` `column_name <`_name >= ?` `column_name <= ?` `startsWith` `column_name LIKE%' `endsWith` `column_name LIKE '%' `in` `column_name IN `notIn` `column_name NOT IN `isNull` `column_name NULL` NULL `isNotNull` `column_name NOT NULL` JSONB Array Fields SQLite storing arrays serialized/JSON bytes array properties queried operators `>` `LIKE`ZyncBase restricts array fields subset Operator Action Array Field SQLite Subquery Mapping `contains Array contains `EXISTS (SELECT 1 json_each(column_name value = ? `eq array equality `column_name = ? match MessagePack bytes `isNull Undefined/Missing `column_name NULL `startsWith `gt array field `SCHEMA_VALIDATION_FAILED error Combining Conditions standard filter contains `conditions optional `orConditions array Example Wire Payload```json
 {
-  "where": {
-    "priority": { "eq": "high" },
-    "or": [
-      { "status": { "eq": "active" } },
-      { "status": { "eq": "pending" } }
-    ]
-  }
+  "conditions": [["priority", 0, "high"]],
+  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
 }
-```SQL Form Generation translation engine `AND` root-level items isolating `OR` group parenthetical block```sql
+```SQL Form Generation translation engine appending `AND` root conditions isolating `orConditions parenthetical block```sql
 SELECT value_msgpack FROM "tasks"
 WHERE _namespace = ?
   AND priority = ?
   AND (status = ? OR status = ?)
-```SQLite parameter array push namespace bound parameter first followed variables standard `conditions variables `or_conditions`
+```Sorting Rules ZyncBase supports sorting multiple fields `orderBy` field single[field, desc] tuple or array multi-field sorting Tie-breaking pagination ZyncBase appends `id DESC` ASC` final tie-breaker if not primary sort field Mapping to SQL `SortDescriptor translates comma-separated fragment `ORDER BY` clause```sql
+ORDER BY priority DESC, created_at ASC, id DESC
+```

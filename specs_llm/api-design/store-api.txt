@@ -5,10 +5,10 @@ client.store.set('user.name', 'Alice')
 ````set()` fire-and-forget errors reported via `client.on('error) See [Error Handling-propagation). calling `set()` document path `elements.rect-1 SDK extracts ID merges into stored object include `id` in value `void` `store.remove(path) Removes value specified path```typescript
 client.store.remove('elements.rect-1')
 ````store.listen(path callback updates specific path```typescript
-const unsubscribe = client.store.listen('elements.rect-1', (element) => {
+const unlisten = client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
-```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unsubscribe function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(collection options) one-off query-real-time).```typescript
+```**Callback `store.get() return values): **Array** collection **Object** document **Scalar** field **Returns** unlisten function Query API (Path Filtering filtering sorting searching data collections Form validation Server-side rendering Filtered real-time subscriptions `store.query(collection options) one-off query-real-time).```typescript
 const users = await client.store.query('users', {
   where: { age: { gte: 18 }, status: { eq: 'active' } },
   orderBy: { created_at: 'desc' },

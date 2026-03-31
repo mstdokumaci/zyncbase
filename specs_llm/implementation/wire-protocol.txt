@@ -15,19 +15,7 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": <string>,     // Push type (e.g., "StoreDelta", "PresenceBroadcast")
   ...                   // Type-specific fields (no "id" — pushes are unsolicited)
 }
-```flat payload under key adds indirection no benefit Keeping fields inline simpler compact wire Client→Server Messages Store operations `StoreGet` Retrieve value path```
-{
-  "type": "StoreGet",
-  "id":   1,
-  "path": ["tasks", "task-1", "title"]   // Array of strings (canonical format)
-}
-```"ok"```
-{
-  "type":  "ok",
-  "id":    1,
-  "value": <any>    // Array for collections, Object for documents, scalar for fields, null if not found (See Store API for details)
-}
-```#### `StoreSet` value path Applied client.```
+```flat payload under key adds indirection no benefit Keeping fields inline simpler compact over wire Client→Server Messages Store operations (ADR-023) read operations through `StoreQuery `StoreSubscribe SDK translates path reads.get into collection-level queries id filters before transmission no `StoreGet message types on wire `StoreSet` value at path Applied client```
 {
   "type":  "StoreSet",
   "id":    2,
@@ -65,40 +53,16 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": "ok",
   "id":   4
 }
-```failure `details` object error response include `batchIndex first operation failure `StoreListen` real-time updates path `store.listen(path cb)```
-{
-  "type": "StoreListen",
-  "id":   4,
-  "path": ["elements"]
-}
-```"ok" includes snapshot```
-{
-  "type":  "ok",
-  "id":    4,
-  "listenId":"lst-abc-123",      // Server-assigned listen ID (used for unlisten and delta matching)
-  "value": [ ... ]             // Current snapshot at path
-}
-```listening server pushes `StoreDelta messages Pushes `StoreUnlisten Stop updates listen subscription```
-{
-  "type":  "StoreUnlisten",
-  "id":    5,
-  "listenId": "lst-abc-123"
-}
-```"ok"```
-{
-  "type": "ok",
-  "id":   5
-}
-````StoreQuery` Execute-off filtered query-real-time collection```
+```failure `details` object error `batchIndex` first operation failure `StoreQuery Execute one-off filtered query-real-time collection Query conditions sort descriptors sent compact positional tuples [Query Grammar encoding```
 {
   "type":  "StoreQuery",
   "id":    6,
   "collection": "users",
-  "where": {
-    "age":    { "gte": 18 },
-    "status": { "eq": "active" }
-  },
-  "orderBy": { "created_at": "desc" },
+  "conditions": [
+    ["age", 4, 18],              // [field, op_code, value] — op 4 = gte
+    ["status", 0, "active"]      // op 0 = eq
+  ],
+  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
   "limit":   50,
   "after":   "eyJpZCI6... "
 }
@@ -114,8 +78,10 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type":    "StoreSubscribe",
   "id":      7,
   "collection": "tasks",
-  "where":   { "status": { "eq": "active" } },
-  "orderBy": { "created_at": "desc" },
+  "conditions": [
+    ["status", 0, "active"]      // [field, op_code, value] — op 0 = eq
+  ],
+  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
   "limit":   50
 }
 ```"ok" includes snapshot```
@@ -132,7 +98,18 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "id":    8,
   "subId": "sub-def-456"
 }
-```"ok server responds `ok` message pushes `StoreDelta additional items subscription pushes `StoreDelta query result changes Presence operations `PresenceSet Update local user presence data Partial updates merge state```
+```"ok server responds `ok` message pushes `StoreDelta` additional items After subscription pushes `StoreDelta messages query result changes `StoreUnsubscribe` Stop updates query subscription```
+{
+  "type":  "StoreUnsubscribe",
+  "id":    9,
+  "subId": "sub-def-456"
+}
+```"ok"```
+{
+  "type": "ok",
+  "id":   9
+}
+```Presence operations Update user presence data updates merge state```
 {
   "type": "PresenceSet",
   "id":   8,
@@ -216,11 +193,10 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": "ok",
   "id":   13
 }
-```Server→Client Messages Response messages responses client requests use "ok"` or "error"` `type` `"ok"` Request succeeded Fields depend original request type `"error"` Request failed [Error Format] include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies client data listened path query changed```
+```Server→Client Messages Response messages client requests use "ok"` or "error"`` `"ok"` Request succeeded Fields depend original request type `"error"` Request failed [Error Format] include `id` original request Server push messages unsolicited messages request `id` `StoreDelta` Notifies subscribed client subscription result set changed```
 {
   "type":  "StoreDelta",
-  "listenId": "lst-abc-123",           // Present if this delta is for a store.listen() caller
-  "subId":    "sub-def-456",           // Present if this delta is for a store.subscribe() caller
+  "subId": "sub-def-456",             // Subscription ID
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
@@ -233,7 +209,7 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
     }
   ]
 }
-```**Operation types `op` Description `"set"` value created updated contains new state `"remove"` value deleted No `value` field note send per-operation deltas snapshots client maintains local state applies operations query subscriptions full re-evaluation if delta individual ops sort-order change). `PresenceBroadcast` Notifies clients presence changes```
+```types `op` `"set" record created updated `value full record"remove" record deleted No `value field note (ADR-023) Deltas record-level only full records `set ID `remove SDK handles field-level projection change detection client maintains state applies operations `PresenceBroadcast Notifies clients changes```
 {
   "type":  "PresenceBroadcast",
   "subId": "sub-pres-789",
@@ -303,4 +279,4 @@ Origin: https://app.example.com
   "type":    "ok",
   "allowed": true
 }
-```Message Type Summary Direction SDK method Response C→S `StoreGet `store.get(path) `ok with `value C→S `StoreSet `store.set(path value `ok C→S `StoreRemove `store(path) `ok C→S `StoreBatch `store.batch `ok C→S `StoreListen` `store.listen(path `ok with `listenId `value C→S `StoreUnlisten` (unsubscribe function `ok C→S `StoreQuery` `ok with `value `nextCursor C→S `StoreSubscribe` `ok with `subId `value C→S `StoreLoadMore`.loadMore( `ok `StoreDelta` C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe(cb) `ok with `subId `users` C→S `PresenceUnsubscribe` function `ok C→S `PresenceRemove` `presence.remove() `ok` C→S `StoreSetNamespace `client.setStoreNamespace(ns) `ok C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
+```Message Summary Direction SDK method Response C→S `StoreSet` `store.set(path value) `ok` C→S `StoreRemove.remove(path) `ok` C→S `StoreBatch `store.batch(ops `ok` C→S `StoreQuery` `store.get(path).query(collection opts) `ok` `nextCursor C→S `StoreSubscribe` `store.listen(path.subscribe(collection opts `ok `subId `value `hasMore` C→S `StoreUnsubscribe` `ok C→S `StoreLoadMore`.loadMore() `ok` `StoreDelta` C→S `PresenceSet`.set(data) `ok` C→S `PresenceSubscribe(cb)` `ok `subId` `users` C→S `PresenceUnsubscribe` `ok C→S `PresenceRemove` `presence.remove()` `ok` C→S `StoreSetNamespace` `client.setStoreNamespace(ns) `ok` C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` Push `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
