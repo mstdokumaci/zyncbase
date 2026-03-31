@@ -88,29 +88,7 @@ Every message is a MessagePack **map** with at minimum a `type` field. Client-or
 
 ### Store operations
 
-#### `StoreGet`
-
-Retrieve a value at a path.
-
-```
-{
-  "type": "StoreGet",
-  "id":   1,
-  "path": ["tasks", "task-1", "title"]   // Array of strings (canonical format)
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type":  "ok",
-  "id":    1,
-  "value": <any>    // Array for collections, Object for documents, scalar for fields, null if not found (See Store API for details)
-}
-```
-
----
+> **Note (ADR-023):** All read operations go through `StoreQuery` (one-shot) and `StoreSubscribe` (ongoing). The SDK translates path-based reads (`store.get(path)`, `store.listen(path, cb)`) into collection-level queries with id filters before transmission. There are no `StoreGet`, `StoreListen`, or `StoreUnlisten` message types on the wire.
 
 #### `StoreSet`
 
@@ -194,70 +172,20 @@ On failure, the `details` object in the error response will include `batchIndex`
 
 ---
 
-#### `StoreListen`
-
-Start receiving real-time updates for a path. (Maps to `store.listen(path, cb)`)
-
-```
-{
-  "type": "StoreListen",
-  "id":   4,
-  "path": ["elements"]
-}
-```
-
-**Response** (`type: "ok"`) — includes initial snapshot:
-
-```
-{
-  "type":  "ok",
-  "id":    4,
-  "listenId":"lst-abc-123",      // Server-assigned listen ID (used for unlisten and delta matching)
-  "value": [ ... ]             // Current snapshot at path
-}
-```
-
-After listening, the server pushes `StoreDelta` messages (see [Server→Client Pushes](#server-push-messages)).
-
----
-
-#### `StoreUnlisten`
-
-Stop receiving updates for a listen subscription.
-
-```
-{
-  "type":  "StoreUnlisten",
-  "id":    5,
-  "listenId": "lst-abc-123"
-}
-```
-
-**Response** (`type: "ok"`):
-
-```
-{
-  "type": "ok",
-  "id":   5
-}
-```
-
----
-
 #### `StoreQuery`
 
-Execute a one-off filtered query (non-real-time) on a collection.
+Execute a one-off filtered query (non-real-time) on a collection. Query conditions and sort descriptors are sent as compact positional tuples (see [Query Grammar](./query-grammar.md) for encoding details).
 
 ```
 {
   "type":  "StoreQuery",
   "id":    6,
   "collection": "users",
-  "where": {
-    "age":    { "gte": 18 },
-    "status": { "eq": "active" }
-  },
-  "orderBy": { "created_at": "desc" },
+  "conditions": [
+    ["age", 4, 18],              // [field, op_code, value] — op 4 = gte
+    ["status", 0, "active"]      // op 0 = eq
+  ],
+  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
   "limit":   50,
   "after":   "eyJpZCI6... "
 }
@@ -285,8 +213,10 @@ Subscribe to a filtered query's results in real-time. (Maps to `store.subscribe(
   "type":    "StoreSubscribe",
   "id":      7,
   "collection": "tasks",
-  "where":   { "status": { "eq": "active" } },
-  "orderBy": { "created_at": "desc" },
+  "conditions": [
+    ["status", 0, "active"]      // [field, op_code, value] — op 0 = eq
+  ],
+  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
   "limit":   50
 }
 ```
@@ -320,6 +250,29 @@ Request more historical data for an active subscription.
 The server responds with an `ok` message for the request, and then pushes a `StoreDelta` containing the additional items.
 
 After subscription, the server pushes `StoreDelta` messages when the query result set changes.
+
+---
+
+#### `StoreUnsubscribe`
+
+Stop receiving updates for a query subscription.
+
+```
+{
+  "type":  "StoreUnsubscribe",
+  "id":    9,
+  "subId": "sub-def-456"
+}
+```
+
+**Response** (`type: "ok"`):
+
+```
+{
+  "type": "ok",
+  "id":   9
+}
+```
 
 ---
 
@@ -520,13 +473,12 @@ These are unsolicited messages from the server. They do not have a request `id`.
 
 #### `StoreDelta`
 
-Notifies a subscribed client that the data at their listened path or query has changed.
+Notifies a subscribed client that their subscription's result set has changed.
 
 ```
 {
   "type":  "StoreDelta",
-  "listenId": "lst-abc-123",           // Present if this delta is for a store.listen() caller
-  "subId":    "sub-def-456",           // Present if this delta is for a store.subscribe() caller
+  "subId": "sub-def-456",             // Subscription ID
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
@@ -545,10 +497,10 @@ Notifies a subscribed client that the data at their listened path or query has c
 
 | `op` | Description |
 |------|-------------|
-| `"set"` | A value was created or updated. `value` contains the new state. |
-| `"remove"` | A value was deleted. No `value` field. |
+| `"set"` | A record was created or updated. `value` contains the full record. |
+| `"remove"` | A record was deleted. No `value` field. |
 
-> **Design note:** We send per-operation deltas rather than full snapshots. The client maintains local state and applies these operations. For query subscriptions, the client may receive a full re-evaluation if the delta cannot be expressed as individual ops (e.g., a sort-order change).
+> **Design note (ADR-023):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
 
 ---
 
@@ -779,14 +731,12 @@ Sent when `authorization.json` delegates a rule to the hook server.
 
 | Direction | Type | SDK method | Response? |
 |-----------|------|------------|-----------|
-| C→S | `StoreGet` | `store.get(path)` | `ok` with `value` |
 | C→S | `StoreSet` | `store.set(path, value)` | `ok` |
 | C→S | `StoreRemove` | `store.remove(path)` | `ok` |
 | C→S | `StoreBatch` | `store.batch(ops)` | `ok` |
-| C→S | `StoreListen` | `store.listen(path, cb)` | `ok` with `listenId` + `value` |
-| C→S | `StoreUnlisten` | (unsubscribe function) | `ok` |
-| C→S | `StoreQuery` | `store.query(collection, opts)` | `ok` with `value` + `nextCursor` |
-| C→S | `StoreSubscribe` | `store.subscribe(collection, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
+| C→S | `StoreQuery` | `store.get(path)`, `store.query(collection, opts)` | `ok` with `value` + `nextCursor` |
+| C→S | `StoreSubscribe` | `store.listen(path, cb)`, `store.subscribe(collection, opts, cb)` | `ok` with `subId`, `value`, `hasMore` |
+| C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
 | C→S | `StoreLoadMore` | `subscription.loadMore()` | `ok` followed by `StoreDelta` |
 | C→S | `PresenceSet` | `presence.set(data)` | `ok` |
 | C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId` + `users` |

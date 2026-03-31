@@ -6,13 +6,178 @@
 
 ## Overview
 
-This document specifies how the ZyncBase JSON query language maps to the internal Zig `QueryFilter` Abstract Syntax Tree (AST), and strictly how that AST is translated into SQLite `SELECT` queries. 
+This document specifies the full query translation pipeline:
 
-Unlike the public-facing API design documentation, this specification acts as the definitive source of truth for the backend systems executing queries against the `StorageEngine`.
+1. **SDK → Wire**: How the Prisma-inspired SDK syntax is pre-compiled into compact positional tuples (per ADR-019).
+2. **Wire → AST**: How the Zig server deserializes wire tuples into the `QueryFilter` AST.
+3. **AST → SQL**: How the AST is translated into SQLite `SELECT` queries.
+
+Unlike the public-facing API design documentation, this specification acts as the definitive source of truth for the backend systems executing queries against the storage engine.
+
+---
+
+## Wire Encoding (SDK → Wire)
+
+The SDK transforms the developer-friendly Prisma-style query into compact positional arrays before transmission. This follows the same principle as path encoding (ADR-019): SDK-friendly syntax on the developer side, compact arrays on the wire.
+
+### Operator Codes
+
+Each query operator maps to a fixed integer code matching the Zig `Operator` enum ordinal:
+
+| Code | Operator | Code | Operator |
+|------|----------|------|----------|
+| 0 | `eq` | 7 | `startsWith` |
+| 1 | `ne` | 8 | `endsWith` |
+| 2 | `gt` | 9 | `in` |
+| 3 | `lt` | 10 | `notIn` |
+| 4 | `gte` | 11 | `isNull` |
+| 5 | `lte` | 12 | `isNotNull` |
+| 6 | `contains` | | |
+
+### Condition Tuples
+
+Each condition is encoded as a positional array:
+
+```
+[field: string, op: int, value: any]
+```
+
+- `field` — Flattened field name (see [Flattening Rules](#flattening-rules))
+- `op` — Integer operator code from the table above
+- `value` — The comparison value. Omitted (2-element tuple) for `isNull` and `isNotNull`
+
+### Sort Tuples
+
+Each sort descriptor is encoded as a positional array:
+
+```
+[field: string, desc: int]
+```
+
+- `field` — Field name
+- `desc` — `0` for ascending, `1` for descending
+
+### Transformation Examples
+
+**Simple query:**
+
+```typescript
+// SDK input
+{ where: { age: { gte: 18 }, status: { eq: 'active' } } }
+
+// Wire output
+{ "conditions": [["age", 4, 18], ["status", 0, "active"]] }
+```
+
+**Query with OR:**
+
+```typescript
+// SDK input
+{
+  where: {
+    priority: { eq: 'high' },
+    or: [
+      { status: { eq: 'active' } },
+      { status: { eq: 'pending' } }
+    ]
+  }
+}
+
+// Wire output
+{
+  "conditions": [["priority", 0, "high"]],
+  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
+}
+```
+
+**Null check (no value):**
+
+```typescript
+// SDK input
+{ where: { deleted_at: { isNull: true } } }
+
+// Wire output
+{ "conditions": [["deleted_at", 11]] }
+```
+
+**Array operator:**
+
+```typescript
+// SDK input
+{ where: { role: { in: ['admin', 'editor'] } } }
+
+// Wire output
+{ "conditions": [["role", 9, ["admin", "editor"]]] }
+```
+
+**Nested field (flattened):**
+
+```typescript
+// SDK input
+{ where: { address: { city: { eq: 'NYC' } } } }
+
+// Wire output
+{ "conditions": [["address__city", 0, "NYC"]] }
+```
+
+**Sort + pagination:**
+
+```typescript
+// SDK input
+{ orderBy: { created_at: 'desc' }, limit: 50, after: 'eyJpZCI6...' }
+
+// Wire output
+{ "orderBy": ["created_at", 1], "limit": 50, "after": "eyJpZCI6..." }
+```
+
+### Full Wire Message
+
+A complete `StoreQuery` message on the wire:
+
+```
+{
+  "type":  "StoreQuery",
+  "id":    6,
+  "collection": "users",
+  "conditions": [
+    ["age", 4, 18],
+    ["status", 0, "active"]
+  ],
+  "orConditions": [
+    ["role", 0, "admin"],
+    ["role", 0, "editor"]
+  ],
+  "orderBy": ["created_at", 1],
+  "limit":   50,
+  "after":   "eyJpZCI6..."
+}
+```
+
+### Encoding Rules Summary
+
+| SDK field | Wire key | Encoding |
+|-----------|----------|----------|
+| `where` (root conditions) | `conditions` | Array of `[field, op, value?]` tuples |
+| `where.or` | `orConditions` | Array of `[field, op, value?]` tuples |
+| `orderBy` | `orderBy` | `[field, desc]` tuple |
+| `limit` | `limit` | Integer (unchanged) |
+| `after` | `after` | String (unchanged) |
+
+---
+
+## Flattening Rules
+
+Clients submit paths as nested JSON, but under the hood, ZyncBase stores deeply nested JSON objects as flat columns. 
+When a query specifies a nested structure like `{"address": {"city": { "eq": "NYC" }}}`, the SDK flattens the field path by joining keys with `__`. 
+The resulting condition tuple field must literally be: `"address__city"`.
+
+**No SQLite JSON Extractors for Objects**: SQLite's `json_extract()` or `->>` operators MUST NOT be used for reading document properties. Property queries strictly run against the `__` delimited flat columns.
+
+---
 
 ## Abstract Syntax Tree (AST)
 
-The query language is structurally parsed down to an array of conditions via an implicit `AND`, with an optional `OR` group.
+The wire tuples map directly to the Zig AST with minimal transformation — the server reads positional array elements into struct fields.
 
 ```zig
 pub const QueryFilter = struct {
@@ -37,12 +202,22 @@ pub const Operator = enum {
 };
 ```
 
-### Flattening Rules
-Clients submit paths as nested JSON, but under the hood, ZyncBase stores deeply nested JSON objects as flat columns. 
-When a query specifies a nested structure like `{"address": {"city": { "eq": "NYC" }}}`, the message payload is flattened by joining keys with `__`. 
-The resulting `Condition.field` injected into the AST must literally be: `"address__city"`.
+### Wire → AST Mapping
 
-**No SQLite JSON Extractors for Objects**: SQLite's `json_extract()` or `->>` operators MUST NOT be used for reading document properties. Property queries strictly run against the `__` delimited flat columns.
+The server deserializes each condition tuple into a `Condition` struct:
+
+| Tuple position | AST field | Notes |
+|----------------|-----------|-------|
+| `[0]` | `Condition.field` | String, already flattened by SDK |
+| `[1]` | `Condition.op` | Integer cast to `Operator` enum |
+| `[2]` | `Condition.value` | Any MessagePack value. Absent for `isNull`/`isNotNull` |
+
+Sort tuples map to `SortDescriptor`:
+
+| Tuple position | AST field | Notes |
+|----------------|-----------|-------|
+| `[0]` | `SortDescriptor.field` | String |
+| `[1]` | `SortDescriptor.desc` | `1` → `true`, `0` → `false` |
 
 ---
 
@@ -97,25 +272,20 @@ Attempting to run `startsWith` or `gt` on an array field results in a `SCHEMA_VA
 
 ## Combining Conditions
 
-A standard filter contains both `conditions` and an optional `or_conditions` array.
+A standard filter contains both `conditions` and an optional `orConditions` array.
 
-#### Example Payload
+#### Example Wire Payload
 
 ```json
 {
-  "where": {
-    "priority": { "eq": "high" },
-    "or": [
-      { "status": { "eq": "active" } },
-      { "status": { "eq": "pending" } }
-    ]
-  }
+  "conditions": [["priority", 0, "high"]],
+  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
 }
 ```
 
 #### SQL Form Generation
 
-The translation engine builds the statement by appending an implicit `AND` for all root-level items, and isolating the `OR` group into a parenthetical block.
+The translation engine builds the statement by appending an implicit `AND` for all root-level conditions, and isolating the `orConditions` group into a parenthetical block.
 
 ```sql
 SELECT value_msgpack FROM "tasks"
@@ -128,7 +298,7 @@ WHERE _namespace = ?
 
 ## Sorting Rules
 
-ZyncBase supports sorting by multiple fields. If the `orderBy` parameter is a string, it maps to a single sort descriptor. If it is a map or an array of maps, it maps to multiple sort descriptors.
+ZyncBase supports sorting by multiple fields. The `orderBy` field on the wire is either a single `[field, desc]` tuple or an array of such tuples for multi-field sorting (future).
 
 ### Tie-breaking
 To ensure deterministic pagination (Cursor Stability), ZyncBase ALWAYS appends `id DESC` (or `id ASC` if the last sort field was ASC) as a final tie-breaker if `id` was not already the primary sort field.

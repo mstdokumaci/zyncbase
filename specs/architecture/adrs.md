@@ -433,17 +433,30 @@ MVP supports specific operators (eq, ne, gt, etc.) but excludes Regex, FTS, and 
 
 ---
 
-## ADR-019: Relational-Document Hybrid Path Conventions
+## ADR-019: SDK-Friendly Syntax, Compact Wire Format
 
 **Date**: 2026-03-09  
+**Updated**: 2026-03-31  
 **Status**: Accepted  
 
-**Decision**: 
-Canonical wire format is an Array `['table', 'id', ...fields]`. SDK provides dot-notation convenience.
+**Context**:  
+The SDK targets TypeScript developers who benefit from expressive, nested syntax (dot-notation paths, Prisma-style query objects). The Zig server benefits from flat, positional data that can be parsed without recursive descent or string-keyed map inspection.
+
+**Decision**:  
+The SDK provides developer-friendly syntax. The wire protocol uses compact positional arrays. The SDK is responsible for transforming one into the other before transmission.
+
+This principle applies to:
+- **Paths**: SDK accepts `'users.u1.name'`, wire sends `['users', 'u1', 'name']`.
+- **Query conditions**: SDK accepts `{ age: { gte: 18 } }`, wire sends `['age', 4, 18]` (positional tuple: `[field, op_code, value]`).
+- **Sort descriptors**: SDK accepts `{ created_at: 'desc' }`, wire sends `['created_at', 1]` (positional tuple: `[field, desc_flag]`).
+
+See [Query Grammar](../implementation/query-grammar.md) for the full wire encoding specification including operator codes.
 
 **Rationale**:
-- Maps directly to SQLite row lookups.
-- Eliminates ambiguity in IDs/keys containing dots.
+- Paths map directly to SQLite row lookups; eliminates ambiguity in IDs containing dots.
+- Flat condition tuples eliminate recursive JSON parsing in Zig — the server reads fixed-position array elements.
+- Integer operator codes avoid string comparison; map 1:1 to the Zig `Operator` enum.
+- Nested path flattening (`address.city` → `address__city`) happens in TypeScript where it's trivial.
 
 **Principles Alignment**: 
 - #5 TypeScript-First
@@ -506,3 +519,59 @@ Implement a 7-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate
 **Principles Alignment**: 
 - #5 TypeScript-First
 - #9 Secure by Default
+
+---
+
+## ADR-023: Unified Subscription Engine for All Read Operations
+
+**Date**: 2026-03-31  
+**Status**: Accepted  
+
+**Context**:  
+ZyncBase defines 4 SDK read commands (`get`, `listen`, `query`, `subscribe`) mapped to 4 wire message types. The message handler splits reads between `StorageEngine` and `SubscriptionManager`, creating dual code paths for semantically overlapping operations. The path-based commands are strict subsets of the collection-based ones. ADR-021 already mandates in-memory AST evaluation for subscriptions; this ADR extends that into a unified read architecture.
+
+**Decision**:  
+Introduce a single Subscription Engine as the sole entry point for all server-side read operations.
+
+**Wire Protocol — 4 → 2 Read Message Types**:  
+Remove `StoreGet`, `StoreListen`, `StoreUnlisten`. All reads go through `StoreQuery` (one-shot: return results, done) and `StoreSubscribe` (ongoing: return snapshot, push `StoreDelta` until `StoreUnsubscribe`). Retained: `StoreUnsubscribe`, `StoreLoadMore`, `StoreDelta`.
+
+**SDK Path Decomposition**:  
+The SDK translates `get(path)`/`listen(path, cb)` into `StoreQuery`/`StoreSubscribe` by decomposing paths into collection-level queries with id filters. For example, `get('users.u1.name')` becomes `StoreQuery('users', { where: { id: { eq: 'u1' } } })` with SDK-side field extraction. The SDK maintains a local value cache for field-level change detection and serves exact-match queries from cache when an active subscription already covers the data.
+
+**Subscription Engine**:  
+Replaces the current split between `StorageEngine` (reads) and `SubscriptionManager`. On `StoreQuery`: if collection is warm (has active subscriptions), evaluate from memory; if cold, query SQLite directly — one-shot queries do not warm the engine. On `StoreSubscribe`: warm from SQLite if cold, register subscriber, push deltas via edge-transition evaluation on `RowChange` events. On `RowChange`: update in-memory state, evaluate against subscriber groups, push `StoreDelta` to matches.
+
+**Subscriber Grouping**:  
+Clients with identical `(namespace, collection, where, orderBy)` share one internal evaluation. `limit` is per-subscriber metadata. New subscribers joining an existing group receive the current snapshot immediately.
+
+**Record-Level Deltas Only**:  
+Server broadcasts `set` (full record — covers both add and update) and `remove` (record ID only) at record granularity. No field-level patches from server. SDK handles field projection.
+
+**Lock-Free Cache Coexistence**:  
+Subscription engine replaces the lock-free cache for application data reads. Lock-free cache continues for permission snapshots and schema metadata.
+
+**Eviction**: Collection state evicted on last unsubscribe. Disconnect triggers auto-unsubscription.
+
+**Memory Budget**: Configurable `subscriptionEngine.maxMemoryMB`. New subscriptions rejected with `RESOURCE_EXHAUSTED` when limit approached.
+
+**`loadMore`**: Always hits SQLite on disk in v1.
+
+**Deferred**: In-memory SQLite for warm-start/fast `loadMore`; SDK subset query matching; specialized per-field index structures (interval trees, trigrams, tries).
+
+**Principles Alignment**:  
+- #1 Real-time First
+- #5 TypeScript-First
+- #8 Predictable Performance
+
+**Supersedes / Modifies**:  
+- Narrows ADR-005: Lock-free cache role reduced to auth/schema metadata.
+- Extends ADR-021: In-memory AST evaluation now covers all reads.
+
+**Consequences**:  
+- ✅ Wire protocol reads halved (4 → 2). Single server-side code path.
+- ✅ Subscriber grouping: O(1) evaluation per unique subscription, not per client.
+- ✅ SDK local cache eliminates redundant round-trips.
+- ⚠️ First subscribe to cold collection incurs SQLite read.
+- ⚠️ `loadMore` always hits disk.
+- ⚠️ Subscription engine is significant implementation effort.
