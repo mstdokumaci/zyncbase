@@ -1123,7 +1123,6 @@ pub const StorageEngine = struct {
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
-
     fn appendConditionSql(
         self: *StorageEngine,
         allocator: Allocator,

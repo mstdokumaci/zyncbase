@@ -340,15 +340,15 @@ pub const SubscriptionEngine = struct {
             .isNotNull => val != .nil,
             .startsWith => blk: {
                 if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.mem.startsWith(u8, val.str.value(), cond.value.?.str.value());
+                break :blk std.ascii.startsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
             },
             .endsWith => blk: {
                 if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.mem.endsWith(u8, val.str.value(), cond.value.?.str.value());
+                break :blk std.ascii.endsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
             },
             .contains => blk: {
                 if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.mem.indexOf(u8, val.str.value(), cond.value.?.str.value()) != null;
+                break :blk std.ascii.indexOfIgnoreCase(val.str.value(), cond.value.?.str.value()) != null;
             },
             .in => blk: {
                 if (cond.value == null or cond.value.? != .arr) break :blk false;

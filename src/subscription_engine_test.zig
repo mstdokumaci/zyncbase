@@ -167,3 +167,55 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     try testing.expectEqual(@as(u64, 1), matches[0].connection_id);
     try testing.expectEqual(@as(u64, 100), matches[0].subscription_id);
 }
+
+test "SubscriptionEngine: case-insensitive string matching" {
+    const allocator = testing.allocator;
+
+    const val = try msgpack.Payload.strToPayload("Al", allocator);
+    defer val.free(allocator);
+
+    const filter_starts_with = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "name", .op = .startsWith, .value = val },
+        },
+    };
+
+    const filter_ends_with = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "name", .op = .endsWith, .value = val },
+        },
+    };
+
+    const filter_contains = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "name", .op = .contains, .value = val },
+        },
+    };
+
+    // Case-insensitive startsWith
+    {
+        var row = msgpack.Payload.mapPayload(allocator);
+        defer row.free(allocator);
+        const name_val = try msgpack.Payload.strToPayload("aLiCe", allocator);
+        try row.mapPut("name", name_val);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, row));
+    }
+
+    // Case-insensitive endsWith
+    {
+        var row = msgpack.Payload.mapPayload(allocator);
+        defer row.free(allocator);
+        const name_val = try msgpack.Payload.strToPayload("reAL", allocator);
+        try row.mapPut("name", name_val);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, row));
+    }
+
+    // Case-insensitive contains
+    {
+        var row = msgpack.Payload.mapPayload(allocator);
+        defer row.free(allocator);
+        const name_val = try msgpack.Payload.strToPayload("vALid", allocator);
+        try row.mapPut("name", name_val);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, row));
+    }
+}
