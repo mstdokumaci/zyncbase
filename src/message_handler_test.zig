@@ -197,7 +197,7 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
     defer sc.deinit();
     const conn = sc.conn;
 
-    const response = try app.handler.routeMessage(allocator, conn, msg_info, parsed);
+    const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -247,7 +247,7 @@ test "StoreSet: array field with valid literal array succeeds" {
     defer sc.deinit();
     const conn = sc.conn;
 
-    const response = try app.handler.routeMessage(allocator, conn, msg_info, parsed);
+    const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -296,7 +296,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try app.handler.routeMessage(allocator, conn, msg_info, parsed);
+        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -332,7 +332,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try app.handler.routeMessage(allocator, conn, msg_info, parsed);
+        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -394,7 +394,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try app.handler.routeMessage(allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -416,7 +416,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try app.handler.routeMessage(allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -437,7 +437,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try app.handler.routeMessage(allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);

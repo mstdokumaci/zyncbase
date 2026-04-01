@@ -472,3 +472,84 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
         try testing.expectEqualStrings(td.value, got_val.str.value());
     }
 }
+
+// Regression Test for Message Handler Double-Free in StoreSubscribe
+test "Verification: StoreSubscribe message processing" {
+    const allocator = testing.allocator;
+
+    var app = try AppTestContext.init(allocator, "verification-storesubscribe", &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const handler = app.handler;
+    const manager = app.manager;
+    const storage_engine = app.storage_engine;
+
+    // 1. Store a value
+    const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
+    defer val_payload.free(allocator);
+    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+    try storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
+    try storage_engine.flushPendingWrites();
+
+    // 2. Create a StoreSubscribe message
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+    var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+    cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+    cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
+    cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
+    conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+    const message = try msgpack.createStoreSubscribeMessage(
+        allocator,
+        3,
+        "test_namespace",
+        "data_table",
+        filter_map,
+        12345,
+    );
+    defer allocator.free(message);
+
+    // 3. Parse the message
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const msg_info = try handler.extractMessageInfo(parsed);
+
+    // 4. Route and process the message
+    var ws = createMockWebSocket();
+    try manager.onOpen(&ws);
+    defer manager.onClose(&ws, 1000, "Normal closure");
+
+    const conn = try manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    // Use an arena for routing to avoid leaks of the response map and its contents
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const result_raw = try handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
+    const response = try allocator.dupe(u8, result_raw);
+    defer allocator.free(response);
+
+    // 5. Verify response payload
+    var resp_reader: std.Io.Reader = .fixed(response);
+    const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+    defer resp_parsed.free(allocator);
+
+    try testing.expect(resp_parsed == .map);
+    const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("StoreSubscribeResponse", msg_type.str.value());
+
+    const results_p = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+    try testing.expect(results_p == .arr);
+    try testing.expectEqual(@as(usize, 1), results_p.arr.len);
+    
+    const doc = results_p.arr[0];
+    const got_val = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("stored_value", got_val.str.value());
+}

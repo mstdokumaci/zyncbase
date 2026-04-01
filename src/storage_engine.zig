@@ -46,6 +46,8 @@ pub const StorageError = error{
     InvalidDataDir,
     /// Path is not a directory
     NotDir,
+    /// Required condition value is missing
+    MissingConditionValue,
 };
 
 /// A column name + msgpack value pair for storage inserts/updates.
@@ -643,8 +645,7 @@ pub const StorageEngine = struct {
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
     /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
-    fn payloadToTypedValue(self: *StorageEngine, allocator: Allocator, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
-        _ = self;
+    fn payloadToTypedValue(allocator: Allocator, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
         if (value == .nil) return .nil;
         return switch (ft) {
             .text => switch (value) {
@@ -683,7 +684,7 @@ pub const StorageEngine = struct {
         var sql_buf: std.ArrayList(u8) = .empty;
         defer sql_buf.deinit(self.allocator);
 
-        try sql_buf.appendSlice(self.allocator, "INSERT OR REPLACE INTO ");
+        try sql_buf.appendSlice(self.allocator, "INSERT INTO ");
         try sql_buf.appendSlice(self.allocator, table);
         try sql_buf.appendSlice(self.allocator, " (id, namespace_id");
         for (columns) |col| {
@@ -706,12 +707,18 @@ pub const StorageEngine = struct {
                 try sql_buf.appendSlice(self.allocator, ", ?");
             }
         }
-        // created_at: preserve existing or use current time
-        try sql_buf.appendSlice(self.allocator, ", COALESCE((SELECT created_at FROM ");
-        try sql_buf.appendSlice(self.allocator, table);
-        try sql_buf.appendSlice(self.allocator, " WHERE id=? AND namespace_id=?), ?)");
-        // updated_at: always current time
-        try sql_buf.appendSlice(self.allocator, ", ?)");
+        // created_at and updated_at placeholders
+        try sql_buf.appendSlice(self.allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+
+        // Update each column provided
+        for (columns, 0..) |col, i| {
+            if (i > 0) try sql_buf.appendSlice(self.allocator, ", ");
+            try sql_buf.appendSlice(self.allocator, col.name);
+            try sql_buf.appendSlice(self.allocator, " = excluded.");
+            try sql_buf.appendSlice(self.allocator, col.name);
+        }
+        // Always update updated_at
+        try sql_buf.appendSlice(self.allocator, ", updated_at = excluded.updated_at");
 
         const sql = try sql_buf.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(sql);
@@ -737,7 +744,7 @@ pub const StorageEngine = struct {
                     break;
                 }
             }
-            values[i] = try self.payloadToTypedValue(self.allocator, field_type, col.value);
+            values[i] = try payloadToTypedValue(self.allocator, field_type, col.value);
             initialized_count += 1;
         }
 
@@ -800,7 +807,7 @@ pub const StorageEngine = struct {
             }
             self.allocator.free(values);
         }
-        values[0] = try self.payloadToTypedValue(self.allocator, field_sql_type, value);
+        values[0] = try payloadToTypedValue(self.allocator, field_sql_type, value);
 
         // Use jsonb(?) placeholder for array fields, ? for others
         const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
@@ -890,7 +897,7 @@ pub const StorageEngine = struct {
         // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try self.execSelectDocument(allocator, &node.conn, sql, id, namespace, table_schema);
+        const payload = try execSelectDocument(allocator, &node.conn, sql, id, namespace, table_schema);
         if (payload) |p| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -935,7 +942,7 @@ pub const StorageEngine = struct {
             try std.fmt.allocPrint(allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
         defer allocator.free(sql);
 
-        const payload = try self.execSelectScalar(allocator, &node.conn, sql, id, namespace, field_ctx);
+        const payload = try execSelectScalar(allocator, &node.conn, sql, id, namespace, field_ctx);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -975,7 +982,7 @@ pub const StorageEngine = struct {
         const sql = try sql_buf.toOwnedSlice(allocator);
         defer allocator.free(sql);
 
-        const payload = try self.execSelectCollection(allocator, &node.conn, sql, namespace, table_schema);
+        const payload = try execSelectCollection(allocator, &node.conn, sql, namespace, table_schema);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -1070,7 +1077,7 @@ pub const StorageEngine = struct {
                 const is_desc = if (filter.order_by) |o| o.desc else false;
                 const op = if (is_desc) "<" else ">";
 
-                const sql_field = try self.translateFieldName(allocator, sort_field);
+                const sql_field = try translateFieldName(allocator, sort_field);
                 defer allocator.free(sql_field);
 
                 // SQLite row-value comparison: (sort_field, id) > (?, ?)
@@ -1093,7 +1100,7 @@ pub const StorageEngine = struct {
                 if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
                 if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
 
-                try values.append(allocator, try self.payloadToTypedValue(allocator, sort_ft, cursor.sort_value));
+                try values.append(allocator, try payloadToTypedValue(allocator, sort_ft, cursor.sort_value));
                 try values.append(allocator, TypedValue{ .text = try allocator.dupe(u8, cursor.id) });
             }
 
@@ -1103,7 +1110,7 @@ pub const StorageEngine = struct {
         // 3. ORDER BY
         try sql_buf.appendSlice(allocator, " ORDER BY ");
         if (filter.order_by) |o| {
-            const sql_field = try self.translateFieldName(allocator, o.field);
+            const sql_field = try translateFieldName(allocator, o.field);
             defer allocator.free(sql_field);
             try sql_buf.appendSlice(allocator, sql_field);
             try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
@@ -1121,12 +1128,11 @@ pub const StorageEngine = struct {
             try sql_buf.appendSlice(allocator, l_str);
         }
 
-        const payload = try self.execQuery(allocator, &node.conn, sql_buf.items, values.items, table_schema);
+        const payload = try execQuery(allocator, &node.conn, sql_buf.items, values.items, table_schema);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
-    fn translateFieldName(self: *StorageEngine, allocator: Allocator, field: []const u8) ![]u8 {
-        _ = self;
+    fn translateFieldName(allocator: Allocator, field: []const u8) ![]u8 {
         if (std.mem.eql(u8, field, "id") or std.mem.eql(u8, field, "namespace_id") or
             std.mem.eql(u8, field, "created_at") or std.mem.eql(u8, field, "updated_at"))
         {
@@ -1143,7 +1149,7 @@ pub const StorageEngine = struct {
         table: []const u8,
         cond: query_parser.Condition,
     ) !void {
-        const sql_field = try self.translateFieldName(allocator, cond.field);
+        const sql_field = try translateFieldName(allocator, cond.field);
         defer allocator.free(sql_field);
 
         // Find field type for value binding
@@ -1164,40 +1170,49 @@ pub const StorageEngine = struct {
 
         switch (cond.op) {
             .eq => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " = ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .ne => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " != ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .gt => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " > ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .lt => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " < ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .gte => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " >= ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .lte => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " <= ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, ft, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
             },
             .contains => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%'");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, .text, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
             },
             .startsWith => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " LIKE ? || '%'");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, .text, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
             },
             .endsWith => {
+                const val = cond.value orelse return error.MissingConditionValue;
                 try sql_buf.appendSlice(allocator, " LIKE '%' || ?");
-                try values.append(allocator, try self.payloadToTypedValue(allocator, .text, cond.value.?));
+                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
             },
             .isNull => try sql_buf.appendSlice(allocator, " IS NULL"),
             .isNotNull => try sql_buf.appendSlice(allocator, " IS NOT NULL"),
@@ -1209,12 +1224,12 @@ pub const StorageEngine = struct {
                         for (val.arr, 0..) |v, i| {
                             if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                             try sql_buf.appendSlice(allocator, "?");
-                            try values.append(allocator, try self.payloadToTypedValue(allocator, ft, v));
+                            try values.append(allocator, try payloadToTypedValue(allocator, ft, v));
                         }
                     } else {
                         // Fallback for single value even if it should be an array
                         try sql_buf.appendSlice(allocator, "?");
-                        try values.append(allocator, try self.payloadToTypedValue(allocator, ft, val));
+                        try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
                     }
                 }
                 try sql_buf.appendSlice(allocator, ")");
@@ -1223,7 +1238,6 @@ pub const StorageEngine = struct {
     }
 
     fn execQuery(
-        self: *StorageEngine,
         allocator: Allocator,
         db: *sqlite.Db,
         sql: []const u8,
@@ -1259,7 +1273,7 @@ pub const StorageEngine = struct {
             var i: c_int = 0;
             while (i < col_count) : (i += 1) {
                 const ctx = resolveColumnContext(stmt, i, table_schema);
-                const val = try self.readColumnValue(allocator, stmt, i, ctx.field);
+                const val = try readColumnValue(allocator, stmt, i, ctx.field);
                 try map.mapPut(ctx.name, val);
             }
             try arr.append(allocator, map);
@@ -1346,8 +1360,7 @@ pub const StorageEngine = struct {
     /// Pass the resolved schema Field for user-defined columns; pass null for system columns
     /// (id, namespace_id, created_at, updated_at). Array fields stored as BLOB are returned
     /// via json(col) in the SELECT, which yields SQLITE_TEXT — dispatched to jsonToPayload.
-    fn readColumnValue(self: *StorageEngine, allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
-        _ = self;
+    fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
         // Array fields: json(col) returns SQLITE_TEXT containing a JSON array string.
         if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
@@ -1386,7 +1399,6 @@ pub const StorageEngine = struct {
     /// Execute a SELECT with explicit column list WHERE id=? AND namespace_id=? and return a msgpack map or null.
     /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectDocument(
-        self: *StorageEngine,
         allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
@@ -1417,7 +1429,7 @@ pub const StorageEngine = struct {
         var i: c_int = 0;
         while (i < col_count) : (i += 1) {
             const ctx = resolveColumnContext(stmt, i, table_schema);
-            const val = try self.readColumnValue(allocator, stmt, i, ctx.field);
+            const val = try readColumnValue(allocator, stmt, i, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         return map;
@@ -1425,7 +1437,6 @@ pub const StorageEngine = struct {
 
     /// Execute a SELECT <col> ... WHERE id=? AND namespace_id=? and return scalar or null.
     fn execSelectScalar(
-        self: *StorageEngine,
         allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
@@ -1450,13 +1461,12 @@ pub const StorageEngine = struct {
         if (rc == sqlite.c.SQLITE_DONE) return null;
         if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-        return try self.readColumnValue(allocator, stmt, 0, field_ctx);
+        return try readColumnValue(allocator, stmt, 0, field_ctx);
     }
 
     /// Execute a SELECT with explicit column list WHERE namespace_id=? and return a msgpack array of maps.
     /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectCollection(
-        self: *StorageEngine,
         allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
@@ -1490,7 +1500,7 @@ pub const StorageEngine = struct {
             var i: c_int = 0;
             while (i < col_count) : (i += 1) {
                 const ctx = resolveColumnContext(stmt, i, table_schema);
-                const val = try self.readColumnValue(allocator, stmt, i, ctx.field);
+                const val = try readColumnValue(allocator, stmt, i, ctx.field);
                 try map.mapPut(ctx.name, val);
             }
             try arr.append(allocator, map);
@@ -1535,15 +1545,12 @@ pub const StorageEngine = struct {
             bind_idx += 1;
         }
 
-        // COALESCE: id, namespace_id, fallback created_at
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
-        bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
-        bind_idx += 1;
+        // created_at
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
         bind_idx += 1;
         // updated_at
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
+        bind_idx += 1;
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;

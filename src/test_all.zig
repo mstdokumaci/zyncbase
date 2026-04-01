@@ -22,6 +22,7 @@ test {
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
     _ = @import("storage_query_test.zig");
+    _ = @import("write_coordinator_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");
@@ -54,4 +55,5 @@ test {
     // Integration tests
     _ = @import("integration_wiring_test.zig");
     _ = @import("message_handler_verification_test.zig");
+    _ = @import("write_coordinator_integration_test.zig");
 }

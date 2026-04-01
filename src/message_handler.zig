@@ -9,12 +9,12 @@ const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const subscription_mod = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_mod.SubscriptionEngine;
-const RowChange = subscription_mod.RowChange;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 // ParsedPath and parsePath have been removed as part of Phase 5 cleanup.
 // All reads now use StoreQuery and StoreSubscribe with QueryFilter AST.
@@ -28,6 +28,7 @@ pub const MessageHandler = struct {
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
     subscription_engine: *SubscriptionEngine,
+    write_coordinator: *WriteCoordinator,
     connection_manager: ?*anyopaque = null, // Type-erased back-reference to ConnectionManager
     security_config: SecurityConfig,
 
@@ -38,6 +39,7 @@ pub const MessageHandler = struct {
         violation_tracker: *ViolationTracker,
         storage_engine: *StorageEngine,
         subscription_engine: *SubscriptionEngine,
+        write_coordinator: *WriteCoordinator,
         security_config: SecurityConfig,
     ) !*MessageHandler {
         const self = try allocator.create(MessageHandler);
@@ -49,6 +51,7 @@ pub const MessageHandler = struct {
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
             .subscription_engine = subscription_engine,
+            .write_coordinator = write_coordinator,
             .security_config = security_config,
             .connection_manager = null,
         };
@@ -411,24 +414,7 @@ pub const MessageHandler = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
-
-            // Notify subscription engine
-            var new_row = msgpack.Payload.mapPayload(arena_allocator);
-            for (columns.items) |col| {
-                try new_row.map.putString(col.name, try msgpack.clonePayload(col.value, arena_allocator));
-            }
-
-            const change = RowChange{
-                .namespace = namespace,
-                .collection = table,
-                .operation = .insert,
-                .new_row = new_row,
-                .old_row = null,
-            };
-
-            try self.notifySubscribers(arena_allocator, change);
-            new_row.free(arena_allocator);
+            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table, doc_id, columns.items);
 
             // Free the column names allocated
             for (columns.items) |col| {
@@ -439,21 +425,8 @@ pub const MessageHandler = struct {
             const document_id = segments[1];
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            try self.storage_engine.updateField(table_name, document_id, namespace, resolved.name, value);
-
-            // Notify engine about field change
-            var new_row = msgpack.Payload.mapPayload(arena_allocator);
-            try new_row.map.putString(resolved.name, try msgpack.clonePayload(value, arena_allocator));
-
-            const change = RowChange{
-                .namespace = namespace,
-                .collection = table_name,
-                .operation = .update,
-                .new_row = new_row,
-                .old_row = null,
-            };
-            try self.notifySubscribers(arena_allocator, change);
-            new_row.free(arena_allocator);
+            const col = [_]storage_mod.ColumnValue{.{ .name = resolved.name, .value = value }};
+            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table_name, document_id, &col);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -474,33 +447,11 @@ pub const MessageHandler = struct {
         const doc_id = segments[1];
 
         if (segments.len == 2) {
-            try self.storage_engine.deleteDocument(table, doc_id, namespace);
-            // Notify delete
-            const change = RowChange{
-                .namespace = namespace,
-                .collection = table,
-                .operation = .delete,
-                .new_row = null,
-                .old_row = null,
-            };
-            try self.notifySubscribers(arena_allocator, change);
+            try self.write_coordinator.coordinateRemove(arena_allocator, namespace, table, doc_id, null);
         } else {
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            try self.storage_engine.updateField(table, doc_id, namespace, resolved.name, .nil);
-
-            // Notify field removal (update to null)
-            var new_row = msgpack.Payload.mapPayload(arena_allocator);
-            try new_row.map.putString(resolved.name, .nil);
-
-            const change = RowChange{
-                .namespace = namespace,
-                .collection = table,
-                .operation = .update,
-                .new_row = new_row,
-                .old_row = null,
-            };
-            try self.notifySubscribers(arena_allocator, change);
+            try self.write_coordinator.coordinateRemove(arena_allocator, namespace, table, doc_id, resolved.name);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -631,7 +582,7 @@ pub const MessageHandler = struct {
         const filter = try query_parser.parseQueryFilter(arena_allocator, payload);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
-        try conn.subscription_ids.append(self.allocator, @intCast(sub_id));
+        try conn.subscription_ids.append(conn.allocator, sub_id);
 
         var response = msgpack.Payload.mapPayload(arena_allocator);
         try response.mapPut("type", try msgpack.Payload.strToPayload("StoreSubscribeResponse", arena_allocator));
@@ -641,7 +592,12 @@ pub const MessageHandler = struct {
         // Snapshot
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
-        try response.mapPut("value", results.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
+        if (results.value) |val| {
+            try response.mapPut("value", val);
+            results.value = null; // Transfer ownership to response
+        } else {
+            try response.mapPut("value", msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
+        }
 
         return try msgpack.encodePayload(arena_allocator, response);
     }
@@ -655,7 +611,7 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         if (payload != .map) return error.InvalidPayload;
         const sub_id_val = self.getPayloadFromMap(payload.map, "subscription_id") orelse return error.MissingSubscriptionId;
-        const sub_id: u32 = if (sub_id_val == .uint) @intCast(sub_id_val.uint) else if (sub_id_val == .int) @intCast(sub_id_val.int) else return error.InvalidSubscriptionId;
+        const sub_id: u64 = if (sub_id_val == .uint) sub_id_val.uint else if (sub_id_val == .int) @intCast(sub_id_val.int) else return error.InvalidSubscriptionId;
 
         try self.subscription_engine.unsubscribe(conn.id, sub_id);
 
@@ -711,49 +667,5 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         return self.handleStoreQuery(arena_allocator, conn, msg_id, payload);
-    }
-
-    fn notifySubscribers(self: *MessageHandler, arena_allocator: std.mem.Allocator, change: RowChange) !void {
-        const matches = self.subscription_engine.handleRowChange(change, arena_allocator) catch |err| {
-            std.log.err("Subscription evaluation failed: {}", .{err});
-            return;
-        };
-
-        if (matches.len == 0) return;
-
-        // Type-erase connection manager to avoid circular dependency
-        const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-        const manager: *ConnectionManager = @ptrCast(@alignCast(self.connection_manager.?));
-
-        for (matches) |match| {
-            const conn = manager.acquireConnection(match.connection_id) catch |err| {
-                std.log.debug("Failed to acquire connection {d} for notification: {}", .{ match.connection_id, err });
-                continue;
-            };
-            defer {
-                if (conn.release()) {
-                    self.memory_strategy.releaseConnection(conn);
-                }
-            }
-
-            // Build StoreDelta message
-            var msg = msgpack.Payload.mapPayload(arena_allocator);
-            try msg.mapPut("type", try msgpack.Payload.strToPayload("StoreDelta", arena_allocator));
-            try msg.mapPut("subscription_id", msgpack.Payload.uintToPayload(match.subscription_id));
-            try msg.mapPut("namespace", try msgpack.Payload.strToPayload(change.namespace, arena_allocator));
-            try msg.mapPut("collection", try msgpack.Payload.strToPayload(change.collection, arena_allocator));
-
-            // For now, simple record-level delta (send the whole new row or null if deleted)
-            if (change.operation == .delete) {
-                try msg.mapPut("value", .nil);
-            } else if (change.new_row) |new| {
-                try msg.mapPut("value", try msgpack.clonePayload(new, arena_allocator));
-            }
-
-            const encoded = try msgpack.encodePayload(arena_allocator, msg);
-            defer arena_allocator.free(encoded);
-            conn.ws.send(encoded, .binary);
-            msg.free(arena_allocator);
-        }
     }
 };

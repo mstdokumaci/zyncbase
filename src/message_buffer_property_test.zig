@@ -37,7 +37,7 @@ test "buffer: message deallocation after processing" {
         const conn = sc.conn;
 
         // Create a simple MessagePack message
-        const message = try createTestMessage(allocator, 1, "test_ns", "/path", "value");
+        const message = try createTestMessage(allocator, 1, "test_ns", "p1", "value");
         defer allocator.free(message);
 
         // Parse the message
@@ -86,7 +86,7 @@ test "buffer: message deallocation after processing" {
                 allocator,
                 @as(u64, iter),
                 "test_ns",
-                "/path",
+                "p1",
                 "value",
             );
             defer allocator.free(message);
@@ -110,7 +110,7 @@ test "buffer: message deallocation after processing" {
 
         // StoreSet
         {
-            const message = try createTestMessage(allocator, 1, "test_ns", "/key1", "value1");
+            const message = try createTestMessage(allocator, 1, "test_ns", "p2", "value1");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -215,7 +215,7 @@ test "buffer: concurrent message deallocation" {
                     ctx.app.allocator,
                     @as(u64, i),
                     "test_ns",
-                    "/path",
+                    "p1",
                     "value",
                 );
                 defer ctx.app.allocator.free(message);

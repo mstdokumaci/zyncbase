@@ -11,6 +11,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const schema_parser = @import("schema_parser.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -41,6 +42,7 @@ pub const AppTestContext = struct {
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
     subscription_engine: *SubscriptionEngine,
+    write_coordinator: *WriteCoordinator,
     handler: *MessageHandler,
     manager: *ConnectionManager,
     schema: *schema_parser.Schema,
@@ -87,13 +89,20 @@ pub const AppTestContext = struct {
         sm.* = SubscriptionEngine.init(allocator);
         errdefer sm.deinit();
 
-        // 6. Initialize Message Handler
-        const mh = try MessageHandler.init(allocator, ms, vt, se, sm, .{});
+        // 6. Initialize Write Coordinator
+        const wc = try WriteCoordinator.init(allocator, se, sm, ms);
+        errdefer wc.deinit();
+
+        // 7. Initialize Message Handler
+        const mh = try MessageHandler.init(allocator, ms, vt, se, sm, wc, .{});
         errdefer mh.deinit();
 
-        // 7. Initialize Connection Manager
+        // 8. Initialize Connection Manager
         const cm = try ConnectionManager.init(allocator, ms, mh);
         errdefer cm.deinit();
+
+        // 9. Wire Connection Manager to Coordinator
+        wc.setConnectionManager(cm);
 
         return AppTestContext{
             .allocator = allocator,
@@ -103,6 +112,7 @@ pub const AppTestContext = struct {
             .schema = schema,
             .storage_engine = se,
             .subscription_engine = sm,
+            .write_coordinator = wc,
             .handler = mh,
             .manager = cm,
         };
@@ -111,6 +121,7 @@ pub const AppTestContext = struct {
     pub fn deinit(self: *AppTestContext) void {
         self.manager.deinit();
         self.handler.deinit();
+        self.write_coordinator.deinit();
         self.subscription_engine.deinit();
         self.allocator.destroy(self.subscription_engine);
         self.storage_engine.deinit();

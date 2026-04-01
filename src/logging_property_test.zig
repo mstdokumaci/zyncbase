@@ -16,6 +16,7 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -250,7 +251,7 @@ test "logging: error details" {
         try manager.onOpen(&ws);
 
         // Create message with missing fields (id, namespace, path, value)
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayList(u8).empty;
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x81); // fixmap(1)
         try msgpack_helpers.writeString(allocator, &buf, "type");
@@ -343,12 +344,16 @@ test "logging: level filtering" {
             subscription_engine.deinit();
             allocator.destroy(subscription_engine);
         }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
             subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();
@@ -421,12 +426,16 @@ test "logging: message formatting" {
             subscription_engine.deinit();
             allocator.destroy(subscription_engine);
         }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
             subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();
@@ -450,10 +459,6 @@ test "logging: message formatting" {
     }
 
     // Test 2: Verify log format consistency
-    // All log messages in the codebase follow consistent patterns:
-    // - Include relevant context (connection ID, error type, etc.)
-    // - Use structured format strings
-    // - Provide actionable information
     {
         // This is verified by code inspection
         try testing.expect(true);
@@ -487,12 +492,16 @@ test "logging: message formatting" {
             subscription_engine.deinit();
             allocator.destroy(subscription_engine);
         }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
             subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();
