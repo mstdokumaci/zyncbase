@@ -4,7 +4,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
@@ -40,7 +40,7 @@ pub const AppTestContext = struct {
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
-    subscription_manager: *SubscriptionManager,
+    subscription_engine: *SubscriptionEngine,
     handler: *MessageHandler,
     manager: *ConnectionManager,
     schema: *schema_parser.Schema,
@@ -81,8 +81,10 @@ pub const AppTestContext = struct {
         const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, schema, options);
         errdefer se.deinit();
 
-        // 5. Initialize Subscription Manager
-        const sm = try SubscriptionManager.init(allocator);
+        // 5. Initialize Subscription Engine
+        const sm = try allocator.create(SubscriptionEngine);
+        errdefer allocator.destroy(sm);
+        sm.* = SubscriptionEngine.init(allocator);
         errdefer sm.deinit();
 
         // 6. Initialize Message Handler
@@ -100,7 +102,7 @@ pub const AppTestContext = struct {
             .test_context = tc,
             .schema = schema,
             .storage_engine = se,
-            .subscription_manager = sm,
+            .subscription_engine = sm,
             .handler = mh,
             .manager = cm,
         };
@@ -109,7 +111,8 @@ pub const AppTestContext = struct {
     pub fn deinit(self: *AppTestContext) void {
         self.manager.deinit();
         self.handler.deinit();
-        self.subscription_manager.deinit();
+        self.subscription_engine.deinit();
+        self.allocator.destroy(self.subscription_engine);
         self.storage_engine.deinit();
         schema_helpers.freeTestSchema(self.allocator, self.schema);
         self.test_context.deinit(); // Deletes artifacts directory

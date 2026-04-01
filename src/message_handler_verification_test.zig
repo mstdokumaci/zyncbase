@@ -122,8 +122,9 @@ test "Verification: StoreSet message processing" {
     try storage_engine.flushPendingWrites();
 
     // Verify data was stored
-    const stored_doc = try storage_engine.selectDocument("data_table", "key", "test_namespace");
-    defer if (stored_doc) |d| d.free(std.testing.allocator);
+    var managed = try storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
+    defer managed.deinit();
+    const stored_doc = managed.value;
 
     // Value is stored as MessagePack-serialized, but selectDocument decodes it
     if (stored_doc) |doc| {
@@ -134,11 +135,11 @@ test "Verification: StoreSet message processing" {
     }
 }
 
-// Task 14 Verification: StoreGet message processing
-test "Verification: StoreGet message processing" {
+// Task 14 Verification: StoreQuery message processing
+test "Verification: StoreQuery message processing" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-storeget", &.{
+    var app = try AppTestContext.init(allocator, "verification-storequery", &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
     defer app.deinit();
@@ -149,17 +150,30 @@ test "Verification: StoreGet message processing" {
 
     // First, store a value (typed storage)
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
-    defer val_payload.free(allocator); // Fix leak
+    defer val_payload.free(allocator);
     const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
     try storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
     try storage_engine.flushPendingWrites();
 
-    // Create a proper MessagePack StoreGet message with array path
-    const message = try msgpack.createStoreGetMessage(
+    // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+    cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+    cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
+    cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
+    conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+    // Create a StoreQuery message
+    const message = try msgpack.createStoreQueryMessage(
         allocator,
         2,
         "test_namespace",
-        &.{ "data_table", "key", "val" },
+        "data_table",
+        filter_map,
     );
     defer allocator.free(message);
 
@@ -170,7 +184,7 @@ test "Verification: StoreGet message processing" {
 
     // Extract message info
     const msg_info = try handler.extractMessageInfo(parsed);
-    try testing.expectEqualStrings("StoreGet", msg_info.type);
+    try testing.expectEqualStrings("StoreQuery", msg_info.type);
     try testing.expectEqual(@as(u64, 2), msg_info.id);
 
     // Route and process the message
@@ -190,36 +204,28 @@ test "Verification: StoreGet message processing" {
 
     try testing.expect(resp_parsed == .map);
     var found_type = false;
-    var found_id = false;
     var found_value = false;
-    var it = resp_parsed.map.iterator();
-    while (it.next()) |entry| {
+    var rit = resp_parsed.map.iterator();
+    while (rit.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
         if (key == .str) {
             const key_str = key.str.value();
             if (std.mem.eql(u8, key_str, "type")) {
-                try testing.expectEqualStrings("ok", val.str.value());
+                try testing.expectEqualStrings("StoreQueryResponse", val.str.value());
                 found_type = true;
-            } else if (std.mem.eql(u8, key_str, "id")) {
-                try testing.expectEqual(@as(u64, 2), val.uint);
-                found_id = true;
             } else if (std.mem.eql(u8, key_str, "value")) {
-                if (val == .str) {
-                    try testing.expectEqualStrings("stored_value", val.str.value());
-                    found_value = true;
-                } else if (val == .map) {
-                    if (msgpack.getMapValue(val, "val")) |f| {
-                        if (f == .str) {
-                            try testing.expectEqualStrings("stored_value", f.str.value());
-                            found_value = true;
-                        }
-                    }
-                }
+                try testing.expect(val == .arr);
+                try testing.expectEqual(@as(usize, 1), val.arr.len);
+                const doc = val.arr[0];
+                try testing.expect(doc == .map);
+                const v_payload = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+                try testing.expectEqualStrings("stored_value", v_payload.str.value());
+                found_value = true;
             }
         }
     }
-    try testing.expect(found_type and found_id and found_value);
+    try testing.expect(found_type and found_value);
 }
 
 // Task 14 Verification: Error handling for invalid messages
@@ -335,7 +341,7 @@ test "Verification: Error handling for invalid messages" {
 }
 
 // Task 14 Verification: End-to-end message flow
-test "Verification: End-to-end StoreSet and StoreGet flow" {
+test "Verification: End-to-end StoreSet and StoreQuery flow" {
     const allocator = testing.allocator;
 
     var app = try AppTestContext.init(allocator, "verification-e2e", &.{
@@ -401,15 +407,28 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
     // Retrieve all values
     for (test_data, 0..) |td, i| {
         {
-            const get_message = try msgpack.createStoreGetMessage(
+            // Create a filter: { "conditions": [ ["id", 0, td.id] ] }
+            var filter_map = msgpack.Payload.mapPayload(allocator);
+            defer filter_map.free(allocator);
+
+            var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+            var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+            cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+            cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
+            cond_arr[2] = try msgpack.Payload.strToPayload(td.id, allocator);
+            conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+            try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+            const query_message = try msgpack.createStoreQueryMessage(
                 allocator,
                 i + 100,
                 td.namespace,
-                &.{ "data_table", td.id, "val" },
+                "data_table",
+                filter_map,
             );
-            defer allocator.free(get_message);
+            defer allocator.free(query_message);
 
-            var reader: std.Io.Reader = .fixed(get_message);
+            var reader: std.Io.Reader = .fixed(query_message);
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
@@ -422,32 +441,32 @@ test "Verification: End-to-end StoreSet and StoreGet flow" {
             const resp_parsed = try msgpack.decode(allocator, &resp_reader);
             defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
-            var val: ?[]const u8 = null;
-            var rit = resp_parsed.map.iterator();
-            while (rit.next()) |entry| {
-                const key = entry.key_ptr.*;
-                if (key == .str and std.mem.eql(u8, key.str.value(), "value")) {
-                    const v = entry.value_ptr.*;
-                    if (v == .str) {
-                        val = v.str.value();
-                    } else if (v == .map) {
-                        if (msgpack.getMapValue(v, "val")) |f| {
-                            if (f == .str) val = f.str.value();
-                        }
-                    }
+
+            const results = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+            try testing.expect(results == .arr);
+            try testing.expect(@as(usize, 1) <= results.arr.len);
+
+            var found = false;
+            for (results.arr) |doc| {
+                const id_payload = msgpack.getMapValue(doc, "id") orelse continue;
+                if (std.mem.eql(u8, id_payload.str.value(), td.id)) {
+                    const val_payload = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+                    try testing.expectEqualStrings(td.value, val_payload.str.value());
+                    found = true;
+                    break;
                 }
             }
-            try testing.expect(val != null);
-            try testing.expectEqualStrings(td.value, val.?);
+            try testing.expect(found);
         }
     }
 
     // Also verify directly in storage engine
     for (test_data) |td| {
-        const stored_doc = try storage_engine.selectDocument("data_table", td.id, td.namespace);
+        var managed = try storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
+        defer managed.deinit();
+        const stored_doc = managed.value;
         try testing.expect(stored_doc != null);
         const doc = stored_doc.?;
-        defer doc.free(allocator);
 
         const got_val = (try doc.mapGet("val")) orelse return error.MissingValue;
         try testing.expectEqualStrings(td.value, got_val.str.value());

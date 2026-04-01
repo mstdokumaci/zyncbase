@@ -66,8 +66,9 @@ test "Storage: CRUD operations" {
     try storage.flushPendingWrites();
     // 2. Read (Select)
     {
-        const doc = try storage.selectDocument("users", "1", "test_ns");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc != null);
         if (doc) |d| {
             const val = msgpack.getMapValue(d, "name") orelse return error.TestExpectedError;
@@ -83,8 +84,9 @@ test "Storage: CRUD operations" {
     try storage.flushPendingWrites();
     // Verify update
     {
-        const doc = try storage.selectDocument("users", "1", "test_ns");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
+        defer managed.deinit();
+        const doc = managed.value;
         if (doc) |d| {
             const val = msgpack.getMapValue(d, "age") orelse return error.TestExpectedError;
             const actual_age: i64 = switch (val) {
@@ -100,8 +102,9 @@ test "Storage: CRUD operations" {
     try storage.flushPendingWrites();
     // Verify deletion
     {
-        const doc = try storage.selectDocument("users", "1", "test_ns");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc == null);
     }
 }

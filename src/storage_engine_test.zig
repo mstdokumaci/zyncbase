@@ -100,8 +100,9 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     // Flush writes
     try engine.flushPendingWrites();
     // Get the value
-    const result = try engine.selectDocument("items", "id1", "test_namespace");
-    defer if (result) |v| v.free(allocator);
+    var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
+    defer managed.deinit();
+    const result = managed.value;
     try testing.expect(result != null);
     const key_payload = try msgpack.Payload.strToPayload("val", allocator);
     defer key_payload.free(allocator);
@@ -120,7 +121,9 @@ test "StorageEngine: selectDocument non-existent key" {
     const ctx = try setupEngine(allocator, &memory_strategy, test_dir, table);
     defer ctx.deinit();
     const engine = ctx.engine;
-    const result = try engine.selectDocument("items", "nonexistent", "test_namespace");
+    var managed = try engine.selectDocument(allocator, "items", "nonexistent", "test_namespace");
+    defer managed.deinit();
+    const result = managed.value;
     try testing.expect(result == null);
 }
 test "StorageEngine: update existing document" {
@@ -149,8 +152,9 @@ test "StorageEngine: update existing document" {
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Get the value
-    const result = try engine.selectDocument("items", "id1", "test_namespace");
-    defer if (result) |v| v.free(allocator);
+    var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
+    defer managed.deinit();
+    const result = managed.value;
     try testing.expect(result != null);
     const key_payload = try msgpack.Payload.strToPayload("val", allocator);
     defer key_payload.free(allocator);
@@ -176,14 +180,17 @@ test "StorageEngine: delete document" {
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
     try engine.flushPendingWrites();
     // Verify it exists
-    const result1 = try engine.selectDocument("items", "id1", "test_namespace");
-    defer if (result1) |v| v.free(allocator);
+    var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
+    defer managed.deinit();
+    const result1 = managed.value;
     try testing.expect(result1 != null);
     // Delete the document
     try engine.deleteDocument("items", "id1", "test_namespace");
     try engine.flushPendingWrites();
     // Verify it's gone
-    const result2 = try engine.selectDocument("items", "id1", "test_namespace");
+    var managed_after = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
+    defer managed_after.deinit();
+    const result2 = managed_after.value;
     try testing.expect(result2 == null);
 }
 test "StorageEngine: query collection" {
@@ -210,9 +217,9 @@ test "StorageEngine: query collection" {
     try engine.insertOrReplace("users", "2", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Query for collection
-    const results = try engine.selectCollection("users", "test_namespace");
-    defer results.free(allocator);
-    try testing.expectEqual(@as(usize, 2), results.arr.len);
+    var managed = try engine.selectCollection(allocator, "users", "test_namespace");
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 2), managed.value.?.arr.len);
 }
 test "StorageEngine: multiple namespaces" {
     const allocator = testing.allocator;
@@ -238,10 +245,13 @@ test "StorageEngine: multiple namespaces" {
     try engine.insertOrReplace("items", "id1", "namespace2", &cols2);
     try engine.flushPendingWrites();
     // Get values from different namespaces
-    const result1 = try engine.selectDocument("items", "id1", "namespace1");
-    defer if (result1) |v| v.free(allocator);
-    const result2 = try engine.selectDocument("items", "id1", "namespace2");
-    defer if (result2) |v| v.free(allocator);
+    var managed1 = try engine.selectDocument(allocator, "items", "id1", "namespace1");
+    defer managed1.deinit();
+    const result1 = managed1.value;
+
+    var managed2 = try engine.selectDocument(allocator, "items", "id1", "namespace2");
+    defer managed2.deinit();
+    const result2 = managed2.value;
     try testing.expect(result1 != null);
     try testing.expect(result2 != null);
     const key_payload = try msgpack.Payload.strToPayload("val", allocator);
@@ -306,11 +316,14 @@ test "StorageEngine: automatic rollback in batch operations" {
     // Verify no transaction is active after batch completes
     try testing.expect(!engine.isTransactionActive());
     // Verify data was written
-    const result1 = try engine.selectDocument("items", "id1", "test_ns");
-    defer if (result1) |v| v.free(allocator);
+    var managed1 = try engine.selectDocument(allocator, "items", "id1", "test_ns");
+    defer managed1.deinit();
+    const result1 = managed1.value;
     try testing.expect(result1 != null);
-    const result2 = try engine.selectDocument("items", "id2", "test_ns");
-    defer if (result2) |v| v.free(allocator);
+
+    var managed2 = try engine.selectDocument(allocator, "items", "id2", "test_ns");
+    defer managed2.deinit();
+    const result2 = managed2.value;
     try testing.expect(result2 != null);
 }
 test "StorageEngine: concurrent reads" {
@@ -334,8 +347,9 @@ test "StorageEngine: concurrent reads" {
     // Perform multiple concurrent reads
     const Thread = struct {
         fn readKey(eng: *StorageEngine, alloc: std.mem.Allocator, id: []const u8) !void {
-            const result = try eng.selectDocument("items", id, "test_namespace");
-            defer if (result) |v| v.free(alloc);
+            var managed = try eng.selectDocument(alloc, "items", id, "test_namespace");
+            defer managed.deinit();
+            const result = managed.value;
             try testing.expect(result != null);
         }
     };
@@ -391,8 +405,9 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     for (0..num_keys) |i| {
         var id_buf: [32]u8 = undefined;
         const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
-        const result = try verify_engine.selectDocument("items", id, "ns");
-        defer if (result) |v| v.free(allocator);
+        var managed = try verify_engine.selectDocument(allocator, "items", id, "ns");
+        defer managed.deinit();
+        const result = managed.value;
         try testing.expect(result != null);
     }
 }

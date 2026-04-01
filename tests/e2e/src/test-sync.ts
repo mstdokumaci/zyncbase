@@ -66,9 +66,9 @@ export async function run(port: number = 3000) {
     })).sort((a, b) => a.id.localeCompare(b.id)));
 
     const expected = JSON.stringify([
-      { id: "1", title: "A's Task", tags: ["urgent", "home"] },
-      { id: "2", title: "B's Task", tags: ["work"] },
-      { id: "3", title: "Nested Task", must_be_complete: { before: beforeTs, after: newAfterTs } }
+      { id: "1", title: "A's Task", tags: ["urgent", "home"], must_be_complete: { before: null, after: null } },
+      { id: "2", title: "B's Task", tags: ["work"], must_be_complete: { before: null, after: null } },
+      { id: "3", title: "Nested Task", tags: null, must_be_complete: { before: beforeTs, after: newAfterTs } }
     ]);
 
     const tasksA = await clientA.get(namespace, ["tasks"]) as any[];

@@ -122,9 +122,9 @@ test "buffer: message deallocation after processing" {
             defer allocator.free(response);
         }
 
-        // StoreGet
+        // StoreQuery
         {
-            const message = try createGetMessage(allocator, 2, "test_ns", "/key1");
+            const message = try createQueryMessage(allocator, 2, "test_ns", "test");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -149,13 +149,15 @@ fn createTestMessage(
     return try msgpack.createStoreSetMessage(allocator, msg_id, namespace, &.{ "test", path, "val" }, value);
 }
 
-fn createGetMessage(
+fn createQueryMessage(
     allocator: std.mem.Allocator,
     msg_id: u64,
     namespace: []const u8,
-    path: []const u8,
+    table: []const u8,
 ) ![]const u8 {
-    return try msgpack.createStoreGetMessage(allocator, msg_id, namespace, &.{ "test", path });
+    var filter = msgpack.Payload.mapPayload(allocator);
+    defer filter.free(allocator);
+    return try msgpack.createStoreQueryMessage(allocator, msg_id, namespace, table, filter);
 }
 
 fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {

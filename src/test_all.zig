@@ -5,7 +5,6 @@ pub const std_options = struct {
 test {
     // Import all test files to ensure they are picked up by the build system
     _ = @import("uwebsockets_wrapper_test.zig");
-    _ = @import("subscription_manager_test.zig");
     _ = @import("hook_server_client_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("violation_tracker_test.zig");
@@ -16,19 +15,19 @@ test {
     _ = @import("config_loader_test.zig");
     _ = @import("connection_manager_test.zig");
     _ = @import("message_handler_test.zig");
-    _ = @import("subscription_manager_perf_test.zig");
     _ = @import("storage_crud_test.zig");
     _ = @import("schema_parser_test.zig");
     _ = @import("ddl_generator_test.zig");
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
+    _ = @import("query_parser_test.zig");
+    _ = @import("storage_query_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");
     _ = @import("hook_server_client_property_test.zig");
     _ = @import("config_loader_property_test.zig");
     _ = @import("checkpoint_manager_property_test.zig");
-    _ = @import("subscription_manager_property_test.zig");
     _ = @import("message_buffer_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
     _ = @import("connection_state_property_test.zig");
@@ -44,10 +43,13 @@ test {
     _ = @import("ddl_generator_property_test.zig");
     _ = @import("migration_detector_property_test.zig");
     _ = @import("migration_executor_property_test.zig");
-    _ = @import("message_handler_path_router_property_test.zig");
+    _ = @import("query_parser_property_test.zig");
+    _ = @import("storage_engine_query_property_test.zig");
+    _ = @import("subscription_engine_test.zig");
+    _ = @import("subscription_engine_perf_test.zig");
 
     // Thread-safety tests
-    _ = @import("subscription_manager_thread_safety_test.zig");
+    _ = @import("subscription_engine_thread_safety_test.zig");
 
     // Integration tests
     _ = @import("integration_wiring_test.zig");

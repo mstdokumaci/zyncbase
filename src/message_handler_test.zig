@@ -209,7 +209,9 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
 
     // Verify no DB write occurred
     try app.storage_engine.flushPendingWrites();
-    const stored = try app.storage_engine.selectDocument("items", "doc1", "test_ns");
+    var managed = try app.storage_engine.selectDocument(allocator, "items", "doc1", "test_ns");
+    defer managed.deinit();
+    const stored = managed.value;
     try testing.expect(stored == null);
 }
 
@@ -502,7 +504,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
 
     // 2. Get document and verify unflattening: Expect { "a": { "b": { "c": "value" } } }
     {
-        const msg = try buildStoreGet(allocator, 2, "deep", "id1");
+        const msg = try buildStoreQuery(allocator, 2, "deep");
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -515,13 +517,16 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         var resp_reader: std.Io.Reader = .fixed(response_copy);
         const resp_parsed = try msgpack_utils.decode(allocator, &resp_reader);
         defer resp_parsed.free(allocator);
-        const val = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.MissingValue;
+        const value = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.MissingValue;
 
-        // Verify structure: val.map["a"].map["b"].map["c"] == "value"
-        const a = msgpack_helpers.getMapValue(val, "a") orelse return error.ValueMismatch;
-        const b = msgpack_helpers.getMapValue(a, "b") orelse return error.ValueMismatch;
-        const c = msgpack_helpers.getMapValue(b, "c") orelse return error.ValueMismatch;
-        try testing.expectEqualStrings("value", c.str.value());
+        // For StoreQueryResponse, the value is an array of records
+        try testing.expect(value == .arr);
+        try testing.expectEqual(@as(usize, 1), value.arr.len);
+        const doc = value.arr[0];
+
+        // Verify structure: doc.map["a__b__c"] == "value" (stay flat architecture)
+        const abc = msgpack_helpers.getMapValue(doc, "a__b__c") orelse return error.ValueMismatch;
+        try testing.expectEqualStrings("value", abc.str.value());
     }
 }
 
@@ -570,19 +575,19 @@ fn buildStoreSetWithFieldPath(
     return buf.toOwnedSlice(allocator);
 }
 
-fn buildStoreGet(allocator: std.mem.Allocator, id: u64, table: []const u8, doc_id: []const u8) ![]u8 {
+fn buildStoreQuery(allocator: std.mem.Allocator, id: u64, table: []const u8) ![]u8 {
     var buf: std.ArrayList(u8) = .{};
-    try buf.append(allocator, 0x84); // fixmap(4)
+    try buf.append(allocator, 0x85); // fixmap(5)
     try msgpack_helpers.writeString(allocator, &buf, "type");
-    try msgpack_helpers.writeString(allocator, &buf, "StoreGet");
+    try msgpack_helpers.writeString(allocator, &buf, "StoreQuery");
     try msgpack_helpers.writeString(allocator, &buf, "id");
     try buf.append(allocator, 0xcf);
     for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
     try msgpack_helpers.writeString(allocator, &buf, "namespace");
     try msgpack_helpers.writeString(allocator, &buf, "default");
-    try msgpack_helpers.writeString(allocator, &buf, "path");
-    try buf.append(allocator, 0x92); // fixarray(2)
+    try msgpack_helpers.writeString(allocator, &buf, "collection");
     try msgpack_helpers.writeString(allocator, &buf, table);
-    try msgpack_helpers.writeString(allocator, &buf, doc_id);
+    try msgpack_helpers.writeString(allocator, &buf, "filter");
+    try buf.append(allocator, 0x80); // empty map {}
     return buf.toOwnedSlice(allocator);
 }
