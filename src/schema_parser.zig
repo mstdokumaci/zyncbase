@@ -50,6 +50,7 @@ pub const Table = struct {
     pub fn clone(self: Table, allocator: Allocator) !Table {
         const cloned_fields = try allocator.alloc(Field, self.fields.len);
         errdefer allocator.free(cloned_fields);
+
         for (self.fields, 0..) |f, i| {
             cloned_fields[i] = try f.clone(allocator);
         }
@@ -60,9 +61,61 @@ pub const Table = struct {
     }
 };
 
+pub const TableMetadata = struct {
+    table: *const Table,
+    field_map: std.StringHashMap(Field),
+
+    pub fn init(allocator: Allocator, table: *const Table) !TableMetadata {
+        var field_map = std.StringHashMap(Field).init(allocator);
+        for (table.fields) |f| {
+            try field_map.put(f.name, f);
+        }
+        return .{
+            .table = table,
+            .field_map = field_map,
+        };
+    }
+
+    pub fn deinit(self: *TableMetadata) void {
+        self.field_map.deinit();
+    }
+
+    pub fn getField(self: *const TableMetadata, name: []const u8) ?Field {
+        return self.field_map.get(name);
+    }
+};
+
 pub const Schema = struct {
     version: []const u8, // "MAJOR.MINOR.PATCH"
     tables: []Table,
+};
+
+pub const SchemaMetadata = struct {
+    schema: *const Schema,
+    table_metadata: std.StringHashMap(TableMetadata),
+
+    pub fn init(allocator: Allocator, schema: *const Schema) !SchemaMetadata {
+        var table_metadata = std.StringHashMap(TableMetadata).init(allocator);
+        for (schema.tables) |*t| {
+            try table_metadata.put(t.name, try TableMetadata.init(allocator, t));
+        }
+        return .{
+            .schema = schema,
+            .table_metadata = table_metadata,
+        };
+    }
+
+    pub fn deinit(self: *SchemaMetadata) void {
+        var it = self.table_metadata.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.table_metadata.deinit();
+    }
+
+    pub fn getTable(self: *const SchemaMetadata, name: []const u8) ?TableMetadata {
+        return self.table_metadata.get(name);
+    }
 };
 
 // ─── SchemaParser ────────────────────────────────────────────────────────────
@@ -101,7 +154,10 @@ pub const SchemaParser = struct {
 
         var store_iter = store_val.object.iterator();
         while (store_iter.next()) |table_entry| {
-            const table_name = try self.allocator.dupe(u8, table_entry.key_ptr.*);
+            const table_name_raw = table_entry.key_ptr.*;
+            if (table_name_raw.len == 0 or std.mem.containsAtLeast(u8, table_name_raw, 1, "__")) return error.InvalidTableName;
+
+            const table_name = try self.allocator.dupe(u8, table_name_raw);
             errdefer self.allocator.free(table_name);
 
             const table_def = table_entry.value_ptr.*;
@@ -158,9 +214,10 @@ pub const SchemaParser = struct {
             }
         }
 
+        const tables_slice = try tables.toOwnedSlice(self.allocator);
         return Schema{
             .version = version,
-            .tables = try tables.toOwnedSlice(self.allocator),
+            .tables = tables_slice,
         };
     }
 
@@ -195,9 +252,8 @@ pub const SchemaParser = struct {
             errdefer self.allocator.free(full_name);
 
             if (std.mem.eql(u8, type_str, "object")) {
-                if (field_def.object.get("fields")) |nested_fields| {
-                    try self.parseFields(nested_fields, fields, required_set, full_name);
-                }
+                const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;
+                try self.parseFields(nested_fields, fields, required_set, full_name);
                 self.allocator.free(full_name); // prefix is no longer needed after recursion
             } else {
                 // Leaf field

@@ -1,6 +1,7 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
+const schema_parser = @import("schema_parser.zig");
 const testing = std.testing;
 
 test "basic query filter parsing" {
@@ -27,7 +28,20 @@ test "basic query filter parsing" {
     try root.mapPut("conditions", .{ .arr = conds_inner });
     try root.mapPut("limit", msgpack.Payload.uintToPayload(50));
 
-    const filter = try query_parser.parseQueryFilter(allocator, root);
+    const fields = try allocator.alloc(schema_parser.Field, 2);
+    defer allocator.free(fields);
+    fields[0] = .{ .name = "age", .sql_type = .integer, .required = true, .indexed = true, .references = null, .on_delete = null };
+    fields[1] = .{ .name = "status", .sql_type = .text, .required = true, .indexed = true, .references = null, .on_delete = null };
+    const table = schema_parser.Table{ .name = "users", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const filter = try query_parser.parseQueryFilter(allocator, &metadata, "users", root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
@@ -65,7 +79,19 @@ test "query with orConditions" {
 
     try root.mapPut("orConditions", .{ .arr = or_conds_inner });
 
-    const filter = try query_parser.parseQueryFilter(allocator, root);
+    const fields = try allocator.alloc(schema_parser.Field, 1);
+    defer allocator.free(fields);
+    fields[0] = .{ .name = "role", .sql_type = .text, .required = true, .indexed = true, .references = null, .on_delete = null };
+    const table = schema_parser.Table{ .name = "users", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const filter = try query_parser.parseQueryFilter(allocator, &metadata, "users", root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.or_conditions != null);
@@ -92,7 +118,20 @@ test "query with orderBy and after" {
     after_inner[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
     try root.mapPut("after", .{ .arr = after_inner });
 
-    const filter = try query_parser.parseQueryFilter(allocator, root);
+    const fields = try allocator.alloc(schema_parser.Field, 2);
+    defer allocator.free(fields);
+    fields[0] = .{ .name = "created_at", .sql_type = .integer, .required = true, .indexed = true, .references = null, .on_delete = null };
+    fields[1] = .{ .name = "val", .sql_type = .text, .required = true, .indexed = true, .references = null, .on_delete = null };
+    const table = schema_parser.Table{ .name = "items", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const filter = try query_parser.parseQueryFilter(allocator, &metadata, "items", root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.order_by != null);
@@ -116,7 +155,19 @@ test "isNull condition (no value tuple)" {
 
     try root.mapPut("conditions", .{ .arr = conds_inner });
 
-    const filter = try query_parser.parseQueryFilter(allocator, root);
+    const fields = try allocator.alloc(schema_parser.Field, 1);
+    defer allocator.free(fields);
+    fields[0] = .{ .name = "deleted_at", .sql_type = .integer, .required = false, .indexed = true, .references = null, .on_delete = null };
+    const table = schema_parser.Table{ .name = "items", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const filter = try query_parser.parseQueryFilter(allocator, &metadata, "items", root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.conditions.?.len);
@@ -124,24 +175,36 @@ test "isNull condition (no value tuple)" {
     try testing.expect(filter.conditions.?[0].value == null);
 }
 
-test "invalid field name (contains __)" {
+test "unknown field name (including flattened paths)" {
     const allocator = testing.allocator;
 
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
 
-    // conditions: [["address__city", 0, "NYC"]] -> Invalid because __ is forbidden from client (ADR-019)
+    // conditions: [["address__city", 0, "NYC"]] -> Unknown because it's not in the mock schema
     var conds_inner = try allocator.alloc(msgpack.Payload, 1);
-    var bad_cond = try allocator.alloc(msgpack.Payload, 3);
-    bad_cond[0] = try msgpack.Payload.strToPayload("address__city", allocator);
-    bad_cond[1] = msgpack.Payload.uintToPayload(0);
-    bad_cond[2] = try msgpack.Payload.strToPayload("NYC", allocator);
-    conds_inner[0] = .{ .arr = bad_cond };
+    var unknown_cond = try allocator.alloc(msgpack.Payload, 3);
+    unknown_cond[0] = try msgpack.Payload.strToPayload("address__city", allocator);
+    unknown_cond[1] = msgpack.Payload.uintToPayload(0);
+    unknown_cond[2] = try msgpack.Payload.strToPayload("NYC", allocator);
+    conds_inner[0] = .{ .arr = unknown_cond };
 
     try root.mapPut("conditions", .{ .arr = conds_inner });
 
-    const result = query_parser.parseQueryFilter(allocator, root);
-    try testing.expectError(error.InvalidFieldName, result);
+    const fields = try allocator.alloc(schema_parser.Field, 1);
+    defer allocator.free(fields);
+    fields[0] = .{ .name = "address", .sql_type = .text, .required = false, .indexed = true, .references = null, .on_delete = null };
+    const table = schema_parser.Table{ .name = "items", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const result = query_parser.parseQueryFilter(allocator, &metadata, "items", root);
+    try testing.expectError(error.UnknownField, result);
 }
 
 test "malformed after field (panic regression test)" {
@@ -156,7 +219,18 @@ test "malformed after field (panic regression test)" {
     after_inner[1] = msgpack.Payload.uintToPayload(99); // Malformed: should be a string
     try root.mapPut("after", .{ .arr = after_inner });
 
-    const result = query_parser.parseQueryFilter(allocator, root);
+    const fields = try allocator.alloc(schema_parser.Field, 0);
+    defer allocator.free(fields);
+    const table = schema_parser.Table{ .name = "items", .fields = fields };
+    const tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = table;
+    const schema = schema_parser.Schema{ .version = "1.0.0", .tables = tables };
+
+    var metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+    defer metadata.deinit();
+
+    const result = query_parser.parseQueryFilter(allocator, &metadata, "items", root);
     // This should return an error instead of panicking
     try testing.expectError(error.InvalidMessageFormat, result);
 }

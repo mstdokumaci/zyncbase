@@ -149,6 +149,7 @@ pub const StorageEngine = struct {
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
+    schema_metadata: schema_parser.SchemaMetadata,
     metadata_cache: *metadata_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
@@ -234,6 +235,9 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
+        const schema_metadata = try schema_parser.SchemaMetadata.init(allocator, schema);
+        errdefer @constCast(&schema_metadata).deinit();
+
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
@@ -248,17 +252,18 @@ pub const StorageEngine = struct {
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
+            .write_seq = std.atomic.Value(u64).init(0),
+            .schema = schema,
+            .schema_metadata = schema_metadata,
+            .metadata_cache = metadata_cache,
+            .flush_cond = .{},
+            .write_mutex = .{},
+            .pending_writes_count = std.atomic.Value(usize).init(0),
             .manual_transaction_active = std.atomic.Value(bool).init(false),
             .migration_active = std.atomic.Value(bool).init(false),
-            .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
-            .write_mutex = .{},
             .write_cond = .{},
-            .flush_cond = .{},
             .write_thread_ready = std.atomic.Value(bool).init(false),
-            .schema = schema,
-            .metadata_cache = metadata_cache,
-            .write_seq = std.atomic.Value(u64).init(0),
         };
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
@@ -289,6 +294,7 @@ pub const StorageEngine = struct {
 
     pub fn deinit(self: *StorageEngine) void {
         const gpa = self.allocator; // Assuming allocator is the general purpose allocator
+        self.schema_metadata.deinit();
 
         // 1. Signal shutdown to the thread
         self.shutdown_requested.store(true, .release);
@@ -587,11 +593,8 @@ pub const StorageEngine = struct {
     // ─── Schema validation helpers ────────────────────────────────────────────
 
     /// Find a table in the loaded schema by name. Returns null if not found.
-    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.Table {
-        for (self.schema.tables) |t| {
-            if (std.mem.eql(u8, t.name, table_name)) return t;
-        }
-        return null;
+    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.TableMetadata {
+        return self.schema_metadata.getTable(table_name);
     }
 
     /// Validate that a table exists
@@ -602,29 +605,19 @@ pub const StorageEngine = struct {
     /// Validate that a field exists in a table
     fn validateField(self: *const StorageEngine, table_name: []const u8, field_name: []const u8) !void {
         const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
-        for (table.fields) |f| {
-            if (std.mem.eql(u8, f.name, field_name)) return;
-        }
-        return StorageError.UnknownField;
+        if (table.getField(field_name) == null) return StorageError.UnknownField;
     }
 
     /// Validate columns for insertOrReplace: check table exists, each column exists,
     /// and required (NOT NULL) columns are not nil.
     fn validateColumns(self: *const StorageEngine, table_name: []const u8, columns: []const ColumnValue) !void {
-        const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
+        const table_metadata = self.findTable(table_name) orelse return StorageError.UnknownTable;
         for (columns) |col| {
-            var found = false;
-            for (table.fields) |f| {
-                if (std.mem.eql(u8, f.name, col.name)) {
-                    found = true;
-                    if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
-                    if (col.value != .nil) {
-                        try validateValueType(f.sql_type, col.value);
-                    }
-                    break;
-                }
+            const f = table_metadata.getField(col.name) orelse return StorageError.UnknownField;
+            if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
+            if (col.value != .nil) {
+                try validateValueType(f.sql_type, col.value);
             }
-            if (!found) return StorageError.UnknownField;
         }
     }
 
@@ -676,7 +669,7 @@ pub const StorageEngine = struct {
         try self.validateColumns(table, columns);
 
         // Look up table schema to determine which columns are array fields
-        const table_schema = self.findTable(table).?; // validateColumns already confirmed table exists
+        const table_metadata = self.findTable(table).?; // validateColumns already confirmed table exists
 
         // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, ..., created_at, updated_at)
         // VALUES (?, ?, ..., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
@@ -695,7 +688,7 @@ pub const StorageEngine = struct {
         for (columns) |col| {
             // Find the field schema to check if it's an array type
             var is_array = false;
-            for (table_schema.fields) |f| {
+            for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, col.name)) {
                     is_array = f.sql_type == .array;
                     break;
@@ -738,7 +731,7 @@ pub const StorageEngine = struct {
         for (columns, 0..) |col, i| {
             // Find the field schema to check its type
             var field_type: schema_parser.FieldType = .text;
-            for (table_schema.fields) |f| {
+            for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, col.name)) {
                     field_type = f.sql_type;
                     break;
@@ -785,9 +778,9 @@ pub const StorageEngine = struct {
         try self.validateField(table, field);
 
         // Look up the field's sql_type to determine if it's an array field and validate type
-        const table_schema = self.findTable(table).?; // validateField already confirmed table exists
+        const table_metadata = self.findTable(table).?; // validateField already confirmed table exists
         var field_sql_type: schema_parser.FieldType = .text;
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, field)) {
                 field_sql_type = f.sql_type;
                 if (value != .nil) {
@@ -874,11 +867,11 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Build explicit column list so array fields can be wrapped with json()
-        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
+        const table_metadata = self.findTable(table).?; // validateTable already confirmed it exists
         var sql_buf: std.ArrayList(u8) = .empty;
         defer sql_buf.deinit(allocator);
         try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (f.sql_type == .array) {
                 try sql_buf.appendSlice(allocator, ", json(");
                 try sql_buf.appendSlice(allocator, f.name);
@@ -897,7 +890,7 @@ pub const StorageEngine = struct {
         // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try execSelectDocument(allocator, &node.conn, sql, id, namespace, table_schema);
+        const payload = try execSelectDocument(allocator, &node.conn, sql, id, namespace, table_metadata);
         if (payload) |p| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -927,9 +920,9 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Resolve field schema to determine if it's an array field
-        const table_schema = self.findTable(table).?;
+        const table_metadata = self.findTable(table).?;
         var field_ctx: ?schema_parser.Field = null;
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, field)) {
                 field_ctx = f;
                 break;
@@ -962,11 +955,11 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Build explicit column list so array fields can be wrapped with json()
-        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
+        const table_metadata = self.findTable(table).?; // validateTable already confirmed it exists
         var sql_buf: std.ArrayList(u8) = .empty;
         defer sql_buf.deinit(allocator);
         try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (f.sql_type == .array) {
                 try sql_buf.appendSlice(allocator, ", json(");
                 try sql_buf.appendSlice(allocator, f.name);
@@ -982,7 +975,7 @@ pub const StorageEngine = struct {
         const sql = try sql_buf.toOwnedSlice(allocator);
         defer allocator.free(sql);
 
-        const payload = try execSelectCollection(allocator, &node.conn, sql, namespace, table_schema);
+        const payload = try execSelectCollection(allocator, &node.conn, sql, namespace, table_metadata.table.*);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -1002,7 +995,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_schema = self.findTable(table).?;
+        const table_metadata = self.findTable(table).?;
 
         var sql_buf: std.ArrayList(u8) = .empty;
         defer sql_buf.deinit(allocator);
@@ -1020,7 +1013,7 @@ pub const StorageEngine = struct {
 
         // 1. SELECT clause
         try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             try sql_buf.appendSlice(allocator, ", ");
             if (f.sql_type == .array) {
                 try sql_buf.appendSlice(allocator, "json(");
@@ -1077,8 +1070,7 @@ pub const StorageEngine = struct {
                 const is_desc = if (filter.order_by) |o| o.desc else false;
                 const op = if (is_desc) "<" else ">";
 
-                const sql_field = try translateFieldName(allocator, sort_field);
-                defer allocator.free(sql_field);
+                const sql_field = sort_field;
 
                 // SQLite row-value comparison: (sort_field, id) > (?, ?)
                 try sql_buf.appendSlice(allocator, "(");
@@ -1089,7 +1081,7 @@ pub const StorageEngine = struct {
 
                 // Find sort field type for correct binding
                 var sort_ft: schema_parser.FieldType = .text;
-                for (table_schema.fields) |f| {
+                for (table_metadata.table.fields) |f| {
                     if (std.mem.eql(u8, f.name, sql_field)) {
                         sort_ft = f.sql_type;
                         break;
@@ -1110,8 +1102,7 @@ pub const StorageEngine = struct {
         // 3. ORDER BY
         try sql_buf.appendSlice(allocator, " ORDER BY ");
         if (filter.order_by) |o| {
-            const sql_field = try translateFieldName(allocator, o.field);
-            defer allocator.free(sql_field);
+            const sql_field = o.field;
             try sql_buf.appendSlice(allocator, sql_field);
             try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
             try sql_buf.appendSlice(allocator, ", id ");
@@ -1128,18 +1119,10 @@ pub const StorageEngine = struct {
             try sql_buf.appendSlice(allocator, l_str);
         }
 
-        const payload = try execQuery(allocator, &node.conn, sql_buf.items, values.items, table_schema);
+        const payload = try execQuery(allocator, &node.conn, sql_buf.items, values.items, table_metadata.table.*);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
-    fn translateFieldName(allocator: Allocator, field: []const u8) ![]u8 {
-        if (std.mem.eql(u8, field, "id") or std.mem.eql(u8, field, "namespace_id") or
-            std.mem.eql(u8, field, "created_at") or std.mem.eql(u8, field, "updated_at"))
-        {
-            return try allocator.dupe(u8, field);
-        }
-        return try std.mem.replaceOwned(u8, allocator, field, ".", "__");
-    }
 
     fn appendConditionSql(
         self: *StorageEngine,
@@ -1149,13 +1132,12 @@ pub const StorageEngine = struct {
         table: []const u8,
         cond: query_parser.Condition,
     ) !void {
-        const sql_field = try translateFieldName(allocator, cond.field);
-        defer allocator.free(sql_field);
+        const sql_field = cond.field;
 
         // Find field type for value binding
-        const table_schema = self.findTable(table).?;
+        const table_metadata = self.findTable(table).?;
         var ft: schema_parser.FieldType = .text;
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, sql_field)) {
                 ft = f.sql_type;
                 break;
@@ -1404,7 +1386,7 @@ pub const StorageEngine = struct {
         sql: []const u8,
         id: []const u8,
         namespace: []const u8,
-        table_schema: schema_parser.Table,
+        table_metadata: schema_parser.TableMetadata,
     ) !?msgpack.Payload {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
@@ -1428,7 +1410,7 @@ pub const StorageEngine = struct {
 
         var i: c_int = 0;
         while (i < col_count) : (i += 1) {
-            const ctx = resolveColumnContext(stmt, i, table_schema);
+            const ctx = resolveColumnContext(stmt, i, table_metadata.table.*);
             const val = try readColumnValue(allocator, stmt, i, ctx.field);
             try map.mapPut(ctx.name, val);
         }

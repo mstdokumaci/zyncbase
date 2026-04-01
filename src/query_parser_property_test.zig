@@ -1,6 +1,7 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
+const schema_parser = @import("schema_parser.zig");
 const testing = std.testing;
 
 test "property: random valid query filters" {
@@ -17,7 +18,7 @@ test "property: random valid query filters" {
             const num_conds = random.intRangeAtMost(usize, 0, 10);
             const conds_arr = try allocator.alloc(msgpack.Payload, num_conds);
             for (conds_arr) |*c| {
-                c.* = try generateRandomCondition(allocator, random, false);
+                c.* = try generateRandomCondition(allocator, random, false, "field");
             }
             try root.mapPut("conditions", .{ .arr = conds_arr });
         }
@@ -26,7 +27,7 @@ test "property: random valid query filters" {
             const num_or_conds = random.intRangeAtMost(usize, 0, 5);
             const or_conds_arr = try allocator.alloc(msgpack.Payload, num_or_conds);
             for (or_conds_arr) |*c| {
-                c.* = try generateRandomCondition(allocator, random, false);
+                c.* = try generateRandomCondition(allocator, random, false, "field");
             }
             try root.mapPut("orConditions", .{ .arr = or_conds_arr });
         }
@@ -38,16 +39,22 @@ test "property: random valid query filters" {
             try root.mapPut("orderBy", .{ .arr = order_arr });
         }
 
-        if (random.boolean()) {
-            try root.mapPut("limit", msgpack.Payload.uintToPayload(random.uintAtMost(u32, 1000)));
-        }
+        const fields = [_]schema_parser.Field{
+            .{ .name = "field", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        };
+        const table = schema_parser.Table{ .name = "items", .fields = @constCast(fields[0..]) };
+        const tables = [_]schema_parser.Table{table};
+        const schema = schema_parser.Schema{ .version = "1.0.0", .tables = @constCast(tables[0..]) };
 
-        const filter = try query_parser.parseQueryFilter(allocator, root);
+        var schema_metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+        defer schema_metadata.deinit();
+
+        const filter = try query_parser.parseQueryFilter(allocator, &schema_metadata, "items", root);
         filter.deinit(allocator);
     }
 }
 
-test "property: reject forbidden field names" {
+test "property: reject unknown field names" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(1);
     const random = prng.random();
@@ -56,17 +63,26 @@ test "property: reject forbidden field names" {
         var root = msgpack.Payload.mapPayload(allocator);
         defer root.free(allocator);
 
-        var conds_arr = try allocator.alloc(msgpack.Payload, 1);
-        conds_arr[0] = try generateRandomCondition(allocator, random, true);
+        // Add a condition with a name not in schema
+        const conds_arr = try allocator.alloc(msgpack.Payload, 1);
+        conds_arr[0] = try generateRandomCondition(allocator, random, true, "unknown_field");
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
-        const result = query_parser.parseQueryFilter(allocator, root);
-        try testing.expectError(error.InvalidFieldName, result);
+        const fields = [_]schema_parser.Field{};
+        const table = schema_parser.Table{ .name = "items", .fields = @constCast(fields[0..]) };
+        const tables = [_]schema_parser.Table{table};
+        const schema = schema_parser.Schema{ .version = "1.0.0", .tables = @constCast(tables[0..]) };
+
+        var schema_metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
+        defer schema_metadata.deinit();
+
+        const result = query_parser.parseQueryFilter(allocator, &schema_metadata, "items", root);
+        try testing.expectError(error.UnknownField, result);
     }
 }
 
-fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_bad_field: bool) !msgpack.Payload {
-    const field = if (force_bad_field) "bad__field" else "good_field";
+fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_name: []const u8) !msgpack.Payload {
+    const field = if (force_unknown_field) "another_field" else field_name;
     const op_code = random.intRangeAtMost(u8, 0, 12);
 
     // isNull (11) and isNotNull (12) are special (2 elements)

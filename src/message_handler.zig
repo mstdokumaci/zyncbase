@@ -16,10 +16,6 @@ const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
 const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
-// ParsedPath and parsePath have been removed as part of Phase 5 cleanup.
-// All reads now use StoreQuery and StoreSubscribe with QueryFilter AST.
-// Writes (StoreSet, StoreRemove) now use direct segment parsing.
-
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
@@ -341,72 +337,44 @@ pub const MessageHandler = struct {
         const table = segments[0];
         const doc_id = segments[1];
 
-        // Validate array fields before any write to prevent partial writes.
-        if (segments.len == 2) {
-            // Find the table in the schema
-            var schema_table: ?@import("schema_parser.zig").Table = null;
-            for (self.storage_engine.schema.tables) |t| {
-                if (std.mem.eql(u8, t.name, table)) {
-                    schema_table = t;
-                    break;
-                }
-            }
+        // Determine table metadata for validation
+        const tbl_md = self.storage_engine.schema_metadata.getTable(table) orelse {
+            return try buildErrorResponse(arena_allocator, msg_id, "COLLECTION_NOT_FOUND");
+        };
 
-            if (schema_table) |tbl| {
-                // Only validate if value is a map (non-map values will be rejected later)
-                if (value == .map) {
-                    // Iterate the value map and validate array fields
-                    var val_it = value.map.iterator();
-                    while (val_it.next()) |entry| {
-                        if (entry.key_ptr.* != .str) continue;
-                        const field_name = entry.key_ptr.*.str.value();
-                        for (tbl.fields) |field| {
-                            if (std.mem.eql(u8, field.name, field_name)) {
-                                if (field.sql_type == .array) {
-                                    msgpack.ensureLiteralArray(entry.value_ptr.*) catch {
-                                        return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
-                                    };
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Find the table and field in the schema
-            for (self.storage_engine.schema.tables) |t| {
-                if (std.mem.eql(u8, t.name, table)) {
-                    // Determine the effective field name (flattened if multiple)
-                    const resolved = try resolveFieldName(self.allocator, segments[2..]);
-                    defer if (resolved.allocated) self.allocator.free(resolved.name);
-                    const effective_field = resolved.name;
-
-                    for (t.fields) |fld| {
-                        if (std.mem.eql(u8, fld.name, effective_field)) {
-                            if (fld.sql_type == .array) {
-                                msgpack.ensureLiteralArray(value) catch {
-                                    return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
-                                };
-                            }
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-        if (segments.len == 2) {
+        const is_full_doc = (segments.len == 2);
+        if (is_full_doc) {
             if (value != .map) return error.InvalidPayload;
-
-            // Start processing writes
-            // Value is expected to be a flat map (flattened by SDK)
-            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
-            defer columns.deinit(self.allocator);
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
+                if (entry.key_ptr.* != .str) continue;
+                const field_name = entry.key_ptr.*.str.value();
+
+                // Validate field exists and check type-specific constraints (like arrays)
+                if (tbl_md.getField(field_name)) |field| {
+                    if (field.sql_type == .array) {
+                        msgpack.ensureLiteralArray(entry.value_ptr.*) catch {
+                            return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
+                        };
+                    }
+                } else {
+                    // Reject unknown fields to prevent pollution, except for built-ins
+                    if (!std.mem.eql(u8, field_name, "id") and
+                        !std.mem.eql(u8, field_name, "namespace_id") and
+                        !std.mem.eql(u8, field_name, "created_at") and
+                        !std.mem.eql(u8, field_name, "updated_at"))
+                    {
+                        return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
+                    }
+                }
+            }
+
+            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
+            defer columns.deinit(self.allocator);
+
+            var it2 = value.map.iterator();
+            while (it2.next()) |entry| {
                 if (entry.key_ptr.* != .str) continue;
                 try columns.append(self.allocator, .{
                     .name = try self.allocator.dupe(u8, entry.key_ptr.*.str.value()),
@@ -416,17 +384,28 @@ pub const MessageHandler = struct {
 
             try self.write_coordinator.coordinateSet(arena_allocator, namespace, table, doc_id, columns.items);
 
-            // Free the column names allocated
             for (columns.items) |col| {
                 self.allocator.free(col.name);
             }
         } else {
-            const table_name = segments[0];
-            const document_id = segments[1];
+            // Partial update / deep path
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            const col = [_]storage_mod.ColumnValue{.{ .name = resolved.name, .value = value }};
-            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table_name, document_id, &col);
+            const effective_field = resolved.name;
+
+            // Validate against schema
+            if (tbl_md.getField(effective_field)) |fld| {
+                if (fld.sql_type == .array) {
+                    msgpack.ensureLiteralArray(value) catch {
+                        return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
+                    };
+                }
+            } else {
+                return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
+            }
+
+            const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
+            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table, doc_id, &col);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -573,13 +552,12 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        if (payload != .map) return error.InvalidPayload;
         const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
         const sub_id_p = self.getPayloadFromMap(payload.map, "subscription_id") orelse return error.MissingSubscriptionId;
         const sub_id: u64 = if (sub_id_p == .uint) sub_id_p.uint else if (sub_id_p == .int) @intCast(sub_id_p.int) else return error.InvalidSubscriptionId;
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, payload);
+        const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
         try conn.subscription_ids.append(conn.allocator, sub_id);
@@ -638,7 +616,7 @@ pub const MessageHandler = struct {
         const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, payload);
+        const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
 
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();

@@ -48,7 +48,7 @@ pub const RowChange = struct {
 };
 
 pub const SubscriptionEngine = struct {
-    allocator: Allocator,
+    allocator: Allocator align(16),
     /// Canonical filter string -> GroupId
     groups_by_filter: std.StringHashMapUnmanaged(u64) = .empty,
     /// group_id -> SubscriptionGroup
@@ -317,16 +317,7 @@ pub const SubscriptionEngine = struct {
     }
 
     fn evaluateCondition(cond: Condition, row: Payload) !bool {
-        // Dot-separated fields (a.b) must be translated to double-underscore (a__b) to match flat stored rows
-        var field_buf: [1024]u8 = undefined;
-        const dot_count = std.mem.count(u8, cond.field, ".");
-        const new_len = cond.field.len + dot_count;
-        if (new_len > field_buf.len) return error.InvalidFieldName;
-
-        _ = std.mem.replace(u8, cond.field, ".", "__", field_buf[0..new_len]);
-        const translated_field = field_buf[0..new_len];
-
-        const val = (try row.mapGet(translated_field)) orelse {
+        const val = (try row.mapGet(cond.field)) orelse {
             // Check for potential nested field that was not flattened in current row
             // (Only happens for partially updated rows during event prop)
             return cond.op == .isNull;

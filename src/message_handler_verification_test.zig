@@ -548,7 +548,7 @@ test "Verification: StoreSubscribe message processing" {
     const results_p = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
     try testing.expect(results_p == .arr);
     try testing.expectEqual(@as(usize, 1), results_p.arr.len);
-    
+
     const doc = results_p.arr[0];
     const got_val = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
     try testing.expectEqualStrings("stored_value", got_val.str.value());

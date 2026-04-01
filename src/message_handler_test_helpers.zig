@@ -119,14 +119,26 @@ pub const AppTestContext = struct {
     }
 
     pub fn deinit(self: *AppTestContext) void {
-        self.manager.deinit();
-        self.handler.deinit();
+        // 1. Stop background activity (write worker) first
+        self.storage_engine.deinit();
+
+        // 2. Shut down the write coordinator (depends on storage engine being stopped)
         self.write_coordinator.deinit();
+
+        // 3. Close all connections and tear down sessions.
+        //    This MUST happen before subscription_engine/handler deinit, because
+        //    manager.deinit() -> teardownSession() -> subscription_engine.unsubscribe()
+        //    requires both the handler and subscription_engine to still be alive.
+        self.manager.deinit();
+
+        // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.allocator.destroy(self.subscription_engine);
-        self.storage_engine.deinit();
+        self.handler.deinit();
+
+        // 5. Cleanup remaining infrastructure
         schema_helpers.freeTestSchema(self.allocator, self.schema);
-        self.test_context.deinit(); // Deletes artifacts directory
+        self.test_context.deinit();
         self.violation_tracker.deinit();
         self.allocator.destroy(self.violation_tracker);
         self.memory_strategy.deinit();

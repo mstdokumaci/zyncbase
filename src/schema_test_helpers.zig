@@ -25,18 +25,12 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
                 .on_delete = null,
             };
         }
-        tables[i] = .{
-            .name = try allocator.dupe(u8, td.name),
-            .fields = fields,
-        };
+        tables[i] = .{ .name = try allocator.dupe(u8, td.name), .fields = fields };
     }
 
     const schema = try allocator.create(schema_parser.Schema);
     errdefer allocator.destroy(schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
+    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
     return schema;
 }
 

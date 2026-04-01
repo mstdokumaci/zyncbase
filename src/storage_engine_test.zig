@@ -40,10 +40,7 @@ fn setupEngineWithOptions(allocator: std.mem.Allocator, memory_strategy: *Memory
     const tables = try allocator.alloc(schema_parser.Table, 1);
     tables[0] = try table.clone(allocator);
     const schema = try allocator.create(schema_parser.Schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
+    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 
     const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, options);
 
@@ -66,8 +63,10 @@ test "StorageEngine: init and deinit" {
     const test_dir = context.test_dir;
 
     var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields }};
-    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables };
+    var dummy_tables = try allocator.alloc(schema_parser.Table, 1);
+    defer allocator.free(dummy_tables);
+    dummy_tables[0] = .{ .name = "_dummy", .fields = &dummy_fields };
+    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = dummy_tables };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();

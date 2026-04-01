@@ -21,6 +21,11 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
     };
 }
 
+fn initTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []schema_parser.Field) !schema_parser.Table {
+    _ = allocator;
+    return schema_parser.Table{ .name = name, .fields = fields };
+}
+
 const EngineTestContext = struct {
     engine: *StorageEngine,
     schema: *schema_parser.Schema,
@@ -37,10 +42,7 @@ fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, t
     const tables = try allocator.alloc(schema_parser.Table, 1);
     tables[0] = try table.clone(allocator);
     const schema = try allocator.create(schema_parser.Schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
+    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 
     const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
 
@@ -63,7 +65,7 @@ test "StorageEngine: selectQuery basic equality" {
         makeField("name", .text, false),
         makeField("age", .integer, false),
     };
-    const table = schema_parser.Table{ .name = "users", .fields = &fields_arr };
+    const table = try initTestTable(allocator, "users", &fields_arr);
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -157,7 +159,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var fields_arr = [_]schema_parser.Field{
         makeField("score", .integer, false),
     };
-    const table = schema_parser.Table{ .name = "scores", .fields = &fields_arr };
+    const table = try initTestTable(allocator, "scores", &fields_arr);
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();

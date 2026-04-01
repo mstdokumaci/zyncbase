@@ -1,5 +1,6 @@
 const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
+const schema_mod = @import("schema_parser.zig");
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -123,14 +124,29 @@ pub const ParserError = error{
     InvalidOperatorCode,
     InvalidSortFormat,
     InvalidFieldName,
+    InvalidTableName,
     MissingRequiredFields,
+    UnknownTable,
+    UnknownField,
     OutOfMemory,
 };
 
 /// Parse a MessagePack Payload (expected to be a map) into a QueryFilter AST.
+/// Validates all field names against the provided schema for the target collection.
 /// The caller is responsible for calling `filter.deinit(allocator)` on success.
-pub fn parseQueryFilter(allocator: std.mem.Allocator, payload: msgpack.Payload) ParserError!QueryFilter {
+pub fn parseQueryFilter(
+    allocator: std.mem.Allocator,
+    schema_metadata: *const schema_mod.SchemaMetadata,
+    collection: []const u8,
+    payload: msgpack.Payload,
+) ParserError!QueryFilter {
     if (payload != .map) return error.InvalidMessageFormat;
+
+    // ADR-019: reject __ from client
+    if (std.mem.containsAtLeast(u8, collection, 1, "__")) return error.InvalidTableName;
+
+    // Find the table metadata in schema for validation
+    const table_metadata = schema_metadata.getTable(collection) orelse return error.UnknownTable;
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
@@ -158,11 +174,11 @@ pub fn parseQueryFilter(allocator: std.mem.Allocator, payload: msgpack.Payload) 
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
-            conditions = try parseConditions(allocator, value);
+            conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
-            or_conditions = try parseConditions(allocator, value);
+            or_conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            order_by = try parseSortDescriptor(allocator, value);
+            order_by = try parseSortDescriptor(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
                 limit = @intCast(value.uint);
@@ -188,7 +204,11 @@ pub fn parseQueryFilter(allocator: std.mem.Allocator, payload: msgpack.Payload) 
     };
 }
 
-fn parseConditions(allocator: std.mem.Allocator, payload: msgpack.Payload) ParserError![]Condition {
+fn parseConditions(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_mod.TableMetadata,
+    payload: msgpack.Payload,
+) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
     const arr = payload.arr;
     const result = try allocator.alloc(Condition, arr.len);
@@ -199,13 +219,17 @@ fn parseConditions(allocator: std.mem.Allocator, payload: msgpack.Payload) Parse
     }
 
     for (arr) |item| {
-        result[count] = try parseCondition(allocator, item);
+        result[count] = try parseCondition(allocator, table_metadata, item);
         count += 1;
     }
     return result;
 }
 
-fn parseCondition(allocator: std.mem.Allocator, payload: msgpack.Payload) ParserError!Condition {
+fn parseCondition(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_mod.TableMetadata,
+    payload: msgpack.Payload,
+) ParserError!Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
     const arr = payload.arr;
     if (arr.len < 2 or arr.len > 3) return error.InvalidConditionFormat;
@@ -213,9 +237,16 @@ fn parseCondition(allocator: std.mem.Allocator, payload: msgpack.Payload) Parser
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
 
-    // Security: Forbid internal flattening sequence if injected by client (ADR-019/Query Grammar)
-    if (std.mem.containsAtLeast(u8, field, 1, "__")) {
-        return error.InvalidFieldName;
+    // Validate field name exists in the schema
+    if (table_metadata.getField(field) == null) {
+        // Check for built-in fields
+        if (!std.mem.eql(u8, field, "id") and
+            !std.mem.eql(u8, field, "namespace_id") and
+            !std.mem.eql(u8, field, "created_at") and
+            !std.mem.eql(u8, field, "updated_at"))
+        {
+            return error.UnknownField;
+        }
     }
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidOperatorCode;
@@ -238,13 +269,29 @@ fn parseCondition(allocator: std.mem.Allocator, payload: msgpack.Payload) Parser
     };
 }
 
-fn parseSortDescriptor(allocator: std.mem.Allocator, payload: msgpack.Payload) ParserError!SortDescriptor {
+fn parseSortDescriptor(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_mod.TableMetadata,
+    payload: msgpack.Payload,
+) ParserError!SortDescriptor {
     if (payload != .arr) return error.InvalidSortFormat;
     const arr = payload.arr;
     if (arr.len != 2) return error.InvalidSortFormat;
 
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
+
+    // Validate field name exists in the schema
+    if (table_metadata.getField(field) == null) {
+        // Check for built-in fields
+        if (!std.mem.eql(u8, field, "id") and
+            !std.mem.eql(u8, field, "namespace_id") and
+            !std.mem.eql(u8, field, "created_at") and
+            !std.mem.eql(u8, field, "updated_at"))
+        {
+            return error.UnknownField;
+        }
+    }
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidSortFormat;
     const desc_val = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));

@@ -316,3 +316,34 @@ test "schema_parser: no references no onDelete keeps on_delete null" {
     defer parser.deinit(schema);
     try std.testing.expect(schema.tables[0].fields[0].on_delete == null);
 }
+
+test "schema_parser: reject __ in table and field names" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    // 1. Forbidden table name
+    const json_table =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "bad__table": {
+        \\      "fields": { "val": { "type": "string" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidTableName, parser.parse(json_table));
+
+    // 2. Forbidden field name
+    const json_field =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": { "bad__field": { "type": "string" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidFieldName, parser.parse(json_field));
+}

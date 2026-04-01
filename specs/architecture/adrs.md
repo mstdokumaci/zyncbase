@@ -449,6 +449,7 @@ This principle applies to:
 - **Paths**: SDK accepts `'users.u1.name'`, wire sends `['users', 'u1', 'name']`.
 - **Query conditions**: SDK accepts `{ age: { gte: 18 } }`, wire sends `['age', 4, 18]` (positional tuple: `[field, op_code, value]`).
 - **Sort descriptors**: SDK accepts `{ created_at: 'desc' }`, wire sends `['created_at', 1]` (positional tuple: `[field, desc_flag]`).
+- **Nested Fields**: SDK accepts `'users.u1.address.city'`, wire sends `['users', 'u1', 'address__city']`.
 
 See [Query Grammar](../implementation/query-grammar.md) for the full wire encoding specification including operator codes.
 
