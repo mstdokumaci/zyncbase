@@ -1259,7 +1259,8 @@ pub const StorageEngine = struct {
             arr.deinit(allocator);
         }
 
-        const col_count: c_int = sqlite.c.sqlite3_column_count(stmt.stmt);
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+        defer allocator.free(col_contexts);
 
         while (true) {
             const rc = sqlite.c.sqlite3_step(stmt.stmt);
@@ -1269,10 +1270,8 @@ pub const StorageEngine = struct {
             var map = msgpack.Payload.mapPayload(allocator);
             errdefer map.free(allocator);
 
-            var i: c_int = 0;
-            while (i < col_count) : (i += 1) {
-                const ctx = resolveColumnContext(stmt, i, table_schema);
-                const val = try readColumnValue(allocator, stmt, i, ctx.field);
+            for (col_contexts, 0..) |ctx, i| {
+                const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
                 try map.mapPut(ctx.name, val);
             }
             try arr.append(allocator, map);
@@ -1319,6 +1318,21 @@ pub const StorageEngine = struct {
         name: []const u8,
         field: ?schema_parser.Field,
     };
+
+    fn resolveAllColumnContexts(
+        allocator: Allocator,
+        stmt: sqlite.DynamicStatement,
+        table_schema: schema_parser.Table,
+    ) ![]ColumnContext {
+        const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
+        const col_contexts = try allocator.alloc(ColumnContext, col_count);
+        errdefer allocator.free(col_contexts);
+
+        for (col_contexts, 0..) |*ctx, i| {
+            ctx.* = resolveColumnContext(stmt, @intCast(i), table_schema);
+        }
+        return col_contexts;
+    }
 
     fn resolveColumnContext(
         stmt: sqlite.DynamicStatement,
@@ -1421,14 +1435,14 @@ pub const StorageEngine = struct {
         if (rc == sqlite.c.SQLITE_DONE) return null;
         if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-        const col_count: c_int = sqlite.c.sqlite3_column_count(stmt.stmt);
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata.table.*);
+        defer allocator.free(col_contexts);
+
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
-        var i: c_int = 0;
-        while (i < col_count) : (i += 1) {
-            const ctx = resolveColumnContext(stmt, i, table_metadata.table.*);
-            const val = try readColumnValue(allocator, stmt, i, ctx.field);
+        for (col_contexts, 0..) |ctx, i| {
+            const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
             try map.mapPut(ctx.name, val);
         }
         return map;
@@ -1486,7 +1500,8 @@ pub const StorageEngine = struct {
             arr.deinit(allocator);
         }
 
-        const col_count: c_int = sqlite.c.sqlite3_column_count(stmt.stmt);
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+        defer allocator.free(col_contexts);
 
         while (true) {
             const rc = sqlite.c.sqlite3_step(stmt.stmt);
@@ -1496,10 +1511,8 @@ pub const StorageEngine = struct {
             var map = msgpack.Payload.mapPayload(allocator);
             errdefer map.free(allocator);
 
-            var i: c_int = 0;
-            while (i < col_count) : (i += 1) {
-                const ctx = resolveColumnContext(stmt, i, table_schema);
-                const val = try readColumnValue(allocator, stmt, i, ctx.field);
+            for (col_contexts, 0..) |ctx, i| {
+                const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
                 try map.mapPut(ctx.name, val);
             }
             try arr.append(allocator, map);
