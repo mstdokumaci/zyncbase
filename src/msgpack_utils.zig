@@ -100,7 +100,7 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
 }
 
 pub fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
-    var list = std.ArrayList(u8).empty;
+    var list = std.ArrayListUnmanaged(u8).empty;
     defer list.deinit(allocator);
     try encode(payload, list.writer(allocator));
     return list.toOwnedSlice(allocator);

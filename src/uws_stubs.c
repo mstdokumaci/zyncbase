@@ -134,3 +134,18 @@ int Bun__HTTPMethod__from(void* str, size_t len) {
 const char *ares_inet_ntop(int af, const void *src, char *dst, size_t size) {
     return inet_ntop(af, src, dst, (socklen_t)size);
 }
+
+// =============================================================================
+// SQLite Helpers (Bypass Zig Alignment Safety for Sentinels)
+// =============================================================================
+// These helpers allow binding text and blobs with SQLITE_TRANSIENT (-1) 
+// without passing the unaligned pointer through Zig's safety-checked system.
+#include <sqlite3.h>
+
+int zyncbase_sqlite3_bind_text_transient(sqlite3_stmt *pStmt, int i, const void *zData, int nData) {
+    return sqlite3_bind_text(pStmt, i, zData, nData, SQLITE_TRANSIENT);
+}
+
+int zyncbase_sqlite3_bind_blob_transient(sqlite3_stmt *pStmt, int i, const void *zData, int nData) {
+    return sqlite3_bind_blob(pStmt, i, zData, nData, SQLITE_TRANSIENT);
+}
