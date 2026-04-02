@@ -256,6 +256,10 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         .file = b.path("src/uws_stubs.c"),
         .flags = stubs_flags,
     });
+    step.addCSourceFile(.{
+        .file = b.path("src/storage_engine/sqlite_stubs.c"),
+        .flags = stubs_flags,
+    });
 
     step.linkLibC();
     if (target.os.tag == .macos) {
