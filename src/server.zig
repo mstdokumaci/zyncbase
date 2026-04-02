@@ -44,6 +44,8 @@ pub const ZyncBaseServer = struct {
     /// Parser used to free loaded_schema on deinit.
     schema_parser_instance: SchemaParser,
     schema_loaded: bool = false,
+    shutdown_mutex: std.Thread.Mutex = .{},
+    shutdown_performed: bool = false,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -254,6 +256,8 @@ pub const ZyncBaseServer = struct {
         self.websocket_server = websocket_server;
         self.connection_manager = connection_manager;
         self.message_handler = message_handler;
+        self.shutdown_performed = false;
+        self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
 
         return self;
@@ -280,7 +284,7 @@ pub const ZyncBaseServer = struct {
         // Start checkpoint manager background thread
         try self.checkpoint_manager.startBackgroundLoop();
 
-        // Setup signal handlers for graceful shutdown
+        // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
 
         // Start listening on configured port
@@ -288,12 +292,23 @@ pub const ZyncBaseServer = struct {
 
         std.log.info("Server started successfully", .{});
 
-        // Run event loop (blocks until shutdown)
+        // Run event loop (blocks until shutdown signal or close)
         self.websocket_server.run();
+
+        // Arrive here after the event loop exits (graceful or forced)
+        // Check if we need to perform graceful shutdown
+        try self.shutdown();
     }
 
-    /// Initiate graceful shutdown of the server
+    /// Initiate graceful shutdown of the server.
+    /// SAFE to call multiple times, but will only perform logic once.
+    /// Safe to call from main thread after start() returns.
     pub fn shutdown(self: *ZyncBaseServer) !void {
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
+        if (self.shutdown_performed) return;
+        self.shutdown_performed = true;
+
         std.log.info("Initiating graceful shutdown", .{});
 
         // Set shutdown flag
@@ -308,11 +323,6 @@ pub const ZyncBaseServer = struct {
 
         // Close all active connections
         self.connection_manager.closeAllConnections();
-
-        // Wake up the event loop to ensure it notices the closed handles
-        if (uws_c.uws_get_loop()) |loop| {
-            uws_c.us_wakeup_loop(loop);
-        }
 
         // Flush pending writes
         try self.storage_engine.flushPendingWrites();
@@ -394,13 +404,12 @@ pub const ZyncBaseServer = struct {
 };
 
 /// Signal handler for SIGTERM and SIGINT
+/// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
 fn handleSignal(sig: c_int) callconv(.c) void {
-    std.log.info("Received signal {d}, initiating shutdown", .{sig});
-
+    _ = sig;
     if (global_server) |server| {
-        server.shutdown() catch |err| {
-            std.log.err("Error during shutdown: {}", .{err});
-        };
+        server.shutdown_requested.store(true, .release);
+        server.websocket_server.close();
     }
 }
 
