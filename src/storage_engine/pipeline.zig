@@ -368,19 +368,19 @@ pub fn executeInsert(
     defer allocator.free(ns_z);
 
     var bind_idx: c_int = 1;
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
     bind_idx += 1;
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
     bind_idx += 1;
 
     for (op.values) |val| {
-        reader.bindTypedValue(stmt, bind_idx, val);
+        try reader.bindTypedValue(stmt, bind_idx, val);
         bind_idx += 1;
     }
 
-    _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
+    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return error.SQLiteError;
     bind_idx += 1;
-    _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
+    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return error.SQLiteError;
     bind_idx += 1;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
@@ -401,11 +401,11 @@ pub fn executeUpdate(
     const ns_z = try allocator.dupeZ(u8, op.namespace);
     defer allocator.free(ns_z);
 
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
-    reader.bindTypedValue(stmt, 3, op.values[0]);
-    _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp);
-    _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    try reader.bindTypedValue(stmt, 3, op.values[0]);
+    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return error.SQLiteError;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;
@@ -425,8 +425,8 @@ pub fn executeDelete(
     const ns_z = try allocator.dupeZ(u8, op.namespace);
     defer allocator.free(ns_z);
 
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;

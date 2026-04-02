@@ -116,7 +116,9 @@ pub fn buildSelectQuery(
 
     // 2.. WHERE clause
     try sql_buf.appendSlice(allocator, " WHERE namespace_id = ?");
-    try values.append(allocator, TypedValue{ .text = try allocator.dupe(u8, namespace) });
+    const ns_val = try allocator.dupe(u8, namespace);
+    errdefer allocator.free(ns_val);
+    try values.append(allocator, TypedValue{ .text = ns_val });
 
     const conds = filter.conditions orelse @as([]const query_parser.Condition, &.{});
     const or_conds = filter.or_conditions orelse @as([]const query_parser.Condition, &.{});
@@ -180,8 +182,13 @@ pub fn buildSelectQuery(
             if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
             if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
 
-            try values.append(allocator, try payloadToTypedValue(allocator, sort_ft, cursor.sort_value));
-            try values.append(allocator, TypedValue{ .text = try allocator.dupe(u8, cursor.id) });
+            const sv = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+            errdefer sv.deinit(allocator);
+            try values.append(allocator, sv);
+
+            const ci = try allocator.dupe(u8, cursor.id);
+            errdefer allocator.free(ci);
+            try values.append(allocator, TypedValue{ .text = ci });
         }
 
         try sql_buf.appendSlice(allocator, ")");
@@ -267,15 +274,16 @@ pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     return out.toOwnedSlice(allocator);
 }
 
-pub fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) void {
-    switch (value) {
-        .integer => |v| _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
-        .real => |v| _ = sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-        .text => |s| _ = sqlite.c.sqlite3_bind_text(stmt.stmt, index, s.ptr, @intCast(s.len), sqlite.c.SQLITE_STATIC),
-        .boolean => |b| _ = sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-        .blob => |b| _ = sqlite.c.sqlite3_bind_blob(stmt.stmt, index, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC),
-        .nil => _ = sqlite.c.sqlite3_bind_null(stmt.stmt, index),
-    }
+pub fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) !void {
+    const rc = switch (value) {
+        .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
+        .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
+        .text => |s| sqlite.c.sqlite3_bind_text(stmt.stmt, index, s.ptr, @intCast(s.len), sqlite.c.SQLITE_STATIC),
+        .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
+        .blob => |b| sqlite.c.sqlite3_bind_blob(stmt.stmt, index, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC),
+        .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
+    };
+    if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
 }
 
 pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
@@ -363,8 +371,8 @@ pub fn resolveAllColumnContexts(
 
 pub fn appendConditionSql(
     allocator: Allocator,
-    sql_buf: *std.ArrayList(u8),
-    values: *std.ArrayList(TypedValue),
+    sql_buf: *std.ArrayListUnmanaged(u8),
+    values: *std.ArrayListUnmanaged(TypedValue),
     table_schema: schema_parser.Table,
     cond: query_parser.Condition,
 ) !void {
@@ -388,32 +396,44 @@ pub fn appendConditionSql(
         .eq => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " = ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .ne => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " != ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .gt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " > ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .lt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " < ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .gte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " >= ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .lte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " <= ?");
-            try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            const tv = try payloadToTypedValue(allocator, ft, val);
+            errdefer tv.deinit(allocator);
+            try values.append(allocator, tv);
         },
         .contains => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -458,11 +478,15 @@ pub fn appendConditionSql(
                     for (val.arr, 0..) |v, i| {
                         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                         try sql_buf.appendSlice(allocator, "?");
-                        try values.append(allocator, try payloadToTypedValue(allocator, ft, v));
+                        const tv = try payloadToTypedValue(allocator, ft, v);
+                        errdefer tv.deinit(allocator);
+                        try values.append(allocator, tv);
                     }
                 } else {
                     try sql_buf.appendSlice(allocator, "?");
-                    try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+                    const tv = try payloadToTypedValue(allocator, ft, val);
+                    errdefer tv.deinit(allocator);
+                    try values.append(allocator, tv);
                 }
             }
             try sql_buf.appendSlice(allocator, ")");
@@ -486,8 +510,8 @@ pub fn execSelectDocument(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC);
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -522,8 +546,8 @@ pub fn execSelectScalar(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC);
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -545,7 +569,7 @@ pub fn execSelectCollection(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
@@ -587,7 +611,7 @@ pub fn execQuery(
     defer stmt.deinit();
 
     for (values, 0..) |v, i| {
-        bindTypedValue(stmt, @intCast(i + 1), v);
+        try bindTypedValue(stmt, @intCast(i + 1), v);
     }
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;

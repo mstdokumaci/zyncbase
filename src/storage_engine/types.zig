@@ -78,6 +78,14 @@ pub const TypedValue = union(enum) {
     boolean: bool,
     blob: []const u8, // Owned (for arrays/complex)
     nil: void,
+    
+    pub fn deinit(self: TypedValue, allocator: Allocator) void {
+        switch (self) {
+            .text => |s| allocator.free(s),
+            .blob => |b| allocator.free(b),
+            else => {},
+        }
+    }
 };
 
 /// SQLite checkpoint modes
@@ -211,13 +219,7 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
-                for (op.values) |val| {
-                    switch (val) {
-                        .text => |s| allocator.free(s),
-                        .blob => |b| allocator.free(b),
-                        else => {},
-                    }
-                }
+                for (op.values) |val| val.deinit(allocator);
                 allocator.free(op.values);
             },
             .update => |op| {
@@ -225,13 +227,7 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
-                for (op.values) |val| {
-                    switch (val) {
-                        .text => |s| allocator.free(s),
-                        .blob => |b| allocator.free(b),
-                        else => {},
-                    }
-                }
+                for (op.values) |val| val.deinit(allocator);
                 allocator.free(op.values);
             },
             .delete => |op| {
