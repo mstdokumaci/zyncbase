@@ -8,6 +8,9 @@ const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 
 pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
+/// Safe definition of SQLITE_TRANSIENT to avoid alignment errors with TSAN on ARM.
+pub const SQLITE_TRANSIENT = @as(sqlite.c.sqlite3_destructor_type, @ptrFromInt(@as(usize, @bitCast(@as(isize, -1)))));
+
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
     /// Database connection was lost
