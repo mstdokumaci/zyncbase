@@ -92,15 +92,6 @@ pub fn createStoreSetMessage(
     return createMessage(allocator, id, "StoreSet", namespace, path, value);
 }
 
-pub fn createStoreGetMessage(
-    allocator: std.mem.Allocator,
-    id: u64,
-    namespace: []const u8,
-    path: []const []const u8,
-) ![]u8 {
-    return createMessage(allocator, id, "StoreGet", namespace, path, null);
-}
-
 pub fn writeString(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), s: []const u8) !void {
     if (s.len <= 31) {
         try buf.append(allocator, @intCast(0xa0 | s.len));
@@ -135,6 +126,70 @@ pub fn createStoreRemoveMessage(
     path: []const []const u8,
 ) ![]u8 {
     return createMessage(allocator, id, "StoreRemove", namespace, path, null);
+}
+
+pub fn createStoreQueryMessage(
+    allocator: std.mem.Allocator,
+    id: u64,
+    namespace: []const u8,
+    collection: []const u8,
+    filter: msgpack_utils.Payload,
+) ![]u8 {
+    var p = msgpack_utils.Payload.mapPayload(allocator);
+    defer p.free(allocator);
+
+    try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreQuery", allocator));
+    try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
+    try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
+    try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
+
+    // Flat filter fields
+    if (filter == .map) {
+        var it = filter.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .str) {
+                try p.mapPut(entry.key_ptr.*.str.value(), try msgpack_utils.clonePayload(entry.value_ptr.*, allocator));
+            }
+        }
+    }
+
+    var list: std.ArrayList(u8) = .{};
+    errdefer list.deinit(allocator);
+    try msgpack_utils.encode(p, list.writer(allocator));
+    return try list.toOwnedSlice(allocator);
+}
+
+pub fn createStoreSubscribeMessage(
+    allocator: std.mem.Allocator,
+    id: u64,
+    namespace: []const u8,
+    collection: []const u8,
+    filter: msgpack_utils.Payload,
+    subscription_id: u64,
+) ![]u8 {
+    var p = msgpack_utils.Payload.mapPayload(allocator);
+    defer p.free(allocator);
+
+    try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreSubscribe", allocator));
+    try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
+    try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
+    try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
+    try p.mapPut("subscription_id", msgpack_utils.Payload.uintToPayload(subscription_id));
+
+    // Flat filter fields
+    if (filter == .map) {
+        var it = filter.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* == .str) {
+                try p.mapPut(entry.key_ptr.*.str.value(), try msgpack_utils.clonePayload(entry.value_ptr.*, allocator));
+            }
+        }
+    }
+
+    var list: std.ArrayList(u8) = .{};
+    errdefer list.deinit(allocator);
+    try msgpack_utils.encode(p, list.writer(allocator));
+    return try list.toOwnedSlice(allocator);
 }
 
 pub fn createCustomMessage(

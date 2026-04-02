@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
 const schema_parser = @import("schema_parser.zig");
+const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const metadata_cache_type = lockFreeCache(msgpack.Payload);
@@ -45,12 +46,30 @@ pub const StorageError = error{
     InvalidDataDir,
     /// Path is not a directory
     NotDir,
+    /// Required condition value is missing
+    MissingConditionValue,
 };
 
 /// A column name + msgpack value pair for storage inserts/updates.
 pub const ColumnValue = struct {
     name: []const u8,
     value: msgpack.Payload,
+};
+
+/// A managed payload that might be backed by a cache handle.
+/// Caller MUST call deinit() to release any potential cache handles.
+pub const ManagedPayload = struct {
+    value: ?msgpack.Payload,
+    handle: ?metadata_cache_type.Handle = null,
+    allocator: ?Allocator = null,
+
+    pub fn deinit(self: *ManagedPayload) void {
+        if (self.handle) |*h| {
+            h.release();
+        } else if (self.allocator) |alloc| {
+            if (self.value) |*p| p.free(alloc);
+        }
+    }
 };
 
 /// A typed value for asynchronous storage binding.
@@ -130,6 +149,7 @@ pub const StorageEngine = struct {
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema: *const schema_parser.Schema,
+    schema_metadata: schema_parser.SchemaMetadata,
     metadata_cache: *metadata_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
@@ -215,6 +235,9 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
+        const schema_metadata = try schema_parser.SchemaMetadata.init(allocator, schema);
+        errdefer @constCast(&schema_metadata).deinit();
+
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
@@ -229,17 +252,18 @@ pub const StorageEngine = struct {
             .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
+            .write_seq = std.atomic.Value(u64).init(0),
+            .schema = schema,
+            .schema_metadata = schema_metadata,
+            .metadata_cache = metadata_cache,
+            .flush_cond = .{},
+            .write_mutex = .{},
+            .pending_writes_count = std.atomic.Value(usize).init(0),
             .manual_transaction_active = std.atomic.Value(bool).init(false),
             .migration_active = std.atomic.Value(bool).init(false),
-            .pending_writes_count = std.atomic.Value(usize).init(0),
             .reconnection_config = .{},
-            .write_mutex = .{},
             .write_cond = .{},
-            .flush_cond = .{},
             .write_thread_ready = std.atomic.Value(bool).init(false),
-            .schema = schema,
-            .metadata_cache = metadata_cache,
-            .write_seq = std.atomic.Value(u64).init(0),
         };
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
@@ -270,6 +294,7 @@ pub const StorageEngine = struct {
 
     pub fn deinit(self: *StorageEngine) void {
         const gpa = self.allocator; // Assuming allocator is the general purpose allocator
+        self.schema_metadata.deinit();
 
         // 1. Signal shutdown to the thread
         self.shutdown_requested.store(true, .release);
@@ -568,11 +593,8 @@ pub const StorageEngine = struct {
     // ─── Schema validation helpers ────────────────────────────────────────────
 
     /// Find a table in the loaded schema by name. Returns null if not found.
-    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.Table {
-        for (self.schema.tables) |t| {
-            if (std.mem.eql(u8, t.name, table_name)) return t;
-        }
-        return null;
+    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.TableMetadata {
+        return self.schema_metadata.getTable(table_name);
     }
 
     /// Validate that a table exists
@@ -583,29 +605,19 @@ pub const StorageEngine = struct {
     /// Validate that a field exists in a table
     fn validateField(self: *const StorageEngine, table_name: []const u8, field_name: []const u8) !void {
         const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
-        for (table.fields) |f| {
-            if (std.mem.eql(u8, f.name, field_name)) return;
-        }
-        return StorageError.UnknownField;
+        if (table.getField(field_name) == null) return StorageError.UnknownField;
     }
 
     /// Validate columns for insertOrReplace: check table exists, each column exists,
     /// and required (NOT NULL) columns are not nil.
     fn validateColumns(self: *const StorageEngine, table_name: []const u8, columns: []const ColumnValue) !void {
-        const table = self.findTable(table_name) orelse return StorageError.UnknownTable;
+        const table_metadata = self.findTable(table_name) orelse return StorageError.UnknownTable;
         for (columns) |col| {
-            var found = false;
-            for (table.fields) |f| {
-                if (std.mem.eql(u8, f.name, col.name)) {
-                    found = true;
-                    if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
-                    if (col.value != .nil) {
-                        try validateValueType(f.sql_type, col.value);
-                    }
-                    break;
-                }
+            const f = table_metadata.getField(col.name) orelse return StorageError.UnknownField;
+            if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
+            if (col.value != .nil) {
+                try validateValueType(f.sql_type, col.value);
             }
-            if (!found) return StorageError.UnknownField;
         }
     }
 
@@ -626,17 +638,17 @@ pub const StorageEngine = struct {
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
     /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
-    fn payloadToTypedValue(self: *StorageEngine, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
+    fn payloadToTypedValue(allocator: Allocator, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
         if (value == .nil) return .nil;
         return switch (ft) {
             .text => switch (value) {
-                .str => |s| TypedValue{ .text = try self.allocator.dupe(u8, s.value()) },
+                .str => |s| TypedValue{ .text = try allocator.dupe(u8, s.value()) },
                 else => StorageError.TypeMismatch,
             },
             .integer => TypedValue{ .integer = try msgpack.payloadAsInt(value) },
             .real => TypedValue{ .real = try msgpack.payloadAsFloat(value) },
             .boolean => TypedValue{ .boolean = try msgpack.payloadAsBool(value) },
-            .array => TypedValue{ .blob = try msgpack.payloadToJson(value, self.allocator) },
+            .array => TypedValue{ .blob = try msgpack.payloadToJson(value, allocator) },
         };
     }
 
@@ -657,15 +669,15 @@ pub const StorageEngine = struct {
         try self.validateColumns(table, columns);
 
         // Look up table schema to determine which columns are array fields
-        const table_schema = self.findTable(table).?; // validateColumns already confirmed table exists
+        const table_metadata = self.findTable(table).?; // validateColumns already confirmed table exists
 
         // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, ..., created_at, updated_at)
         // VALUES (?, ?, ..., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
         // Array columns use jsonb(?) instead of ? as the placeholder.
-        var sql_buf: std.ArrayList(u8) = .{};
+        var sql_buf: std.ArrayList(u8) = .empty;
         defer sql_buf.deinit(self.allocator);
 
-        try sql_buf.appendSlice(self.allocator, "INSERT OR REPLACE INTO ");
+        try sql_buf.appendSlice(self.allocator, "INSERT INTO ");
         try sql_buf.appendSlice(self.allocator, table);
         try sql_buf.appendSlice(self.allocator, " (id, namespace_id");
         for (columns) |col| {
@@ -676,7 +688,7 @@ pub const StorageEngine = struct {
         for (columns) |col| {
             // Find the field schema to check if it's an array type
             var is_array = false;
-            for (table_schema.fields) |f| {
+            for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, col.name)) {
                     is_array = f.sql_type == .array;
                     break;
@@ -688,12 +700,18 @@ pub const StorageEngine = struct {
                 try sql_buf.appendSlice(self.allocator, ", ?");
             }
         }
-        // created_at: preserve existing or use current time
-        try sql_buf.appendSlice(self.allocator, ", COALESCE((SELECT created_at FROM ");
-        try sql_buf.appendSlice(self.allocator, table);
-        try sql_buf.appendSlice(self.allocator, " WHERE id=? AND namespace_id=?), ?)");
-        // updated_at: always current time
-        try sql_buf.appendSlice(self.allocator, ", ?)");
+        // created_at and updated_at placeholders
+        try sql_buf.appendSlice(self.allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+
+        // Update each column provided
+        for (columns, 0..) |col, i| {
+            if (i > 0) try sql_buf.appendSlice(self.allocator, ", ");
+            try sql_buf.appendSlice(self.allocator, col.name);
+            try sql_buf.appendSlice(self.allocator, " = excluded.");
+            try sql_buf.appendSlice(self.allocator, col.name);
+        }
+        // Always update updated_at
+        try sql_buf.appendSlice(self.allocator, ", updated_at = excluded.updated_at");
 
         const sql = try sql_buf.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(sql);
@@ -713,13 +731,13 @@ pub const StorageEngine = struct {
         for (columns, 0..) |col, i| {
             // Find the field schema to check its type
             var field_type: schema_parser.FieldType = .text;
-            for (table_schema.fields) |f| {
+            for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, col.name)) {
                     field_type = f.sql_type;
                     break;
                 }
             }
-            values[i] = try self.payloadToTypedValue(field_type, col.value);
+            values[i] = try payloadToTypedValue(self.allocator, field_type, col.value);
             initialized_count += 1;
         }
 
@@ -760,9 +778,9 @@ pub const StorageEngine = struct {
         try self.validateField(table, field);
 
         // Look up the field's sql_type to determine if it's an array field and validate type
-        const table_schema = self.findTable(table).?; // validateField already confirmed table exists
+        const table_metadata = self.findTable(table).?; // validateField already confirmed table exists
         var field_sql_type: schema_parser.FieldType = .text;
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, field)) {
                 field_sql_type = f.sql_type;
                 if (value != .nil) {
@@ -782,7 +800,7 @@ pub const StorageEngine = struct {
             }
             self.allocator.free(values);
         }
-        values[0] = try self.payloadToTypedValue(field_sql_type, value);
+        values[0] = try payloadToTypedValue(self.allocator, field_sql_type, value);
 
         // Use jsonb(?) placeholder for array fields, ? for others
         const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
@@ -819,24 +837,25 @@ pub const StorageEngine = struct {
         try self.pushWrite(op);
     }
 
-    /// SELECT * for a single document by id and namespace. Returns null if not found.
-    /// Caller owns the returned Payload and must call payload.free(allocator).
+    /// Select a single document by ID.
+    /// Returns a ManagedPayload which may point directly to the cache (zero-copy).
     pub fn selectDocument(
         self: *StorageEngine,
+        allocator: Allocator,
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
-    ) !?msgpack.Payload {
+    ) !ManagedPayload {
         try self.validateTable(table);
 
-        const cache_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}:{s}", .{ table, namespace, id });
-        defer self.allocator.free(cache_key);
+        const cache_key = try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table, namespace, id });
+        defer allocator.free(cache_key);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
-            defer handle.release();
-            // We must copy the payload because the caller owns it and it might be modified or freed
-            // after we release the handle.
-            return try msgpack.clonePayload(handle.data().*, self.allocator);
+            return ManagedPayload{
+                .value = handle.data().*,
+                .handle = handle,
+            };
         } else |err| switch (err) {
             error.NotFound => {},
             else => return err,
@@ -848,52 +867,51 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Build explicit column list so array fields can be wrapped with json()
-        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
-        var sql_buf: std.ArrayList(u8) = .{};
-        defer sql_buf.deinit(self.allocator);
-        try sql_buf.appendSlice(self.allocator, "SELECT id, namespace_id");
-        for (table_schema.fields) |f| {
+        const table_metadata = self.findTable(table).?; // validateTable already confirmed it exists
+        var sql_buf: std.ArrayList(u8) = .empty;
+        defer sql_buf.deinit(allocator);
+        try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
+        for (table_metadata.table.fields) |f| {
             if (f.sql_type == .array) {
-                try sql_buf.appendSlice(self.allocator, ", json(");
-                try sql_buf.appendSlice(self.allocator, f.name);
-                try sql_buf.append(self.allocator, ')');
+                try sql_buf.appendSlice(allocator, ", json(");
+                try sql_buf.appendSlice(allocator, f.name);
+                try sql_buf.append(allocator, ')');
             } else {
-                try sql_buf.append(self.allocator, ',');
-                try sql_buf.appendSlice(self.allocator, f.name);
+                try sql_buf.append(allocator, ',');
+                try sql_buf.appendSlice(allocator, f.name);
             }
         }
-        try sql_buf.appendSlice(self.allocator, ", created_at, updated_at FROM ");
-        try sql_buf.appendSlice(self.allocator, table);
-        try sql_buf.appendSlice(self.allocator, " WHERE id=? AND namespace_id=?");
-        const sql = try sql_buf.toOwnedSlice(self.allocator);
-        defer self.allocator.free(sql);
+        try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+        try sql_buf.appendSlice(allocator, table);
+        try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=?");
+        const sql = try sql_buf.toOwnedSlice(allocator);
+        defer allocator.free(sql);
 
-        // Snapshot write_seq before the DB read. We only populate the cache if
-        // the sequence hasn't advanced, meaning no write committed (and evicted
-        // this key) between our read and the cache store.
+        // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try self.execSelectDocument(&node.conn, sql, id, namespace, table_schema);
+        const payload = try execSelectDocument(allocator, &node.conn, sql, id, namespace, table_metadata);
         if (payload) |p| {
-            errdefer p.free(self.allocator);
             if (self.write_seq.load(.acquire) == seq_before) {
+                // Populate cache with a persistent copy (cloned into GPA)
                 const cache_payload = try msgpack.clonePayload(p, self.allocator);
                 errdefer cache_payload.free(self.allocator);
                 try self.metadata_cache.update(cache_key, cache_payload);
             }
         }
-        return payload;
+        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
     /// SELECT a single field for a document. Returns null if not found.
     /// Caller owns the returned Payload.
     pub fn selectField(
         self: *StorageEngine,
+        allocator: Allocator,
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
-    ) !?msgpack.Payload {
+    ) !ManagedPayload {
         try self.validateField(table, field);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
@@ -902,9 +920,9 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Resolve field schema to determine if it's an array field
-        const table_schema = self.findTable(table).?;
+        const table_metadata = self.findTable(table).?;
         var field_ctx: ?schema_parser.Field = null;
-        for (table_schema.fields) |f| {
+        for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, field)) {
                 field_ctx = f;
                 break;
@@ -912,21 +930,23 @@ pub const StorageEngine = struct {
         }
 
         const sql = if (field_ctx != null and field_ctx.?.sql_type == .array)
-            try std.fmt.allocPrint(self.allocator, "SELECT json({s}) FROM {s} WHERE id=? AND namespace_id=?", .{ field, table })
+            try std.fmt.allocPrint(allocator, "SELECT json({s}) FROM {s} WHERE id=? AND namespace_id=?", .{ field, table })
         else
-            try std.fmt.allocPrint(self.allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
-        defer self.allocator.free(sql);
+            try std.fmt.allocPrint(allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field, table });
+        defer allocator.free(sql);
 
-        return self.execSelectScalar(&node.conn, sql, id, namespace, field_ctx);
+        const payload = try execSelectScalar(allocator, &node.conn, sql, id, namespace, field_ctx);
+        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
     /// SELECT * for all documents in a namespace. Returns a msgpack array of maps.
     /// Caller owns the returned Payload.
     pub fn selectCollection(
         self: *StorageEngine,
+        allocator: Allocator,
         table: []const u8,
         namespace: []const u8,
-    ) !msgpack.Payload {
+    ) !ManagedPayload {
         try self.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
@@ -935,30 +955,331 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         // Build explicit column list so array fields can be wrapped with json()
-        const table_schema = self.findTable(table).?; // validateTable already confirmed it exists
-        var sql_buf: std.ArrayList(u8) = .{};
-        defer sql_buf.deinit(self.allocator);
-        try sql_buf.appendSlice(self.allocator, "SELECT id, namespace_id");
-        for (table_schema.fields) |f| {
+        const table_metadata = self.findTable(table).?; // validateTable already confirmed it exists
+        var sql_buf: std.ArrayList(u8) = .empty;
+        defer sql_buf.deinit(allocator);
+        try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
+        for (table_metadata.table.fields) |f| {
             if (f.sql_type == .array) {
-                try sql_buf.appendSlice(self.allocator, ", json(");
-                try sql_buf.appendSlice(self.allocator, f.name);
-                try sql_buf.append(self.allocator, ')');
+                try sql_buf.appendSlice(allocator, ", json(");
+                try sql_buf.appendSlice(allocator, f.name);
+                try sql_buf.append(allocator, ')');
             } else {
-                try sql_buf.append(self.allocator, ',');
-                try sql_buf.appendSlice(self.allocator, f.name);
+                try sql_buf.append(allocator, ',');
+                try sql_buf.appendSlice(allocator, f.name);
             }
         }
-        try sql_buf.appendSlice(self.allocator, ", created_at, updated_at FROM ");
-        try sql_buf.appendSlice(self.allocator, table);
-        try sql_buf.appendSlice(self.allocator, " WHERE namespace_id=?");
-        const sql = try sql_buf.toOwnedSlice(self.allocator);
-        defer self.allocator.free(sql);
+        try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+        try sql_buf.appendSlice(allocator, table);
+        try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
+        const sql = try sql_buf.toOwnedSlice(allocator);
+        defer allocator.free(sql);
 
-        return self.execSelectCollection(&node.conn, sql, namespace, table_schema);
+        const payload = try execSelectCollection(allocator, &node.conn, sql, namespace, table_metadata.table.*);
+        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
-    /// DELETE a document by id and namespace.
+    /// SELECT for a query filter. Returns a msgpack array of maps.
+    /// Caller owns the returned Payload.
+    pub fn selectQuery(
+        self: *StorageEngine,
+        allocator: Allocator,
+        table: []const u8,
+        namespace: []const u8,
+        filter: query_parser.QueryFilter,
+    ) !ManagedPayload {
+        try self.validateTable(table);
+
+        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
+        const node = &self.reader_pool[reader_idx];
+        node.mutex.lock();
+        defer node.mutex.unlock();
+
+        const table_metadata = self.findTable(table).?;
+
+        var sql_buf: std.ArrayList(u8) = .empty;
+        defer sql_buf.deinit(allocator);
+        var values: std.ArrayList(TypedValue) = .empty;
+        defer {
+            for (values.items) |v| {
+                switch (v) {
+                    .text => |s| allocator.free(s),
+                    .blob => |b| allocator.free(b),
+                    else => {},
+                }
+            }
+            values.deinit(allocator);
+        }
+
+        // 1. SELECT clause
+        try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
+        for (table_metadata.table.fields) |f| {
+            try sql_buf.appendSlice(allocator, ", ");
+            if (f.sql_type == .array) {
+                try sql_buf.appendSlice(allocator, "json(");
+                try sql_buf.appendSlice(allocator, f.name);
+                try sql_buf.appendSlice(allocator, ")");
+            } else {
+                try sql_buf.appendSlice(allocator, f.name);
+            }
+        }
+        try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+        try sql_buf.appendSlice(allocator, table);
+
+        // 2. WHERE clause
+        try sql_buf.appendSlice(allocator, " WHERE namespace_id = ?");
+        try values.append(allocator, TypedValue{ .text = try allocator.dupe(u8, namespace) });
+
+        const conds = filter.conditions orelse @as([]const query_parser.Condition, &.{});
+        const or_conds = filter.or_conditions orelse @as([]const query_parser.Condition, &.{});
+        const has_conditions = conds.len > 0 or or_conds.len > 0;
+
+        if (has_conditions or filter.after != null) {
+            try sql_buf.appendSlice(allocator, " AND (");
+
+            var added_where = false;
+
+            // AND conditions
+            if (conds.len > 0) {
+                try sql_buf.appendSlice(allocator, "(");
+                for (conds, 0..) |cond, i| {
+                    if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
+                    try self.appendConditionSql(allocator, &sql_buf, &values, table, cond);
+                }
+                try sql_buf.appendSlice(allocator, ")");
+                added_where = true;
+            }
+
+            // OR conditions
+            if (or_conds.len > 0) {
+                if (added_where) try sql_buf.appendSlice(allocator, " OR ");
+                try sql_buf.appendSlice(allocator, "(");
+                for (or_conds, 0..) |cond, i| {
+                    if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
+                    try self.appendConditionSql(allocator, &sql_buf, &values, table, cond);
+                }
+                try sql_buf.appendSlice(allocator, ")");
+                added_where = true;
+            }
+
+            // cursor-based pagination (after)
+            if (filter.after) |cursor| {
+                if (added_where) try sql_buf.appendSlice(allocator, " AND ");
+
+                const sort_field = if (filter.order_by) |o| o.field else "id";
+                const is_desc = if (filter.order_by) |o| o.desc else false;
+                const op = if (is_desc) "<" else ">";
+
+                const sql_field = sort_field;
+
+                // SQLite row-value comparison: (sort_field, id) > (?, ?)
+                try sql_buf.appendSlice(allocator, "(");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, ", id) ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " (?, ?)");
+
+                // Find sort field type for correct binding
+                var sort_ft: schema_parser.FieldType = .text;
+                for (table_metadata.table.fields) |f| {
+                    if (std.mem.eql(u8, f.name, sql_field)) {
+                        sort_ft = f.sql_type;
+                        break;
+                    }
+                }
+                if (std.mem.eql(u8, sort_field, "id")) sort_ft = .text;
+                if (std.mem.eql(u8, sort_field, "namespace_id")) sort_ft = .text;
+                if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
+                if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
+
+                try values.append(allocator, try payloadToTypedValue(allocator, sort_ft, cursor.sort_value));
+                try values.append(allocator, TypedValue{ .text = try allocator.dupe(u8, cursor.id) });
+            }
+
+            try sql_buf.appendSlice(allocator, ")");
+        }
+
+        // 3. ORDER BY
+        try sql_buf.appendSlice(allocator, " ORDER BY ");
+        if (filter.order_by) |o| {
+            const sql_field = o.field;
+            try sql_buf.appendSlice(allocator, sql_field);
+            try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
+            try sql_buf.appendSlice(allocator, ", id ");
+            try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
+        } else {
+            try sql_buf.appendSlice(allocator, "id ASC");
+        }
+
+        // 4. LIMIT
+        if (filter.limit) |l| {
+            try sql_buf.appendSlice(allocator, " LIMIT ");
+            var l_buf: [20]u8 = undefined;
+            const l_str = std.fmt.bufPrint(&l_buf, "{}", .{l}) catch "0";
+            try sql_buf.appendSlice(allocator, l_str);
+        }
+
+        const payload = try execQuery(allocator, &node.conn, sql_buf.items, values.items, table_metadata.table.*);
+        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
+    }
+
+    fn appendConditionSql(
+        self: *StorageEngine,
+        allocator: Allocator,
+        sql_buf: *std.ArrayList(u8),
+        values: *std.ArrayList(TypedValue),
+        table: []const u8,
+        cond: query_parser.Condition,
+    ) !void {
+        const sql_field = cond.field;
+
+        // Find field type for value binding
+        const table_metadata = self.findTable(table).?;
+        var ft: schema_parser.FieldType = .text;
+        for (table_metadata.table.fields) |f| {
+            if (std.mem.eql(u8, f.name, sql_field)) {
+                ft = f.sql_type;
+                break;
+            }
+        }
+        if (std.mem.eql(u8, cond.field, "id")) ft = .text;
+        if (std.mem.eql(u8, cond.field, "namespace_id")) ft = .text;
+        if (std.mem.eql(u8, cond.field, "created_at")) ft = .integer;
+        if (std.mem.eql(u8, cond.field, "updated_at")) ft = .integer;
+
+        try sql_buf.appendSlice(allocator, sql_field);
+
+        switch (cond.op) {
+            .eq => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " = ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .ne => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " != ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .gt => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " > ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .lt => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " < ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .gte => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " >= ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .lte => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                try sql_buf.appendSlice(allocator, " <= ?");
+                try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+            },
+            .contains => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
+            },
+            .startsWith => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
+            },
+            .endsWith => {
+                const val = cond.value orelse return error.MissingConditionValue;
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
+            },
+            .isNull => try sql_buf.appendSlice(allocator, " IS NULL"),
+            .isNotNull => try sql_buf.appendSlice(allocator, " IS NOT NULL"),
+            .in, .notIn => {
+                const is_not = cond.op == .notIn;
+                try sql_buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
+                if (cond.value) |val| {
+                    if (val == .arr) {
+                        for (val.arr, 0..) |v, i| {
+                            if (i > 0) try sql_buf.appendSlice(allocator, ", ");
+                            try sql_buf.appendSlice(allocator, "?");
+                            try values.append(allocator, try payloadToTypedValue(allocator, ft, v));
+                        }
+                    } else {
+                        // Fallback for single value even if it should be an array
+                        try sql_buf.appendSlice(allocator, "?");
+                        try values.append(allocator, try payloadToTypedValue(allocator, ft, val));
+                    }
+                }
+                try sql_buf.appendSlice(allocator, ")");
+            },
+        }
+    }
+
+    fn execQuery(
+        allocator: Allocator,
+        db: *sqlite.Db,
+        sql: []const u8,
+        values: []const TypedValue,
+        table_schema: schema_parser.Table,
+    ) !msgpack.Payload {
+        var stmt = db.prepareDynamic(sql) catch |err| {
+            std.log.err("Failed to prepare SQL: {s}\nError: {}", .{ sql, err });
+            return classifyError(err);
+        };
+        defer stmt.deinit();
+
+        for (values, 0..) |v, i| {
+            bindTypedValue(stmt, @intCast(i + 1), v);
+        }
+
+        var arr: std.ArrayList(msgpack.Payload) = .empty;
+        errdefer {
+            for (arr.items) |item| item.free(allocator);
+            arr.deinit(allocator);
+        }
+
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+        defer allocator.free(col_contexts);
+
+        while (true) {
+            const rc = sqlite.c.sqlite3_step(stmt.stmt);
+            if (rc == sqlite.c.SQLITE_DONE) break;
+            if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
+
+            var map = msgpack.Payload.mapPayload(allocator);
+            errdefer map.free(allocator);
+
+            for (col_contexts, 0..) |ctx, i| {
+                const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
+                try map.mapPut(ctx.name, val);
+            }
+            try arr.append(allocator, map);
+        }
+
+        return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
+    }
+
     pub fn deleteDocument(
         self: *StorageEngine,
         table: []const u8,
@@ -997,6 +1318,21 @@ pub const StorageEngine = struct {
         name: []const u8,
         field: ?schema_parser.Field,
     };
+
+    fn resolveAllColumnContexts(
+        allocator: Allocator,
+        stmt: sqlite.DynamicStatement,
+        table_schema: schema_parser.Table,
+    ) ![]ColumnContext {
+        const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
+        const col_contexts = try allocator.alloc(ColumnContext, col_count);
+        errdefer allocator.free(col_contexts);
+
+        for (col_contexts, 0..) |*ctx, i| {
+            ctx.* = resolveColumnContext(stmt, @intCast(i), table_schema);
+        }
+        return col_contexts;
+    }
 
     fn resolveColumnContext(
         stmt: sqlite.DynamicStatement,
@@ -1037,14 +1373,14 @@ pub const StorageEngine = struct {
     /// Pass the resolved schema Field for user-defined columns; pass null for system columns
     /// (id, namespace_id, created_at, updated_at). Array fields stored as BLOB are returned
     /// via json(col) in the SELECT, which yields SQLITE_TEXT — dispatched to jsonToPayload.
-    fn readColumnValue(self: *StorageEngine, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
+    fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
         const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
         // Array fields: json(col) returns SQLITE_TEXT containing a JSON array string.
         if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
             const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
             const s = if (ptr != null) ptr[0..len] else "[]";
-            return msgpack.jsonToPayload(s, self.allocator);
+            return msgpack.jsonToPayload(s, allocator);
         }
         return switch (col_type) {
             sqlite.c.SQLITE_INTEGER => {
@@ -1059,15 +1395,15 @@ pub const StorageEngine = struct {
                 const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
                 const s = if (ptr != null) ptr[0..len] else "";
-                break :blk try msgpack.Payload.strToPayload(s, self.allocator);
+                break :blk try msgpack.Payload.strToPayload(s, allocator);
             },
             sqlite.c.SQLITE_BLOB => blk: {
                 const ptr = sqlite.c.sqlite3_column_blob(stmt.stmt, i);
                 const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
                 const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
                 var any_reader: std.Io.Reader = .fixed(b);
-                break :blk msgpack.decodeTrusted(self.allocator, &any_reader) catch
-                    try msgpack.Payload.strToPayload(b, self.allocator);
+                break :blk msgpack.decodeTrusted(allocator, &any_reader) catch
+                    try msgpack.Payload.strToPayload(b, allocator);
             },
             else => .nil, // SQLITE_NULL
         };
@@ -1076,21 +1412,21 @@ pub const StorageEngine = struct {
     /// Execute a SELECT with explicit column list WHERE id=? AND namespace_id=? and return a msgpack map or null.
     /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectDocument(
-        self: *StorageEngine,
+        allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
         id: []const u8,
         namespace: []const u8,
-        table_schema: schema_parser.Table,
+        table_metadata: schema_parser.TableMetadata,
     ) !?msgpack.Payload {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
         // Bind parameters using the raw C API
-        const id_z = try self.allocator.dupeZ(u8, id);
-        defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, namespace);
-        defer self.allocator.free(ns_z);
+        const id_z = try allocator.dupeZ(u8, id);
+        defer allocator.free(id_z);
+        const ns_z = try allocator.dupeZ(u8, namespace);
+        defer allocator.free(ns_z);
 
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC);
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
@@ -1099,14 +1435,14 @@ pub const StorageEngine = struct {
         if (rc == sqlite.c.SQLITE_DONE) return null;
         if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-        const col_count: c_int = sqlite.c.sqlite3_column_count(stmt.stmt);
-        var map = msgpack.Payload.mapPayload(self.allocator);
-        errdefer map.free(self.allocator);
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata.table.*);
+        defer allocator.free(col_contexts);
 
-        var i: c_int = 0;
-        while (i < col_count) : (i += 1) {
-            const ctx = resolveColumnContext(stmt, i, table_schema);
-            const val = try self.readColumnValue(stmt, i, ctx.field);
+        var map = msgpack.Payload.mapPayload(allocator);
+        errdefer map.free(allocator);
+
+        for (col_contexts, 0..) |ctx, i| {
+            const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
             try map.mapPut(ctx.name, val);
         }
         return map;
@@ -1114,7 +1450,7 @@ pub const StorageEngine = struct {
 
     /// Execute a SELECT <col> ... WHERE id=? AND namespace_id=? and return scalar or null.
     fn execSelectScalar(
-        self: *StorageEngine,
+        allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
         id: []const u8,
@@ -1124,10 +1460,10 @@ pub const StorageEngine = struct {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const id_z = try self.allocator.dupeZ(u8, id);
-        defer self.allocator.free(id_z);
-        const ns_z = try self.allocator.dupeZ(u8, namespace);
-        defer self.allocator.free(ns_z);
+        const id_z = try allocator.dupeZ(u8, id);
+        defer allocator.free(id_z);
+        const ns_z = try allocator.dupeZ(u8, namespace);
+        defer allocator.free(ns_z);
 
         std.log.debug("execSelectScalar: sql='{s}', id='{s}', namespace='{s}'", .{ sql, id, namespace });
 
@@ -1138,13 +1474,13 @@ pub const StorageEngine = struct {
         if (rc == sqlite.c.SQLITE_DONE) return null;
         if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-        return try self.readColumnValue(stmt, 0, field_ctx);
+        return try readColumnValue(allocator, stmt, 0, field_ctx);
     }
 
     /// Execute a SELECT with explicit column list WHERE namespace_id=? and return a msgpack array of maps.
     /// Array columns must be wrapped with json() in the SQL; table_schema is used to resolve field context.
     fn execSelectCollection(
-        self: *StorageEngine,
+        allocator: Allocator,
         reader: *sqlite.Db,
         sql: []const u8,
         namespace: []const u8,
@@ -1153,40 +1489,51 @@ pub const StorageEngine = struct {
         var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
         defer stmt.deinit();
 
-        const ns_z = try self.allocator.dupeZ(u8, namespace);
-        defer self.allocator.free(ns_z);
+        const ns_z = try allocator.dupeZ(u8, namespace);
+        defer allocator.free(ns_z);
 
         _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
 
-        var arr: std.ArrayList(msgpack.Payload) = .{};
+        var arr: std.ArrayList(msgpack.Payload) = .empty;
         errdefer {
-            for (arr.items) |item| item.free(self.allocator);
-            arr.deinit(self.allocator);
+            for (arr.items) |item| item.free(allocator);
+            arr.deinit(allocator);
         }
 
-        const col_count: c_int = sqlite.c.sqlite3_column_count(stmt.stmt);
+        const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+        defer allocator.free(col_contexts);
 
         while (true) {
             const rc = sqlite.c.sqlite3_step(stmt.stmt);
             if (rc == sqlite.c.SQLITE_DONE) break;
             if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
 
-            var map = msgpack.Payload.mapPayload(self.allocator);
-            errdefer map.free(self.allocator);
+            var map = msgpack.Payload.mapPayload(allocator);
+            errdefer map.free(allocator);
 
-            var i: c_int = 0;
-            while (i < col_count) : (i += 1) {
-                const ctx = resolveColumnContext(stmt, i, table_schema);
-                const val = try self.readColumnValue(stmt, i, ctx.field);
+            for (col_contexts, 0..) |ctx, i| {
+                const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
                 try map.mapPut(ctx.name, val);
             }
-            try arr.append(self.allocator, map);
+            try arr.append(allocator, map);
         }
 
-        return msgpack.Payload{ .arr = try arr.toOwnedSlice(self.allocator) };
+        return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
     }
 
     // ─── Internal write helpers ───────────────────────────────────────────────
+
+    fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        for (input) |c| {
+            if (c == '%' or c == '_' or c == '\\') {
+                try out.append(allocator, '\\');
+            }
+            try out.append(allocator, c);
+        }
+        return out.toOwnedSlice(allocator);
+    }
 
     fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) void {
         switch (value) {
@@ -1222,15 +1569,12 @@ pub const StorageEngine = struct {
             bind_idx += 1;
         }
 
-        // COALESCE: id, namespace_id, fallback created_at
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), sqlite.c.SQLITE_STATIC);
-        bind_idx += 1;
-        _ = sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), sqlite.c.SQLITE_STATIC);
-        bind_idx += 1;
+        // created_at
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
         bind_idx += 1;
         // updated_at
         _ = sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp);
+        bind_idx += 1;
 
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc != sqlite.c.SQLITE_DONE) return error.SQLiteError;

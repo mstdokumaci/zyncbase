@@ -96,7 +96,7 @@ pub const ConnectionManager = struct {
         // ZyncBase uses binary MessagePack for all communications.
         if (msg_type != .binary) {
             std.log.warn("Rejected non-binary (text) message from connection {}", .{conn_id});
-            self.message_handler.sendError(ws, "INVALID_MESSAGE_TYPE", "Only binary MessagePack frames are supported") catch |err| {
+            self.message_handler.sendError(ws, "INVALID_MESSAGE_TYPE", "Only binary MessagePack frames are supported", null) catch |err| {
                 std.log.err("Failed to send error response for invalid message type: {}", .{err});
             };
             return;

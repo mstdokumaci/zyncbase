@@ -5,12 +5,13 @@ pub const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 pub const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 const ConfigLoader = @import("config_loader.zig").ConfigLoader;
 const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const SchemaParser = @import("schema_parser.zig").SchemaParser;
@@ -29,10 +30,11 @@ pub const ZyncBaseServer = struct {
     config: Config,
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
-    subscription_manager: *SubscriptionManager,
+    subscription_engine: *SubscriptionEngine,
     checkpoint_manager: *CheckpointManager,
     storage_layer: *CheckpointManager.StorageLayer,
     storage_engine: *StorageEngine,
+    write_coordinator: *WriteCoordinator,
     websocket_server: *WebSocketServer,
     connection_manager: *ConnectionManager,
     message_handler: *MessageHandler,
@@ -101,12 +103,14 @@ pub const ZyncBaseServer = struct {
         );
         errdefer violation_tracker.deinit();
 
-        // Initialize subscription manager
-        std.log.debug("Initializing subscription manager", .{});
-        const subscription_manager = try SubscriptionManager.init(
+        // Initialize subscription engine
+        std.log.debug("Initializing subscription engine", .{});
+        const subscription_engine = try allocator.create(SubscriptionEngine);
+        errdefer allocator.destroy(subscription_engine);
+        subscription_engine.* = SubscriptionEngine.init(
             memory_strategy.generalAllocator(),
         );
-        errdefer subscription_manager.deinit();
+        errdefer subscription_engine.deinit();
 
         const schema_path = config.schema_file;
         {
@@ -205,12 +209,22 @@ pub const ZyncBaseServer = struct {
         );
         errdefer websocket_server.deinit();
 
+        // Initialize Write Coordinator
+        const write_coordinator = try WriteCoordinator.init(
+            memory_strategy.generalAllocator(),
+            storage_engine,
+            subscription_engine,
+            memory_strategy,
+        );
+        errdefer write_coordinator.deinit();
+
         const message_handler = try MessageHandler.init(
             memory_strategy.generalAllocator(),
             memory_strategy,
             violation_tracker,
             storage_engine,
-            subscription_manager,
+            subscription_engine,
+            write_coordinator,
             config.security,
         );
         errdefer message_handler.deinit();
@@ -224,15 +238,19 @@ pub const ZyncBaseServer = struct {
         );
         errdefer connection_manager.deinit();
 
+        message_handler.setConnectionManager(@ptrCast(connection_manager));
+        write_coordinator.setConnectionManager(connection_manager);
+
         std.log.debug("Setting up ZyncBaseServer struct", .{});
 
         self.config = config;
         self.memory_strategy = memory_strategy;
         self.violation_tracker = violation_tracker;
-        self.subscription_manager = subscription_manager;
+        self.subscription_engine = subscription_engine;
         self.checkpoint_manager = checkpoint_manager;
         self.storage_layer = storage_layer;
         self.storage_engine = storage_engine;
+        self.write_coordinator = write_coordinator;
         self.websocket_server = websocket_server;
         self.connection_manager = connection_manager;
         self.message_handler = message_handler;
@@ -336,6 +354,8 @@ pub const ZyncBaseServer = struct {
         self.connection_manager.deinit();
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
+        std.log.debug("Deinitializing write_coordinator", .{});
+        self.write_coordinator.deinit();
         std.log.debug("Deinitializing websocket_server", .{});
         self.websocket_server.deinit();
         std.log.debug("Deinitializing checkpoint_manager", .{});
@@ -344,8 +364,9 @@ pub const ZyncBaseServer = struct {
         self.storage_layer.deinit();
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
-        std.log.debug("Deinitializing subscription_manager", .{});
-        self.subscription_manager.deinit();
+        std.log.debug("Deinitializing subscription_engine", .{});
+        self.subscription_engine.deinit();
+        self.allocator.destroy(self.subscription_engine);
         std.log.debug("Deinitializing violation_tracker", .{});
         self.violation_tracker.deinit();
         self.allocator.destroy(self.violation_tracker);

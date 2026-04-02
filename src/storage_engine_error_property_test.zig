@@ -60,8 +60,9 @@ test "storage: error handling read-only filesystem" {
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        const doc = try storage.selectDocument("data_table", "key1", "data_table");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc != null);
     }
 }
@@ -97,8 +98,9 @@ test "storage: error handling constraint violations" {
     try storage.flushPendingWrites();
     // Verify the value was updated
     {
-        const doc = try storage.selectDocument("data_table", "key1", "data_table");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc != null);
         if (doc) |d| {
             // Document retrieved as map, let's check field "val"
@@ -130,8 +132,9 @@ test "storage: error handling transaction rollback on error" {
     }
     try storage.rollbackTransaction();
     {
-        const doc = try storage.selectDocument("data_table", "key1", "data_table");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc == null);
     }
 }
@@ -162,8 +165,9 @@ test "storage: error handling concurrent access safety" {
     };
     const runRead = struct {
         fn run(ctx: ThreadContext) void {
-            const doc = ctx.storage.selectDocument("data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
-            defer if (doc) |d| d.free(ctx.allocator);
+            var managed = ctx.storage.selectDocument(ctx.allocator, "data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
+            defer managed.deinit();
+            _ = managed.value;
         }
     }.run;
     var threads: [4]std.Thread = undefined;
@@ -195,8 +199,9 @@ test "storage: error handling empty paths" {
     }
     try storage.flushPendingWrites();
     {
-        const doc = try storage.selectDocument("data_table", "empty", "");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "data_table", "empty", "");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc != null);
     }
 }
@@ -225,8 +230,9 @@ test "storage: error handling large values" {
     }
     try storage.flushPendingWrites();
     {
-        const doc = try storage.selectDocument("test", "large_key", "test");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "test", "large_key", "test");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc != null);
     }
 }
@@ -247,8 +253,9 @@ test "storage: error handling delete non-existent key" {
     try storage.deleteDocument("test", "nonexistent", "test");
     try storage.flushPendingWrites();
     {
-        const doc = try storage.selectDocument("test", "nonexistent", "test");
-        defer if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");
+        defer managed.deinit();
+        const doc = managed.value;
         try testing.expect(doc == null);
     }
 }

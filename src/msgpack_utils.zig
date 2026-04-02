@@ -99,6 +99,13 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
     return packer.write(payload);
 }
 
+pub fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
+    var list = std.ArrayList(u8).empty;
+    defer list.deinit(allocator);
+    try encode(payload, list.writer(allocator));
+    return list.toOwnedSlice(allocator);
+}
+
 pub const Payload = msgpack.Payload;
 pub const Map = msgpack.Map;
 
@@ -144,6 +151,31 @@ pub fn isLiteral(payload: Payload) bool {
     return switch (payload) {
         .nil, .bool, .int, .uint, .float, .str => true,
         .arr, .map, .bin, .ext, .timestamp => false,
+    };
+}
+
+/// Converts a literal payload to a deterministic string for canonical keys.
+/// Rejects complex types (arr, map, bin, ext, timestamp).
+/// The caller owns the returned slice.
+pub fn payloadToCanonicalString(payload: Payload, allocator: std.mem.Allocator) ![]const u8 {
+    return switch (payload) {
+        .nil => try allocator.dupe(u8, "null"),
+        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+        .int => |v| try std.fmt.allocPrint(allocator, "{d}", .{v}),
+        .uint => |v| try std.fmt.allocPrint(allocator, "{d}", .{v}),
+        .float => |v| {
+            const s = try std.fmt.allocPrint(allocator, "{d}", .{v});
+            errdefer allocator.free(s);
+            // Ensure float representation has a dot or exponent
+            if (std.mem.indexOfScalar(u8, s, '.') == null and std.mem.indexOfScalar(u8, s, 'e') == null and std.mem.indexOfScalar(u8, s, 'E') == null) {
+                const s2 = try std.mem.concat(allocator, u8, &.{ s, ".0" });
+                allocator.free(s);
+                return s2;
+            }
+            return s;
+        },
+        .str => |s| try allocator.dupe(u8, s.value()),
+        else => error.UnsupportedCanonicalType,
     };
 }
 

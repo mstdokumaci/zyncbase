@@ -15,7 +15,8 @@ const schema_helpers = @import("schema_test_helpers.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -250,7 +251,7 @@ test "logging: error details" {
         try manager.onOpen(&ws);
 
         // Create message with missing fields (id, namespace, path, value)
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayList(u8).empty;
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x81); // fixmap(1)
         try msgpack_helpers.writeString(allocator, &buf, "type");
@@ -268,8 +269,9 @@ test "logging: error details" {
     // Storage engine logs errors internally when operations fail
     {
         // Try to get from non-existent namespace/path
-        const result = try storage_engine.selectDocument("data_table", "path", "nonexistent");
-        defer if (result) |r| r.free(std.testing.allocator);
+        var managed = try storage_engine.selectDocument(testing.allocator, "data_table", "path", "nonexistent");
+        defer managed.deinit();
+        const result = managed.value;
         try testing.expect(result == null);
     }
 
@@ -336,14 +338,22 @@ test "logging: level filtering" {
         const dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_2, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
-        var subscription_manager = try SubscriptionManager.init(allocator);
-        defer subscription_manager.deinit();
+        var subscription_engine = try allocator.create(SubscriptionEngine);
+        subscription_engine.* = SubscriptionEngine.init(allocator);
+        defer {
+            subscription_engine.deinit();
+            allocator.destroy(subscription_engine);
+        }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
-            subscription_manager,
+            subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();
@@ -410,14 +420,22 @@ test "logging: message formatting" {
         const dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_3, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
-        var subscription_manager = try SubscriptionManager.init(allocator);
-        defer subscription_manager.deinit();
+        var subscription_engine = try allocator.create(SubscriptionEngine);
+        subscription_engine.* = SubscriptionEngine.init(allocator);
+        defer {
+            subscription_engine.deinit();
+            allocator.destroy(subscription_engine);
+        }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
-            subscription_manager,
+            subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();
@@ -441,10 +459,6 @@ test "logging: message formatting" {
     }
 
     // Test 2: Verify log format consistency
-    // All log messages in the codebase follow consistent patterns:
-    // - Include relevant context (connection ID, error type, etc.)
-    // - Use structured format strings
-    // - Provide actionable information
     {
         // This is verified by code inspection
         try testing.expect(true);
@@ -472,14 +486,22 @@ test "logging: message formatting" {
         const dummy_schema_4 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_4, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
-        var subscription_manager = try SubscriptionManager.init(allocator);
-        defer subscription_manager.deinit();
+        var subscription_engine = try allocator.create(SubscriptionEngine);
+        subscription_engine.* = SubscriptionEngine.init(allocator);
+        defer {
+            subscription_engine.deinit();
+            allocator.destroy(subscription_engine);
+        }
+        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
+        defer write_coordinator.deinit();
+
         var handler = try MessageHandler.init(
             allocator,
             &memory_strategy,
             &tracker,
             storage_engine,
-            subscription_manager,
+            subscription_engine,
+            write_coordinator,
             .{},
         );
         defer handler.deinit();

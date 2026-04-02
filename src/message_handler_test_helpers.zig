@@ -4,13 +4,14 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SubscriptionManager = @import("subscription_manager.zig").SubscriptionManager;
+const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const schema_parser = @import("schema_parser.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
+const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -40,7 +41,8 @@ pub const AppTestContext = struct {
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
-    subscription_manager: *SubscriptionManager,
+    subscription_engine: *SubscriptionEngine,
+    write_coordinator: *WriteCoordinator,
     handler: *MessageHandler,
     manager: *ConnectionManager,
     schema: *schema_parser.Schema,
@@ -81,17 +83,26 @@ pub const AppTestContext = struct {
         const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, schema, options);
         errdefer se.deinit();
 
-        // 5. Initialize Subscription Manager
-        const sm = try SubscriptionManager.init(allocator);
+        // 5. Initialize Subscription Engine
+        const sm = try allocator.create(SubscriptionEngine);
+        errdefer allocator.destroy(sm);
+        sm.* = SubscriptionEngine.init(allocator);
         errdefer sm.deinit();
 
-        // 6. Initialize Message Handler
-        const mh = try MessageHandler.init(allocator, ms, vt, se, sm, .{});
+        // 6. Initialize Write Coordinator
+        const wc = try WriteCoordinator.init(allocator, se, sm, ms);
+        errdefer wc.deinit();
+
+        // 7. Initialize Message Handler
+        const mh = try MessageHandler.init(allocator, ms, vt, se, sm, wc, .{});
         errdefer mh.deinit();
 
-        // 7. Initialize Connection Manager
+        // 8. Initialize Connection Manager
         const cm = try ConnectionManager.init(allocator, ms, mh);
         errdefer cm.deinit();
+
+        // 9. Wire Connection Manager to Coordinator
+        wc.setConnectionManager(cm);
 
         return AppTestContext{
             .allocator = allocator,
@@ -100,19 +111,34 @@ pub const AppTestContext = struct {
             .test_context = tc,
             .schema = schema,
             .storage_engine = se,
-            .subscription_manager = sm,
+            .subscription_engine = sm,
+            .write_coordinator = wc,
             .handler = mh,
             .manager = cm,
         };
     }
 
     pub fn deinit(self: *AppTestContext) void {
-        self.manager.deinit();
-        self.handler.deinit();
-        self.subscription_manager.deinit();
+        // 1. Stop background activity (write worker) first
         self.storage_engine.deinit();
+
+        // 2. Shut down the write coordinator (depends on storage engine being stopped)
+        self.write_coordinator.deinit();
+
+        // 3. Close all connections and tear down sessions.
+        //    This MUST happen before subscription_engine/handler deinit, because
+        //    manager.deinit() -> teardownSession() -> subscription_engine.unsubscribe()
+        //    requires both the handler and subscription_engine to still be alive.
+        self.manager.deinit();
+
+        // 4. Now safe to tear down subsystems that were needed for session teardown
+        self.subscription_engine.deinit();
+        self.allocator.destroy(self.subscription_engine);
+        self.handler.deinit();
+
+        // 5. Cleanup remaining infrastructure
         schema_helpers.freeTestSchema(self.allocator, self.schema);
-        self.test_context.deinit(); // Deletes artifacts directory
+        self.test_context.deinit();
         self.violation_tracker.deinit();
         self.allocator.destroy(self.violation_tracker);
         self.memory_strategy.deinit();

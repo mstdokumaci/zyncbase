@@ -34,7 +34,7 @@ test "Integration: All components properly wired" {
     // Verify all components are initialized and correctly cross-linked
     try testing.expect(@intFromPtr(server.memory_strategy) != 0);
     try testing.expect(@intFromPtr(server.violation_tracker) != 0);
-    try testing.expect(@intFromPtr(server.subscription_manager) != 0);
+    try testing.expect(@intFromPtr(server.subscription_engine) != 0);
     try testing.expect(@intFromPtr(server.checkpoint_manager) != 0);
     try testing.expect(@intFromPtr(server.storage_engine) != 0);
     try testing.expect(@intFromPtr(server.websocket_server) != 0);
@@ -42,7 +42,7 @@ test "Integration: All components properly wired" {
 
     // Verify message handler's component wiring
     try testing.expect(server.message_handler.storage_engine == server.storage_engine);
-    try testing.expect(server.message_handler.subscription_manager == server.subscription_manager);
+    try testing.expect(server.message_handler.subscription_engine == server.subscription_engine);
     try testing.expect(server.message_handler.violation_tracker == server.violation_tracker);
 
     // Verify initial operational state
@@ -58,8 +58,9 @@ test "Integration: Error propagation through layers" {
     defer server.deinit();
 
     // Verify storage engine interaction through wiring
-    const doc = try server.storage_engine.selectDocument("test", "nonexistent_key", "test_namespace");
-    defer if (doc) |d| d.free(server.allocator);
+    var managed = try server.storage_engine.selectDocument(allocator, "test", "nonexistent_key", "test_namespace");
+    defer managed.deinit();
+    const doc = managed.value;
     try testing.expect(doc == null);
 
     // Verify components have expected internal pointers

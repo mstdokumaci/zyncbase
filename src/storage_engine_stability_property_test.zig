@@ -102,8 +102,9 @@ test "storage: stability no crashes on concurrent errors" {
                 ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 // zwanzig-disable-next-line: swallowed-error
-                const doc = ctx.storage.selectDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
-                if (doc) |d| d.free(ctx.allocator);
+                var managed = ctx.storage.selectDocument(ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                defer managed.deinit();
+                _ = managed.value;
                 // Try to delete the value
                 // zwanzig-disable-next-line: swallowed-error
                 ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
@@ -153,9 +154,10 @@ test "storage: stability continues after transaction errors" {
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
     try storage.insertOrReplace("test", "key1", "test", &cols);
     try storage.flushPendingWrites();
-    const doc = try storage.selectDocument("test", "key1", "test");
+    var managed = try storage.selectDocument(allocator, "test", "key1", "test");
+    defer managed.deinit();
+    const doc = managed.value;
     try testing.expect(doc != null);
-    if (doc) |d| d.free(allocator);
     // Cause another transaction error
     _ = storage.rollbackTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
@@ -166,9 +168,10 @@ test "storage: stability continues after transaction errors" {
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
-    const doc2 = try storage.selectDocument("test", "key2", "test");
+    var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
+    defer managed2.deinit();
+    const doc2 = managed2.value;
     try testing.expect(doc2 != null);
-    if (doc2) |d| d.free(allocator);
 }
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
@@ -201,9 +204,10 @@ test "storage: stability handles rapid error conditions" {
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
     try storage.insertOrReplace("test", "key", "test", &cols);
     try storage.flushPendingWrites();
-    const doc = try storage.selectDocument("test", "key", "test");
+    var managed = try storage.selectDocument(allocator, "test", "key", "test");
+    defer managed.deinit();
+    const doc = managed.value;
     try testing.expect(doc != null);
-    if (doc) |d| d.free(allocator);
 }
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
@@ -238,15 +242,17 @@ test "storage: stability error recovery with valid operations" {
             try testing.expectEqual(error.NoActiveTransaction, err);
         };
         // Another valid operation
-        const doc = try storage.selectDocument("test", key, "test");
-        if (doc) |d| d.free(allocator);
+        var managed = try storage.selectDocument(allocator, "test", key, "test");
+        defer managed.deinit();
+        _ = managed.value;
     }
     // Flush and verify server is still operational
     try storage.flushPendingWrites();
     // Verify some data was persisted
-    const doc = try storage.selectDocument("test", "key0", "test");
+    var managed = try storage.selectDocument(allocator, "test", "key0", "test");
+    defer managed.deinit();
+    const doc = managed.value;
     try testing.expect(doc != null);
-    if (doc) |d| d.free(allocator);
 }
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
@@ -289,9 +295,10 @@ test "storage: stability resource cleanup after errors" {
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.commitTransaction();
     // Verify the committed data is there
-    const doc = try storage.selectDocument("test", "key3", "test");
+    var managed = try storage.selectDocument(allocator, "test", "key3", "test");
+    defer managed.deinit();
+    const doc = managed.value;
     try testing.expect(doc != null);
-    if (doc) |d| d.free(allocator);
 }
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
@@ -336,16 +343,20 @@ test "storage: stability mixed error and success scenarios" {
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
-    const doc1 = try storage.selectDocument("test", "key1", "test");
+    var managed1 = try storage.selectDocument(allocator, "test", "key1", "test");
+    defer managed1.deinit();
+    const doc1 = managed1.value;
     try testing.expect(doc1 != null);
-    defer doc1.?.free(allocator);
     // Verify second transaction was rolled back
-    const doc2 = try storage.selectDocument("test", "key2", "test");
+    var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
+    defer managed2.deinit();
+    const doc2 = managed2.value;
     try testing.expect(doc2 == null);
     // Verify third operation succeeded
-    const doc3 = try storage.selectDocument("test", "key3", "test");
+    var managed3 = try storage.selectDocument(allocator, "test", "key3", "test");
+    defer managed3.deinit();
+    const doc3 = managed3.value;
     try testing.expect(doc3 != null);
-    if (doc3) |d| d.free(allocator);
 }
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
@@ -387,11 +398,13 @@ test "storage: stability concurrent reads during write errors" {
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
                 // zwanzig-disable-next-line: swallowed-error
-                const doc1 = ctx.storage.selectDocument("test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
-                if (doc1) |d| d.free(ctx.allocator);
+                var managed1 = ctx.storage.selectDocument(ctx.allocator, "test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                defer managed1.deinit();
+                _ = managed1.value;
                 // zwanzig-disable-next-line: swallowed-error
-                const doc2 = ctx.storage.selectDocument("test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
-                if (doc2) |d| d.free(ctx.allocator);
+                var managed2 = ctx.storage.selectDocument(ctx.allocator, "test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                defer managed2.deinit();
+                _ = managed2.value;
                 // Small delay
                 std.Thread.sleep(1 * std.time.ns_per_ms);
             }
@@ -417,7 +430,8 @@ test "storage: stability concurrent reads during write errors" {
         thread.join();
     }
     // Verify data is still intact
-    const doc1 = try storage.selectDocument("test", "key1", "test");
+    var managed = try storage.selectDocument(allocator, "test", "key1", "test");
+    defer managed.deinit();
+    const doc1 = managed.value;
     try testing.expect(doc1 != null);
-    defer doc1.?.free(allocator);
 }

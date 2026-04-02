@@ -160,41 +160,33 @@ const QueryEngine = struct {
 ### Subscription Tracking
 
 ```zig
-const Subscription = struct {
+const SubscriptionId = u64;
+
+/// Internal representation of a group of subscribers sharing the same Filter AST
+const SubscriptionGroup = struct {
     id: u64,
-    connection_id: u64,
     namespace: []const u8,
-    query: Query,
-    last_result: []json.Value,
-    last_version: u64,
+    collection: []const u8,
+    filter: QueryFilter,
+    /// Set of (connection_id, client_subscription_id)
+    subscribers: std.AutoHashMapUnmanaged(SubscriberKey, void),
+
+    pub const SubscriberKey = struct {
+        connection_id: u64,
+        id: SubscriptionId,
+    };
 };
 
-const SubscriptionManager = struct {
-    subscriptions: HashMap(u64, *Subscription),
-    namespace_index: HashMap([]const u8, ArrayList(u64)),
+const SubscriptionEngine = struct {
+    /// group_id -> SubscriptionGroup
+    groups: std.AutoHashMapUnmanaged(u64, SubscriptionGroup),
+    /// collection_key (ns:coll) -> ArrayList(GroupId)
+    groups_by_collection: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u64)),
+    /// (conn_id, sub_id) -> group_id
+    active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64),
     
-    pub fn add(self: *SubscriptionManager, sub: Subscription) !void {
-        try self.subscriptions.put(sub.id, &sub);
-        
-        // Index by namespace for efficient lookup
-        var list = try self.namespace_index.getOrPut(sub.namespace);
-        try list.value_ptr.append(sub.id);
-    }
-    
-    pub fn remove(self: *SubscriptionManager, sub_id: u64) void {
-        if (self.subscriptions.fetchRemove(sub_id)) |entry| {
-            const sub = entry.value;
-            
-            // Remove from namespace index
-            if (self.namespace_index.get(sub.namespace)) |list| {
-                for (list.items, 0..) |id, i| {
-                    if (id == sub_id) {
-                        _ = list.swapRemove(i);
-                        break;
-                    }
-                }
-            }
-        }
+    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange) ![]Match {
+        // Implementation logic...
     }
 };
 ```
@@ -204,48 +196,36 @@ const SubscriptionManager = struct {
 ZyncBase uses a **Fine-Grained Observation** strategy to ensure sub-100ms real-time sync without overloading the SQLite reader pool.
 
 **Strategy: Fine-Grained Observation (ADR-018)**
-- The Writer thread emits a change event: `(table, id, operation, old_row, new_row)`.
-- The `SubscriptionManager` evaluates the `new_row` against active subscription filters *in memory*.
-- **No SQLite queries are re-run** during the broadcast phase for standard filter matches.
-- Updates are pushed to clients only if the row specifically matching their query has changed.
+- The Writer thread or Message Handler emits a `RowChange` event.
+- The `SubscriptionEngine` evaluates the change against active `SubscriptionGroups` in memory.
+- **No SQLite queries are re-run** for standard filter matching.
+- Only clients subscribed to groups that match the before or after state of the record are notified.
 
-### Fine-Grained Implementation
+### Implementation Details
 
 The notification pipeline operates entirely in RAM:
 
 ```zig
-pub fn notify(self: *SubscriptionManager, table: []const u8, changed_id: []const u8, new_row: json.Value) !void {
-    const subs = self.table_index.get(table) orelse return;
-    
-    for (subs.items) |sub_id| {
-        const sub = self.subscriptions.get(sub_id).?;
-        
-        // Evaluate filters in RAM (no SQLite)
-        if (try self.evaluator.matches(new_row, sub.query.filters)) {
-            // Push individual delta to client
-            try self.sendDelta(sub.connection_id, sub_id, new_row);
-        }
-    }
-}
-```
+pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
+    const key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ change.namespace, change.collection });
+    const group_ids = self.groups_by_collection.get(key) orelse return &.{};
 
-```zig
-fn affectsSubscription(self: *SubscriptionManager, sub: *Subscription, changed_ids: []const []const u8) !bool {
-    // If subscription has no filters, any change affects it
-    if (sub.query.filters.len == 0) {
-        return true;
-    }
-    
-    // Check if any changed ID matches the subscription's filters
-    for (changed_ids) |id| {
-        const handle = try self.cache.get(id);
-        defer handle.release();
-        if (try self.matchesFilters(handle.state(), sub.query.filters)) {
-            return true;
+    var matches = std.ArrayList(Match).init(allocator);
+    for (group_ids.items) |gid| {
+        const group = self.groups.get(gid) orelse continue;
+
+        const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
+        const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
+
+        if (matched_before or matches_after) {
+            // Group-level match means all subscribers in group receive notification
+            var it = group.subscribers.keyIterator();
+            while (it.next()) |sub| {
+                try matches.append(.{ .connection_id = sub.connection_id, .subscription_id = sub.id });
+            }
         }
     }
-    
-    return false;
+    return matches.toOwnedSlice();
 }
 ```
 
