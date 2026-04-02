@@ -13,7 +13,7 @@ pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
 /// checks for the special -1 pointer sentinel.
 extern const zyncbase_sqlite_transient: ?*const anyopaque;
 pub inline fn getSqliteTransient() sqlite.c.sqlite3_destructor_type {
-    return @ptrCast(zyncbase_sqlite_transient);
+    return @ptrFromInt(@intFromPtr(zyncbase_sqlite_transient));
 }
 
 /// Specific error types for different database failure scenarios
