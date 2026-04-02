@@ -286,6 +286,10 @@ pub const MessageHandler = struct {
                     if (val == .str) namespace = val.str.value();
                 } else if (std.mem.eql(u8, key_str, "path")) {
                     if (val == .arr) {
+                        if (segments) |s| {
+                            allocator.free(s);
+                            segments = null;
+                        }
                         const elems = val.arr;
                         if (elems.len < 2) return error.InvalidPath;
                         const s = try allocator.alloc([]const u8, elems.len);

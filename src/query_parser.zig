@@ -174,10 +174,19 @@ pub fn parseQueryFilter(
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
+            if (conditions) |old| {
+                for (old) |c| c.deinit(allocator);
+                allocator.free(old);
+            }
             conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
+            if (or_conditions) |old| {
+                for (old) |c| c.deinit(allocator);
+                allocator.free(old);
+            }
             or_conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
+            if (order_by) |old| old.deinit(allocator);
             order_by = try parseSortDescriptor(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
@@ -188,6 +197,7 @@ pub fn parseQueryFilter(
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .arr or value.arr.len != 2) return error.InvalidMessageFormat;
             if (value.arr[1] != .str) return error.InvalidMessageFormat;
+            if (after) |old| old.deinit(allocator);
             after = Cursor{
                 .sort_value = try msgpack.clonePayload(value.arr[0], allocator),
                 .id = try allocator.dupe(u8, value.arr[1].str.value()),

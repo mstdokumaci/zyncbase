@@ -20,7 +20,7 @@ The primary purpose of the `WriteCoordinator` is to ensure that subscriber notif
 4. `WriteCoordinator` creates a `RowChange` object and a merged `new_row` (Full Document).
 5. `WriteCoordinator` submits the **full** set of columns to `StorageEngine.insertOrReplace`.
 6. `WriteCoordinator` calls `SubscriptionEngine.handleRowChange` for notification.
-6. `WriteCoordinator` iterates through matches and sends `StoreDelta` messages via `ConnectionManager`.
+7. `WriteCoordinator` iterates through matches and sends `StoreDelta` messages via `ConnectionManager`.
 
 ### Memory Management
 The `WriteCoordinator` uses the provided `Arena` (usually the request-scoped arena) for temporary allocations like the `RowChange` and the merged `new_row`.
