@@ -24,7 +24,7 @@ pub fn buildInsertOrReplaceOp(
     // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
     // VALUES (?, ?, .., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
     // Array columns use jsonb(?) instead of ? as the placeholder.
-    var sql_buf: std.ArrayList(u8) = .empty;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "INSERT INTO ");

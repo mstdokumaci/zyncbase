@@ -251,7 +251,7 @@ test "logging: error details" {
         try manager.onOpen(&ws);
 
         // Create message with missing fields (id, namespace, path, value)
-        var buf = std.ArrayList(u8).empty;
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
         try buf.append(allocator, 0x81); // fixmap(1)
         try msgpack_helpers.writeString(allocator, &buf, "type");

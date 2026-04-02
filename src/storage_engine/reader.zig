@@ -13,7 +13,7 @@ const ColumnContext = types.ColumnContext;
 // ─── SQL Builders ─────────────────────────────────────────────────────────
 
 pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_parser.TableMetadata) ![]const u8 {
-    var sql_buf: std.ArrayList(u8) = .empty;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
@@ -42,7 +42,7 @@ pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_n
 }
 
 pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_parser.TableMetadata) ![]const u8 {
-    var sql_buf: std.ArrayList(u8) = .empty;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
@@ -85,9 +85,9 @@ pub fn buildSelectQuery(
     namespace: []const u8,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
-    var sql_buf: std.ArrayList(u8) = .empty;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
-    var values: std.ArrayList(TypedValue) = .empty;
+    var values: std.ArrayListUnmanaged(TypedValue) = .empty;
     errdefer {
         for (values.items) |v| {
             switch (v) {
@@ -256,7 +256,7 @@ pub fn payloadToTypedValue(allocator: Allocator, ft: schema_parser.FieldType, va
 }
 
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     errdefer out.deinit(allocator);
     for (input) |c| {
         if (c == '%' or c == '_' or c == '\\') {
@@ -547,7 +547,7 @@ pub fn execSelectCollection(
 
     _ = sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC);
 
-    var arr: std.ArrayList(msgpack.Payload) = .empty;
+    var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
         for (arr.items) |item| item.free(allocator);
         arr.deinit(allocator);
@@ -590,7 +590,7 @@ pub fn execQuery(
         bindTypedValue(stmt, @intCast(i + 1), v);
     }
 
-    var arr: std.ArrayList(msgpack.Payload) = .empty;
+    var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
         for (arr.items) |item| item.free(allocator);
         arr.deinit(allocator);

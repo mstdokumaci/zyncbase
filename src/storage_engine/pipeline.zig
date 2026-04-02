@@ -6,8 +6,6 @@ const connection = @import("connection.zig");
 const types = @import("types.zig");
 
 const WriteOp = types.WriteOp;
-const CheckpointMode = types.CheckpointMode;
-const CheckpointStats = types.CheckpointStats;
 const StorageError = types.StorageError;
 
 pub fn executeBatch(
@@ -83,27 +81,6 @@ pub fn executeBatch(
     }
 }
 
-pub fn internalExecuteCheckpoint(conn: *sqlite.Db, mode: CheckpointMode) !CheckpointStats {
-    const sql = switch (mode) {
-        .passive => "PRAGMA wal_checkpoint(PASSIVE)",
-        .full => "PRAGMA wal_checkpoint(FULL)",
-        .restart => "PRAGMA wal_checkpoint(RESTART)",
-        .truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
-    };
-
-    var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
-    defer stmt.deinit();
-
-    if (sqlite.c.sqlite3_step(stmt.stmt) != sqlite.c.SQLITE_ROW) return error.SQLiteError;
-
-    return CheckpointStats{
-        .mode = mode,
-        .busy = sqlite.c.sqlite3_column_int(stmt.stmt, 0) != 0,
-        .log = sqlite.c.sqlite3_column_int(stmt.stmt, 1),
-        .checkpointed = sqlite.c.sqlite3_column_int(stmt.stmt, 2),
-    };
-}
-
 pub fn flushBatch(
     allocator: Allocator,
     conn: *sqlite.Db,
@@ -115,11 +92,11 @@ pub fn flushBatch(
     metadata_cache: anytype,
     batch: *std.ArrayListUnmanaged(WriteOp),
     last_batch_time: *i64,
-) !void {
+) void {
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-    var eviction_keys = std.ArrayList([]const u8).empty;
+    var eviction_keys = std.ArrayListUnmanaged([]const u8).empty;
     defer {
         for (eviction_keys.items) |k| allocator.free(k);
         eviction_keys.deinit(allocator);
@@ -238,7 +215,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .begin_transaction => |top| {
                         if (batch.items.len > 0) {
-                            try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
                         }
                         if (ctx.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
                             ctx.transaction_active.store(true, .release);
@@ -254,7 +231,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .commit_transaction => |top| {
                         if (batch.items.len > 0) {
-                            try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -281,7 +258,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .rollback_transaction => |top| {
                         if (batch.items.len > 0) {
-                            try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -307,10 +284,13 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .checkpoint => |cop| {
                         if (batch.items.len > 0) {
-                            try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
                         }
-                        const stats = try connection.internalExecuteCheckpoint(&ctx.writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode);
-                        cop.completion_signal.signalWithResult(stats);
+                        if (connection.internalExecuteCheckpoint(&ctx.writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
+                            cop.completion_signal.signalWithResult(stats);
+                        } else |err| {
+                            cop.completion_signal.signal(reader.classifyError(err));
+                        }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
                         ctx.flush_cond.broadcast();
@@ -329,7 +309,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
             (batch.items.len > 0 and time_since_last >= batch_timeout);
 
         if (should_flush) {
-            try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
         } else {
             ctx.write_mutex.lock();
             defer ctx.write_mutex.unlock();
@@ -365,7 +345,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
     }
 
     if (batch.items.len > 0) {
-        try flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+        flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
     }
 }
 

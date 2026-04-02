@@ -331,7 +331,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 }
 
                 // 2. Handle capacity limit if set
-                var evicted_batch = std.ArrayList(struct { key: []const u8, value: *CacheEntry }).empty;
+                var evicted_batch = std.ArrayListUnmanaged(struct { key: []const u8, value: *CacheEntry }).empty;
                 defer evicted_batch.deinit(self.allocator);
 
                 if (options.max_capacity) |max| {
@@ -486,7 +486,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 }
 
                 var it = old_entries.iterator();
-                var evicted_entries = std.ArrayList(struct { key: []const u8, value: *CacheEntry }).empty;
+                var evicted_entries = std.ArrayListUnmanaged(struct { key: []const u8, value: *CacheEntry }).empty;
                 defer evicted_entries.deinit(self.allocator);
 
                 while (it.next()) |entry| {
