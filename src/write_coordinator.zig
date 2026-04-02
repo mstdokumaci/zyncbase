@@ -138,28 +138,61 @@ pub const WriteCoordinator = struct {
 
         const cm = self.connection_manager orelse return;
 
+        // 1. Build the common message prefix once.
+        // A StoreDelta message has 5 keys: type, namespace, collection, value, and subscription_id.
+        // We encode the first 4 pairs and the key of the 5th pair once.
+        var common = std.ArrayListUnmanaged(u8).empty;
+        defer common.deinit(arena);
+        const writer = common.writer(arena);
+
+        // FixMap header for 5 elements (0x80 | 5)
+        try writer.writeByte(0x85);
+
+        // Pre-create payloads for keys to avoid redundant arena allocations
+        const type_k = try Payload.strToPayload("type", arena);
+        const type_v = try Payload.strToPayload("StoreDelta", arena);
+        const ns_k = try Payload.strToPayload("namespace", arena);
+        const ns_v = try Payload.strToPayload(change.namespace, arena);
+        const coll_k = try Payload.strToPayload("collection", arena);
+        const coll_v = try Payload.strToPayload(change.collection, arena);
+        const val_k = try Payload.strToPayload("value", arena);
+        const sub_k = try Payload.strToPayload("subscription_id", arena);
+
+        // Encode common pairs
+        try msgpack.encode(type_k, writer);
+        try msgpack.encode(type_v, writer);
+
+        try msgpack.encode(ns_k, writer);
+        try msgpack.encode(ns_v, writer);
+
+        try msgpack.encode(coll_k, writer);
+        try msgpack.encode(coll_v, writer);
+
+        try msgpack.encode(val_k, writer);
+        const value_p = if (change.operation == .delete) .nil else change.new_row orelse .nil;
+        try msgpack.encode(value_p, writer);
+
+        // Encode the key for subscription_id; the value is recipient-specific
+        try msgpack.encode(sub_k, writer);
+
+        const prefix = common.items;
+
+        // 2. Broadcast to all matching connections
+        // Reuse a single buffer for the per-recipient assembly
+        var out = std.ArrayListUnmanaged(u8).empty;
+        defer out.deinit(arena);
         for (matches) |match| {
+            out.clearRetainingCapacity();
+            try out.appendSlice(arena, prefix);
+            try msgpack.encode(Payload.uintToPayload(match.subscription_id), out.writer(arena));
+
             const conn = cm.acquireConnection(match.connection_id) catch |err| {
                 std.log.debug("Failed to acquire connection {} for notification: {}", .{ match.connection_id, err });
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            // Construct StoreDelta message
-            var msg = msgpack.Payload.mapPayload(arena);
-            try msg.mapPut("type", try msgpack.Payload.strToPayload("StoreDelta", arena));
-            try msg.mapPut("subscription_id", msgpack.Payload.uintToPayload(match.subscription_id));
-            try msg.mapPut("namespace", try msgpack.Payload.strToPayload(change.namespace, arena));
-            try msg.mapPut("collection", try msgpack.Payload.strToPayload(change.collection, arena));
-
-            if (change.operation == .delete) {
-                try msg.mapPut("value", .nil);
-            } else if (change.new_row) |new| {
-                try msg.mapPut("value", try msgpack.clonePayload(new, arena));
-            }
-
-            const encoded = try msgpack.encodePayload(arena, msg);
-            conn.ws.send(encoded, .binary);
+            conn.ws.send(out.items, .binary);
         }
     }
 
