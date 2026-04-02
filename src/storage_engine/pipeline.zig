@@ -368,9 +368,9 @@ pub fn executeInsert(
     defer allocator.free(ns_z);
 
     var bind_idx: c_int = 1;
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, bind_idx, id_z.ptr, @intCast(op.id.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     bind_idx += 1;
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, bind_idx, ns_z.ptr, @intCast(op.namespace.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     bind_idx += 1;
 
     for (op.values) |val| {
@@ -401,8 +401,8 @@ pub fn executeUpdate(
     const ns_z = try allocator.dupeZ(u8, op.namespace);
     defer allocator.free(ns_z);
 
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     try reader.bindTypedValue(stmt, 3, op.values[0]);
     if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
@@ -425,8 +425,8 @@ pub fn executeDelete(
     const ns_z = try allocator.dupeZ(u8, op.namespace);
     defer allocator.free(ns_z);
 
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len), types.getSqliteTransient()) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc != sqlite.c.SQLITE_DONE) return reader.classifyStepError(conn);
