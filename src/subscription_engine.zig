@@ -246,6 +246,57 @@ pub const SubscriptionEngine = struct {
         return try matches.toOwnedSlice(allocator);
     }
 
+    const SortableCondition = struct {
+        cond: Condition,
+        val_str: []const u8,
+
+        fn lessThan(_: void, a: SortableCondition, b: SortableCondition) bool {
+            const f = std.mem.order(u8, a.cond.field, b.cond.field);
+            if (f != .eq) return f == .lt;
+            const o = std.math.order(@intFromEnum(a.cond.op), @intFromEnum(b.cond.op));
+            if (o != .eq) return o == .lt;
+            return std.mem.order(u8, a.val_str, b.val_str) == .lt;
+        }
+    };
+
+    fn appendSortedConditions(
+        allocator: Allocator,
+        list: *std.ArrayListUnmanaged(u8),
+        conditions: ?[]const Condition,
+        prefix: ?[]const u8,
+    ) !void {
+        const conds = conditions orelse return;
+        if (conds.len == 0) return;
+
+        if (prefix) |p| try list.appendSlice(allocator, p);
+
+        var sortable = try allocator.alloc(SortableCondition, conds.len);
+        defer allocator.free(sortable);
+
+        var count: usize = 0;
+        errdefer {
+            for (0..count) |i| allocator.free(@constCast(sortable[i].val_str));
+        }
+
+        for (conds) |c| {
+            const val_str = if (c.value) |v|
+                try msgpack.payloadToCanonicalString(v, allocator)
+            else
+                try allocator.dupe(u8, "null");
+            sortable[count] = .{ .cond = c, .val_str = val_str };
+            count += 1;
+        }
+
+        std.sort.pdq(SortableCondition, sortable, {}, SortableCondition.lessThan);
+
+        for (sortable) |sc| {
+            const s = try std.fmt.allocPrint(allocator, "({s}:{s}:{s})", .{ sc.cond.field, @tagName(sc.cond.op), sc.val_str });
+            defer allocator.free(s);
+            try list.appendSlice(allocator, s);
+            allocator.free(@constCast(sc.val_str));
+        }
+    }
+
     fn toCanonicalFilterKey(allocator: Allocator, ns: []const u8, coll: []const u8, filter: QueryFilter) ![]u8 {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(allocator);
@@ -255,25 +306,9 @@ pub const SubscriptionEngine = struct {
         defer allocator.free(base);
         try list.appendSlice(allocator, base);
 
-        if (filter.conditions) |conds| {
-            for (conds) |c| {
-                const val_str = if (c.value) |v| try msgpack.payloadToCanonicalString(v, allocator) else try allocator.dupe(u8, "null");
-                defer allocator.free(val_str);
-                const s = try std.fmt.allocPrint(allocator, "({s}:{s}:{s})", .{ c.field, @tagName(c.op), val_str });
-                defer allocator.free(s);
-                try list.appendSlice(allocator, s);
-            }
-        }
-        if (filter.or_conditions) |or_conds| {
-            try list.appendSlice(allocator, ":OR:");
-            for (or_conds) |c| {
-                const val_str = if (c.value) |v| try msgpack.payloadToCanonicalString(v, allocator) else try allocator.dupe(u8, "null");
-                defer allocator.free(val_str);
-                const s = try std.fmt.allocPrint(allocator, "({s}:{s}:{s})", .{ c.field, @tagName(c.op), val_str });
-                defer allocator.free(s);
-                try list.appendSlice(allocator, s);
-            }
-        }
+        try appendSortedConditions(allocator, &list, filter.conditions, null);
+        try appendSortedConditions(allocator, &list, filter.or_conditions, ":OR:");
+
         if (filter.limit) |l| {
             const s = try std.fmt.allocPrint(allocator, ":L:{}", .{l});
             defer allocator.free(s);

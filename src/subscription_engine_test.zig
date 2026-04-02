@@ -219,3 +219,38 @@ test "SubscriptionEngine: case-insensitive string matching" {
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, row));
     }
 }
+
+test "SubscriptionEngine: group sharing with different condition order" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const val1 = try msgpack.Payload.strToPayload("A", allocator);
+    defer val1.free(allocator);
+    const val2 = try msgpack.Payload.strToPayload("B", allocator);
+    defer val2.free(allocator);
+
+    // Filter 1: status=A, type=B
+    const filter1 = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "status", .op = .eq, .value = val1 },
+            .{ .field = "type", .op = .eq, .value = val2 },
+        },
+    };
+
+    // Filter 2: type=B, status=A (different order)
+    const filter2 = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "type", .op = .eq, .value = val2 },
+            .{ .field = "status", .op = .eq, .value = val1 },
+        },
+    };
+
+    const first = try engine.subscribe("ns", "coll", filter1, 1, 101);
+    const second = try engine.subscribe("ns", "coll", filter2, 2, 102);
+
+    try testing.expect(first);
+    try testing.expect(!second); // Should share group!
+
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+}
