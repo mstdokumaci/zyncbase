@@ -9,7 +9,9 @@ const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
 /// Safe definition of sqlite_transient to avoid alignment errors with TSAN on ARM.
-pub const sqlite_transient: sqlite.c.sqlite3_destructor_type = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+/// We store this as a usize (-1) to bypass strict comptime alignment checks
+/// for function pointers in sanitize=thread builds.
+pub const sqlite_transient: usize = @bitCast(@as(isize, -1));
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
