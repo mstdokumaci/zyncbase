@@ -134,3 +134,11 @@ int Bun__HTTPMethod__from(void* str, size_t len) {
 const char *ares_inet_ntop(int af, const void *src, char *dst, size_t size) {
     return inet_ntop(af, src, dst, (socklen_t)size);
 }
+
+// =============================================================================
+// SQLite Helpers
+// =============================================================================
+// Define a sentinel symbol that mirrors SQLITE_TRANSIENT (-1).
+// This is used by Zig to avoid alignment errors that occur when casting -1 
+// directly to a function pointer type in a TSAN-instrumented ARM64 build.
+const void* const zyncbase_sqlite_transient = (void*)(intptr_t)-1;
