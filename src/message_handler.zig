@@ -562,6 +562,7 @@ pub const MessageHandler = struct {
         const sub_id: u64 = if (sub_id_p == .uint) sub_id_p.uint else if (sub_id_p == .int) @intCast(sub_id_p.int) else return error.InvalidSubscriptionId;
 
         const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
+        defer filter.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
         try conn.subscription_ids.append(conn.allocator, sub_id);
@@ -621,6 +622,7 @@ pub const MessageHandler = struct {
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
 
         const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
+        defer filter.deinit(arena_allocator);
 
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
