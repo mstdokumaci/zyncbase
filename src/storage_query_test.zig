@@ -228,3 +228,158 @@ fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
     const val = payload.map.get(key_p) orelse return error.KeyNotFound;
     return val.str.value();
 }
+
+test "StorageEngine: LIKE wildcard escaping" {
+    const allocator = testing.allocator;
+    var context = try schema_helpers.TestContext.init(allocator, "engine-wildcard-escape");
+    defer context.deinit();
+
+    var fields_arr = [_]schema_parser.Field{
+        makeField("data", .text, false),
+    };
+    const table = try initTestTable(allocator, "wildcards", &fields_arr);
+    var memory_strategy: MemoryStrategy = undefined;
+    try memory_strategy.init(allocator);
+    defer memory_strategy.deinit();
+    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
+    // Seed data
+    const ns = "ns";
+    try seedData(allocator, engine, "1", "apple");
+    try seedData(allocator, engine, "2", "app%le");
+    try seedData(allocator, engine, "3", "ap_le");
+    try seedData(allocator, engine, "4", "a\\le");
+    try engine.flushPendingWrites();
+
+    // 1. Contains '%' - should only match "app%le", not "apple"
+    {
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .contains,
+            .value = try msgpack.Payload.strToPayload("p%l", allocator),
+        };
+        filter.conditions = conds;
+        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("2", try getMapStr(results[0], "id"));
+    }
+
+    // 2. Contains '_' - should only match "ap_le", not "apple"
+    {
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .contains,
+            .value = try msgpack.Payload.strToPayload("p_l", allocator),
+        };
+        filter.conditions = conds;
+        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("3", try getMapStr(results[0], "id"));
+    }
+
+    // 3. StartsWith 'ap_' - should only match "ap_le"
+    {
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .startsWith,
+            .value = try msgpack.Payload.strToPayload("ap_", allocator),
+        };
+        filter.conditions = conds;
+        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("3", try getMapStr(results[0], "id"));
+    }
+
+    // 4. EndsWith '%le' - should only match "app%le"
+    {
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .endsWith,
+            .value = try msgpack.Payload.strToPayload("%le", allocator),
+        };
+        filter.conditions = conds;
+        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("2", try getMapStr(results[0], "id"));
+    }
+
+    // 5. Contains '\' - should match "a\\le"
+    {
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .contains,
+            .value = try msgpack.Payload.strToPayload("\\", allocator),
+        };
+        filter.conditions = conds;
+        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("4", try getMapStr(results[0], "id"));
+    }
+
+    // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
+    {
+        // Add a document in a different namespace that we'll try to reach
+        try seedDataInNs(allocator, engine, "5", "secret", "other_ns");
+        try engine.flushPendingWrites();
+
+        var filter = query_parser.QueryFilter{};
+        defer filter.deinit(allocator);
+        var conds = try allocator.alloc(query_parser.Condition, 1);
+
+        // Malicious payload attempting to break out of the LIKE clause and OR-in a different namespace
+        const malicious = "' OR namespace_id = 'other_ns' --";
+
+        conds[0] = .{
+            .field = try allocator.dupe(u8, "data"),
+            .op = .contains,
+            .value = try msgpack.Payload.strToPayload(malicious, allocator),
+        };
+        filter.conditions = conds;
+
+        // Querying "ns" - should return 0 results because no document in "ns" has that literal string
+        var managed = try engine.selectQuery(allocator, "wildcards", "ns", filter);
+        defer managed.deinit();
+        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        try testing.expectEqual(@as(usize, 0), results.len);
+    }
+}
+
+fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8) !void {
+    try seedDataInNs(allocator, engine, id, data, "ns");
+}
+
+fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
+    const data_p = try msgpack.Payload.strToPayload(data, allocator);
+    defer data_p.free(allocator);
+    const cols = [_]storage_engine.ColumnValue{
+        .{ .name = "data", .value = data_p },
+    };
+    try engine.insertOrReplace("wildcards", id, namespace, &cols);
+}

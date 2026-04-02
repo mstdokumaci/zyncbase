@@ -1182,18 +1182,36 @@ pub const StorageEngine = struct {
             },
             .contains => {
                 const val = cond.value orelse return error.MissingConditionValue;
-                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%'");
-                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
             },
             .startsWith => {
                 const val = cond.value orelse return error.MissingConditionValue;
-                try sql_buf.appendSlice(allocator, " LIKE ? || '%'");
-                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
             },
             .endsWith => {
                 const val = cond.value orelse return error.MissingConditionValue;
-                try sql_buf.appendSlice(allocator, " LIKE '%' || ?");
-                try values.append(allocator, try payloadToTypedValue(allocator, .text, val));
+                const raw_str = switch (val) {
+                    .str => |s| s.value(),
+                    else => return error.TypeMismatch,
+                };
+                const escaped = try escapeLikePattern(allocator, raw_str);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
             },
             .isNull => try sql_buf.appendSlice(allocator, " IS NULL"),
             .isNotNull => try sql_buf.appendSlice(allocator, " IS NOT NULL"),
@@ -1491,6 +1509,18 @@ pub const StorageEngine = struct {
     }
 
     // ─── Internal write helpers ───────────────────────────────────────────────
+
+    fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        for (input) |c| {
+            if (c == '%' or c == '_' or c == '\\') {
+                try out.append(allocator, '\\');
+            }
+            try out.append(allocator, c);
+        }
+        return out.toOwnedSlice(allocator);
+    }
 
     fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) void {
         switch (value) {
