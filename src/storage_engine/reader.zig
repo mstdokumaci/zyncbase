@@ -67,13 +67,7 @@ pub const QueryResult = struct {
     values: []TypedValue,
 
     pub fn deinit(self: QueryResult, allocator: Allocator) void {
-        for (self.values) |v| {
-            switch (v) {
-                .text => |s| allocator.free(s),
-                .blob => |b| allocator.free(b),
-                else => {},
-            }
-        }
+        for (self.values) |v| v.deinit(allocator);
         allocator.free(self.values);
         allocator.free(self.sql);
     }
@@ -89,13 +83,7 @@ pub fn buildSelectQuery(
     defer sql_buf.deinit(allocator);
     var values: std.ArrayListUnmanaged(TypedValue) = .empty;
     errdefer {
-        for (values.items) |v| {
-            switch (v) {
-                .text => |s| allocator.free(s),
-                .blob => |b| allocator.free(b),
-                else => {},
-            }
-        }
+        for (values.items) |v| v.deinit(allocator);
         values.deinit(allocator);
     }
 
@@ -233,6 +221,17 @@ pub fn classifyError(err: anyerror) anyerror {
     };
 }
 
+pub fn classifyStepError(db: *sqlite.Db) anyerror {
+    const rc = sqlite.c.sqlite3_errcode(db.db);
+    return switch (rc) {
+        sqlite.c.SQLITE_CONSTRAINT => StorageError.ConstraintViolation,
+        sqlite.c.SQLITE_FULL => StorageError.DiskFull,
+        sqlite.c.SQLITE_CORRUPT, sqlite.c.SQLITE_NOTADB => StorageError.DatabaseCorrupted,
+        sqlite.c.SQLITE_BUSY, sqlite.c.SQLITE_LOCKED => StorageError.DatabaseLocked,
+        else => error.SQLiteError,
+    };
+}
+
 pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u8) void {
     std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
 }
@@ -278,9 +277,9 @@ pub fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedV
     const rc = switch (value) {
         .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
         .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-        .text => |s| sqlite.c.sqlite3_bind_text(stmt.stmt, index, s.ptr, @intCast(s.len), sqlite.c.SQLITE_STATIC),
+        .text => |s| sqlite.c.sqlite3_bind_text(stmt.stmt, index, s.ptr, @intCast(s.len), sqlite.c.SQLITE_TRANSIENT),
         .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-        .blob => |b| sqlite.c.sqlite3_bind_blob(stmt.stmt, index, b.ptr, @intCast(b.len), sqlite.c.SQLITE_STATIC),
+        .blob => |b| sqlite.c.sqlite3_bind_blob(stmt.stmt, index, b.ptr, @intCast(b.len), sqlite.c.SQLITE_TRANSIENT),
         .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
     };
     if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
@@ -510,12 +509,12 @@ pub fn execSelectDocument(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_TRANSIENT) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_TRANSIENT) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
+    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
 
     const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
     defer allocator.free(col_contexts);
@@ -546,12 +545,12 @@ pub fn execSelectScalar(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, id_z.ptr, @intCast(id.len), sqlite.c.SQLITE_TRANSIENT) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_TRANSIENT) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
+    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
 
     return try readColumnValue(allocator, stmt, 0, field_ctx);
 }
@@ -569,7 +568,7 @@ pub fn execSelectCollection(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_STATIC) != sqlite.c.SQLITE_OK) return error.SQLiteError;
+    if (sqlite.c.sqlite3_bind_text(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len), sqlite.c.SQLITE_TRANSIENT) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
@@ -583,7 +582,7 @@ pub fn execSelectCollection(
     while (true) {
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
+        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
@@ -626,7 +625,7 @@ pub fn execQuery(
     while (true) {
         const rc = sqlite.c.sqlite3_step(stmt.stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return error.SQLiteError;
+        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);

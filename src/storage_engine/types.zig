@@ -78,7 +78,7 @@ pub const TypedValue = union(enum) {
     boolean: bool,
     blob: []const u8, // Owned (for arrays/complex)
     nil: void,
-    
+
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {
             .text => |s| allocator.free(s),

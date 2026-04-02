@@ -202,27 +202,27 @@ pub const StorageEngine = struct {
         const gpa = self.allocator; // Assuming allocator is the general purpose allocator
         self.schema_metadata.deinit();
 
-        // 1.. Signal shutdown to the thread
+        // 1. Signal shutdown to the thread
         self.shutdown_requested.store(true, .release);
         self.write_cond.signal();
 
-        // 2.. Wait for the thread to exit cleanly
+        // 2. Wait for the thread to exit cleanly
         if (self.write_thread) |thread| {
             thread.join();
         }
 
-        // 3.. Deinit cache
+        // 3. Deinit cache
         self.metadata_cache.deinit();
         self.writer_conn.deinit();
 
-        // 4.. Clean up readers
+        // 4. Clean up readers
         for (self.reader_pool) |*node| {
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
         gpa.free(self.db_path);
 
-        // 5.. Clean up the queues and objects
+        // 5. Clean up the queues and objects
         self.write_queue.deinit();
         self.node_pool.deinit();
 

@@ -69,13 +69,7 @@ pub fn buildInsertOrReplaceOp(
     const values = try allocator.alloc(TypedValue, columns.len);
     var initialized_count: usize = 0;
     errdefer {
-        for (values[0..initialized_count]) |v| {
-            switch (v) {
-                .text => |s| allocator.free(s),
-                .blob => |b| allocator.free(b),
-                else => {},
-            }
-        }
+        for (values[0..initialized_count]) |v| v.deinit(allocator);
         allocator.free(values);
     }
     for (columns, 0..) |col, i| {
@@ -139,11 +133,7 @@ pub fn buildUpdateFieldOp(
     const values = try allocator.alloc(TypedValue, 1);
     values[0] = .nil;
     errdefer {
-        switch (values[0]) {
-            .text => |s| allocator.free(s),
-            .blob => |b| allocator.free(b),
-            else => {},
-        }
+        values[0].deinit(allocator);
         allocator.free(values);
     }
     values[0] = try reader.payloadToTypedValue(allocator, field_sql_type, value);
