@@ -117,7 +117,6 @@ pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path
 }
 
 pub fn reconnectWithBackoff(
-    allocator: Allocator,
     db_path: [:0]const u8,
     in_memory: bool,
     writer_conn: *sqlite.Db,
@@ -133,7 +132,7 @@ pub fn reconnectWithBackoff(
             config.max_attempts,
         });
 
-        const reconnect_result = attemptReconnect(allocator, db_path, in_memory, writer_conn, reader_pool);
+        const reconnect_result = attemptReconnect(db_path, in_memory, writer_conn, reader_pool);
         if (reconnect_result) {
             std.log.info("Database reconnection successful after {} attempts", .{attempt + 1});
             return;
@@ -156,13 +155,11 @@ pub fn reconnectWithBackoff(
 }
 
 pub fn attemptReconnect(
-    allocator: Allocator,
     db_path: [:0]const u8,
     in_memory: bool,
     writer_conn: *sqlite.Db,
     reader_pool: []ReaderNode,
 ) !void {
-    _ = allocator;
     // Close existing connections
     writer_conn.deinit();
     for (reader_pool) |*reader_node| {

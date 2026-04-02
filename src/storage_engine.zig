@@ -338,7 +338,6 @@ pub const StorageEngine = struct {
     /// Attempt to reconnect to database with exponential backoff
     fn reconnectWithBackoff(self: *StorageEngine) !void {
         return connection.reconnectWithBackoff(
-            self.allocator,
             self.db_path,
             self.options.in_memory,
             &self.writer_conn,
@@ -349,7 +348,6 @@ pub const StorageEngine = struct {
 
     fn attemptReconnect(self: *StorageEngine) !void {
         return connection.attemptReconnect(
-            self.allocator,
             self.db_path,
             self.options.in_memory,
             &self.writer_conn,
