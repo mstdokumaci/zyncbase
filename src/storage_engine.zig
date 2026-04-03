@@ -442,7 +442,7 @@ pub const StorageEngine = struct {
         if (payload) |p| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
-                const cache_payload = try msgpack.clonePayload(p, self.allocator);
+                const cache_payload = try p.deepClone(self.allocator);
                 errdefer cache_payload.free(self.allocator);
                 try self.metadata_cache.update(cache_key, cache_payload);
             }

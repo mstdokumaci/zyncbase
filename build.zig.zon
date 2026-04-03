@@ -4,12 +4,12 @@
     // Licensed under BSL 1.1 (Business Source License). See LICENSE for details.
     .dependencies = .{
         .sqlite = .{
-            .url = "https://github.com/vrischmann/zig-sqlite/archive/refs/heads/master.tar.gz",
+            .url = "https://github.com/vrischmann/zig-sqlite/archive/0b75ba276d34de3141ec1697e3ef7c836d7b38e7.tar.gz",
             .hash = "sqlite-3.48.0-F2R_a8eODgD9X8XjvWlZ1K7C-tDuHae4FuShM2N-yIT2",
         },
         .zig_msgpack = .{
-            .url = "https://github.com/zigcc/zig-msgpack/archive/73b174dbf95cd0d670cf5259f9cefe264fabba39.tar.gz",
-            .hash = "zig_msgpack-0.0.14-evvueIkqBQA7F_-8hpmPYvAjmg9MOWJLm6p8sb0HnGem",
+            .url = "https://github.com/zigcc/zig-msgpack/archive/2795481d1ae75ac5458736e86166e7964116ecba.tar.gz",
+            .hash = "zig_msgpack-0.0.14-evvueEc7BQATytDqy8wFvDb883Jv3yLk_8cF5EoYaKFB",
         },
         .zwanzig = .{
             .url = "https://github.com/forketyfork/zwanzig/archive/refs/tags/v0.11.0.tar.gz",

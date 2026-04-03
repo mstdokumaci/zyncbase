@@ -30,10 +30,12 @@ pub const Condition = struct {
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
+        const field = try allocator.dupe(u8, self.field);
+        errdefer allocator.free(field);
         return .{
-            .field = try allocator.dupe(u8, self.field),
+            .field = field,
             .op = self.op,
-            .value = if (self.value) |v| try msgpack.clonePayload(v, allocator) else null,
+            .value = if (self.value) |v| try v.deepClone(allocator) else null,
         };
     }
 };
@@ -64,8 +66,10 @@ pub const Cursor = struct {
     }
 
     pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
+        const sort_value = try self.sort_value.deepClone(allocator);
+        errdefer sort_value.free(allocator);
         return .{
-            .sort_value = try msgpack.clonePayload(self.sort_value, allocator),
+            .sort_value = sort_value,
             .id = try allocator.dupe(u8, self.id),
         };
     }
@@ -200,7 +204,11 @@ pub fn parseQueryFilter(
             if (value.arr[1] != .str) return error.InvalidMessageFormat;
             if (after) |old| old.deinit(allocator);
             after = Cursor{
-                .sort_value = try msgpack.clonePayload(value.arr[0], allocator),
+                .sort_value = blk: {
+                    const p = try value.arr[0].deepClone(allocator);
+                    errdefer p.free(allocator);
+                    break :blk p;
+                },
                 .id = try allocator.dupe(u8, value.arr[1].str.value()),
             };
         }
@@ -267,11 +275,12 @@ fn parseCondition(
 
     var value: ?msgpack.Payload = null;
     if (arr.len == 3) {
-        value = try msgpack.clonePayload(arr[2], allocator);
+        value = try arr[2].deepClone(allocator);
     } else {
         // isNull and isNotNull don't require value
         if (op != .isNull and op != .isNotNull) return error.InvalidConditionFormat;
     }
+    errdefer if (value) |v| v.free(allocator);
 
     return Condition{
         .field = try allocator.dupe(u8, field),
