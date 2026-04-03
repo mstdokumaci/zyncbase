@@ -154,6 +154,7 @@ fn setupHandlerWithArraySchema(
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = tables,
     };
+    defer schema_manager.freeSchema(allocator, schema);
 
     return AppTestContext.initWithSchema(allocator, prefix, schema);
 }
@@ -371,6 +372,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
     };
 
     const schema = schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    defer schema_manager.freeSchema(allocator, schema);
 
     var app = try AppTestContext.initWithSchema(allocator, "mh-resolve-field", schema);
     defer app.deinit();
@@ -463,6 +465,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     };
 
     const schema = schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    defer schema_manager.freeSchema(allocator, schema);
 
     var app = try AppTestContext.initWithSchema(allocator, "mh-deep-nested", schema);
     defer app.deinit();

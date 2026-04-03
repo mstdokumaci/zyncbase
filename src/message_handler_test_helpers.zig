@@ -60,10 +60,13 @@ pub const AppTestContext = struct {
     }
 
     pub fn initWithSchema(allocator: std.mem.Allocator, prefix: []const u8, schema: schema_manager.Schema) !AppTestContext {
+        const cloned_schema = try schema.clone(allocator);
+        errdefer schema_manager.freeSchema(allocator, cloned_schema);
+
         const sm = try allocator.create(SchemaManager);
         errdefer allocator.destroy(sm);
 
-        const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
+        const metadata = try schema_manager.SchemaMetadata.init(allocator, &cloned_schema);
         errdefer {
             var m = metadata;
             m.deinit();
@@ -71,10 +74,10 @@ pub const AppTestContext = struct {
 
         sm.* = .{
             .allocator = allocator,
-            .schema = schema,
+            .schema = cloned_schema,
             .metadata = metadata,
         };
-        errdefer sm.deinit();
+
         return initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
