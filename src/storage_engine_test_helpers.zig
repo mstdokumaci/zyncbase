@@ -80,12 +80,15 @@ pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !*Schema
     errdefer allocator.destroy(sm);
 
     // Clone tables so SchemaManager can own them independently of the caller's stack
-    var cloned_tables = try allocator.alloc(Table, tables.len);
+    const cloned_tables = try allocator.alloc(Table, tables.len);
+    var i: usize = 0;
     errdefer {
+        for (cloned_tables[0..i]) |t| schema_manager.freeTable(allocator, t);
         allocator.free(cloned_tables);
     }
-    for (tables, 0..) |t, i| {
+    for (tables) |t| {
         cloned_tables[i] = try t.clone(allocator);
+        i += 1;
     }
 
     const schema = Schema{

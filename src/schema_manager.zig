@@ -13,6 +13,8 @@ pub const OnDelete = schema_parser.OnDelete;
 pub const TableMetadata = schema_parser.TableMetadata;
 pub const SchemaMetadata = schema_parser.SchemaMetadata;
 pub const freeSchema = schema_parser.freeSchema;
+pub const freeTable = schema_parser.freeTable;
+pub const freeField = schema_parser.freeField;
 
 /// SchemaManager centralizes schema metadata and provides efficient lookup and validation.
 /// It is initialized once at startup and remains immutable for the lifetime of the server.

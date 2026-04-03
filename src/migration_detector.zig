@@ -118,8 +118,8 @@ pub const MigrationDetector = struct {
                     if (!typesMatch(field.sql_type, db_type)) {
                         const owned_table = try self.allocator.dupe(u8, table.name);
                         errdefer self.allocator.free(owned_table);
-                        const owned_field = try self.dupeField(field);
-                        errdefer self.freeFieldOwned(owned_field);
+                        const owned_field = try field.clone(self.allocator);
+                        errdefer schema_manager.freeField(self.allocator, owned_field);
                         try changes.append(self.allocator, .{
                             .kind = .change_type,
                             .table_name = owned_table,
@@ -129,8 +129,8 @@ pub const MigrationDetector = struct {
                 } else {
                     const owned_table = try self.allocator.dupe(u8, table.name);
                     errdefer self.allocator.free(owned_table);
-                    const owned_field = try self.dupeField(field);
-                    errdefer self.freeFieldOwned(owned_field);
+                    const owned_field = try field.clone(self.allocator);
+                    errdefer schema_manager.freeField(self.allocator, owned_field);
                     try changes.append(self.allocator, .{
                         .kind = .add_column,
                         .table_name = owned_table,
@@ -192,25 +192,6 @@ pub const MigrationDetector = struct {
 
     fn freeChange(self: *MigrationDetector, c: Change) void {
         self.allocator.free(c.table_name);
-        if (c.field) |f| self.freeFieldOwned(f);
-    }
-
-    fn freeFieldOwned(self: *MigrationDetector, f: schema_manager.Field) void {
-        self.allocator.free(f.name);
-        if (f.references) |r| self.allocator.free(r);
-    }
-
-    fn dupeField(self: *MigrationDetector, f: schema_manager.Field) !schema_manager.Field {
-        const owned_name = try self.allocator.dupe(u8, f.name);
-        errdefer self.allocator.free(owned_name);
-        const owned_refs = if (f.references) |r| try self.allocator.dupe(u8, r) else null;
-        return schema_manager.Field{
-            .name = owned_name,
-            .sql_type = f.sql_type,
-            .required = f.required,
-            .indexed = f.indexed,
-            .references = owned_refs,
-            .on_delete = f.on_delete,
-        };
+        if (c.field) |f| schema_manager.freeField(self.allocator, f);
     }
 };
