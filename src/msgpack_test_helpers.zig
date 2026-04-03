@@ -138,17 +138,31 @@ pub fn createStoreQueryMessage(
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
-    try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreQuery", allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload("StoreQuery", allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("type", k_val);
+    }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
-    try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("namespace", k_val);
+    }
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(collection, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("collection", k_val);
+    }
 
     // Flat filter fields
     if (filter == .map) {
         var it = filter.map.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* == .str) {
-                try p.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(allocator));
+                const cloned = try entry.value_ptr.*.deepClone(allocator);
+                errdefer cloned.free(allocator);
+                try p.mapPut(entry.key_ptr.*.str.value(), cloned);
             }
         }
     }

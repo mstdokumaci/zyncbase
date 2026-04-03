@@ -70,19 +70,26 @@ pub const WriteCoordinator = struct {
 
         // 2. Perform optimistic merge to compute new state for notifications
         const new_row = try self.mergeRow(arena, old_row, fields);
+        defer new_row.free(arena);
 
-        // 3. Persist the change (StorageEngine now handles non-destructive UPSERT)
-        try self.storage_engine.insertOrReplace(table, doc_id, namespace, fields);
+        const old_row_cloned = if (old_row) |o| try o.deepClone(arena) else null;
+        errdefer {
+            if (old_row_cloned) |o| o.free(arena);
+        }
+        const new_row_cloned = try new_row.deepClone(arena);
+        errdefer new_row_cloned.free(arena);
 
-        // 4. Notify subscribers
         const change = RowChange{
             .namespace = namespace,
             .collection = table,
             .operation = if (old_row != null) .update else .insert,
-            .old_row = if (old_row) |o| try o.deepClone(arena) else null,
-            .new_row = try new_row.deepClone(arena),
+            .old_row = old_row_cloned,
+            .new_row = new_row_cloned,
         };
+        defer change.deinit(arena);
+
         try self.broadcastChange(arena, change);
+        try self.storage_engine.insertOrReplace(table, doc_id, namespace, fields);
     }
 
     /// Coordinates a StoreRemove operation.
@@ -108,27 +115,45 @@ pub const WriteCoordinator = struct {
             try self.storage_engine.updateField(table, doc_id, namespace, field, .nil);
 
             const new_row = if (old_row) |old| try self.removeFieldFromRow(arena, old, field) else null;
+            defer {
+                if (new_row) |nr| nr.free(arena);
+            }
+
+            const old_row_cloned = if (old_row) |o| try o.deepClone(arena) else null;
+            errdefer {
+                if (old_row_cloned) |o| o.free(arena);
+            }
+            const new_row_cloned = if (new_row) |nr| try nr.deepClone(arena) else null;
+            errdefer {
+                if (new_row_cloned) |nr| nr.free(arena);
+            }
 
             const change = RowChange{
                 .namespace = namespace,
                 .collection = table,
                 .operation = .update,
-                .old_row = if (old_row) |o| try o.deepClone(arena) else null,
-                .new_row = if (new_row) |nr| try nr.deepClone(arena) else null,
+                .old_row = old_row_cloned,
+                .new_row = new_row_cloned,
             };
+            defer change.deinit(arena);
             try self.broadcastChange(arena, change);
         } else {
             // Full document delete
-            try self.storage_engine.deleteDocument(table, doc_id, namespace);
+            const old_row_actual = old_row orelse return;
+            const old_row_cloned = try old_row_actual.deepClone(arena);
+            errdefer old_row_cloned.free(arena);
 
             const change = RowChange{
                 .namespace = namespace,
                 .collection = table,
                 .operation = .delete,
-                .old_row = if (old_row) |o| try o.deepClone(arena) else null,
+                .old_row = old_row_cloned,
                 .new_row = null,
             };
+            defer change.deinit(arena);
+
             try self.broadcastChange(arena, change);
+            try self.storage_engine.deleteDocument(table, doc_id, namespace);
         }
     }
 
@@ -150,13 +175,21 @@ pub const WriteCoordinator = struct {
 
         // Pre-create payloads for keys to avoid redundant arena allocations
         const type_k = try Payload.strToPayload("type", arena);
+        defer type_k.free(arena);
         const type_v = try Payload.strToPayload("StoreDelta", arena);
+        defer type_v.free(arena);
         const ns_k = try Payload.strToPayload("namespace", arena);
+        defer ns_k.free(arena);
         const ns_v = try Payload.strToPayload(change.namespace, arena);
+        defer ns_v.free(arena);
         const coll_k = try Payload.strToPayload("collection", arena);
+        defer coll_k.free(arena);
         const coll_v = try Payload.strToPayload(change.collection, arena);
+        defer coll_v.free(arena);
         const val_k = try Payload.strToPayload("value", arena);
+        defer val_k.free(arena);
         const sub_k = try Payload.strToPayload("subscription_id", arena);
+        defer sub_k.free(arena);
 
         // Encode common pairs
         try msgpack.encode(type_k, writer);
@@ -199,20 +232,25 @@ pub const WriteCoordinator = struct {
     pub fn mergeRow(self: *WriteCoordinator, arena: Allocator, old_row: ?Payload, fields: []const ColumnValue) !Payload {
         _ = self;
         var new_map = msgpack.Payload.mapPayload(arena);
+        errdefer new_map.free(arena);
 
         // 1. Copy over old row state
         if (old_row) |old| {
             if (old == .map) {
                 var it = old.map.iterator();
                 while (it.next()) |entry| {
-                    try new_map.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(arena));
+                    const cloned_val = try entry.value_ptr.*.deepClone(arena);
+                    errdefer cloned_val.free(arena);
+                    try new_map.mapPut(entry.key_ptr.*.str.value(), cloned_val);
                 }
             }
         }
 
         // 2. Apply new fields
         for (fields) |col| {
-            try new_map.mapPut(col.name, try col.value.deepClone(arena));
+            const cloned_val = try col.value.deepClone(arena);
+            errdefer cloned_val.free(arena);
+            try new_map.mapPut(col.name, cloned_val);
         }
 
         return new_map;
@@ -223,11 +261,15 @@ pub const WriteCoordinator = struct {
         if (row != .map) return row;
 
         var new_map = msgpack.Payload.mapPayload(arena);
+        errdefer new_map.free(arena);
+
         var it = row.map.map.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*.str.value();
             if (std.mem.eql(u8, key, field)) continue;
-            try new_map.mapPut(key, try entry.value_ptr.*.deepClone(arena));
+            const cloned_val = try entry.value_ptr.*.deepClone(arena);
+            errdefer cloned_val.free(arena);
+            try new_map.mapPut(key, cloned_val);
         }
         return new_map;
     }
