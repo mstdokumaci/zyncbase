@@ -4,9 +4,10 @@ const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const ColumnValue = storage_mod.ColumnValue;
 const msgpack = @import("msgpack_test_helpers.zig");
-const schema_parser = @import("schema_parser.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 
 // Helper to create a ColumnValue array for a simple user object
 fn createUserCols(allocator: std.mem.Allocator, name: []const u8, age: i64) ![]ColumnValue {
@@ -29,34 +30,35 @@ test "Storage: CRUD operations" {
     const tmp_path = context.test_dir;
 
     // Setup schema
-    var fields = try allocator.alloc(schema_parser.Field, 2);
+    var fields = try allocator.alloc(schema_manager.Field, 2);
+    defer allocator.free(fields);
     fields[0] = .{ .name = "name", .sql_type = .text, .required = true, .indexed = false, .references = null, .on_delete = null };
     fields[1] = .{ .name = "age", .sql_type = .integer, .required = true, .indexed = false, .references = null, .on_delete = null };
-    const table = schema_parser.Table{ .name = "users", .fields = fields };
 
-    const schema_ptr = try allocator.create(schema_parser.Schema);
-    const tables = try allocator.alloc(schema_parser.Table, 1);
-    tables[0] = try table.clone(allocator);
-    schema_ptr.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    var tables = try allocator.alloc(schema_manager.Table, 1);
+    defer allocator.free(tables);
+    tables[0] = .{ .name = "users", .fields = fields };
+
+    const schema = schema_manager.Schema{ .version = "1.0.0", .tables = tables };
+    const sm = try SchemaManager.initWithSchema(allocator, try schema.clone(allocator));
+    defer sm.deinit();
 
     // Initialize memory strategy
     var memory_strategy: @import("memory_strategy.zig").MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
 
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr, .{}, .{ .in_memory = true });
-    defer {
-        storage.deinit();
-        schema_parser.freeSchema(allocator, schema_ptr.*);
-        allocator.destroy(schema_ptr);
-    }
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, sm, .{}, .{ .in_memory = true });
+    defer storage.deinit();
+
     var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
+    const table_metadata = sm.getTable("users") orelse return error.TableNotFound;
+    const table = table_metadata.table;
+    const ddl = try gen.generateDDL(table.*);
     defer allocator.free(ddl);
     const ddl_z = try allocator.dupeZ(u8, ddl);
     defer allocator.free(ddl_z);
     try storage.writer_conn.execMulti(ddl_z, .{});
-    allocator.free(fields);
     // 1. Create (Insert)
     {
         const cols = try createUserCols(allocator, "Alice", 30);

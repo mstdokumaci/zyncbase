@@ -3,14 +3,15 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
+fn makeField(name: []const u8, sql_type: schema_manager.FieldType, required: bool) schema_manager.Field {
     return .{
         .name = name,
         .sql_type = sql_type,
@@ -21,30 +22,31 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
     };
 }
 
-fn initTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []schema_parser.Field) !schema_parser.Table {
+fn initTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []schema_manager.Field) !schema_manager.Table {
     _ = allocator;
-    return schema_parser.Table{ .name = name, .fields = fields };
+    return schema_manager.Table{ .name = name, .fields = fields };
 }
 
 const EngineTestContext = struct {
     engine: *StorageEngine,
-    schema: *schema_parser.Schema,
+    sm: *SchemaManager,
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *const EngineTestContext) void {
         self.engine.deinit();
-        schema_parser.freeSchema(self.allocator, self.schema.*);
-        self.allocator.destroy(self.schema);
+        self.sm.deinit();
     }
 };
 
-fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_parser.Table) !EngineTestContext {
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_manager.Table) !EngineTestContext {
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = try table.clone(allocator);
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
+    allocator.destroy(schema);
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -53,7 +55,7 @@ fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, t
     defer allocator.free(ddl_z);
     try engine.writer_conn.execMulti(ddl_z, .{});
 
-    return .{ .engine = engine, .schema = schema, .allocator = allocator };
+    return .{ .engine = engine, .sm = sm, .allocator = allocator };
 }
 
 test "StorageEngine: selectQuery basic equality" {
@@ -61,7 +63,7 @@ test "StorageEngine: selectQuery basic equality" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-query-basic");
     defer context.deinit();
 
-    var fields_arr = [_]schema_parser.Field{
+    var fields_arr = [_]schema_manager.Field{
         makeField("name", .text, false),
         makeField("age", .integer, false),
     };
@@ -104,11 +106,11 @@ test "StorageEngine: selectQuery with OR and ordering" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-query-or");
     defer context.deinit();
 
-    var fields_arr = [_]schema_parser.Field{
+    var fields_arr = [_]schema_manager.Field{
         makeField("name", .text, false),
         makeField("age", .integer, false),
     };
-    const table = schema_parser.Table{ .name = "users", .fields = &fields_arr };
+    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -156,7 +158,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-query-page");
     defer context.deinit();
 
-    var fields_arr = [_]schema_parser.Field{
+    var fields_arr = [_]schema_manager.Field{
         makeField("score", .integer, false),
     };
     const table = try initTestTable(allocator, "scores", &fields_arr);
@@ -234,7 +236,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-wildcard-escape");
     defer context.deinit();
 
-    var fields_arr = [_]schema_parser.Field{
+    var fields_arr = [_]schema_manager.Field{
         makeField("data", .text, false),
     };
     const table = try initTestTable(allocator, "wildcards", &fields_arr);

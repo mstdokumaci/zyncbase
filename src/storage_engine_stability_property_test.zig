@@ -3,7 +3,8 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -23,7 +24,7 @@ const schema_helpers = @import("schema_test_helpers.zig");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
+fn makeField(name: []const u8, sql_type: schema_manager.FieldType, required: bool) schema_manager.Field {
     return .{
         .name = name,
         .sql_type = sql_type,
@@ -34,22 +35,24 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
     };
 }
 
-fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
+fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_sm: *?*SchemaManager) !*StorageEngine {
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = table_name, .fields = &fields_arr };
 
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = try table.clone(allocator);
 
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = tables,
     };
 
-    out_schema.* = schema;
+    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
+    allocator.destroy(schema);
+    out_sm.* = sm;
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -68,13 +71,15 @@ test "storage: stability no crashes on concurrent errors" {
     defer context.deinit();
     const tmp_path = context.test_dir;
 
-    var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
-    const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
+    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
+    });
+    defer sm.deinit();
+
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema, .{}, .{ .in_memory = true });
+    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, sm, .{}, .{ .in_memory = true });
     defer storage.deinit();
     // Property: Server should not crash when multiple threads encounter errors simultaneously
     const num_threads = 8;
@@ -131,16 +136,15 @@ test "storage: stability continues after transaction errors" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-txn-err");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema: ?*schema_parser.Schema = null;
+    var test_sm: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm);
     defer {
         storage.deinit();
-        if (test_schema) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm) |sm| {
+            sm.deinit();
         }
     }
     // Property: Server should continue operating after transaction errors
@@ -178,16 +182,15 @@ test "storage: stability handles rapid error conditions" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-rapid-err");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema_1: ?*schema_parser.Schema = null;
+    var test_sm_1: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_1);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm_1);
     defer {
         storage.deinit();
-        if (test_schema_1) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm_1) |sm| {
+            sm.deinit();
         }
     }
     // Property: Server should handle rapid succession of errors without crashing
@@ -214,16 +217,15 @@ test "storage: stability error recovery with valid operations" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-recovery");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema_2: ?*schema_parser.Schema = null;
+    var test_sm_2: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_2);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm_2);
     defer {
         storage.deinit();
-        if (test_schema_2) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm_2) |sm| {
+            sm.deinit();
         }
     }
     // Property: Server should recover from errors and continue with valid operations
@@ -259,16 +261,15 @@ test "storage: stability resource cleanup after errors" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-resource-cleanup");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema_3: ?*schema_parser.Schema = null;
+    var test_sm_3: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_3);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm_3);
     defer {
         storage.deinit();
-        if (test_schema_3) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm_3) |sm| {
+            sm.deinit();
         }
     }
     // Property: Resources should be properly cleaned up after errors
@@ -305,16 +306,15 @@ test "storage: stability mixed error and success scenarios" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-mixed");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema_4: ?*schema_parser.Schema = null;
+    var test_sm_4: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_4);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm_4);
     defer {
         storage.deinit();
-        if (test_schema_4) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm_4) |sm| {
+            sm.deinit();
         }
     }
     // Property: Server should handle mixed scenarios of errors and successes
@@ -363,16 +363,15 @@ test "storage: stability concurrent reads during write errors" {
     var context = try schema_helpers.TestContext.init(allocator, "stability-concurrent-reads");
     defer context.deinit();
     const tmp_path = context.test_dir;
-    var test_schema_5: ?*schema_parser.Schema = null;
+    var test_sm_5: ?*SchemaManager = null;
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_5);
+    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_sm_5);
     defer {
         storage.deinit();
-        if (test_schema_5) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
+        if (test_sm_5) |sm| {
+            sm.deinit();
         }
     }
     // Property: Reads should continue working even when writes encounter errors

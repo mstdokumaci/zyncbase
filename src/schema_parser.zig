@@ -88,6 +88,18 @@ pub const TableMetadata = struct {
 pub const Schema = struct {
     version: []const u8, // "MAJOR.MINOR.PATCH"
     tables: []Table,
+
+    pub fn clone(self: Schema, allocator: Allocator) !Schema {
+        const cloned_tables = try allocator.alloc(Table, self.tables.len);
+        errdefer allocator.free(cloned_tables);
+        for (self.tables, 0..) |table, i| {
+            cloned_tables[i] = try table.clone(allocator);
+        }
+        return .{
+            .version = try allocator.dupe(u8, self.version),
+            .tables = cloned_tables,
+        };
+    }
 };
 
 pub const SchemaMetadata = struct {

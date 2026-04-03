@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
@@ -25,7 +25,7 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
     try db.execMulti(sql_z, .{});
 }
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+fn makeField(name: []const u8, sql_type: schema_manager.FieldType) schema_manager.Field {
     return .{
         .name = name,
         .sql_type = sql_type,
@@ -46,11 +46,11 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     var gen = ddl_generator.DDLGenerator.init(allocator);
 
     // Create table with [title TEXT, status TEXT]
-    var initial_fields = [_]schema_parser.Field{
+    var initial_fields = [_]schema_manager.Field{
         makeField("title", .text),
         makeField("status", .text),
     };
-    const initial_table = schema_parser.Table{ .name = "tasks", .fields = &initial_fields };
+    const initial_table = schema_manager.Table{ .name = "tasks", .fields = &initial_fields };
     const initial_ddl = try gen.generateDDL(initial_table);
     defer allocator.free(initial_ddl);
     try execMultiSql(&db, allocator, initial_ddl);
@@ -64,7 +64,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     changes[0] = .{
         .kind = .change_type,
         .table_name = "tasks",
-        .field = schema_parser.Field{
+        .field = schema_manager.Field{
             .name = "status",
             .sql_type = .integer,
             .required = false,
@@ -80,12 +80,12 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     };
 
     // Target schema: status is now INTEGER
-    var target_fields = [_]schema_parser.Field{
+    var target_fields = [_]schema_manager.Field{
         makeField("title", .text),
         makeField("status", .integer),
     };
-    var target_tables = [_]schema_parser.Table{.{ .name = "tasks", .fields = &target_fields }};
-    const target_schema = schema_parser.Schema{
+    var target_tables = [_]schema_manager.Table{.{ .name = "tasks", .fields = &target_fields }};
+    const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
     };
@@ -126,8 +126,8 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     var gen = ddl_generator.DDLGenerator.init(allocator);
 
     // Create a real table first
-    var fields = [_]schema_parser.Field{makeField("name", .text)};
-    const table = schema_parser.Table{ .name = "real_table", .fields = &fields };
+    var fields = [_]schema_manager.Field{makeField("name", .text)};
+    const table = schema_manager.Table{ .name = "real_table", .fields = &fields };
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
@@ -150,9 +150,9 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     };
 
     // Target schema does NOT contain "nonexistent_in_schema" - this will cause TableNotFoundInSchema
-    var target_fields = [_]schema_parser.Field{makeField("name", .text)};
-    var target_tables = [_]schema_parser.Table{.{ .name = "real_table", .fields = &target_fields }};
-    const target_schema = schema_parser.Schema{
+    var target_fields = [_]schema_manager.Field{makeField("name", .text)};
+    var target_tables = [_]schema_manager.Table{.{ .name = "real_table", .fields = &target_fields }};
+    const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
     };
@@ -201,12 +201,12 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
         .is_destructive = false,
     };
 
-    var target_fields = [_]schema_parser.Field{
+    var target_fields = [_]schema_manager.Field{
         makeField("username", .text),
         makeField("email", .text),
     };
-    var target_tables = [_]schema_parser.Table{.{ .name = "users", .fields = &target_fields }};
-    const target_schema = schema_parser.Schema{
+    var target_tables = [_]schema_manager.Table{.{ .name = "users", .fields = &target_fields }};
+    const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
     };
@@ -256,8 +256,8 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
 
     // Build a simple add_column plan (non-destructive so it won't be refused for that reason)
     // We need a table to exist first
-    var fields = [_]schema_parser.Field{makeField("data", .text)};
-    const table = schema_parser.Table{ .name = "docs", .fields = &fields };
+    var fields = [_]schema_manager.Field{makeField("data", .text)};
+    const table = schema_manager.Table{ .name = "docs", .fields = &fields };
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
@@ -267,7 +267,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
     changes[0] = .{
         .kind = .add_column,
         .table_name = "docs",
-        .field = schema_parser.Field{
+        .field = schema_manager.Field{
             .name = "extra",
             .sql_type = .text,
             .required = false,
@@ -282,12 +282,12 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         .is_destructive = false,
     };
 
-    var target_fields = [_]schema_parser.Field{
+    var target_fields = [_]schema_manager.Field{
         makeField("data", .text),
         makeField("extra", .text),
     };
-    var target_tables = [_]schema_parser.Table{.{ .name = "docs", .fields = &target_fields }};
-    const target_schema = schema_parser.Schema{
+    var target_tables = [_]schema_manager.Table{.{ .name = "docs", .fields = &target_fields }};
+    const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
     };

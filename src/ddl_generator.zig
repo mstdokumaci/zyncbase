@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 
 pub const DDLGenerator = struct {
     allocator: std.mem.Allocator,
@@ -11,7 +11,7 @@ pub const DDLGenerator = struct {
     /// Generate DDL for a table: CREATE TABLE IF NOT EXISTS + CREATE INDEX statements.
     /// Returns a single string with all statements separated by ";\n".
     /// Caller owns the returned slice.
-    pub fn generateDDL(self: *DDLGenerator, table: schema_parser.Table) ![]const u8 {
+    pub fn generateDDL(self: *DDLGenerator, table: schema_manager.Table) ![]const u8 {
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(self.allocator);
 

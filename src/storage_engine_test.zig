@@ -3,13 +3,14 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
+fn makeField(name: []const u8, sql_type: schema_manager.FieldType, required: bool) schema_manager.Field {
     return .{
         .name = name,
         .sql_type = sql_type,
@@ -22,27 +23,28 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool
 
 const EngineTestContext = struct {
     engine: *StorageEngine,
-    schema: *schema_parser.Schema,
+    sm: *SchemaManager,
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *const EngineTestContext) void {
         self.engine.deinit();
-        schema_parser.freeSchema(self.allocator, self.schema.*);
-        self.allocator.destroy(self.schema);
+        self.sm.deinit();
     }
 };
 
-fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_parser.Table) !EngineTestContext {
+fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_manager.Table) !EngineTestContext {
     return setupEngineWithOptions(allocator, memory_strategy, test_dir, table, .{ .in_memory = true });
 }
 
-fn setupEngineWithOptions(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_parser.Table, options: StorageEngine.Options) !EngineTestContext {
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+fn setupEngineWithOptions(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_manager.Table, options: StorageEngine.Options) !EngineTestContext {
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = try table.clone(allocator);
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
+    allocator.destroy(schema);
 
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, options);
+    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, options);
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
     const ddl = try gen.generateDDL(table);
@@ -51,7 +53,7 @@ fn setupEngineWithOptions(allocator: std.mem.Allocator, memory_strategy: *Memory
     defer allocator.free(ddl_z);
     try engine.writer_conn.execMulti(ddl_z, .{});
 
-    return .{ .engine = engine, .schema = schema, .allocator = allocator };
+    return .{ .engine = engine, .sm = sm, .allocator = allocator };
 }
 
 test "StorageEngine: init and deinit" {
@@ -62,15 +64,15 @@ test "StorageEngine: init and deinit" {
     defer context.deinit();
     const test_dir = context.test_dir;
 
-    var dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var dummy_tables = try allocator.alloc(schema_parser.Table, 1);
-    defer allocator.free(dummy_tables);
-    dummy_tables[0] = .{ .name = "_dummy", .fields = &dummy_fields };
-    const dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = dummy_tables };
+    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "_dummy",
+        .fields = &[_][]const u8{"val"},
+    }});
+    defer sm.deinit();
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema, .{}, .{ .in_memory = false });
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm, .{}, .{ .in_memory = false });
     defer engine.deinit();
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
@@ -83,8 +85,8 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-crud");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -112,8 +114,8 @@ test "StorageEngine: selectDocument non-existent key" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-nonexistent");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -130,8 +132,8 @@ test "StorageEngine: update existing document" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-update");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -164,8 +166,8 @@ test "StorageEngine: delete document" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-delete");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -197,8 +199,8 @@ test "StorageEngine: query collection" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-query");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("name", .text, false)};
-    const table = schema_parser.Table{ .name = "users", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("name", .text, false)};
+    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -225,8 +227,8 @@ test "StorageEngine: multiple namespaces" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-namespaces");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -263,13 +265,15 @@ test "StorageEngine: transaction support" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-tx");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var dummy_fields_1 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var dummy_tables_1 = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &dummy_fields_1 }};
-    const dummy_schema_1 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_1 };
+    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "_dummy",
+        .fields = &[_][]const u8{"val"},
+    }});
+    defer sm.deinit();
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_1, .{}, .{ .in_memory = true });
+    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
     defer engine.deinit();
     // Initially no transaction should be active
     try testing.expect(!engine.isTransactionActive());
@@ -296,8 +300,8 @@ test "StorageEngine: automatic rollback in batch operations" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-auto-rollback");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -330,8 +334,8 @@ test "StorageEngine: concurrent reads" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-concurrent");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -376,8 +380,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     const test_dir = context.test_dir;
     const num_keys = 50;
     {
-        var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
-        const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+        var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
+        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
         var memory_strategy: MemoryStrategy = undefined;
         try memory_strategy.init(allocator);
         defer memory_strategy.deinit();
@@ -393,8 +397,8 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         ctx.deinit(); // must not return until all writes are on disk
     }
     // Reopen the same database and verify every key is present.
-    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy_verify: MemoryStrategy = undefined;
     try memory_strategy_verify.init(allocator);
     defer memory_strategy_verify.deinit();
@@ -418,8 +422,8 @@ test "StorageEngine: client writes blocked during migration" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-migration-block");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .integer, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
@@ -446,8 +450,8 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     var context = try schema_helpers.TestContext.init(allocator, "engine-tx-race");
     defer context.deinit();
     const test_dir = context.test_dir;
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = "items", .fields = &fields_arr };
+    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();

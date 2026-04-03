@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
-const schema_parser = @import("../schema_parser.zig");
+const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
 const reader = @import("reader.zig");
 const TypedValue = types.TypedValue;
@@ -10,16 +10,16 @@ const ColumnValue = types.ColumnValue;
 
 pub fn buildInsertOrReplaceOp(
     allocator: Allocator,
-    schema_metadata: *const schema_parser.SchemaMetadata,
+    sm: *const schema_manager.SchemaManager,
     table: []const u8,
     id: []const u8,
     namespace: []const u8,
     columns: []const ColumnValue,
 ) !WriteOp {
-    try reader.validateColumns(schema_metadata, table, columns);
+    try sm.validateColumns(table, columns);
 
     // Look up table schema to determine which columns are array fields
-    const table_metadata = reader.findTable(schema_metadata, table) orelse return error.UnknownTable;
+    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
 
     // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
     // VALUES (?, ?, .., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
@@ -74,7 +74,7 @@ pub fn buildInsertOrReplaceOp(
     }
     for (columns, 0..) |col, i| {
         // Find the field schema to check its type
-        var field_type: schema_parser.FieldType = .text;
+        var field_type: schema_manager.FieldType = .text;
         for (table_metadata.table.fields) |f| {
             if (std.mem.eql(u8, f.name, col.name)) {
                 field_type = f.sql_type;
@@ -108,18 +108,18 @@ pub fn buildInsertOrReplaceOp(
 
 pub fn buildUpdateFieldOp(
     allocator: Allocator,
-    schema_metadata: *const schema_parser.SchemaMetadata,
+    sm: *const schema_manager.SchemaManager,
     table: []const u8,
     id: []const u8,
     namespace: []const u8,
     field: []const u8,
     value: msgpack.Payload,
 ) !WriteOp {
-    try reader.validateField(schema_metadata, table, field);
+    try sm.validateField(table, field);
 
     // Look up the field's sql_type to determine if it's an array field and validate type
-    const table_metadata = reader.findTable(schema_metadata, table) orelse return error.UnknownTable;
-    var field_sql_type: schema_parser.FieldType = .text;
+    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
+    var field_sql_type: schema_manager.FieldType = .text;
     for (table_metadata.table.fields) |f| {
         if (std.mem.eql(u8, f.name, field)) {
             field_sql_type = f.sql_type;
@@ -173,12 +173,12 @@ pub fn buildUpdateFieldOp(
 
 pub fn buildDeleteDocumentOp(
     allocator: Allocator,
-    schema_metadata: *const schema_parser.SchemaMetadata,
+    sm: *const schema_manager.SchemaManager,
     table: []const u8,
     id: []const u8,
     namespace: []const u8,
 ) !WriteOp {
-    try reader.validateTable(schema_metadata, table);
+    try sm.validateTable(table);
 
     const sql = try std.fmt.allocPrint(allocator, "DELETE FROM {s} WHERE id=? AND namespace_id=?", .{table});
     errdefer allocator.free(sql);

@@ -15,6 +15,7 @@ const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
 const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
+const SchemaManager = @import("schema_manager.zig").SchemaManager;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -25,6 +26,7 @@ pub const MessageHandler = struct {
     storage_engine: *StorageEngine,
     subscription_engine: *SubscriptionEngine,
     write_coordinator: *WriteCoordinator,
+    schema_manager: *const SchemaManager,
     connection_manager: ?*anyopaque = null, // Type-erased back-reference to ConnectionManager
     security_config: SecurityConfig,
 
@@ -36,6 +38,7 @@ pub const MessageHandler = struct {
         storage_engine: *StorageEngine,
         subscription_engine: *SubscriptionEngine,
         write_coordinator: *WriteCoordinator,
+        schema_manager: *const SchemaManager,
         security_config: SecurityConfig,
     ) !*MessageHandler {
         const self = try allocator.create(MessageHandler);
@@ -48,6 +51,7 @@ pub const MessageHandler = struct {
             .storage_engine = storage_engine,
             .subscription_engine = subscription_engine,
             .write_coordinator = write_coordinator,
+            .schema_manager = schema_manager,
             .security_config = security_config,
             .connection_manager = null,
         };
@@ -342,7 +346,7 @@ pub const MessageHandler = struct {
         const doc_id = segments[1];
 
         // Determine table metadata for validation
-        const tbl_md = self.storage_engine.schema_metadata.getTable(table) orelse {
+        const tbl_md = self.schema_manager.getTable(table) orelse {
             return try buildErrorResponse(arena_allocator, msg_id, "COLLECTION_NOT_FOUND");
         };
 
@@ -561,7 +565,7 @@ pub const MessageHandler = struct {
         const sub_id_p = self.getPayloadFromMap(payload.map, "subscription_id") orelse return error.MissingSubscriptionId;
         const sub_id: u64 = if (sub_id_p == .uint) sub_id_p.uint else if (sub_id_p == .int) @intCast(sub_id_p.int) else return error.InvalidSubscriptionId;
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
+        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, collection, payload);
         defer filter.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
@@ -621,7 +625,7 @@ pub const MessageHandler = struct {
         const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, &self.storage_engine.schema_metadata, collection, payload);
+        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, collection, payload);
         defer filter.deinit(arena_allocator);
 
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);

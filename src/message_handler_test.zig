@@ -45,7 +45,7 @@ test "Connection - add subscription IDs" {
 // ─── Task 4.2: Array field validation tests ──────────────────────────────────
 
 const msgpack_utils = @import("msgpack_utils.zig");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 
 /// Build a StoreSet message where the value map contains a field with a msgpack array payload.
@@ -126,7 +126,7 @@ fn setupHandlerWithArraySchema(
     prefix: []const u8,
 ) !AppTestContext {
     // Manually build schema with array field
-    const fields = try allocator.alloc(schema_parser.Field, 2);
+    const fields = try allocator.alloc(schema_manager.Field, 2);
     fields[0] = .{
         .name = try allocator.dupe(u8, "tags"),
         .sql_type = .array,
@@ -144,13 +144,13 @@ fn setupHandlerWithArraySchema(
         .on_delete = null,
     };
 
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = .{
         .name = try allocator.dupe(u8, "items"),
         .fields = fields,
     };
 
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = tables,
@@ -347,7 +347,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
     const allocator = testing.allocator;
 
     // Create a schema with a flattened multi-segment field
-    const fields = try allocator.alloc(schema_parser.Field, 2);
+    const fields = try allocator.alloc(schema_manager.Field, 2);
     fields[0] = .{
         .name = try allocator.dupe(u8, "metadata__tags"),
         .sql_type = .array,
@@ -365,13 +365,13 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         .on_delete = null,
     };
 
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = .{
         .name = try allocator.dupe(u8, "items"),
         .fields = fields,
     };
 
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = tables,
@@ -451,7 +451,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     const allocator = testing.allocator;
 
     // a.b.c -> a__b__c
-    const fields = try allocator.alloc(schema_parser.Field, 1);
+    const fields = try allocator.alloc(schema_manager.Field, 1);
     fields[0] = .{
         .name = try allocator.dupe(u8, "a__b__c"),
         .sql_type = .text,
@@ -461,13 +461,13 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         .on_delete = null,
     };
 
-    const tables = try allocator.alloc(schema_parser.Table, 1);
+    const tables = try allocator.alloc(schema_manager.Table, 1);
     tables[0] = .{
         .name = try allocator.dupe(u8, "deep"),
         .fields = fields,
     };
 
-    const schema = try allocator.create(schema_parser.Schema);
+    const schema = try allocator.create(schema_manager.Schema);
     schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 
     var app = try AppTestContext.initWithSchema(allocator, "mh-deep-nested", schema);

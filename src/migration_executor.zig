@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
@@ -52,7 +52,7 @@ pub const MigrationExecutor = struct {
     pub fn execute(
         self: *MigrationExecutor,
         plan: migration_detector.MigrationPlan,
-        target_schema: schema_parser.Schema,
+        target_schema: schema_manager.Schema,
     ) !void {
         // Nothing to do
         if (plan.changes.len == 0) {
@@ -97,7 +97,7 @@ pub const MigrationExecutor = struct {
     fn applyChange(
         self: *MigrationExecutor,
         change: migration_detector.Change,
-        target_schema: schema_parser.Schema,
+        target_schema: schema_manager.Schema,
     ) !void {
         switch (change.kind) {
             .create_table => {
@@ -130,7 +130,7 @@ pub const MigrationExecutor = struct {
         }
     }
 
-    fn recreateTable(self: *MigrationExecutor, table: schema_parser.Table) !void {
+    fn recreateTable(self: *MigrationExecutor, table: schema_manager.Table) !void {
         const name = table.name;
 
         // 1. Backup
@@ -301,7 +301,7 @@ pub const MigrationExecutor = struct {
     }
 };
 
-fn findTable(schema: schema_parser.Schema, name: []const u8) ?schema_parser.Table {
+fn findTable(schema: schema_manager.Schema, name: []const u8) ?schema_manager.Table {
     for (schema.tables) |t| {
         if (std.mem.eql(u8, t.name, name)) return t;
     }

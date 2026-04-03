@@ -75,7 +75,7 @@ test "WriteCoordinator: regression - leave notification on update" {
     try filter_payload.mapPut("conditions", Payload{ .arr = cond_arr });
 
     // Note: parseQueryFilter clones the payload, so we can use setup_arena
-    const filter = try query_parser.parseQueryFilter(allocator, &app.storage_engine.schema_metadata, table, filter_payload);
+    const filter = try query_parser.parseQueryFilter(allocator, app.schema_manager, table, filter_payload);
     defer filter.deinit(allocator);
 
     _ = try sub_engine.subscribe(namespace, table, filter, ws.getConnId(), 101);
