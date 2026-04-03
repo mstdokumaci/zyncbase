@@ -258,7 +258,7 @@ pub const WriteCoordinator = struct {
 
     fn removeFieldFromRow(self: *WriteCoordinator, arena: Allocator, row: Payload, field: []const u8) !Payload {
         _ = self;
-        if (row != .map) return row;
+        if (row != .map) return try row.deepClone(arena);
 
         var new_map = msgpack.Payload.mapPayload(arena);
         errdefer new_map.free(arena);
