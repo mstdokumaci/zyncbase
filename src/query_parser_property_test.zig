@@ -1,7 +1,8 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const testing = std.testing;
 
 test "property: random valid query filters" {
@@ -39,17 +40,17 @@ test "property: random valid query filters" {
             try root.mapPut("orderBy", .{ .arr = order_arr });
         }
 
-        const fields = [_]schema_parser.Field{
-            .{ .name = "field", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        var fields = [_]schema_manager.Field{
+            sth.makeField("field", .text, false),
         };
-        const table = schema_parser.Table{ .name = "items", .fields = @constCast(fields[0..]) };
-        const tables = [_]schema_parser.Table{table};
-        const schema = schema_parser.Schema{ .version = "1.0.0", .tables = @constCast(tables[0..]) };
+        const tables = [_]schema_manager.Table{
+            .{ .name = "items", .fields = &fields },
+        };
 
-        var schema_metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
-        defer schema_metadata.deinit();
+        const sm = try sth.createSchemaManager(allocator, &tables);
+        defer sm.deinit();
 
-        const filter = try query_parser.parseQueryFilter(allocator, &schema_metadata, "items", root);
+        const filter = try query_parser.parseQueryFilter(allocator, sm, "items", root);
         filter.deinit(allocator);
     }
 }
@@ -68,15 +69,14 @@ test "property: reject unknown field names" {
         conds_arr[0] = try generateRandomCondition(allocator, random, true, "unknown_field");
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
-        const fields = [_]schema_parser.Field{};
-        const table = schema_parser.Table{ .name = "items", .fields = @constCast(fields[0..]) };
-        const tables = [_]schema_parser.Table{table};
-        const schema = schema_parser.Schema{ .version = "1.0.0", .tables = @constCast(tables[0..]) };
+        const tables = [_]schema_manager.Table{
+            .{ .name = "items", .fields = &[_]schema_manager.Field{} },
+        };
 
-        var schema_metadata = try schema_parser.SchemaMetadata.init(allocator, &schema);
-        defer schema_metadata.deinit();
+        const sm = try sth.createSchemaManager(allocator, &tables);
+        defer sm.deinit();
 
-        const result = query_parser.parseQueryFilter(allocator, &schema_metadata, "items", root);
+        const result = query_parser.parseQueryFilter(allocator, sm, "items", root);
         try testing.expectError(error.UnknownField, result);
     }
 }

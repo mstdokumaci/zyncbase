@@ -7,7 +7,8 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const helpers = @import("message_handler_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
@@ -330,13 +331,13 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_2 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_2 = [_]schema_parser.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_2 },
-            .{ .name = "table", .fields = &dummy_fields_2 },
-        };
-        const dummy_schema_2 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_2, .{}, .{ .in_memory = true });
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm2 = try sth.createSchemaManager(allocator, tables);
+        defer sm2.deinit();
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm2, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_engine = try allocator.create(SubscriptionEngine);
         subscription_engine.* = SubscriptionEngine.init(allocator);
@@ -354,6 +355,7 @@ test "logging: level filtering" {
             storage_engine,
             subscription_engine,
             write_coordinator,
+            sm2,
             .{},
         );
         defer handler.deinit();
@@ -412,13 +414,13 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_3 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_3 = [_]schema_parser.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_3 },
-            .{ .name = "table", .fields = &dummy_fields_3 },
-        };
-        const dummy_schema_3 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_3, .{}, .{ .in_memory = true });
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm3 = try sth.createSchemaManager(allocator, tables);
+        defer sm3.deinit();
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm3, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_engine = try allocator.create(SubscriptionEngine);
         subscription_engine.* = SubscriptionEngine.init(allocator);
@@ -436,6 +438,7 @@ test "logging: message formatting" {
             storage_engine,
             subscription_engine,
             write_coordinator,
+            sm3,
             .{},
         );
         defer handler.deinit();
@@ -478,13 +481,13 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_4 = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_4 = [_]schema_parser.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_4 },
-            .{ .name = "table", .fields = &dummy_fields_4 },
-        };
-        const dummy_schema_4 = schema_parser.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, &dummy_schema_4, .{}, .{ .in_memory = true });
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm4 = try sth.createSchemaManager(allocator, tables);
+        defer sm4.deinit();
+        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm4, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
         var subscription_engine = try allocator.create(SubscriptionEngine);
         subscription_engine.* = SubscriptionEngine.init(allocator);
@@ -502,6 +505,7 @@ test "logging: message formatting" {
             storage_engine,
             subscription_engine,
             write_coordinator,
+            sm4,
             .{},
         );
         defer handler.deinit();

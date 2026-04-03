@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 const sqlite = @import("sqlite");
 
 pub const ChangeKind = enum { create_table, add_column, change_type, remove_column };
@@ -7,7 +7,7 @@ pub const ChangeKind = enum { create_table, add_column, change_type, remove_colu
 pub const Change = struct {
     kind: ChangeKind,
     table_name: []const u8,
-    field: ?schema_parser.Field,
+    field: ?schema_manager.Field,
 };
 
 pub const MigrationPlan = struct {
@@ -24,14 +24,14 @@ fn isSystemColumn(name: []const u8) bool {
     return false;
 }
 
-fn dbTypeToFieldType(db_type: []const u8) schema_parser.FieldType {
+fn dbTypeToFieldType(db_type: []const u8) schema_manager.FieldType {
     if (std.mem.eql(u8, db_type, "TEXT")) return .text;
     if (std.mem.eql(u8, db_type, "INTEGER")) return .integer;
     if (std.mem.eql(u8, db_type, "REAL")) return .real;
     if (std.mem.eql(u8, db_type, "BLOB")) return .array;
     return .text;
 }
-fn typesMatch(target: schema_parser.FieldType, db_type: []const u8) bool {
+fn typesMatch(target: schema_manager.FieldType, db_type: []const u8) bool {
     const sql_type = target.toSqlType();
     if (std.mem.eql(u8, sql_type, db_type)) return true;
     return false;
@@ -45,7 +45,7 @@ pub const MigrationDetector = struct {
         return .{ .allocator = allocator, .db = db };
     }
 
-    pub fn detectChanges(self: *MigrationDetector, target: schema_parser.Schema) !MigrationPlan {
+    pub fn detectChanges(self: *MigrationDetector, target: schema_manager.Schema) !MigrationPlan {
         var changes: std.ArrayList(Change) = .{};
         errdefer {
             for (changes.items) |c| self.freeChange(c);
@@ -118,8 +118,8 @@ pub const MigrationDetector = struct {
                     if (!typesMatch(field.sql_type, db_type)) {
                         const owned_table = try self.allocator.dupe(u8, table.name);
                         errdefer self.allocator.free(owned_table);
-                        const owned_field = try self.dupeField(field);
-                        errdefer self.freeFieldOwned(owned_field);
+                        const owned_field = try field.clone(self.allocator);
+                        errdefer schema_manager.freeField(self.allocator, owned_field);
                         try changes.append(self.allocator, .{
                             .kind = .change_type,
                             .table_name = owned_table,
@@ -129,8 +129,8 @@ pub const MigrationDetector = struct {
                 } else {
                     const owned_table = try self.allocator.dupe(u8, table.name);
                     errdefer self.allocator.free(owned_table);
-                    const owned_field = try self.dupeField(field);
-                    errdefer self.freeFieldOwned(owned_field);
+                    const owned_field = try field.clone(self.allocator);
+                    errdefer schema_manager.freeField(self.allocator, owned_field);
                     try changes.append(self.allocator, .{
                         .kind = .add_column,
                         .table_name = owned_table,
@@ -158,7 +158,7 @@ pub const MigrationDetector = struct {
                     try changes.append(self.allocator, .{
                         .kind = .remove_column,
                         .table_name = owned_table,
-                        .field = schema_parser.Field{
+                        .field = schema_manager.Field{
                             .name = owned_field_name,
                             .sql_type = ft,
                             .required = false,
@@ -192,25 +192,6 @@ pub const MigrationDetector = struct {
 
     fn freeChange(self: *MigrationDetector, c: Change) void {
         self.allocator.free(c.table_name);
-        if (c.field) |f| self.freeFieldOwned(f);
-    }
-
-    fn freeFieldOwned(self: *MigrationDetector, f: schema_parser.Field) void {
-        self.allocator.free(f.name);
-        if (f.references) |r| self.allocator.free(r);
-    }
-
-    fn dupeField(self: *MigrationDetector, f: schema_parser.Field) !schema_parser.Field {
-        const owned_name = try self.allocator.dupe(u8, f.name);
-        errdefer self.allocator.free(owned_name);
-        const owned_refs = if (f.references) |r| try self.allocator.dupe(u8, r) else null;
-        return schema_parser.Field{
-            .name = owned_name,
-            .sql_type = f.sql_type,
-            .required = f.required,
-            .indexed = f.indexed,
-            .references = owned_refs,
-            .on_delete = f.on_delete,
-        };
+        if (c.field) |f| schema_manager.freeField(self.allocator, f);
     }
 };

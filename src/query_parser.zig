@@ -1,6 +1,7 @@
 const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
-const schema_mod = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -136,7 +137,7 @@ pub const ParserError = error{
 /// The caller is responsible for calling `filter.deinit(allocator)` on success.
 pub fn parseQueryFilter(
     allocator: std.mem.Allocator,
-    schema_metadata: *const schema_mod.SchemaMetadata,
+    sm: *const SchemaManager,
     collection: []const u8,
     payload: msgpack.Payload,
 ) ParserError!QueryFilter {
@@ -146,7 +147,7 @@ pub fn parseQueryFilter(
     if (std.mem.containsAtLeast(u8, collection, 1, "__")) return error.InvalidTableName;
 
     // Find the table metadata in schema for validation
-    const table_metadata = schema_metadata.getTable(collection) orelse return error.UnknownTable;
+    const table_metadata = sm.getTable(collection) orelse return error.UnknownTable;
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
@@ -216,7 +217,7 @@ pub fn parseQueryFilter(
 
 fn parseConditions(
     allocator: std.mem.Allocator,
-    table_metadata: schema_mod.TableMetadata,
+    table_metadata: schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -237,7 +238,7 @@ fn parseConditions(
 
 fn parseCondition(
     allocator: std.mem.Allocator,
-    table_metadata: schema_mod.TableMetadata,
+    table_metadata: schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -281,7 +282,7 @@ fn parseCondition(
 
 fn parseSortDescriptor(
     allocator: std.mem.Allocator,
-    table_metadata: schema_mod.TableMetadata,
+    table_metadata: schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
     if (payload != .arr) return error.InvalidSortFormat;

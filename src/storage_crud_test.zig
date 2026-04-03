@@ -1,110 +1,94 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_mod = @import("storage_engine.zig");
-const StorageEngine = storage_mod.StorageEngine;
-const ColumnValue = storage_mod.ColumnValue;
-const msgpack = @import("msgpack_test_helpers.zig");
-const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
-const schema_helpers = @import("schema_test_helpers.zig");
+const storage_engine = @import("storage_engine.zig");
+const ColumnValue = storage_engine.ColumnValue;
+const schema_manager = @import("schema_manager.zig");
+const sth = @import("storage_engine_test_helpers.zig");
+const msgpack = @import("msgpack_utils.zig");
 
-// Helper to create a ColumnValue array for a simple user object
-fn createUserCols(allocator: std.mem.Allocator, name: []const u8, age: i64) ![]ColumnValue {
-    const cols = try allocator.alloc(ColumnValue, 2);
-    cols[0] = .{ .name = "name", .value = try msgpack.Payload.strToPayload(name, allocator) };
-    cols[1] = .{ .name = "age", .value = .{ .int = age } };
-    return cols;
-}
-
-fn freeUserCols(allocator: std.mem.Allocator, cols: []ColumnValue) void {
-    for (cols) |col| col.value.free(allocator);
-    allocator.free(cols);
-}
-
-test "Storage: CRUD operations" {
+test "StorageEngine: insert and select basic" {
     const allocator = testing.allocator;
 
-    var context = try schema_helpers.TestContext.init(allocator, "storage-crud");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
+    var fields_arr = [_]schema_manager.Field{
+        sth.makeField("name", .text, false),
+        sth.makeField("age", .integer, false),
+    };
+    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
 
-    // Setup schema
-    var fields = try allocator.alloc(schema_parser.Field, 2);
-    fields[0] = .{ .name = "name", .sql_type = .text, .required = true, .indexed = false, .references = null, .on_delete = null };
-    fields[1] = .{ .name = "age", .sql_type = .integer, .required = true, .indexed = false, .references = null, .on_delete = null };
-    const table = schema_parser.Table{ .name = "users", .fields = fields };
+    var ctx = try sth.setupEngine(allocator, "crud-basic", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
 
-    const schema_ptr = try allocator.create(schema_parser.Schema);
-    const tables = try allocator.alloc(schema_parser.Table, 1);
-    tables[0] = try table.clone(allocator);
-    schema_ptr.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+    // Insert
+    const name_p = try msgpack.Payload.strToPayload("Alice", allocator);
+    defer name_p.free(allocator);
+    const cols = [_]ColumnValue{
+        .{ .name = "name", .value = name_p },
+        .{ .name = "age", .value = msgpack.Payload.intToPayload(30) },
+    };
+    try engine.insertOrReplace("users", "id1", "ns", &cols);
+    try engine.flushPendingWrites();
 
-    // Initialize memory strategy
-    var memory_strategy: @import("memory_strategy.zig").MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    // Select
+    var managed = try engine.selectDocument(allocator, "users", "id1", "ns");
+    defer managed.deinit();
+    const doc = managed.value orelse return error.NotFound;
 
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, schema_ptr, .{}, .{ .in_memory = true });
-    defer {
-        storage.deinit();
-        schema_parser.freeSchema(allocator, schema_ptr.*);
-        allocator.destroy(schema_ptr);
-    }
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try storage.writer_conn.execMulti(ddl_z, .{});
-    allocator.free(fields);
-    // 1. Create (Insert)
-    {
-        const cols = try createUserCols(allocator, "Alice", 30);
-        defer freeUserCols(allocator, cols);
-        try storage.insertOrReplace("users", "1", "test_ns", cols);
-    }
-    try storage.flushPendingWrites();
-    // 2. Read (Select)
-    {
-        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
-        defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
-        if (doc) |d| {
-            const val = msgpack.getMapValue(d, "name") orelse return error.TestExpectedError;
-            try testing.expectEqualStrings("Alice", val.str.value());
-        }
-    }
-    // 3. Update (InsertOrReplace with new data)
-    {
-        const cols = try createUserCols(allocator, "Alice Updated", 31);
-        defer freeUserCols(allocator, cols);
-        try storage.insertOrReplace("users", "1", "test_ns", cols);
-    }
-    try storage.flushPendingWrites();
-    // Verify update
-    {
-        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
-        defer managed.deinit();
-        const doc = managed.value;
-        if (doc) |d| {
-            const val = msgpack.getMapValue(d, "age") orelse return error.TestExpectedError;
-            const actual_age: i64 = switch (val) {
-                .int => |v| v,
-                .uint => |v| @intCast(v),
-                else => unreachable,
-            };
-            try testing.expectEqual(@as(i64, 31), actual_age);
-        }
-    }
-    // 4. Delete
-    try storage.deleteDocument("users", "1", "test_ns");
-    try storage.flushPendingWrites();
-    // Verify deletion
-    {
-        var managed = try storage.selectDocument(allocator, "users", "1", "test_ns");
-        defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc == null);
-    }
+    try testing.expectEqualStrings("Alice", (try doc.mapGet("name")).?.str.value());
+    try testing.expectEqual(@as(i64, 30), (try doc.mapGet("age")).?.int);
+}
+
+test "StorageEngine: update document" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        sth.makeField("val", .text, false),
+    };
+    const table = schema_manager.Table{ .name = "test", .fields = &fields_arr };
+
+    var ctx = try sth.setupEngine(allocator, "crud-update", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
+    const val1 = try sth.makePayloadStr("v1", allocator);
+    defer val1.free(allocator);
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val1 }};
+    try engine.insertOrReplace("test", "id1", "ns", &cols1);
+    try engine.flushPendingWrites();
+
+    const val2 = try sth.makePayloadStr("v2", allocator);
+    defer val2.free(allocator);
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val2 }};
+    try engine.insertOrReplace("test", "id1", "ns", &cols2);
+    try engine.flushPendingWrites();
+
+    var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
+    defer managed.deinit();
+    const doc = managed.value orelse return error.TestValueMissing;
+    try testing.expectEqualStrings("v2", (try doc.mapGet("val")).?.str.value());
+}
+
+test "StorageEngine: delete document" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        sth.makeField("val", .text, false),
+    };
+    const table = schema_manager.Table{ .name = "test", .fields = &fields_arr };
+
+    var ctx = try sth.setupEngine(allocator, "crud-delete", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
+    const p = try sth.makePayloadStr("foo", allocator);
+    defer p.free(allocator);
+    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = p }});
+    try engine.flushPendingWrites();
+
+    try engine.deleteDocument("test", "id1", "ns");
+    try engine.flushPendingWrites();
+
+    var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
+    defer managed.deinit();
+    try testing.expect(managed.value == null);
 }

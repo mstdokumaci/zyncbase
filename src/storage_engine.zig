@@ -9,7 +9,8 @@ const reader = @import("storage_engine/reader.zig");
 const pipeline = @import("storage_engine/pipeline.zig");
 const writer = @import("storage_engine/writer.zig");
 const connection = @import("storage_engine/connection.zig");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const types = @import("storage_engine/types.zig");
@@ -54,8 +55,7 @@ pub const StorageEngine = struct {
     flush_cond: std.Thread.Condition,
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
-    schema: *const schema_parser.Schema,
-    schema_metadata: schema_parser.SchemaMetadata,
+    schema_manager: *const SchemaManager,
     metadata_cache: *metadata_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
@@ -69,7 +69,7 @@ pub const StorageEngine = struct {
         payload.free(allocator);
     }
 
-    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, schema: *const schema_parser.Schema, performance_config: PerformanceConfig, options: Options) !*StorageEngine {
+    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, sm: *const SchemaManager, performance_config: PerformanceConfig, options: Options) !*StorageEngine {
         if (data_dir.len == 0 and !options.in_memory) return error.InvalidDataDir;
         const self = try allocator.create(StorageEngine);
         errdefer allocator.destroy(self);
@@ -141,9 +141,6 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
-        const schema_metadata = try schema_parser.SchemaMetadata.init(allocator, schema);
-        errdefer @constCast(&schema_metadata).deinit();
-
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
@@ -159,8 +156,7 @@ pub const StorageEngine = struct {
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .transaction_active = std.atomic.Value(bool).init(false),
             .write_seq = std.atomic.Value(u64).init(0),
-            .schema = schema,
-            .schema_metadata = schema_metadata,
+            .schema_manager = sm,
             .metadata_cache = metadata_cache,
             .flush_cond = .{},
             .write_mutex = .{},
@@ -200,7 +196,6 @@ pub const StorageEngine = struct {
 
     pub fn deinit(self: *StorageEngine) void {
         const gpa = self.allocator; // Assuming allocator is the general purpose allocator
-        self.schema_metadata.deinit();
 
         // 1. Signal shutdown to the thread
         self.shutdown_requested.store(true, .release);
@@ -370,24 +365,6 @@ pub const StorageEngine = struct {
         }
     }
 
-    // ─── Schema validation helpers (delegated) ────────────────────────────────
-
-    fn findTable(self: *const StorageEngine, table_name: []const u8) ?schema_parser.TableMetadata {
-        return reader.findTable(&self.schema_metadata, table_name);
-    }
-
-    fn validateTable(self: *const StorageEngine, table_name: []const u8) !void {
-        return reader.validateTable(&self.schema_metadata, table_name);
-    }
-
-    fn validateField(self: *const StorageEngine, table_name: []const u8, field_name: []const u8) !void {
-        return reader.validateField(&self.schema_metadata, table_name, field_name);
-    }
-
-    fn validateColumns(self: *const StorageEngine, table_name: []const u8, columns: []const ColumnValue) !void {
-        return reader.validateColumns(&self.schema_metadata, table_name, columns);
-    }
-
     fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
         return reader.getCacheKey(self.allocator, table, namespace, id);
     }
@@ -406,7 +383,7 @@ pub const StorageEngine = struct {
         columns: []const ColumnValue,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, &self.schema_metadata, table, id, namespace, columns);
+        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -421,7 +398,7 @@ pub const StorageEngine = struct {
         value: msgpack.Payload,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildUpdateFieldOp(self.allocator, &self.schema_metadata, table, id, namespace, field, value);
+        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -434,7 +411,7 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
     ) !ManagedPayload {
-        try self.validateTable(table);
+        try self.schema_manager.validateTable(table);
 
         const cache_key = try reader.getCacheKey(allocator, table, namespace, id);
         defer allocator.free(cache_key);
@@ -454,7 +431,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.findTable(table).?;
+        const table_metadata = self.schema_manager.getTable(table).?;
         const sql = try reader.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql);
 
@@ -482,14 +459,14 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         field: []const u8,
     ) !ManagedPayload {
-        try self.validateField(table, field);
+        try self.schema_manager.validateField(table, field);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.findTable(table).?;
+        const table_metadata = self.schema_manager.getTable(table).?;
         const field_ctx = table_metadata.getField(field);
         const sql = try reader.buildSelectFieldSql(allocator, table, field, field_ctx);
         defer allocator.free(sql);
@@ -505,14 +482,14 @@ pub const StorageEngine = struct {
         table: []const u8,
         namespace: []const u8,
     ) !ManagedPayload {
-        try self.validateTable(table);
+        try self.schema_manager.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.findTable(table).?;
+        const table_metadata = self.schema_manager.getTable(table).?;
         const sql = try reader.buildSelectCollectionSql(allocator, table_metadata);
         defer allocator.free(sql);
 
@@ -528,14 +505,14 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         filter: query_parser.QueryFilter,
     ) !ManagedPayload {
-        try self.validateTable(table);
+        try self.schema_manager.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.findTable(table).?;
+        const table_metadata = self.schema_manager.getTable(table).?;
         const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
         defer query_res.deinit(allocator);
 
@@ -551,7 +528,7 @@ pub const StorageEngine = struct {
         namespace: []const u8,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildDeleteDocumentOp(self.allocator, &self.schema_metadata, table, id, namespace);
+        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

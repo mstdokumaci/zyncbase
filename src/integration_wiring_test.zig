@@ -11,7 +11,7 @@ fn setupTestServer(allocator: std.mem.Allocator, context: *schema_helpers.TestCo
     const schema = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
-    defer schema_helpers.freeTestSchema(allocator, schema);
+    defer schema_helpers.deinitTestSchema(allocator, schema);
 
     try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
     // Note: We don't delete schema_path here because server.initDetailed needs it.

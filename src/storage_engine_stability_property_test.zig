@@ -3,11 +3,9 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
-const schema_parser = @import("schema_parser.zig");
-const ddl_generator = @import("ddl_generator.zig");
+const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -21,64 +19,19 @@ const schema_helpers = @import("schema_test_helpers.zig");
 // - Error recovery and retry logic
 // - Resource cleanup after errors
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType, required: bool) schema_parser.Field {
-    return .{
-        .name = name,
-        .sql_type = sql_type,
-        .required = required,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
-}
-
-fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_schema: *?*schema_parser.Schema) !*StorageEngine {
-    var fields_arr = [_]schema_parser.Field{makeField("val", .text, false)};
-    const table = schema_parser.Table{ .name = table_name, .fields = &fields_arr };
-
-    const tables = try allocator.alloc(schema_parser.Table, 1);
-    tables[0] = try table.clone(allocator);
-
-    const schema = try allocator.create(schema_parser.Schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
-
-    out_schema.* = schema;
-
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, schema, .{}, .{ .in_memory = true });
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try engine.execDDL(ddl_z);
-
-    return engine;
-}
+// ─── Tests ───────────────────────────────────────────────────────────────────
 
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    var context = try schema_helpers.TestContext.init(allocator, "stability-concurrent");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
 
-    var raw_dummy_fields = [_]schema_parser.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var raw_dummy_tables = [_]schema_parser.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
-    const raw_dummy_schema = schema_parser.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try StorageEngine.init(allocator, &memory_strategy, tmp_path, &raw_dummy_schema, .{}, .{ .in_memory = true });
-    defer storage.deinit();
+    var ctx = try sth.setupEngine(allocator, "stability-concurrent", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Server should not crash when multiple threads encounter errors simultaneously
     const num_threads = 8;
-    const operations_per_thread = 50;
     var threads: [num_threads]std.Thread = undefined;
     const ThreadContext = struct {
         storage: *StorageEngine,
@@ -86,28 +39,29 @@ test "storage: stability no crashes on concurrent errors" {
         thread_id: usize,
     };
     const workerThread = struct {
-        fn run(ctx: ThreadContext) void {
+        fn run(t_ctx: ThreadContext) void {
             var i: usize = 0;
-            while (i < operations_per_thread) : (i += 1) {
+            const ops = 50;
+            while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
                 // zwanzig-disable-next-line: swallowed-error
-                const key = std.fmt.allocPrint(ctx.allocator, "thread{}_key{}", .{ ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
-                defer ctx.allocator.free(key);
+                const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
+                defer t_ctx.allocator.free(key);
                 // Try to set a value
                 // zwanzig-disable-next-line: swallowed-error
-                const val_payload = msgpack.Payload.strToPayload(key, ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
-                defer val_payload.free(ctx.allocator);
+                const val_payload = msgpack.Payload.strToPayload(key, t_ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
+                defer val_payload.free(t_ctx.allocator);
                 const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
                 // zwanzig-disable-next-line: swallowed-error
-                ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 // zwanzig-disable-next-line: swallowed-error
-                var managed = ctx.storage.selectDocument(ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
                 _ = managed.value;
                 // Try to delete the value
                 // zwanzig-disable-next-line: swallowed-error
-                ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
@@ -128,21 +82,13 @@ test "storage: stability no crashes on concurrent errors" {
 }
 test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-txn-err");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema);
-    defer {
-        storage.deinit();
-        if (test_schema) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-txn-err", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Server should continue operating after transaction errors
     // Cause a transaction error by trying to commit without beginning
     _ = storage.commitTransaction() catch |err| {
@@ -175,21 +121,13 @@ test "storage: stability continues after transaction errors" {
 }
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-rapid-err");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema_1: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_1);
-    defer {
-        storage.deinit();
-        if (test_schema_1) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-rapid-err", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Server should handle rapid succession of errors without crashing
     // Rapidly trigger transaction errors
     var i: usize = 0;
@@ -211,21 +149,13 @@ test "storage: stability handles rapid error conditions" {
 }
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-recovery");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema_2: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_2);
-    defer {
-        storage.deinit();
-        if (test_schema_2) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-recovery", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Server should recover from errors and continue with valid operations
     // Interleave errors with valid operations
     var i: usize = 0;
@@ -256,21 +186,13 @@ test "storage: stability error recovery with valid operations" {
 }
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-resource-cleanup");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema_3: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_3);
-    defer {
-        storage.deinit();
-        if (test_schema_3) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-resource-cleanup", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Resources should be properly cleaned up after errors
     // Begin a transaction
     try storage.beginTransaction();
@@ -302,21 +224,13 @@ test "storage: stability resource cleanup after errors" {
 }
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-mixed");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema_4: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_4);
-    defer {
-        storage.deinit();
-        if (test_schema_4) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-mixed", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Server should handle mixed scenarios of errors and successes
     // Successful transaction
     try storage.beginTransaction();
@@ -360,21 +274,13 @@ test "storage: stability mixed error and success scenarios" {
 }
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "stability-concurrent-reads");
-    defer context.deinit();
-    const tmp_path = context.test_dir;
-    var test_schema_5: ?*schema_parser.Schema = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage = try setupEngineWithSchema(allocator, &memory_strategy, tmp_path, "test", &test_schema_5);
-    defer {
-        storage.deinit();
-        if (test_schema_5) |s| {
-            schema_parser.freeSchema(allocator, s.*);
-            allocator.destroy(s);
-        }
-    }
+
+    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+
+    var ctx = try sth.setupEngine(allocator, "stability-concurrent-reads", table);
+    defer ctx.deinit();
+    const storage = ctx.engine;
     // Property: Reads should continue working even when writes encounter errors
     // Set up some initial data
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
@@ -393,16 +299,16 @@ test "storage: stability concurrent reads during write errors" {
         allocator: std.mem.Allocator,
     };
     const readerThread = struct {
-        fn run(ctx: ReaderContext) void {
+        fn run(r_ctx: ReaderContext) void {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
                 // zwanzig-disable-next-line: swallowed-error
-                var managed1 = ctx.storage.selectDocument(ctx.allocator, "test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed1.deinit();
                 _ = managed1.value;
                 // zwanzig-disable-next-line: swallowed-error
-                var managed2 = ctx.storage.selectDocument(ctx.allocator, "test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed2.deinit();
                 _ = managed2.value;
                 // Small delay

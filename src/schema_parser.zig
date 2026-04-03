@@ -32,12 +32,18 @@ pub const Field = struct {
     on_delete: ?OnDelete,
 
     pub fn clone(self: Field, allocator: Allocator) !Field {
+        const cloned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(cloned_name);
+
+        const cloned_ref = if (self.references) |ref| try allocator.dupe(u8, ref) else null;
+        errdefer if (cloned_ref) |r| allocator.free(r);
+
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .name = cloned_name,
             .sql_type = self.sql_type,
             .required = self.required,
             .indexed = self.indexed,
-            .references = if (self.references) |ref| try allocator.dupe(u8, ref) else null,
+            .references = cloned_ref,
             .on_delete = self.on_delete,
         };
     }
@@ -48,14 +54,22 @@ pub const Table = struct {
     fields: []Field,
 
     pub fn clone(self: Table, allocator: Allocator) !Table {
-        const cloned_fields = try allocator.alloc(Field, self.fields.len);
-        errdefer allocator.free(cloned_fields);
+        const cloned_name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(cloned_name);
 
-        for (self.fields, 0..) |f, i| {
-            cloned_fields[i] = try f.clone(allocator);
+        const cloned_fields = try allocator.alloc(Field, self.fields.len);
+        var i: usize = 0;
+        errdefer {
+            for (cloned_fields[0..i]) |f| freeField(allocator, f);
+            allocator.free(cloned_fields);
         }
+        for (self.fields) |f| {
+            cloned_fields[i] = try f.clone(allocator);
+            i += 1;
+        }
+
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .name = cloned_name,
             .fields = cloned_fields,
         };
     }
@@ -88,6 +102,27 @@ pub const TableMetadata = struct {
 pub const Schema = struct {
     version: []const u8, // "MAJOR.MINOR.PATCH"
     tables: []Table,
+
+    pub fn clone(self: Schema, allocator: Allocator) !Schema {
+        const cloned_version = try allocator.dupe(u8, self.version);
+        errdefer allocator.free(cloned_version);
+
+        const cloned_tables = try allocator.alloc(Table, self.tables.len);
+        var i: usize = 0;
+        errdefer {
+            for (cloned_tables[0..i]) |t| freeTable(allocator, t);
+            allocator.free(cloned_tables);
+        }
+        for (self.tables) |t| {
+            cloned_tables[i] = try t.clone(allocator);
+            i += 1;
+        }
+
+        return .{
+            .version = cloned_version,
+            .tables = cloned_tables,
+        };
+    }
 };
 
 pub const SchemaMetadata = struct {

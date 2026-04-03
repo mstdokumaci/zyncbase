@@ -14,8 +14,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const SchemaParser = @import("schema_parser.zig").SchemaParser;
-const schema_parser = @import("schema_parser.zig");
+const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
@@ -39,11 +38,7 @@ pub const ZyncBaseServer = struct {
     connection_manager: *ConnectionManager,
     message_handler: *MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
-    /// Loaded schema (owned).
-    loaded_schema: schema_parser.Schema,
-    /// Parser used to free loaded_schema on deinit.
-    schema_parser_instance: SchemaParser,
-    schema_loaded: bool = false,
+    schema_manager: *SchemaManager,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
 
@@ -63,7 +58,7 @@ pub const ZyncBaseServer = struct {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
         self.allocator = allocator;
-        self.schema_loaded = false;
+        // schema_manager will be initialized later
 
         // Initialize memory strategy
         const memory_strategy = try allocator.create(MemoryStrategy);
@@ -127,15 +122,7 @@ pub const ZyncBaseServer = struct {
             };
             defer memory_strategy.generalAllocator().free(json_text);
 
-            var parser = SchemaParser.init(memory_strategy.generalAllocator());
-            const schema = parser.parse(json_text) catch |err| {
-                std.log.err("Failed to parse schema file '{s}': {}", .{ schema_path, err });
-                return err;
-            };
-            errdefer parser.deinit(schema);
-            self.loaded_schema = schema;
-            self.schema_parser_instance = parser;
-            self.schema_loaded = true;
+            self.schema_manager = try SchemaManager.init(memory_strategy.generalAllocator(), json_text);
         }
 
         // Initialize storage engine, which now requires a schema
@@ -144,7 +131,7 @@ pub const ZyncBaseServer = struct {
             memory_strategy.generalAllocator(),
             memory_strategy,
             config.data_dir,
-            &self.loaded_schema,
+            self.schema_manager,
             config.performance,
             .{},
         );
@@ -152,7 +139,7 @@ pub const ZyncBaseServer = struct {
 
         // Run migrations and DDL
         {
-            const schema_ptr = &self.loaded_schema;
+            const schema_ptr = &self.schema_manager.schema;
             // Apply DDL for each table
             var gen = DDLGenerator.init(memory_strategy.generalAllocator());
             for (schema_ptr.tables) |table| {
@@ -227,6 +214,7 @@ pub const ZyncBaseServer = struct {
             storage_engine,
             subscription_engine,
             write_coordinator,
+            self.schema_manager,
             config.security,
         );
         errdefer message_handler.deinit();
@@ -386,10 +374,8 @@ pub const ZyncBaseServer = struct {
         config_ptr.deinit();
         std.log.debug("config deinitialized", .{});
 
-        // Free loaded schema if present before destroying the allocator it uses
-        if (self.schema_loaded) {
-            self.schema_parser_instance.deinit(self.loaded_schema);
-        }
+        // Free schema manager
+        self.schema_manager.deinit();
 
         std.log.debug("Deinitializing memory_strategy", .{});
         self.memory_strategy.deinit();

@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("../msgpack_utils.zig");
-const schema_parser = @import("../schema_parser.zig");
+const schema_manager = @import("../schema_manager.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 
@@ -134,7 +134,7 @@ pub const ReconnectionConfig = struct {
 
 pub const ColumnContext = struct {
     name: []const u8,
-    field: ?schema_parser.Field,
+    field: ?schema_manager.Field,
 };
 
 pub const WriteOp = union(enum) {

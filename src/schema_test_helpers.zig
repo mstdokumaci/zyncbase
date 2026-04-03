@@ -1,19 +1,24 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const ddl_generator = @import("ddl_generator.zig");
+const schema_parser = @import("schema_parser.zig");
 
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
 };
 
-pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !*schema_parser.Schema {
-    var tables = try allocator.alloc(schema_parser.Table, tables_def.len);
-    errdefer allocator.free(tables);
+pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !schema_manager.Schema {
+    var tables = try allocator.alloc(schema_manager.Table, tables_def.len);
+    errdefer {
+        for (tables) |*t| allocator.free(t.name);
+        allocator.free(tables);
+    }
 
     for (tables_def, 0..) |td, i| {
-        var fields = try allocator.alloc(schema_parser.Field, td.fields.len);
+        var fields = try allocator.alloc(schema_manager.Field, td.fields.len);
         errdefer allocator.free(fields);
         for (td.fields, 0..) |fn_name, j| {
             fields[j] = .{
@@ -28,20 +33,37 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         tables[i] = .{ .name = try allocator.dupe(u8, td.name), .fields = fields };
     }
 
-    const schema = try allocator.create(schema_parser.Schema);
-    errdefer allocator.destroy(schema);
-    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
-    return schema;
+    return schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 }
 
-pub fn freeTestSchema(allocator: std.mem.Allocator, schema: *schema_parser.Schema) void {
-    schema_parser.freeSchema(allocator, schema.*);
-    allocator.destroy(schema);
+pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !*SchemaManager {
+    const schema = try createTestSchema(allocator, tables_def);
+    errdefer schema_manager.freeSchema(allocator, schema);
+
+    const sm = try allocator.create(SchemaManager);
+    errdefer allocator.destroy(sm);
+
+    const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
+    errdefer {
+        var m = metadata;
+        m.deinit();
+    }
+
+    sm.* = .{
+        .allocator = allocator,
+        .schema = schema,
+        .metadata = metadata,
+    };
+    return sm;
 }
 
-pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema: *const schema_parser.Schema, path: []const u8) !void {
+pub fn deinitTestSchema(allocator: std.mem.Allocator, schema: schema_manager.Schema) void {
+    schema_manager.freeSchema(allocator, schema);
+}
+
+pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema: schema_manager.Schema, path: []const u8) !void {
     var parser = schema_parser.SchemaParser.init(allocator);
-    const json_text = try parser.print(schema.*);
+    const json_text = try parser.print(schema);
     defer allocator.free(json_text);
 
     // Ensure directory exists
@@ -93,12 +115,12 @@ pub const TestContext = struct {
     }
 };
 
-pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, schema: *const schema_parser.Schema, options: StorageEngine.Options) !*StorageEngine {
-    const engine = try StorageEngine.init(allocator, memory_strategy, context.test_dir, schema, .{}, options);
+pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, sm: *const SchemaManager, options: StorageEngine.Options) !*StorageEngine {
+    const engine = try StorageEngine.init(allocator, memory_strategy, context.test_dir, sm, .{}, options);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (schema.tables) |table| {
+    for (sm.schema.tables) |table| {
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);

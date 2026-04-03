@@ -8,7 +8,8 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const schema_parser = @import("schema_parser.zig");
+const schema_manager = @import("schema_manager.zig");
+const SchemaManager = schema_manager.SchemaManager;
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_test_helpers.zig");
 const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
@@ -45,7 +46,7 @@ pub const AppTestContext = struct {
     write_coordinator: *WriteCoordinator,
     handler: *MessageHandler,
     manager: *ConnectionManager,
-    schema: *schema_parser.Schema,
+    schema_manager: *SchemaManager,
     test_context: schema_helpers.TestContext,
 
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !AppTestContext {
@@ -53,16 +54,35 @@ pub const AppTestContext = struct {
     }
 
     pub fn initWithOptions(allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef, options: StorageEngine.Options) !AppTestContext {
-        const schema = try schema_helpers.createTestSchema(allocator, table_defs);
-        errdefer schema_helpers.freeTestSchema(allocator, schema);
-        return initWithSchemaAndOptions(allocator, prefix, schema, options);
+        const sm = try schema_helpers.createTestSchemaManager(allocator, table_defs);
+        errdefer sm.deinit();
+        return initWithSchemaManagerAndOptions(allocator, prefix, sm, options);
     }
 
-    pub fn initWithSchema(allocator: std.mem.Allocator, prefix: []const u8, schema: *schema_parser.Schema) !AppTestContext {
-        return initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
+    pub fn initWithSchema(allocator: std.mem.Allocator, prefix: []const u8, schema: schema_manager.Schema) !AppTestContext {
+        const cloned_schema = try schema.clone(allocator);
+        errdefer schema_manager.freeSchema(allocator, cloned_schema);
+
+        const sm = try allocator.create(SchemaManager);
+        errdefer allocator.destroy(sm);
+
+        const metadata = try schema_manager.SchemaMetadata.init(allocator, &cloned_schema);
+        errdefer {
+            var m = metadata;
+            m.deinit();
+        }
+
+        sm.* = .{
+            .allocator = allocator,
+            .schema = cloned_schema,
+            .metadata = metadata,
+        };
+
+        return initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
-    pub fn initWithSchemaAndOptions(allocator: std.mem.Allocator, prefix: []const u8, schema: *schema_parser.Schema, options: StorageEngine.Options) !AppTestContext {
+    pub fn initWithSchemaManagerAndOptions(allocator: std.mem.Allocator, prefix: []const u8, sm: *SchemaManager, options: StorageEngine.Options) !AppTestContext {
+        // ... (rest of the code will use sm)
         // 1. Initialize Memory Strategy
         const ms = try allocator.create(MemoryStrategy);
         errdefer allocator.destroy(ms);
@@ -80,21 +100,21 @@ pub const AppTestContext = struct {
         errdefer tc.deinit();
 
         // 4. Initialize Storage Engine
-        const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, schema, options);
+        const se = try schema_helpers.setupTestEngine(allocator, ms, &tc, sm, options);
         errdefer se.deinit();
 
         // 5. Initialize Subscription Engine
-        const sm = try allocator.create(SubscriptionEngine);
-        errdefer allocator.destroy(sm);
-        sm.* = SubscriptionEngine.init(allocator);
-        errdefer sm.deinit();
+        const sub_e = try allocator.create(SubscriptionEngine);
+        errdefer allocator.destroy(sub_e);
+        sub_e.* = SubscriptionEngine.init(allocator);
+        errdefer sub_e.deinit();
 
         // 6. Initialize Write Coordinator
-        const wc = try WriteCoordinator.init(allocator, se, sm, ms);
+        const wc = try WriteCoordinator.init(allocator, se, sub_e, ms);
         errdefer wc.deinit();
 
         // 7. Initialize Message Handler
-        const mh = try MessageHandler.init(allocator, ms, vt, se, sm, wc, .{});
+        const mh = try MessageHandler.init(allocator, ms, vt, se, sub_e, wc, sm, .{});
         errdefer mh.deinit();
 
         // 8. Initialize Connection Manager
@@ -109,9 +129,9 @@ pub const AppTestContext = struct {
             .memory_strategy = ms,
             .violation_tracker = vt,
             .test_context = tc,
-            .schema = schema,
+            .schema_manager = sm,
             .storage_engine = se,
-            .subscription_engine = sm,
+            .subscription_engine = sub_e,
             .write_coordinator = wc,
             .handler = mh,
             .manager = cm,
@@ -137,7 +157,7 @@ pub const AppTestContext = struct {
         self.handler.deinit();
 
         // 5. Cleanup remaining infrastructure
-        schema_helpers.freeTestSchema(self.allocator, self.schema);
+        self.schema_manager.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
         self.allocator.destroy(self.violation_tracker);

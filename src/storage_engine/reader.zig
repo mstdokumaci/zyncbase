@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("../msgpack_utils.zig");
-const schema_parser = @import("../schema_parser.zig");
+const schema_manager = @import("../schema_manager.zig");
 const query_parser = @import("../query_parser.zig");
 const types = @import("types.zig");
 
@@ -12,7 +12,7 @@ const ColumnContext = types.ColumnContext;
 
 // ─── SQL Builders ─────────────────────────────────────────────────────────
 
-pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_parser.TableMetadata) ![]const u8 {
+pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
@@ -33,7 +33,7 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_parse
     return sql_buf.toOwnedSlice(allocator);
 }
 
-pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_name: []const u8, field_ctx: ?schema_parser.Field) ![]const u8 {
+pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_name: []const u8, field_ctx: ?schema_manager.Field) ![]const u8 {
     if (field_ctx != null and field_ctx.?.sql_type == .array) {
         return try std.fmt.allocPrint(allocator, "SELECT json({s}) FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, table_name });
     } else {
@@ -41,7 +41,7 @@ pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_n
     }
 }
 
-pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_parser.TableMetadata) ![]const u8 {
+pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
@@ -75,7 +75,7 @@ pub const QueryResult = struct {
 
 pub fn buildSelectQuery(
     allocator: Allocator,
-    table_metadata: schema_parser.TableMetadata,
+    table_metadata: schema_manager.TableMetadata,
     namespace: []const u8,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
@@ -158,7 +158,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, " (?, ?)");
 
             // Find sort field type for correct binding
-            var sort_ft: schema_parser.FieldType = .text;
+            var sort_ft: schema_manager.FieldType = .text;
             for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, sql_field)) {
                     sort_ft = f.sql_type;
@@ -236,7 +236,7 @@ pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u
     std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
 }
 
-pub fn validateValueType(ft: schema_parser.FieldType, value: msgpack.Payload) !void {
+pub fn validateValueType(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
     const match = switch (ft) {
         .text => value == .str,
         .integer => value == .uint or value == .int,
@@ -247,7 +247,7 @@ pub fn validateValueType(ft: schema_parser.FieldType, value: msgpack.Payload) !v
     if (!match) return StorageError.TypeMismatch;
 }
 
-pub fn payloadToTypedValue(allocator: Allocator, ft: schema_parser.FieldType, value: msgpack.Payload) !TypedValue {
+pub fn payloadToTypedValue(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
     if (value == .nil) return .nil;
     return switch (ft) {
         .text => switch (value) {
@@ -285,7 +285,7 @@ pub fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedV
     if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
 }
 
-pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_parser.Field) !msgpack.Payload {
+pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_manager.Field) !msgpack.Payload {
     const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
     if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
         const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
@@ -323,7 +323,7 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
 pub fn resolveColumnContext(
     stmt: sqlite.DynamicStatement,
     i: c_int,
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
 ) ColumnContext {
     const col_name_ptr = sqlite.c.sqlite3_column_name(stmt.stmt, i);
     const raw_name = std.mem.span(col_name_ptr);
@@ -333,7 +333,7 @@ pub fn resolveColumnContext(
         raw_name;
 
     const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-    var field_ctx: ?schema_parser.Field = null;
+    var field_ctx: ?schema_manager.Field = null;
     var is_system = false;
     for (system_cols) |sc| {
         if (std.mem.eql(u8, col_name, sc)) {
@@ -356,7 +356,7 @@ pub fn resolveColumnContext(
 pub fn resolveAllColumnContexts(
     allocator: Allocator,
     stmt: sqlite.DynamicStatement,
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
 ) ![]ColumnContext {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
     const col_contexts = try allocator.alloc(ColumnContext, col_count);
@@ -372,12 +372,12 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
     cond: query_parser.Condition,
 ) !void {
     const sql_field = cond.field;
 
-    var ft: schema_parser.FieldType = .text;
+    var ft: schema_manager.FieldType = .text;
     for (table_schema.fields) |f| {
         if (std.mem.eql(u8, f.name, sql_field)) {
             ft = f.sql_type;
@@ -499,7 +499,7 @@ pub fn execSelectDocument(
     sql: []const u8,
     id: []const u8,
     namespace: []const u8,
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
 ) !?msgpack.Payload {
     var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
     defer stmt.deinit();
@@ -535,7 +535,7 @@ pub fn execSelectScalar(
     sql: []const u8,
     id: []const u8,
     namespace: []const u8,
-    field_ctx: ?schema_parser.Field,
+    field_ctx: ?schema_manager.Field,
 ) !?msgpack.Payload {
     var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
     defer stmt.deinit();
@@ -560,7 +560,7 @@ pub fn execSelectCollection(
     reader: *sqlite.Db,
     sql: []const u8,
     namespace: []const u8,
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
 ) !msgpack.Payload {
     var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
     defer stmt.deinit();
@@ -602,7 +602,7 @@ pub fn execQuery(
     db: *sqlite.Db,
     sql: []const u8,
     values: []const TypedValue,
-    table_schema: schema_parser.Table,
+    table_schema: schema_manager.Table,
 ) !msgpack.Payload {
     var stmt = db.prepareDynamic(sql) catch |err| {
         return classifyError(err);
@@ -638,35 +638,4 @@ pub fn execQuery(
     }
 
     return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
-}
-
-// ─── Schema validation helpers ────────────────────────────────────────────
-
-/// Find a table in the loaded schema by name. Returns null if not found.
-pub fn findTable(schema_metadata: *const schema_parser.SchemaMetadata, table_name: []const u8) ?schema_parser.TableMetadata {
-    return schema_metadata.getTable(table_name);
-}
-
-/// Validate that a table exists
-pub fn validateTable(schema_metadata: *const schema_parser.SchemaMetadata, table_name: []const u8) !void {
-    _ = findTable(schema_metadata, table_name) orelse return StorageError.UnknownTable;
-}
-
-/// Validate that a field exists in a table
-pub fn validateField(schema_metadata: *const schema_parser.SchemaMetadata, table_name: []const u8, field_name: []const u8) !void {
-    const table = findTable(schema_metadata, table_name) orelse return StorageError.UnknownTable;
-    if (table.getField(field_name) == null) return StorageError.UnknownField;
-}
-
-/// Validate columns for insertOrReplace: check table exists, each column exists,
-/// and required (NOT NULL) columns are not nil.
-pub fn validateColumns(schema_metadata: *const schema_parser.SchemaMetadata, table_name: []const u8, columns: []const types.ColumnValue) !void {
-    const table_metadata = findTable(schema_metadata, table_name) orelse return StorageError.UnknownTable;
-    for (columns) |col| {
-        const f = table_metadata.getField(col.name) orelse return StorageError.UnknownField;
-        if (f.required and col.value == .nil) return StorageError.NullNotAllowed;
-        if (col.value != .nil) {
-            try validateValueType(f.sql_type, col.value);
-        }
-    }
 }
