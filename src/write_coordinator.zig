@@ -79,8 +79,8 @@ pub const WriteCoordinator = struct {
             .namespace = namespace,
             .collection = table,
             .operation = if (old_row != null) .update else .insert,
-            .old_row = if (old_row) |o| try msgpack.clonePayload(o, arena) else null,
-            .new_row = try msgpack.clonePayload(new_row, arena),
+            .old_row = if (old_row) |o| try o.deepClone(arena) else null,
+            .new_row = try new_row.deepClone(arena),
         };
         try self.broadcastChange(arena, change);
     }
@@ -113,8 +113,8 @@ pub const WriteCoordinator = struct {
                 .namespace = namespace,
                 .collection = table,
                 .operation = .update,
-                .old_row = if (old_row) |o| try msgpack.clonePayload(o, arena) else null,
-                .new_row = if (new_row) |nr| try msgpack.clonePayload(nr, arena) else null,
+                .old_row = if (old_row) |o| try o.deepClone(arena) else null,
+                .new_row = if (new_row) |nr| try nr.deepClone(arena) else null,
             };
             try self.broadcastChange(arena, change);
         } else {
@@ -125,7 +125,7 @@ pub const WriteCoordinator = struct {
                 .namespace = namespace,
                 .collection = table,
                 .operation = .delete,
-                .old_row = if (old_row) |o| try msgpack.clonePayload(o, arena) else null,
+                .old_row = if (old_row) |o| try o.deepClone(arena) else null,
                 .new_row = null,
             };
             try self.broadcastChange(arena, change);
@@ -205,14 +205,14 @@ pub const WriteCoordinator = struct {
             if (old == .map) {
                 var it = old.map.iterator();
                 while (it.next()) |entry| {
-                    try new_map.mapPut(entry.key_ptr.*.str.value(), try msgpack.clonePayload(entry.value_ptr.*, arena));
+                    try new_map.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(arena));
                 }
             }
         }
 
         // 2. Apply new fields
         for (fields) |col| {
-            try new_map.mapPut(col.name, try msgpack.clonePayload(col.value, arena));
+            try new_map.mapPut(col.name, try col.value.deepClone(arena));
         }
 
         return new_map;
@@ -227,7 +227,7 @@ pub const WriteCoordinator = struct {
         while (it.next()) |entry| {
             const key = entry.key_ptr.*.str.value();
             if (std.mem.eql(u8, key, field)) continue;
-            try new_map.mapPut(key, try msgpack.clonePayload(entry.value_ptr.*, arena));
+            try new_map.mapPut(key, try entry.value_ptr.*.deepClone(arena));
         }
         return new_map;
     }

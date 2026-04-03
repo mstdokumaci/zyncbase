@@ -148,7 +148,7 @@ pub fn createStoreQueryMessage(
         var it = filter.map.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* == .str) {
-                try p.mapPut(entry.key_ptr.*.str.value(), try msgpack_utils.clonePayload(entry.value_ptr.*, allocator));
+                try p.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(allocator));
             }
         }
     }
@@ -181,7 +181,7 @@ pub fn createStoreSubscribeMessage(
         var it = filter.map.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* == .str) {
-                try p.mapPut(entry.key_ptr.*.str.value(), try msgpack_utils.clonePayload(entry.value_ptr.*, allocator));
+                try p.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(allocator));
             }
         }
     }

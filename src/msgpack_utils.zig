@@ -109,42 +109,6 @@ pub fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8
 pub const Payload = msgpack.Payload;
 pub const Map = msgpack.Map;
 
-// Copied from upstream zig-msgpack fn clonePayload (private). Replace with upstream call once made pub.
-/// Deep clone a Payload (allocates new memory for dynamic types).
-/// The caller owns the returned Payload and must call `payload.free(allocator)`.
-pub fn clonePayload(payload: Payload, allocator: std.mem.Allocator) !Payload {
-    return switch (payload) {
-        .nil, .bool, .int, .uint, .float, .timestamp => payload, // Value types, no allocation needed
-
-        .str => |s| try Payload.strToPayload(s.value(), allocator),
-        .bin => |b| try Payload.binToPayload(b.value(), allocator),
-        .ext => |e| try Payload.extToPayload(e.type, e.data, allocator),
-
-        .arr => |arr| {
-            const new_arr = try allocator.alloc(Payload, arr.len);
-            errdefer allocator.free(new_arr);
-            for (arr, 0..) |item, i| {
-                new_arr[i] = try clonePayload(item, allocator);
-            }
-            return Payload{ .arr = new_arr };
-        },
-
-        .map => |m| {
-            var new_map = msgpack.Map.init(allocator);
-            errdefer new_map.deinit();
-
-            var it = m.map.iterator();
-            while (it.next()) |entry| {
-                // map.put clones the key internally; we clone the value ourselves.
-                const cloned_value = try clonePayload(entry.value_ptr.*, allocator);
-                errdefer cloned_value.free(allocator);
-                try new_map.put(entry.key_ptr.*, cloned_value);
-            }
-            return Payload{ .map = new_map };
-        },
-    };
-}
-
 /// Returns true if the payload is a literal (primitive) value: nil, bool, int, uint, float, or str.
 /// Returns false for arr, map, bin, ext, and timestamp.
 pub fn isLiteral(payload: Payload) bool {
