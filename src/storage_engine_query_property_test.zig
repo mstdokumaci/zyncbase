@@ -4,31 +4,22 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
-const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "query-property");
-    defer context.deinit();
 
     var fields_arr = [_]schema_manager.Field{
-        .{ .name = "name", .sql_type = .text, .required = true, .indexed = true, .references = null, .on_delete = null },
-        .{ .name = "age", .sql_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "score", .sql_type = .real, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "tags", .sql_type = .array, .required = false, .indexed = false, .references = null, .on_delete = null },
+        sth.makeIndexedField("name", .text, true),
+        sth.makeField("age", .integer, false),
+        sth.makeField("score", .real, false),
+        sth.makeField("tags", .array, false),
     };
     const table = schema_manager.Table{ .name = "entities", .fields = &fields_arr };
 
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    var ctx = try sth.setupEngine(allocator, "query-property", table);
     defer ctx.deinit();
     const engine = ctx.engine;
 
@@ -144,36 +135,4 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
         .op = op,
         .value = value,
     };
-}
-
-const EngineTestContext = struct {
-    engine: *StorageEngine,
-    sm: *SchemaManager,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *const EngineTestContext) void {
-        self.engine.deinit();
-        self.sm.deinit();
-    }
-};
-
-fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_manager.Table) !EngineTestContext {
-    const tables = try allocator.alloc(schema_manager.Table, 1);
-    tables[0] = try table.clone(allocator);
-    const schema = try allocator.create(schema_manager.Schema);
-    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
-
-    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-    allocator.destroy(schema);
-
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try engine.writer_conn.execMulti(ddl_z, .{});
-
-    return .{ .engine = engine, .sm = sm, .allocator = allocator };
 }

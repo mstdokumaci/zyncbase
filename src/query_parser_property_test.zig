@@ -2,7 +2,7 @@ const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
+const sth = @import("storage_engine_test_helpers.zig");
 const testing = std.testing;
 
 test "property: random valid query filters" {
@@ -40,17 +40,14 @@ test "property: random valid query filters" {
             try root.mapPut("orderBy", .{ .arr = order_arr });
         }
 
-        const fields = [_]schema_manager.Field{
-            .{ .name = "field", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        var fields = [_]schema_manager.Field{
+            sth.makeField("field", .text, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = @constCast(fields[0..]) };
-        const tables = try allocator.alloc(schema_manager.Table, 1);
-        tables[0] = try table.clone(allocator); // clone for SchemaManager ownership
-        const schema = try allocator.create(schema_manager.Schema);
-        schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+        const tables = [_]schema_manager.Table{
+            .{ .name = "items", .fields = &fields },
+        };
 
-        const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-        allocator.destroy(schema);
+        const sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
         const filter = try query_parser.parseQueryFilter(allocator, sm, "items", root);
@@ -72,15 +69,11 @@ test "property: reject unknown field names" {
         conds_arr[0] = try generateRandomCondition(allocator, random, true, "unknown_field");
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
-        const fields = [_]schema_manager.Field{};
-        const table = schema_manager.Table{ .name = "items", .fields = @constCast(fields[0..]) };
-        const tables = try allocator.alloc(schema_manager.Table, 1);
-        tables[0] = try table.clone(allocator);
-        const schema = try allocator.create(schema_manager.Schema);
-        schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
+        const tables = [_]schema_manager.Table{
+            .{ .name = "items", .fields = &[_]schema_manager.Field{} },
+        };
 
-        const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-        allocator.destroy(schema);
+        const sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
         const result = query_parser.parseQueryFilter(allocator, sm, "items", root);

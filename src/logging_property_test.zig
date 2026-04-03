@@ -8,7 +8,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
+const sth = @import("storage_engine_test_helpers.zig");
 const helpers = @import("message_handler_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
@@ -331,13 +331,11 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_2 = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_2 = [_]schema_manager.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_2 },
-            .{ .name = "table", .fields = &dummy_fields_2 },
-        };
-        const dummy_schema_2 = schema_manager.Schema{ .version = "1.0.0", .tables = &dummy_tables_2 };
-        const sm2 = try SchemaManager.initWithSchema(allocator, try dummy_schema_2.clone(allocator));
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm2 = try sth.createSchemaManager(allocator, tables);
         defer sm2.deinit();
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm2, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
@@ -416,13 +414,11 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_3 = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_3 = [_]schema_manager.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_3 },
-            .{ .name = "table", .fields = &dummy_fields_3 },
-        };
-        const dummy_schema_3 = schema_manager.Schema{ .version = "1.0.0", .tables = &dummy_tables_3 };
-        const sm3 = try SchemaManager.initWithSchema(allocator, try dummy_schema_3.clone(allocator));
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm3 = try sth.createSchemaManager(allocator, tables);
         defer sm3.deinit();
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm3, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();
@@ -485,13 +481,11 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var dummy_fields_4 = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-        var dummy_tables_4 = [_]schema_manager.Table{
-            .{ .name = "_dummy", .fields = &dummy_fields_4 },
-            .{ .name = "table", .fields = &dummy_fields_4 },
-        };
-        const dummy_schema_4 = schema_manager.Schema{ .version = "1.0.0", .tables = &dummy_tables_4 };
-        const sm4 = try SchemaManager.initWithSchema(allocator, try dummy_schema_4.clone(allocator));
+        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema_manager.Table, 1);
+        defer allocator.free(tables);
+        tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
+        const sm4 = try sth.createSchemaManager(allocator, tables);
         defer sm4.deinit();
         var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm4, .{}, .{ .in_memory = true });
         defer storage_engine.deinit();

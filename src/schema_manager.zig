@@ -45,25 +45,6 @@ pub const SchemaManager = struct {
         return self;
     }
 
-    /// Initialize with an already parsed Schema. The SchemaManager takes ownership of the Schema.
-    pub fn initWithSchema(allocator: Allocator, schema: schema_parser.Schema) !*SchemaManager {
-        const self = try allocator.create(SchemaManager);
-        errdefer allocator.destroy(self);
-
-        const metadata = try SchemaMetadata.init(allocator, &schema);
-        errdefer {
-            var m = metadata;
-            m.deinit();
-        }
-
-        self.* = .{
-            .allocator = allocator,
-            .schema = schema,
-            .metadata = metadata,
-        };
-        return self;
-    }
-
     /// Clean up schema and metadata resources.
     pub fn deinit(self: *SchemaManager) void {
         self.metadata.deinit();

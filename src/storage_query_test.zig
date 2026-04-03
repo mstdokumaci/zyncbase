@@ -4,74 +4,19 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
-const ddl_generator = @import("ddl_generator.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
-
-fn makeField(name: []const u8, sql_type: schema_manager.FieldType, required: bool) schema_manager.Field {
-    return .{
-        .name = name,
-        .sql_type = sql_type,
-        .required = required,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
-}
-
-fn initTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []schema_manager.Field) !schema_manager.Table {
-    _ = allocator;
-    return schema_manager.Table{ .name = name, .fields = fields };
-}
-
-const EngineTestContext = struct {
-    engine: *StorageEngine,
-    sm: *SchemaManager,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *const EngineTestContext) void {
-        self.engine.deinit();
-        self.sm.deinit();
-    }
-};
-
-fn setupEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table: schema_manager.Table) !EngineTestContext {
-    const tables = try allocator.alloc(schema_manager.Table, 1);
-    tables[0] = try table.clone(allocator);
-    const schema = try allocator.create(schema_manager.Schema);
-    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
-    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-    allocator.destroy(schema);
-
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try engine.writer_conn.execMulti(ddl_z, .{});
-
-    return .{ .engine = engine, .sm = sm, .allocator = allocator };
-}
+const sth = @import("storage_engine_test_helpers.zig");
 
 test "StorageEngine: selectQuery basic equality" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "engine-query-basic");
-    defer context.deinit();
 
     var fields_arr = [_]schema_manager.Field{
-        makeField("name", .text, false),
-        makeField("age", .integer, false),
+        sth.makeField("name", .text, false),
+        sth.makeField("age", .integer, false),
     };
-    const table = try initTestTable(allocator, "users", &fields_arr);
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "engine-query-basic", table);
     defer ctx.deinit();
     const engine = ctx.engine;
 
@@ -103,18 +48,13 @@ test "StorageEngine: selectQuery basic equality" {
 
 test "StorageEngine: selectQuery with OR and ordering" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "engine-query-or");
-    defer context.deinit();
 
     var fields_arr = [_]schema_manager.Field{
-        makeField("name", .text, false),
-        makeField("age", .integer, false),
+        sth.makeField("name", .text, false),
+        sth.makeField("age", .integer, false),
     };
     const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    var ctx = try sth.setupEngine(allocator, "engine-query-or", table);
     defer ctx.deinit();
     const engine = ctx.engine;
 
@@ -155,17 +95,12 @@ test "StorageEngine: selectQuery with OR and ordering" {
 
 test "StorageEngine: selectQuery pagination (after)" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "engine-query-page");
-    defer context.deinit();
 
     var fields_arr = [_]schema_manager.Field{
-        makeField("score", .integer, false),
+        sth.makeField("score", .integer, false),
     };
-    const table = try initTestTable(allocator, "scores", &fields_arr);
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    const table = schema_manager.Table{ .name = "scores", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "engine-query-page", table);
     defer ctx.deinit();
     const engine = ctx.engine;
 
@@ -233,17 +168,12 @@ fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
 
 test "StorageEngine: LIKE wildcard escaping" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "engine-wildcard-escape");
-    defer context.deinit();
 
     var fields_arr = [_]schema_manager.Field{
-        makeField("data", .text, false),
+        sth.makeField("data", .text, false),
     };
-    const table = try initTestTable(allocator, "wildcards", &fields_arr);
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const ctx = try setupEngine(allocator, &memory_strategy, context.test_dir, table);
+    const table = schema_manager.Table{ .name = "wildcards", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();
     const engine = ctx.engine;
 

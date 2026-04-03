@@ -1,74 +1,28 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
-const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
-const ddl_generator = @import("ddl_generator.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_helpers.zig");
-
-fn makeField(name: []const u8, sql_type: schema_manager.FieldType, required: bool) schema_manager.Field {
-    return .{
-        .name = name,
-        .sql_type = sql_type,
-        .required = required,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
-}
-
-fn setupEngineWithSchema(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir: []const u8, table_name: []const u8, out_sm: *?*SchemaManager) !*StorageEngine {
-    var fields_arr = [_]schema_manager.Field{makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = table_name, .fields = &fields_arr };
-
-    const tables = try allocator.alloc(schema_manager.Table, 1);
-    tables[0] = try table.clone(allocator);
-
-    const schema = try allocator.create(schema_manager.Schema);
-    schema.* = .{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = tables,
-    };
-
-    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-    allocator.destroy(schema);
-    out_sm.* = sm;
-
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try engine.execDDL(ddl_z);
-
-    return engine;
-}
+const StorageEngine = sth.StorageEngine;
+const ColumnValue = sth.ColumnValue;
 
 test "storage: engine initialization errors" {
     const allocator = testing.allocator;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    const ms = try allocator.create(sth.MemoryStrategy);
+    defer {
+        ms.deinit();
+        allocator.destroy(ms);
+    }
+    try ms.init(allocator);
 
-    // Test 1: Invalid directory path (read-only filesystem simulation)
-    // We can't easily simulate a read-only filesystem in a portable way,
-    // so we test with an invalid path that should fail
+    // Test 1: Invalid directory path
     const invalid_dir = "";
-    var raw_dummy_fields = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var raw_dummy_tables = [_]schema_manager.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields }};
-    const raw_dummy_schema = schema_manager.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables };
-    const sm1 = try SchemaManager.initWithSchema(allocator, try raw_dummy_schema.clone(allocator));
+    const sm1 = try sth.createDummySchemaManager(allocator);
     defer sm1.deinit();
-    const result1 = StorageEngine.init(allocator, &memory_strategy, invalid_dir, sm1, .{}, .{ .in_memory = false });
+    const result1 = StorageEngine.init(allocator, ms, invalid_dir, sm1, .{}, .{ .in_memory = false });
     try testing.expectError(error.InvalidDataDir, result1);
+
     // Test 2: Path that is a file, not a directory
-    var context_not_dir = try schema_helpers.TestContext.init(allocator, "storage-not-dir");
+    var context_not_dir = try sth.TestContext.init(allocator, "storage-not-dir");
     defer context_not_dir.deinit();
     const test_file = try std.fs.path.join(allocator, &.{ context_not_dir.test_dir, "test_file_not_dir.txt" });
     defer allocator.free(test_file);
@@ -76,51 +30,38 @@ test "storage: engine initialization errors" {
     // Create a file
     const file = try std.fs.cwd().createFile(test_file, .{});
     file.close();
-    // Try to use it as a directory - should fail
-    var raw_dummy_fields_2 = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var raw_dummy_tables_2 = [_]schema_manager.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_2 }};
-    const raw_dummy_schema_2 = schema_manager.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_2 };
-    const sm2 = try SchemaManager.initWithSchema(allocator, try raw_dummy_schema_2.clone(allocator));
+
+    const sm2 = try sth.createDummySchemaManager(allocator);
     defer sm2.deinit();
-    const result2 = StorageEngine.init(allocator, &memory_strategy, test_file, sm2, .{}, .{ .in_memory = false });
+    const result2 = StorageEngine.init(allocator, ms, test_file, sm2, .{}, .{ .in_memory = false });
     try testing.expectError(error.NotDir, result2);
+
     // Test 3: Valid initialization should succeed
-    var context_valid = try schema_helpers.TestContext.init(allocator, "storage-init-valid");
+    var context_valid = try sth.TestContext.init(allocator, "storage-init-valid");
     defer context_valid.deinit();
     const test_dir = context_valid.test_dir;
 
-    var raw_dummy_fields_3 = [_]schema_manager.Field{.{ .name = "val", .sql_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null }};
-    var raw_dummy_tables_3 = [_]schema_manager.Table{.{ .name = "_dummy", .fields = &raw_dummy_fields_3 }};
-    const raw_dummy_schema_3 = schema_manager.Schema{ .version = "1.0.0", .tables = &raw_dummy_tables_3 };
-    const sm3 = try SchemaManager.initWithSchema(allocator, try raw_dummy_schema_3.clone(allocator));
-    // We don't defer deinit here because StorageEngine takes a *const SchemaManager
-    // Wait, StorageEngine doesn't OWN it. So we should own it in the test.
+    const sm3 = try sth.createDummySchemaManager(allocator);
     defer sm3.deinit();
-    const engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm3, .{}, .{ .in_memory = false });
+    const engine = try StorageEngine.init(allocator, ms, test_dir, sm3, .{}, .{ .in_memory = false });
     defer engine.deinit();
+
     // Verify database file was created
     const db_path = try std.fs.path.join(allocator, &.{ test_dir, "zyncbase.db" });
     defer allocator.free(db_path);
     const db_file = try std.fs.cwd().openFile(db_path, .{});
     db_file.close();
 }
+
 // Storage engine thread safety properties
 test "storage: thread-safe engine access" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-thread-safe");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-thread-safe", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     // Concurrent writes and reads
     const num_threads = 10;
     const ops_per_thread = 50;
@@ -142,7 +83,7 @@ test "storage: thread-safe engine access" {
                 defer testing.allocator.free(value);
                 const val_payload = try msgpack.Payload.strToPayload(value, testing.allocator);
                 defer val_payload.free(testing.allocator);
-                const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+                const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_payload }};
                 try eng.insertOrReplace("test", key, "test", &cols);
             }
         }
@@ -159,13 +100,10 @@ test "storage: thread-safe engine access" {
                 defer testing.allocator.free(key);
                 var managed = try eng.selectDocument(testing.allocator, "test", key, "test");
                 defer managed.deinit();
-                const doc = managed.value;
-                if (doc) |_| {
-                    // ManagedPayload contains the payload which will be freed by deinit()
-                }
             }
         }
     };
+
     // Spawn write threads
     var write_threads: [num_threads / 2]std.Thread = undefined;
     for (&write_threads, 0..) |*thread, i| {
@@ -193,20 +131,12 @@ test "storage: thread-safe engine access" {
 }
 test "storage: connection pool reuse and release" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-conn-release");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-pool-reuse", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     // Set some initial data
     {
         const val_payload1 = try msgpack.Payload.strToPayload("test1", allocator);
@@ -234,20 +164,12 @@ test "storage: connection pool reuse and release" {
 }
 test "storage: persistence round-trip (various types)" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-roundtrip");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-roundtrip", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     // Test various data types and values
     const test_cases = [_]struct {
         namespace: []const u8,
@@ -276,26 +198,16 @@ test "storage: persistence round-trip (various types)" {
         defer managed.deinit();
         const doc = managed.value;
         try testing.expect(doc != null);
-        // Compare values if possible, for text we can try
-        // Since we stored it as Payload string, it should match back
     }
 }
 test "storage: insert/delete inverse consistency" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-inverse");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-inverse", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     const test_cases = [_]struct {
         namespace: []const u8,
         path: []const u8,
@@ -329,20 +241,12 @@ test "storage: insert/delete inverse consistency" {
 }
 test "storage: transaction isolation and consistency" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-txn-isolation");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-txn-isolation", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     // Test that operations are batched and executed atomically by the write thread
     // The write thread uses transactions internally to ensure atomicity
     // Set up initial state
@@ -438,20 +342,12 @@ test "storage: transaction isolation and consistency" {
 }
 test "storage: automatic transaction rollback on failure" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-auto-rollback");
-    defer context.deinit();
-    const test_dir = context.test_dir;
-    var test_sm: ?*SchemaManager = null;
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    const engine = try setupEngineWithSchema(allocator, &memory_strategy, test_dir, "test", &test_sm);
-    defer {
-        engine.deinit();
-        if (test_sm) |sm| {
-            sm.deinit();
-        }
-    }
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    var ctx = try sth.setupEngine(allocator, "storage-auto-rollback", table);
+    defer ctx.deinit();
+    const engine = ctx.engine;
+
     // Set up initial state
     {
         const v1 = try msgpack.Payload.strToPayload("initial", allocator);
@@ -545,47 +441,6 @@ test "storage: automatic transaction rollback on failure" {
         try testing.expect(doc != null);
     }
 }
-// ─── Property Test Helpers ──────────────────────────────────────────────────
-const PropTestContext = struct {
-    allocator: std.mem.Allocator,
-    engine: *StorageEngine,
-    sm: *SchemaManager,
-    test_dir: []const u8,
-    pub fn deinit(self: PropTestContext) void {
-        self.engine.deinit();
-        self.sm.deinit();
-        self.allocator.free(self.test_dir);
-        std.fs.cwd().deleteTree(self.test_dir) catch |err| {
-            // Log failure to delete test directory
-            std.log.warn("failed to delete test directory {s}: {}", .{ self.test_dir, err });
-        };
-    }
-};
-fn setupPropTestEngine(allocator: std.mem.Allocator, memory_strategy: *MemoryStrategy, test_dir_base: []const u8, table: schema_manager.Table) !PropTestContext {
-    const test_dir = try allocator.dupe(u8, test_dir_base);
-    errdefer allocator.free(test_dir); // zwanzig-disable-line: deinit-lifecycle
-    const tables = try allocator.alloc(schema_manager.Table, 1);
-    tables[0] = try table.clone(allocator);
-    const schema = try allocator.create(schema_manager.Schema);
-    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
-    const sm = try SchemaManager.initWithSchema(allocator, schema.*);
-    allocator.destroy(schema);
-    errdefer sm.deinit();
-    const engine = try StorageEngine.init(allocator, memory_strategy, test_dir, sm, .{}, .{ .in_memory = true });
-    errdefer engine.deinit();
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    const ddl_z = try allocator.dupeZ(u8, ddl);
-    defer allocator.free(ddl_z);
-    try engine.writer_conn.execMulti(ddl_z, .{});
-    return PropTestContext{
-        .allocator = allocator,
-        .engine = engine,
-        .sm = sm,
-        .test_dir = test_dir,
-    };
-}
 // ─── Property 13: Document set/get round-trip ────────────────────────────────
 test "storage: document set/get round-trip" {
     const allocator = testing.allocator;
@@ -594,20 +449,15 @@ test "storage: document set/get round-trip" {
     const scalar_values = [_][]const u8{ "hello", "world", "foo", "bar", "baz" };
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p13");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{
-            makeField("title", .text, false),
-            makeField("score", .integer, false),
+        var fields_arr = [_]sth.Field{
+            sth.makeField("title", .text, false),
+            sth.makeField("score", .integer, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p13", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
@@ -623,14 +473,11 @@ test "storage: document set/get round-trip" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, ns);
         defer managed.deinit();
-        const result = managed.value;
-        try testing.expect(result != null);
-        const got_title = try result.?.mapGet("title");
-        try testing.expect(got_title != null);
-        try testing.expectEqualStrings(title_str, got_title.?.str.value());
-        const got_score = try result.?.mapGet("score");
-        try testing.expect(got_score != null);
-        const got_score_val: i64 = switch (got_score.?) {
+        const doc = managed.value orelse return error.MissingDoc;
+        const got_title = (try doc.mapGet("title")) orelse return error.MissingTitle;
+        try testing.expectEqualStrings(title_str, got_title.str.value());
+        const got_score = (try doc.mapGet("score")) orelse return error.MissingScore;
+        const got_score_val: i64 = switch (got_score) {
             .int => |v| v,
             .uint => |v| @intCast(v),
             else => return error.UnexpectedType,
@@ -645,20 +492,15 @@ test "storage: field set/get round-trip" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p14");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{
-            makeField("title", .text, false),
-            makeField("score", .integer, false),
+        var fields_arr = [_]sth.Field{
+            sth.makeField("title", .text, false),
+            sth.makeField("score", .integer, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p14", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         const initial_title = try msgpack.Payload.strToPayload("initial", allocator);
@@ -674,8 +516,7 @@ test "storage: field set/get round-trip" {
         try engine.flushPendingWrites();
         var managed = try engine.selectField(allocator, "items", id, ns, "score");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
-        const got = managed.value.?;
+        const got = managed.value orelse return error.MissingField;
         const got_score_val: i64 = switch (got) {
             .int => |v| v,
             .uint => |v| @intCast(v),
@@ -691,17 +532,12 @@ test "storage: collection get is namespace-scoped" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p15");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p15", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const ns_a = "ns-alpha";
         const ns_b = "ns-beta";
         const count_a = rand.intRangeAtMost(usize, 1, 5);
@@ -723,11 +559,11 @@ test "storage: collection get is namespace-scoped" {
         try engine.flushPendingWrites();
         var managed_a = try engine.selectCollection(allocator, "items", ns_a);
         defer managed_a.deinit();
-        const coll_a = managed_a.value.?;
+        const coll_a = managed_a.value orelse return error.MissingCollection;
         try testing.expectEqual(count_a, coll_a.arr.len);
         var managed_b = try engine.selectCollection(allocator, "items", ns_b);
         defer managed_b.deinit();
-        const coll_b = managed_b.value.?;
+        const coll_b = managed_b.value orelse return error.MissingCollection;
         try testing.expectEqual(count_b, coll_b.arr.len);
     }
 }
@@ -736,17 +572,12 @@ test "storage: remove then get returns null" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p16");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p16", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(42) }};
@@ -765,23 +596,18 @@ test "storage: schema validation rejects unknown tables and fields" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p17");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{makeField("title", .text, false)};
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        var fields_arr = [_]sth.Field{sth.makeField("title", .text, false)};
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p17", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const cols = [_]ColumnValue{.{ .name = "title", .value = msgpack.Payload.intToPayload(1) }};
         const err1 = engine.insertOrReplace("nonexistent_table", "id1", "ns", &cols);
-        try testing.expectError(storage_engine.StorageError.UnknownTable, err1);
+        try testing.expectError(sth.StorageError.UnknownTable, err1);
         const bad_cols = [_]ColumnValue{.{ .name = "nonexistent_field", .value = msgpack.Payload.intToPayload(1) }};
         const err2 = engine.insertOrReplace("items", "id1", "ns", &bad_cols);
-        try testing.expectError(storage_engine.StorageError.UnknownField, err2);
+        try testing.expectError(sth.StorageError.UnknownField, err2);
     }
 }
 // ─── Property 18: updated_at is always refreshed on write ────────────────────
@@ -789,17 +615,12 @@ test "storage: updated_at is always refreshed on write" {
     const allocator = testing.allocator;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p18");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{makeField("val", .integer, false)};
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p18", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         const t_before_insert = std.time.timestamp();
@@ -808,9 +629,8 @@ test "storage: updated_at is always refreshed on write" {
         try engine.flushPendingWrites();
         var managed1 = try engine.selectDocument(allocator, "items", id, ns);
         defer managed1.deinit();
-        const doc1 = managed1.value;
-        try testing.expect(doc1 != null);
-        const updated_at_1_payload = (try doc1.?.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
+        const doc1 = managed1.value orelse return error.MissingDoc;
+        const updated_at_1_payload = (try doc1.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
         const updated_at_1: i64 = switch (updated_at_1_payload) {
             .int => |v| v,
             .uint => |v| @intCast(v),
@@ -823,9 +643,8 @@ test "storage: updated_at is always refreshed on write" {
         try engine.flushPendingWrites();
         var managed2 = try engine.selectDocument(allocator, "items", id, ns);
         defer managed2.deinit();
-        const doc2 = managed2.value;
-        try testing.expect(doc2 != null);
-        const updated_at_2_payload = (try doc2.?.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
+        const doc2 = managed2.value orelse return error.MissingDoc;
+        const updated_at_2_payload = (try doc2.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
         const updated_at_2: i64 = switch (updated_at_2_payload) {
             .int => |v| v,
             .uint => |v| @intCast(v),
@@ -842,20 +661,15 @@ test "storage: write/read round-trip for array fields" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p10");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{
-            makeField("tags", .array, false),
-            makeField("name", .text, false),
+        var fields_arr = [_]sth.Field{
+            sth.makeField("tags", .array, false),
+            sth.makeField("name", .text, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p10", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         // Generate a random literal array
@@ -877,9 +691,8 @@ test "storage: write/read round-trip for array fields" {
         // Read back via selectDocument
         var managed = try engine.selectDocument(allocator, "items", id, ns);
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
-        const got_tags = (try doc.?.mapGet("tags")) orelse return error.MissingTags;
+        const doc = managed.value orelse return error.MissingDoc;
+        const got_tags = (try doc.mapGet("tags")) orelse return error.MissingTags;
         try testing.expect(got_tags == .arr);
         try testing.expectEqual(n, got_tags.arr.len);
         for (elems, got_tags.arr) |orig, got| {
@@ -911,22 +724,17 @@ test "storage: non-array fields are unaffected" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p11");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{
-            makeField("title", .text, false),
-            makeField("score", .integer, false),
-            makeField("rating", .real, false),
-            makeField("active", .boolean, false),
+        var fields_arr = [_]sth.Field{
+            sth.makeField("title", .text, false),
+            sth.makeField("score", .integer, false),
+            sth.makeField("rating", .real, false),
+            sth.makeField("active", .boolean, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p11", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         const title_str = if (rand.boolean()) "hello" else "world";
@@ -945,16 +753,14 @@ test "storage: non-array fields are unaffected" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, ns);
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        const doc = managed.value orelse return error.MissingDoc;
         // Verify text field
-        const got_title = (try doc.?.mapGet("title")) orelse {
-            std.debug.print("Property 11: Missing title field!\n", .{});
+        const got_title = (try doc.mapGet("title")) orelse {
             return error.MissingTitle;
         };
         try testing.expectEqualStrings(title_str, got_title.str.value());
         // Verify integer field
-        const got_score = (try doc.?.mapGet("score")) orelse return error.MissingScore;
+        const got_score = (try doc.mapGet("score")) orelse return error.MissingScore;
         const got_score_val: i64 = switch (got_score) {
             .int => |v| v,
             .uint => |v| @intCast(v),
@@ -971,19 +777,14 @@ test "storage: SQLite json_array_length works on stored array columns" {
     const rand = prng.random();
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var context = try schema_helpers.TestContext.init(allocator, "storage-p12");
-        defer context.deinit();
-        const test_dir = context.test_dir;
-        var fields_arr = [_]schema_manager.Field{
-            makeField("tags", .array, false),
+        var fields_arr = [_]sth.Field{
+            sth.makeField("tags", .array, false),
         };
-        const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
-        var memory_strategy: MemoryStrategy = undefined;
-        try memory_strategy.init(allocator);
-        defer memory_strategy.deinit();
-        const ctx = try setupPropTestEngine(allocator, &memory_strategy, test_dir, table);
+        const table = sth.Table{ .name = "items", .fields = &fields_arr };
+        var ctx = try sth.setupEngine(allocator, "storage-p12", table);
         defer ctx.deinit();
         const engine = ctx.engine;
+
         const id = "doc-001";
         const ns = "ns-test";
         // Generate a random literal array of known length n

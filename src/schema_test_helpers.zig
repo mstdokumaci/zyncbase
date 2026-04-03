@@ -10,9 +10,12 @@ pub const TableDef = struct {
     fields: []const []const u8,
 };
 
-pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !*schema_manager.Schema {
+pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !schema_manager.Schema {
     var tables = try allocator.alloc(schema_manager.Table, tables_def.len);
-    errdefer allocator.free(tables);
+    errdefer {
+        for (tables) |*t| allocator.free(t.name);
+        allocator.free(tables);
+    }
 
     for (tables_def, 0..) |td, i| {
         var fields = try allocator.alloc(schema_manager.Field, td.fields.len);
@@ -30,26 +33,37 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         tables[i] = .{ .name = try allocator.dupe(u8, td.name), .fields = fields };
     }
 
-    const schema = try allocator.create(schema_manager.Schema);
-    errdefer allocator.destroy(schema);
-    schema.* = .{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
-    return schema;
+    return schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 }
 
 pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !*SchemaManager {
     const schema = try createTestSchema(allocator, tables_def);
-    defer allocator.destroy(schema); // Destroy the pointer, but SchemaManager now owns the contents
-    return try SchemaManager.initWithSchema(allocator, schema.*);
+    errdefer schema_manager.freeSchema(allocator, schema);
+
+    const sm = try allocator.create(SchemaManager);
+    errdefer allocator.destroy(sm);
+
+    const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
+    errdefer {
+        var m = metadata;
+        m.deinit();
+    }
+
+    sm.* = .{
+        .allocator = allocator,
+        .schema = schema,
+        .metadata = metadata,
+    };
+    return sm;
 }
 
-pub fn freeTestSchema(allocator: std.mem.Allocator, schema: *schema_manager.Schema) void {
-    schema_manager.freeSchema(allocator, schema.*);
-    allocator.destroy(schema);
+pub fn deinitTestSchema(allocator: std.mem.Allocator, schema: schema_manager.Schema) void {
+    schema_manager.freeSchema(allocator, schema);
 }
 
-pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema: *const schema_manager.Schema, path: []const u8) !void {
+pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema: schema_manager.Schema, path: []const u8) !void {
     var parser = schema_parser.SchemaParser.init(allocator);
-    const json_text = try parser.print(schema.*);
+    const json_text = try parser.print(schema);
     defer allocator.free(json_text);
 
     // Ensure directory exists
