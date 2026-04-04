@@ -50,17 +50,17 @@ test "ChangeBuffer: concurrent push and drain stress" {
     };
 
     const producer = struct {
-        fn run(ctx: *Context) void {
+        fn run(ctx: *Context) !void {
             for (0..ctx.items_to_push) |i| {
-                const ns = std.fmt.allocPrint(ctx.alloc, "ns{}", .{i}) catch unreachable; // zwanzig-disable-line: swallowed-error
-                const coll = std.fmt.allocPrint(ctx.alloc, "coll{}", .{i}) catch unreachable; // zwanzig-disable-line: swallowed-error
-                ctx.cb.push(.{
+                const ns = try std.fmt.allocPrint(ctx.alloc, "ns{}", .{i});
+                const coll = try std.fmt.allocPrint(ctx.alloc, "coll{}", .{i});
+                try ctx.cb.push(.{
                     .namespace = ns,
                     .collection = coll,
                     .operation = .update,
                     .old_row = null,
                     .new_row = null,
-                }) catch unreachable; // zwanzig-disable-line: swallowed-error
+                });
             }
         }
     }.run;

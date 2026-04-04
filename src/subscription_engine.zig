@@ -205,7 +205,17 @@ pub const SubscriptionEngine = struct {
         defer self.mutex.unlockShared();
 
         var key_buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ namespace, collection }) catch return true;
+        var heap_key: ?[]u8 = null;
+        defer if (heap_key) |k| self.allocator.free(k);
+
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ namespace, collection }) catch blk: {
+            heap_key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ namespace, collection }) catch {
+                // If formatting and allocation both fail, conservatively assume there may be subscriptions.
+                std.log.err("Failed to format subscription key for metadata check: {s}:{s}", .{ namespace, collection });
+                return true;
+            };
+            break :blk heap_key.?;
+        };
 
         if (self.groups_by_collection.get(key)) |list| {
             return list.items.len > 0;

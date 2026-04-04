@@ -49,12 +49,17 @@ pub const ChangeBuffer = struct {
     /// Called by event loop only.
     pub fn drainInto(self: *ChangeBuffer, out: *std.ArrayListUnmanaged(OwnedRowChange), alloc: Allocator) !void {
         const wp = self.write_pos.load(.acquire);
-        var rp = self.read_pos.load(.monotonic);
-        var count = wp -% rp;
-        while (count > 0) : (count -= 1) {
+        const rp_initial = self.read_pos.load(.monotonic);
+        var rp = rp_initial;
+
+        // Amortize atomic store: update read_pos once at the end (or on early return due to error).
+        // This remains safe against partial moves (preventing use-after-free) while being more performant.
+        defer if (rp != rp_initial) self.read_pos.store(rp, .release);
+
+        const count = wp -% rp;
+        for (0..count) |_| {
             try out.append(alloc, self.buffer[rp % capacity]);
             rp = rp +% 1;
-            self.read_pos.store(rp, .release);
         }
     }
 

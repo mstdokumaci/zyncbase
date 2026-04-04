@@ -64,7 +64,7 @@ sequenceDiagram
 
 ### 🔴 1. Synchronous Read-Before-Write (CRITICAL)
 
-**Location:** [coordinateSet](file:///Users/mustafa.dokumaci/projects/zyncbase/src/write_coordinator.zig#L62-L66)
+**Location:** [coordinateSet](../../src/write_coordinator.zig#L62-L66)
 
 ```zig
 // This blocks the event loop thread on every single write!
@@ -83,7 +83,7 @@ Every write triggers a `selectDocument()` — even when there are zero subscribe
 
 ### 🔴 2. Excessive Deep Cloning (CRITICAL)
 
-**Location:** [coordinateSet](file:///Users/mustafa.dokumaci/projects/zyncbase/src/write_coordinator.zig#L72-L82) and [mergeRow](file:///Users/mustafa.dokumaci/projects/zyncbase/src/write_coordinator.zig#L231-L256)
+**Location:** [coordinateSet](../../src/write_coordinator.zig#L72-L82) and [mergeRow](../../src/write_coordinator.zig#L231-L256)
 
 A single `StoreSet` triggers **4 separate deep clone operations**:
 1. `mergeRow` clones every field from `old_row` 
@@ -97,7 +97,7 @@ Each `deepClone` walks the entire MessagePack tree, allocating new nodes for map
 
 ### 🔴 3. Notification on Event Loop Thread (CRITICAL)
 
-**Location:** [broadcastChange](file:///Users/mustafa.dokumaci/projects/zyncbase/src/write_coordinator.zig#L159-L229)
+**Location:** [broadcastChange](../../src/write_coordinator.zig#L159-L229)
 
 The entire notification pipeline runs on the event loop thread:
 - Acquires shared lock on `SubscriptionEngine`
@@ -112,7 +112,7 @@ With 100 groups watching a collection and 10 subscribers per group, that's **200
 
 ### 🟡 4. SQL Generation Per Write
 
-**Location:** [buildInsertOrReplaceOp](file:///Users/mustafa.dokumaci/projects/zyncbase/src/storage_engine/writer.zig) 
+**Location:** [buildInsertOrReplaceOp](../../src/storage_engine/writer.zig)
 
 Every write generates SQL text strings (`INSERT OR REPLACE INTO ...`). SQLite then parses these into bytecode every time. For a given table, the SQL is always identical — only the bound values change.
 
@@ -120,7 +120,7 @@ Every write generates SQL text strings (`INSERT OR REPLACE INTO ...`). SQLite th
 
 ### 🟡 5. Phantom Notifications on Failed Writes
 
-**Location:** The ordering in [coordinateSet](file:///Users/mustafa.dokumaci/projects/zyncbase/src/write_coordinator.zig#L88-L91)
+**Location:** The ordering in [coordinateSet](../../src/write_coordinator.zig#L88-L91)
 
 ```zig
 try self.broadcastChange(arena, change);           // Notify first
