@@ -69,40 +69,42 @@ pub const NotificationDispatcher = struct {
         var common = std.ArrayListUnmanaged(u8).empty;
         const writer = common.writer(alloc);
 
-        // FixMap header for 5 elements (0x80 | 5)
-        writer.writeByte(0x85) catch return;
+        // MsgPack Map header (FixMap 0x85) for common prefix of the notification message
+        const setup = struct {
+            fn run(c: OwnedRowChange, a: Allocator, w: anytype) !void {
+                try w.writeByte(0x85);
+                try msgpack.encode(try Payload.strToPayload("type", a), w);
+                try msgpack.encode(try Payload.strToPayload("StoreDelta", a), w);
+                try msgpack.encode(try Payload.strToPayload("namespace", a), w);
+                try msgpack.encode(try Payload.strToPayload(c.namespace, a), w);
+                try msgpack.encode(try Payload.strToPayload("collection", a), w);
+                try msgpack.encode(try Payload.strToPayload(c.collection, a), w);
+                try msgpack.encode(try Payload.strToPayload("value", a), w);
 
-        const type_k = Payload.strToPayload("type", alloc) catch return;
-        const type_v = Payload.strToPayload("StoreDelta", alloc) catch return;
-        const ns_k = Payload.strToPayload("namespace", alloc) catch return;
-        const ns_v = Payload.strToPayload(change.namespace, alloc) catch return;
-        const coll_k = Payload.strToPayload("collection", alloc) catch return;
-        const coll_v = Payload.strToPayload(change.collection, alloc) catch return;
-        const val_k = Payload.strToPayload("value", alloc) catch return;
-        const sub_k = Payload.strToPayload("subscription_id", alloc) catch return;
+                const val_p = if (c.operation == .delete) .nil else c.new_row orelse .nil;
+                try msgpack.encode(val_p, w);
 
-        msgpack.encode(type_k, writer) catch return;
-        msgpack.encode(type_v, writer) catch return;
+                try msgpack.encode(try Payload.strToPayload("subscription_id", a), w);
+            }
+        }.run;
 
-        msgpack.encode(ns_k, writer) catch return;
-        msgpack.encode(ns_v, writer) catch return;
-
-        msgpack.encode(coll_k, writer) catch return;
-        msgpack.encode(coll_v, writer) catch return;
-
-        msgpack.encode(val_k, writer) catch return;
-        const value_p = if (change.operation == .delete) .nil else change.new_row orelse .nil;
-        msgpack.encode(value_p, writer) catch return;
-
-        msgpack.encode(sub_k, writer) catch return;
+        setup(change, alloc, writer) catch |err| {
+            std.log.err("NotificationDispatcher prefix encoding failed: {}", .{err});
+            return;
+        };
 
         const prefix = common.items;
-
         var out = std.ArrayListUnmanaged(u8).empty;
         for (matches) |match| {
             out.clearRetainingCapacity();
-            out.appendSlice(alloc, prefix) catch continue; // zwanzig-disable-line: swallowed-error
-            msgpack.encode(Payload.uintToPayload(match.subscription_id), out.writer(alloc)) catch continue; // zwanzig-disable-line: swallowed-error
+            out.appendSlice(alloc, prefix) catch |err| {
+                std.log.err("NotificationDispatcher match append content failed: {}", .{err});
+                continue;
+            };
+            msgpack.encode(Payload.uintToPayload(match.subscription_id), out.writer(alloc)) catch |err| {
+                std.log.err("NotificationDispatcher match encode sub_id failed: {}", .{err});
+                continue;
+            };
 
             const conn = cm.acquireConnection(match.connection_id) catch |err| {
                 std.log.debug("Failed to acquire connection {} for notification: {}", .{ match.connection_id, err });

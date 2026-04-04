@@ -57,7 +57,6 @@ pub const WebSocketServer = struct {
             return error.FailedToCreateApp;
         }
 
-
         self.app = app.?;
         self.allocator = allocator;
         self.ssl = config.ssl;
@@ -70,7 +69,6 @@ pub const WebSocketServer = struct {
         self.is_listening = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
-
     }
 
     /// Clean up resources.

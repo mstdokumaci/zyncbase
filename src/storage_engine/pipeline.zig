@@ -19,10 +19,14 @@ fn getDocumentHelper(
     table: []const u8,
     namespace: []const u8,
     id: []const u8,
+    sql_cache: *std.StringHashMap([]const u8),
 ) !?msgpack.Payload {
     const table_metadata = sm.getTable(table) orelse return null;
-    const sql = try reader.buildSelectDocumentSql(allocator, table_metadata);
-    defer allocator.free(sql);
+    const sql = if (sql_cache.get(table)) |s| s else blk: {
+        const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        try sql_cache.put(table, s);
+        break :blk s;
+    };
     return reader.execSelectDocument(allocator, conn, sql, id, namespace, table_metadata.table.*);
 }
 
@@ -58,6 +62,13 @@ pub fn executeBatch(
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
 
+    var sql_cache = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var it = sql_cache.valueIterator();
+        while (it.next()) |sql| allocator.free(sql.*);
+        sql_cache.deinit();
+    }
+
     if (!manual_transaction_active) {
         conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
             const classified_err = reader.classifyError(err);
@@ -82,7 +93,12 @@ pub fn executeBatch(
             .insert => |iop| {
                 var old_row: ?msgpack.Payload = null;
                 if (iop.change_capture) {
-                    old_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id) catch null;
+                    const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache);
+                    if (capture_res) |orow| {
+                        old_row = orow;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-INSERT) for {s}: {}", .{ iop.table, err });
+                    }
                 }
                 executeInsert(allocator, conn, iop) catch |err| {
                     if (old_row) |*r| r.free(allocator);
@@ -91,18 +107,33 @@ pub fn executeBatch(
                     return classified_err;
                 };
                 if (iop.change_capture) {
-                    const new_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id) catch null;
-                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, .update, old_row, new_row) catch |err| {
-                        std.log.err("Failed to capture row change: {}", .{err});
+                    const maybe_new_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache) catch |err| {
+                        std.log.err("Failed to capture new state (post-INSERT) for {s}: {}", .{ iop.table, err });
                         if (old_row) |*r| r.free(allocator);
-                        if (new_row) |*r| r.free(allocator);
+                        continue;
                     };
+                    if (maybe_new_row) |*new_row| {
+                        const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
+                        pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row.*) catch |err| {
+                            std.log.err("Failed to capture row change: {}", .{err});
+                            if (old_row) |*r| r.free(allocator);
+                            new_row.free(allocator);
+                        };
+                    } else {
+                        std.log.err("Failed to capture new state for {s} after successful INSERT (not found)", .{iop.table});
+                        if (old_row) |*r| r.free(allocator);
+                    }
                 }
             },
             .update => |uop| {
                 var old_row: ?msgpack.Payload = null;
                 if (uop.change_capture) {
-                    old_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id) catch null;
+                    const capture_res = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache);
+                    if (capture_res) |orow| {
+                        old_row = orow;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-UPDATE) for {s}: {}", .{ uop.table, err });
+                    }
                 }
                 executeUpdate(allocator, conn, uop) catch |err| {
                     if (old_row) |*r| r.free(allocator);
@@ -111,18 +142,32 @@ pub fn executeBatch(
                     return classified_err;
                 };
                 if (uop.change_capture) {
-                    const new_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id) catch null;
-                    pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row) catch |err| {
-                        std.log.err("Failed to capture row change: {}", .{err});
+                    const maybe_new_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache) catch |err| {
+                        std.log.err("Failed to capture new state (post-UPDATE) for {s}: {}", .{ uop.table, err });
                         if (old_row) |*r| r.free(allocator);
-                        if (new_row) |*r| r.free(allocator);
+                        continue;
                     };
+                    if (maybe_new_row) |*new_row| {
+                        pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row.*) catch |err| {
+                            std.log.err("Failed to capture row change: {}", .{err});
+                            if (old_row) |*r| r.free(allocator);
+                            new_row.free(allocator);
+                        };
+                    } else {
+                        std.log.err("Failed to capture new state for {s} after successful UPDATE (not found)", .{uop.table});
+                        if (old_row) |*r| r.free(allocator);
+                    }
                 }
             },
             .delete => |dop| {
                 var old_row: ?msgpack.Payload = null;
                 if (dop.change_capture) {
-                    old_row = getDocumentHelper(allocator, conn, sm, dop.table, dop.namespace, dop.id) catch null;
+                    const capture_res = getDocumentHelper(allocator, conn, sm, dop.table, dop.namespace, dop.id, &sql_cache);
+                    if (capture_res) |orow| {
+                        old_row = orow;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-DELETE) for {s}: {}", .{ dop.table, err });
+                    }
                 }
                 executeDelete(allocator, conn, dop) catch |err| {
                     if (old_row) |*r| r.free(allocator);
@@ -138,6 +183,11 @@ pub fn executeBatch(
                 }
             },
             .ddl => |dop| {
+                // Clear SQL cache because schema changed
+                var cit = sql_cache.valueIterator();
+                while (cit.next()) |sql| allocator.free(sql.*);
+                sql_cache.clearRetainingCapacity();
+
                 const sql = dop.sql;
                 var it = std.mem.splitScalar(u8, sql, ';');
                 while (it.next()) |stmt_raw| {

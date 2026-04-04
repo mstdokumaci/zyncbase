@@ -23,7 +23,6 @@ test "WebSocketServer: init with valid config" {
     defer server.deinit();
 
     try testing.expectEqual(false, server.ssl);
-
 }
 
 test "WebSocketServer: init with SSL config" {

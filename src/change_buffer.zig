@@ -41,26 +41,30 @@ pub const ChangeBuffer = struct {
     pub fn push(self: *ChangeBuffer, change: OwnedRowChange) !void {
         const wp = self.write_pos.load(.monotonic);
         const rp = self.read_pos.load(.acquire);
-        if (wp - rp >= capacity) return error.BufferFull;
+        if (wp -% rp >= capacity) return error.BufferFull;
         self.buffer[wp % capacity] = change;
-        self.write_pos.store(wp + 1, .release);
+        self.write_pos.store(wp +% 1, .release);
     }
 
     /// Called by event loop only.
     pub fn drainInto(self: *ChangeBuffer, out: *std.ArrayListUnmanaged(OwnedRowChange), alloc: Allocator) !void {
         const wp = self.write_pos.load(.acquire);
         var rp = self.read_pos.load(.monotonic);
-        while (rp < wp) : (rp += 1) {
+        var count = wp -% rp;
+        while (count > 0) : (count -= 1) {
             try out.append(alloc, self.buffer[rp % capacity]);
+            rp = rp +% 1;
+            self.read_pos.store(rp, .release);
         }
-        self.read_pos.store(rp, .release);
     }
 
     pub fn deinit(self: *ChangeBuffer) void {
         const wp = self.write_pos.load(.acquire);
         var rp = self.read_pos.load(.monotonic);
-        while (rp < wp) : (rp += 1) {
+        var count = wp -% rp;
+        while (count > 0) : (count -= 1) {
             self.buffer[rp % capacity].deinit(self.allocator);
+            rp = rp +% 1;
         }
         self.allocator.free(self.buffer);
     }
