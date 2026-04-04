@@ -380,7 +380,7 @@ fn deinitCachedAuth(allocator: Allocator, auth: *CachedAuth) void {
 pub const AuthCache = struct {
     const lfc_type = lockFreeCache(CachedAuth);
     allocator: Allocator,
-    lfc: *lfc_type,
+    lfc: lfc_type,
     max_size: usize,
     cleanup_thread: ?std.Thread,
     cleanup_mutex: std.Thread.Mutex,
@@ -389,15 +389,15 @@ pub const AuthCache = struct {
 
     pub fn init(allocator: Allocator, max_size: usize) !*AuthCache {
         const self = try allocator.create(AuthCache);
-        self.* = .{
-            .allocator = allocator,
-            .lfc = try lfc_type.init(allocator, .{}, deinitCachedAuth),
-            .max_size = max_size,
-            .cleanup_thread = null,
-            .cleanup_mutex = .{},
-            .cleanup_cond = .{},
-            .shutdown = std.atomic.Value(bool).init(false),
-        };
+        errdefer allocator.destroy(self);
+
+        self.allocator = allocator;
+        try self.lfc.init(allocator, .{}, deinitCachedAuth);
+        self.max_size = max_size;
+        self.cleanup_thread = null;
+        self.cleanup_mutex = .{};
+        self.cleanup_cond = .{};
+        self.shutdown = std.atomic.Value(bool).init(false);
 
         self.cleanup_thread = try std.Thread.spawn(.{}, backgroundCleanup, .{self});
         return self;

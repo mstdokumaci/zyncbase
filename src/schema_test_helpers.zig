@@ -36,12 +36,9 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     return schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
 }
 
-pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !*SchemaManager {
+pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !SchemaManager {
     const schema = try createTestSchema(allocator, tables_def);
     errdefer schema_manager.freeSchema(allocator, schema);
-
-    const sm = try allocator.create(SchemaManager);
-    errdefer allocator.destroy(sm);
 
     const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
     errdefer {
@@ -49,12 +46,11 @@ pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const
         m.deinit();
     }
 
-    sm.* = .{
+    return schema_manager.SchemaManager{
         .allocator = allocator,
         .schema = schema,
         .metadata = metadata,
     };
-    return sm;
 }
 
 pub fn deinitTestSchema(allocator: std.mem.Allocator, schema: schema_manager.Schema) void {
@@ -115,8 +111,8 @@ pub const TestContext = struct {
     }
 };
 
-pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, sm: *const SchemaManager, options: StorageEngine.Options) !*StorageEngine {
-    const engine = try StorageEngine.init(allocator, memory_strategy, context.test_dir, sm, .{}, options);
+pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const @import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, sm: *const SchemaManager, options: StorageEngine.Options) !void {
+    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, sm, .{}, options, null, null);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
@@ -127,8 +123,6 @@ pub fn setupTestEngine(allocator: std.mem.Allocator, memory_strategy: *@import("
         defer allocator.free(ddl_z);
         try engine.execDDL(ddl_z);
     }
-
-    return engine;
 }
 
 pub fn cleanupTestEngine(engine: *StorageEngine, context: *TestContext) void {

@@ -15,9 +15,10 @@ test "StorageEngine: insert and select basic" {
     };
     const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
 
-    var ctx = try sth.setupEngine(allocator, "crud-basic", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-basic", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Insert
     const name_p = try msgpack.Payload.strToPayload("Alice", allocator);
@@ -26,7 +27,7 @@ test "StorageEngine: insert and select basic" {
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(30) },
     };
-    try engine.insertOrReplace("users", "id1", "ns", &cols);
+    try engine.insertOrReplace("users", "id1", "ns", &cols, false);
     try engine.flushPendingWrites();
 
     // Select
@@ -46,20 +47,21 @@ test "StorageEngine: update document" {
     };
     const table = schema_manager.Table{ .name = "test", .fields = &fields_arr };
 
-    var ctx = try sth.setupEngine(allocator, "crud-update", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-update", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     const val1 = try sth.makePayloadStr("v1", allocator);
     defer val1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val1 }};
-    try engine.insertOrReplace("test", "id1", "ns", &cols1);
+    try engine.insertOrReplace("test", "id1", "ns", &cols1, false);
     try engine.flushPendingWrites();
 
     const val2 = try sth.makePayloadStr("v2", allocator);
     defer val2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val2 }};
-    try engine.insertOrReplace("test", "id1", "ns", &cols2);
+    try engine.insertOrReplace("test", "id1", "ns", &cols2, false);
     try engine.flushPendingWrites();
 
     var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
@@ -76,16 +78,17 @@ test "StorageEngine: delete document" {
     };
     const table = schema_manager.Table{ .name = "test", .fields = &fields_arr };
 
-    var ctx = try sth.setupEngine(allocator, "crud-delete", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-delete", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     const p = try sth.makePayloadStr("foo", allocator);
     defer p.free(allocator);
-    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = p }});
+    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = p }}, false);
     try engine.flushPendingWrites();
 
-    try engine.deleteDocument("test", "id1", "ns");
+    try engine.deleteDocument("test", "id1", "ns", false);
     try engine.flushPendingWrites();
 
     var managed = try engine.selectDocument(allocator, "test", "id1", "ns");

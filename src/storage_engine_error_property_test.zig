@@ -17,17 +17,21 @@ test "storage: error handling invalid database path" {
     const allocator = testing.allocator;
 
     // Try to create storage engine with invalid path
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer sm.deinit();
+
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    const result = StorageEngine.init(allocator, &memory_strategy, "/invalid/nonexistent/path/that/cannot/be/created", sm, .{}, .{ .in_memory = false });
+
+    var storage: StorageEngine = undefined;
+    const result = storage.init(allocator, &memory_strategy, "/invalid/nonexistent/path/that/cannot/be/created", &sm, .{}, .{ .in_memory = false }, null, null);
     // Verify we get an error
     if (result) |_| {
+        storage.deinit();
         return error.ExpectedError;
     } else |err| {
         switch (err) {
@@ -40,7 +44,7 @@ test "storage: error handling read-only filesystem" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-readonly");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -48,14 +52,15 @@ test "storage: error handling read-only filesystem" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     // Try to set a value
     {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
@@ -70,7 +75,7 @@ test "storage: error handling constraint violations" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-constraints");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -78,14 +83,15 @@ test "storage: error handling constraint violations" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     // Set a value
     {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
@@ -93,7 +99,7 @@ test "storage: error handling constraint violations" {
         const val_payload = try msgpack.Payload.strToPayload("value2", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
@@ -113,7 +119,7 @@ test "storage: error handling transaction rollback on error" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-rollback");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -121,14 +127,15 @@ test "storage: error handling transaction rollback on error" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     try storage.beginTransaction();
     {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
     }
     try storage.rollbackTransaction();
     {
@@ -142,7 +149,7 @@ test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-concurrent");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
@@ -150,13 +157,14 @@ test "storage: error handling concurrent access safety" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -172,7 +180,7 @@ test "storage: error handling concurrent access safety" {
     }.run;
     var threads: [4]std.Thread = undefined;
     for (&threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, runRead, .{ThreadContext{ .storage = storage, .allocator = allocator }});
+        t.* = try std.Thread.spawn(.{}, runRead, .{ThreadContext{ .storage = &storage, .allocator = allocator }});
     }
     for (threads) |t| t.join();
 }
@@ -180,22 +188,25 @@ test "storage: error handling empty paths" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-empty");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer sm.deinit();
+
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
         const val_payload = try msgpack.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "empty", "", &cols);
+        try storage.insertOrReplace("data_table", "empty", "", &cols, false);
     }
     try storage.flushPendingWrites();
     {
@@ -209,7 +220,7 @@ test "storage: error handling large values" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-large");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "test", .fields = &.{"val"} },
     });
@@ -217,7 +228,8 @@ test "storage: error handling large values" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     const large_value = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(large_value);
@@ -226,7 +238,7 @@ test "storage: error handling large values" {
         const val_payload = try msgpack.Payload.strToPayload(large_value, allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("test", "large_key", "test", &cols);
+        try storage.insertOrReplace("test", "large_key", "test", &cols, false);
     }
     try storage.flushPendingWrites();
     {
@@ -240,7 +252,7 @@ test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
     var context = try schema_helpers.TestContext.init(allocator, "storage-error-delete");
     defer context.deinit();
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "test", .fields = &.{"val"} },
     });
@@ -248,9 +260,10 @@ test "storage: error handling delete non-existent key" {
     var memory_strategy: MemoryStrategy = undefined;
     try memory_strategy.init(allocator);
     defer memory_strategy.deinit();
-    var storage = try schema_helpers.setupTestEngine(allocator, &memory_strategy, &context, sm, .{ .in_memory = false });
+    var storage: StorageEngine = undefined;
+    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
-    try storage.deleteDocument("test", "nonexistent", "test");
+    try storage.deleteDocument("test", "nonexistent", "test", false);
     try storage.flushPendingWrites();
     {
         var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");

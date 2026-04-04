@@ -53,13 +53,13 @@ test "server: initialization is idempotent" {
         }
 
         // Verify server is properly initialized
-        try testing.expect(@intFromPtr(server.memory_strategy) != 0);
-        try testing.expect(@intFromPtr(server.violation_tracker) != 0);
-        try testing.expect(@intFromPtr(server.subscription_engine) != 0);
-        try testing.expect(@intFromPtr(server.checkpoint_manager) != 0);
-        try testing.expect(@intFromPtr(server.storage_engine) != 0);
-        try testing.expect(@intFromPtr(server.websocket_server) != 0);
-        try testing.expect(@intFromPtr(server.message_handler) != 0);
+        try testing.expect(@intFromPtr(&server.memory_strategy) != 0);
+        try testing.expect(@intFromPtr(&server.violation_tracker) != 0);
+        try testing.expect(@intFromPtr(&server.subscription_engine) != 0);
+        try testing.expect(@intFromPtr(&server.checkpoint_manager) != 0);
+        try testing.expect(@intFromPtr(&server.storage_engine) != 0);
+        try testing.expect(@intFromPtr(&server.websocket_server) != 0);
+        try testing.expect(@intFromPtr(&server.message_handler) != 0);
 
         // Verify shutdown flag is initialized to false
         try testing.expect(!server.shutdown_requested.load(.acquire));

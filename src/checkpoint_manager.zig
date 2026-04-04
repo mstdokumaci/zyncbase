@@ -103,18 +103,16 @@ pub const CheckpointManager = struct {
         db_path: []const u8,
         storage_engine: ?*storage_mod.StorageEngine = null,
 
-        pub fn init(allocator: Allocator, db_path: []const u8) !*StorageLayer {
-            const storage = try allocator.create(StorageLayer);
-            storage.* = .{
+        pub fn init(allocator: Allocator, db_path: []const u8) !StorageLayer {
+            return .{
                 .allocator = allocator,
                 .db_path = db_path,
                 .storage_engine = null,
             };
-            return storage;
         }
 
         pub fn deinit(self: *StorageLayer) void {
-            self.allocator.destroy(self);
+            _ = self;
         }
 
         /// Execute a SQL statement (placeholder)
@@ -149,11 +147,10 @@ pub const CheckpointManager = struct {
     };
 
     /// Initialize a new CheckpointManager
-    pub fn init(allocator: Allocator, storage: *StorageLayer, config: Config) !*CheckpointManager {
-        const manager = try allocator.create(CheckpointManager);
+    pub fn init(self: *CheckpointManager, allocator: Allocator, storage: *StorageLayer, config: Config) !void {
         const now = std.time.timestamp();
 
-        manager.* = .{
+        self.* = .{
             .allocator = allocator,
             .storage = storage,
             .config = config,
@@ -170,9 +167,7 @@ pub const CheckpointManager = struct {
 
         // Query initial WAL size
         const initial_wal_size = try storage.queryWalSize();
-        manager.wal_size.store(initial_wal_size, .release);
-
-        return manager;
+        self.wal_size.store(initial_wal_size, .release);
     }
 
     /// Clean up resources
@@ -183,7 +178,6 @@ pub const CheckpointManager = struct {
             thread.join();
             self.background_thread = null;
         }
-        self.allocator.destroy(self);
     }
 
     /// Get current metrics for monitoring

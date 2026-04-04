@@ -4,15 +4,57 @@ const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const types = @import("types.zig");
+const schema_manager = @import("../schema_manager.zig");
+const msgpack = @import("../msgpack_utils.zig");
+const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
+const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
 
 const WriteOp = types.WriteOp;
 const StorageError = types.StorageError;
+
+fn getDocumentHelper(
+    allocator: Allocator,
+    conn: *sqlite.Db,
+    sm: *const schema_manager.SchemaManager,
+    table: []const u8,
+    namespace: []const u8,
+    id: []const u8,
+) !?msgpack.Payload {
+    const table_metadata = sm.getTable(table) orelse return null;
+    const sql = try reader.buildSelectDocumentSql(allocator, table_metadata);
+    defer allocator.free(sql);
+    return reader.execSelectDocument(allocator, conn, sql, id, namespace, table_metadata.table.*);
+}
+
+fn pushOwnedChange(
+    allocator: Allocator,
+    pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+    namespace: []const u8,
+    collection: []const u8,
+    op: OwnedRowChange.Operation,
+    old_row: ?msgpack.Payload,
+    new_row: ?msgpack.Payload,
+) !void {
+    const ns = try allocator.dupe(u8, namespace);
+    errdefer allocator.free(ns);
+    const coll = try allocator.dupe(u8, collection);
+    errdefer allocator.free(coll);
+    try pending_changes.append(allocator, .{
+        .namespace = ns,
+        .collection = coll,
+        .operation = op,
+        .old_row = old_row,
+        .new_row = new_row,
+    });
+}
 
 pub fn executeBatch(
     allocator: Allocator,
     conn: *sqlite.Db,
     transaction_active: *std.atomic.Value(bool),
     ops: []const WriteOp,
+    pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+    sm: *const schema_manager.SchemaManager,
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
 
@@ -37,20 +79,63 @@ pub fn executeBatch(
 
     for (ops) |op| {
         switch (op) {
-            .insert => |iop| executeInsert(allocator, conn, iop) catch |err| {
-                const classified_err = reader.classifyError(err);
-                reader.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
-                return classified_err;
+            .insert => |iop| {
+                var old_row: ?msgpack.Payload = null;
+                if (iop.change_capture) {
+                    old_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id) catch null;
+                }
+                executeInsert(allocator, conn, iop) catch |err| {
+                    if (old_row) |*r| r.free(allocator);
+                    const classified_err = reader.classifyError(err);
+                    reader.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
+                    return classified_err;
+                };
+                if (iop.change_capture) {
+                    const new_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id) catch null;
+                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, .update, old_row, new_row) catch |err| {
+                        std.log.err("Failed to capture row change: {}", .{err});
+                        if (old_row) |*r| r.free(allocator);
+                        if (new_row) |*r| r.free(allocator);
+                    };
+                }
             },
-            .update => |uop| executeUpdate(allocator, conn, uop) catch |err| {
-                const classified_err = reader.classifyError(err);
-                reader.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
-                return classified_err;
+            .update => |uop| {
+                var old_row: ?msgpack.Payload = null;
+                if (uop.change_capture) {
+                    old_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id) catch null;
+                }
+                executeUpdate(allocator, conn, uop) catch |err| {
+                    if (old_row) |*r| r.free(allocator);
+                    const classified_err = reader.classifyError(err);
+                    reader.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
+                    return classified_err;
+                };
+                if (uop.change_capture) {
+                    const new_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id) catch null;
+                    pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row) catch |err| {
+                        std.log.err("Failed to capture row change: {}", .{err});
+                        if (old_row) |*r| r.free(allocator);
+                        if (new_row) |*r| r.free(allocator);
+                    };
+                }
             },
-            .delete => |dop| executeDelete(allocator, conn, dop) catch |err| {
-                const classified_err = reader.classifyError(err);
-                reader.logDatabaseError("executeBatch DELETE", classified_err, dop.table);
-                return classified_err;
+            .delete => |dop| {
+                var old_row: ?msgpack.Payload = null;
+                if (dop.change_capture) {
+                    old_row = getDocumentHelper(allocator, conn, sm, dop.table, dop.namespace, dop.id) catch null;
+                }
+                executeDelete(allocator, conn, dop) catch |err| {
+                    if (old_row) |*r| r.free(allocator);
+                    const classified_err = reader.classifyError(err);
+                    reader.logDatabaseError("executeBatch DELETE", classified_err, dop.table);
+                    return classified_err;
+                };
+                if (dop.change_capture) {
+                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table, .delete, old_row, null) catch |err| {
+                        std.log.err("Failed to capture row change: {}", .{err});
+                        if (old_row) |*r| r.free(allocator);
+                    };
+                }
             },
             .ddl => |dop| {
                 const sql = dop.sql;
@@ -92,6 +177,10 @@ pub fn flushBatch(
     metadata_cache: anytype,
     batch: *std.ArrayListUnmanaged(WriteOp),
     last_batch_time: *i64,
+    sm: *const schema_manager.SchemaManager,
+    change_buffer: *ChangeBuffer,
+    notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
+    notifier_ctx: ?*anyopaque,
 ) void {
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
@@ -146,13 +235,36 @@ pub fn flushBatch(
         metadata_cache.bulkEvict(eviction_keys.items);
     }
 
-    const result = executeBatch(allocator, conn, transaction_active, batch.items);
+    var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
+    defer {
+        for (pending_changes.items) |*c| c.deinit(allocator);
+        pending_changes.deinit(allocator);
+    }
+
+    const result = executeBatch(allocator, conn, transaction_active, batch.items, &pending_changes, sm);
     if (result) |_| {
         _ = write_seq.fetchAdd(1, .acq_rel);
 
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(null);
             op.deinit(allocator);
+        }
+
+        var dispatcher_woken = false;
+        for (pending_changes.items) |*change| {
+            change_buffer.push(change.*) catch |err| {
+                std.log.err("Failed to push to change_buffer: {}", .{err});
+                change.deinit(allocator);
+                continue;
+            };
+            dispatcher_woken = true;
+        }
+        pending_changes.clearRetainingCapacity();
+
+        if (dispatcher_woken) {
+            if (notifier_ptr) |n| {
+                n(notifier_ctx);
+            }
         }
     } else |err| {
         const classified_err = reader.classifyError(err);
@@ -215,7 +327,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .begin_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
                         }
                         if (ctx.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
                             ctx.transaction_active.store(true, .release);
@@ -231,7 +343,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .commit_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -258,7 +370,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .rollback_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -284,7 +396,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .checkpoint => |cop| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
                         }
                         if (connection.internalExecuteCheckpoint(&ctx.writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
                             cop.completion_signal.signalWithResult(stats);
@@ -309,7 +421,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
             (batch.items.len > 0 and time_since_last >= batch_timeout);
 
         if (should_flush) {
-            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
         } else {
             ctx.write_mutex.lock();
             defer ctx.write_mutex.unlock();
@@ -345,7 +457,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
     }
 
     if (batch.items.len > 0) {
-        flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, ctx.metadata_cache, &batch, &last_batch_time);
+        flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
     }
 }
 

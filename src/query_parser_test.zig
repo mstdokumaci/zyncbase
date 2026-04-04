@@ -28,13 +28,13 @@ test "basic query filter parsing" {
     try root.mapPut("conditions", .{ .arr = conds_inner });
     try root.mapPut("limit", msgpack.Payload.uintToPayload(50));
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "age", "status" },
     }});
     defer sm.deinit();
 
-    const filter = try query_parser.parseQueryFilter(allocator, sm, "users", root);
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, "users", root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
@@ -72,13 +72,13 @@ test "query with orConditions" {
 
     try root.mapPut("orConditions", .{ .arr = or_conds_inner });
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
     }});
     defer sm.deinit();
 
-    const filter = try query_parser.parseQueryFilter(allocator, sm, "users", root);
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, "users", root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.or_conditions != null);
@@ -105,13 +105,13 @@ test "query with orderBy and after" {
     after_inner[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
     try root.mapPut("after", .{ .arr = after_inner });
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{ "created_at", "val" },
     }});
     defer sm.deinit();
 
-    const filter = try query_parser.parseQueryFilter(allocator, sm, "items", root);
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.order_by != null);
@@ -135,13 +135,13 @@ test "isNull condition (no value tuple)" {
 
     try root.mapPut("conditions", .{ .arr = conds_inner });
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"deleted_at"},
     }});
     defer sm.deinit();
 
-    const filter = try query_parser.parseQueryFilter(allocator, sm, "items", root);
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.conditions.?.len);
@@ -165,13 +165,13 @@ test "unknown field name (including flattened paths)" {
 
     try root.mapPut("conditions", .{ .arr = conds_inner });
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"address"},
     }});
     defer sm.deinit();
 
-    const result = query_parser.parseQueryFilter(allocator, sm, "items", root);
+    const result = query_parser.parseQueryFilter(allocator, &sm, "items", root);
     try testing.expectError(error.UnknownField, result);
 }
 
@@ -187,13 +187,13 @@ test "malformed after field (panic regression test)" {
     after_inner[1] = msgpack.Payload.uintToPayload(99); // Malformed: should be a string
     try root.mapPut("after", .{ .arr = after_inner });
 
-    const sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{},
     }});
     defer sm.deinit();
 
-    const result = query_parser.parseQueryFilter(allocator, sm, "items", root);
+    const result = query_parser.parseQueryFilter(allocator, &sm, "items", root);
     // This should return an error instead of panicking
     try testing.expectError(error.InvalidMessageFormat, result);
 }

@@ -11,13 +11,15 @@ pub const WebSocketServer = struct {
     app: *c.uws_app_t,
     allocator: Allocator,
     ssl: bool,
-    handlers: WebSocketHandlers,
-    user_data: ?*anyopaque,
+    handlers: WebSocketHandlers = .{},
+    user_data: ?*anyopaque = null,
     listen_socket: ?*c.struct_us_listen_socket_t = null,
     loop: std.atomic.Value(?*anyopaque) = std.atomic.Value(?*anyopaque).init(null),
     close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     is_closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     is_listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    post_handler: ?*const fn (?*anyopaque) void = null,
+    post_handler_ctx: ?*anyopaque = null,
 
     pub const Config = struct {
         port: u16,
@@ -35,10 +37,7 @@ pub const WebSocketServer = struct {
     };
 
     /// Initialize WebSocket server
-    pub fn init(allocator: Allocator, config: Config) Error!*WebSocketServer {
-        const self = try allocator.create(WebSocketServer);
-        errdefer allocator.destroy(self);
-
+    pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
         var ssl_options = std.mem.zeroes(c.us_bun_socket_context_options_t);
         if (config.ssl) {
             if (config.ssl_cert_path) |cert| {
@@ -58,27 +57,27 @@ pub const WebSocketServer = struct {
             return error.FailedToCreateApp;
         }
 
-        self.* = .{
-            .app = app.?,
-            .allocator = allocator,
-            .ssl = config.ssl,
-            .handlers = .{},
-            .user_data = null,
-            .listen_socket = null,
-            .loop = std.atomic.Value(?*anyopaque).init(null),
-            .close_requested = std.atomic.Value(bool).init(false),
-            .is_closing = std.atomic.Value(bool).init(false),
-            .is_listening = std.atomic.Value(bool).init(false),
-        };
 
-        return self;
+        self.app = app.?;
+        self.allocator = allocator;
+        self.ssl = config.ssl;
+        self.handlers = .{};
+        self.user_data = null;
+        self.listen_socket = null;
+        self.loop = std.atomic.Value(?*anyopaque).init(null);
+        self.close_requested = std.atomic.Value(bool).init(false);
+        self.is_closing = std.atomic.Value(bool).init(false);
+        self.is_listening = std.atomic.Value(bool).init(false);
+        self.post_handler = null;
+        self.post_handler_ctx = null;
+
     }
 
     /// Clean up resources.
     /// CAUTION: Must be called only after the event loop (run()) has exited.
     /// In multi-threaded environments, ensure the server thread has joined.
-    pub fn deinit(self: *WebSocketServer) void {
-        self.allocator.destroy(self);
+    pub fn deinit(_: *WebSocketServer) void {
+        // Only infrastructure cleanup (none currently)
     }
 
     /// Register WebSocket handlers for a specific pattern
@@ -215,6 +214,10 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
 fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
     if (ctx == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
+
+    if (server.post_handler) |handler| {
+        handler(server.post_handler_ctx);
+    }
 
     // Ensure we only perform shutdown once
     if (server.close_requested.load(.monotonic) and !server.is_closing.swap(true, .acquire)) {

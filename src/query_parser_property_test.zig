@@ -47,10 +47,10 @@ test "property: random valid query filters" {
             .{ .name = "items", .fields = &fields },
         };
 
-        const sm = try sth.createSchemaManager(allocator, &tables);
+        var sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
-        const filter = try query_parser.parseQueryFilter(allocator, sm, "items", root);
+        const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
         filter.deinit(allocator);
     }
 }
@@ -73,10 +73,10 @@ test "property: reject unknown field names" {
             .{ .name = "items", .fields = &[_]schema_manager.Field{} },
         };
 
-        const sm = try sth.createSchemaManager(allocator, &tables);
+        var sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
-        const result = query_parser.parseQueryFilter(allocator, sm, "items", root);
+        const result = query_parser.parseQueryFilter(allocator, &sm, "items", root);
         try testing.expectError(error.UnknownField, result);
     }
 }

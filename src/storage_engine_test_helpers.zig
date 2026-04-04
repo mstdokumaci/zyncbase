@@ -20,10 +20,39 @@ pub const TestContext = schema_helpers.TestContext;
 /// EngineTestContext owns all resources for a storage engine test.
 pub const EngineTestContext = struct {
     allocator: Allocator,
-    engine: *StorageEngine,
-    sm: *SchemaManager,
-    memory_strategy: *MemoryStrategy,
+    engine: StorageEngine,
+    sm: SchemaManager,
+    memory_strategy: MemoryStrategy,
     test_context: TestContext,
+
+    pub fn init(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table) !void {
+        try self.initWithOptions(allocator, prefix, &[_]Table{table}, .{ .in_memory = true });
+    }
+
+    pub fn initWithOptions(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
+        self.allocator = allocator;
+        self.test_context = try TestContext.init(allocator, prefix);
+        errdefer self.test_context.deinit();
+
+        try self.memory_strategy.init(allocator);
+        errdefer self.memory_strategy.deinit();
+
+        self.sm = try createSchemaManager(allocator, tables);
+        errdefer self.sm.deinit();
+
+        try self.engine.init(allocator, &self.memory_strategy, self.test_context.test_dir, &self.sm, .{}, options, null, null);
+        errdefer self.engine.deinit();
+
+        // Synchronously execute DDL for all tables
+        var gen = ddl_generator.DDLGenerator.init(allocator);
+        for (self.sm.schema.tables) |t| {
+            const ddl = try gen.generateDDL(t);
+            defer allocator.free(ddl);
+            const ddl_z = try allocator.dupeZ(u8, ddl);
+            defer allocator.free(ddl_z);
+            try self.engine.execDDL(ddl_z);
+        }
+    }
 
     pub fn deinit(self: *EngineTestContext) void {
         self.deinitInternal(true);
@@ -37,7 +66,6 @@ pub const EngineTestContext = struct {
         self.engine.deinit();
         self.sm.deinit();
         self.memory_strategy.deinit();
-        self.allocator.destroy(self.memory_strategy);
         if (cleanup) {
             self.test_context.deinit();
         } else {
@@ -75,10 +103,7 @@ pub fn makeRefField(name: []const u8, references: []const u8, on_delete: schema_
 
 /// Internal helper that replaces the old SchemaManager.initWithSchema logic.
 /// Takes a slice of Table values, clones them, builds SchemaMetadata.
-pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !*SchemaManager {
-    const sm = try allocator.create(SchemaManager);
-    errdefer allocator.destroy(sm);
-
+pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !SchemaManager {
     // Clone tables so SchemaManager can own them independently of the caller's stack
     const cloned_tables = try allocator.alloc(Table, tables.len);
     var i: usize = 0;
@@ -95,32 +120,29 @@ pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !*Schema
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = cloned_tables,
     };
+    errdefer schema_manager.freeSchema(allocator, schema);
 
     const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
     errdefer {
         var m = metadata;
         m.deinit();
-        schema_manager.freeSchema(allocator, schema);
     }
 
-    sm.* = .{
+    return SchemaManager{
         .allocator = allocator,
         .schema = schema,
         .metadata = metadata,
     };
-    return sm;
 }
 
 /// Creates a SchemaManager with a single dummy table.
-pub fn createDummySchemaManager(allocator: Allocator) !*SchemaManager {
+pub fn createDummySchemaManager(allocator: Allocator) !SchemaManager {
     const fields = try allocator.alloc(Field, 1);
     fields[0] = makeField("val", .text, false);
 
     var tables = try allocator.alloc(Table, 1);
     tables[0] = .{ .name = "_dummy", .fields = fields };
     // Note: createSchemaManager will clone the tables and fields.
-    // However, our manually allocated 'fields' and 'tables' arrays here will leak if we don't handle them.
-    // Actually, createSchemaManager will clone EVERYTHING.
     const sm = try createSchemaManager(allocator, tables);
 
     // Clean up our temporary structures
@@ -131,76 +153,63 @@ pub fn createDummySchemaManager(allocator: Allocator) !*SchemaManager {
 }
 
 /// Setup a storage engine with a single table.
-pub fn setupEngine(allocator: Allocator, prefix: []const u8, table: Table) !EngineTestContext {
-    return setupEngineWithOptions(allocator, prefix, table, .{ .in_memory = true });
+pub fn setupEngine(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table) !void {
+    try setupEngineWithOptions(ctx, allocator, prefix, table, .{ .in_memory = true });
 }
 
 /// Setup a storage engine with a single table and specific options.
-pub fn setupEngineWithOptions(allocator: Allocator, prefix: []const u8, table: Table, options: StorageEngine.Options) !EngineTestContext {
-    var tables = [_]Table{table};
-    return setupEngineMultiTableWithOptions(allocator, prefix, &tables, options);
+pub fn setupEngineWithOptions(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table, options: StorageEngine.Options) !void {
+    try ctx.initWithOptions(allocator, prefix, &[_]Table{table}, options);
 }
 
 /// Setup a storage engine with multiple tables.
-pub fn setupEngineMultiTable(allocator: Allocator, prefix: []const u8, tables: []const Table) !EngineTestContext {
-    return setupEngineMultiTableWithOptions(allocator, prefix, tables, .{ .in_memory = true });
+pub fn setupEngineMultiTable(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table) !void {
+    try setupEngineMultiTableWithOptions(ctx, allocator, prefix, tables, .{ .in_memory = true });
 }
 
 /// Setup a storage engine with a single table in an existing directory.
-pub fn setupEngineWithDir(allocator: Allocator, test_dir: []const u8, table: Table, options: StorageEngine.Options) !EngineTestContext {
+pub fn setupEngineWithDir(ctx: *EngineTestContext, allocator: Allocator, test_dir: []const u8, table: Table, options: StorageEngine.Options) !void {
     var tables = [_]Table{table};
-    return setupEngineMultiTableWithDir(allocator, test_dir, &tables, options);
+    try setupEngineMultiTableWithDir(ctx, allocator, test_dir, &tables, options);
 }
 
 /// Setup a storage engine with multiple tables and specific options.
-pub fn setupEngineMultiTableWithOptions(allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !EngineTestContext {
-    const tc = try TestContext.init(allocator, prefix);
-    return setupEngineMultiTableWithTestContext(allocator, tc, tables, options);
+pub fn setupEngineMultiTableWithOptions(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
+    try ctx.initWithOptions(allocator, prefix, tables, options);
 }
 
 /// Setup a storage engine with multiple tables in an existing directory.
-pub fn setupEngineMultiTableWithDir(allocator: Allocator, test_dir: []const u8, tables: []const Table, options: StorageEngine.Options) !EngineTestContext {
+pub fn setupEngineMultiTableWithDir(ctx: *EngineTestContext, allocator: Allocator, test_dir: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
     const tc = TestContext{
         .allocator = allocator,
         .test_dir = try allocator.dupe(u8, test_dir),
     };
-    return setupEngineMultiTableWithTestContext(allocator, tc, tables, options);
+    try setupEngineMultiTableWithTestContext(ctx, allocator, tc, tables, options);
 }
 
-fn setupEngineMultiTableWithTestContext(allocator: Allocator, tc: TestContext, tables: []const Table, options: StorageEngine.Options) !EngineTestContext {
-    errdefer {
-        var local_tc = tc;
-        local_tc.deinit();
-    }
+fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allocator, tc: TestContext, tables: []const Table, options: StorageEngine.Options) !void {
+    ctx.allocator = allocator;
+    ctx.test_context = tc;
+    errdefer ctx.test_context.deinit();
 
-    const ms = try allocator.create(MemoryStrategy);
-    errdefer allocator.destroy(ms);
-    try ms.init(allocator);
-    errdefer ms.deinit();
+    try ctx.memory_strategy.init(allocator);
+    errdefer ctx.memory_strategy.deinit();
 
-    const sm = try createSchemaManager(allocator, tables);
-    errdefer sm.deinit();
+    ctx.sm = try createSchemaManager(allocator, tables);
+    errdefer ctx.sm.deinit();
 
-    const engine = try StorageEngine.init(allocator, ms, tc.test_dir, sm, .{}, options);
-    errdefer engine.deinit();
+    try ctx.engine.init(allocator, &ctx.memory_strategy, ctx.test_context.test_dir, &ctx.sm, .{}, options, null, null);
+    errdefer ctx.engine.deinit();
 
     // Synchronously execute DDL for all tables
     var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (sm.schema.tables) |t| {
+    for (ctx.sm.schema.tables) |t| {
         const ddl = try gen.generateDDL(t);
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
-        try engine.execDDL(ddl_z);
+        try ctx.engine.execDDL(ddl_z);
     }
-
-    return EngineTestContext{
-        .allocator = allocator,
-        .engine = engine,
-        .sm = sm,
-        .memory_strategy = ms,
-        .test_context = tc,
-    };
 }
 
 pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payload {

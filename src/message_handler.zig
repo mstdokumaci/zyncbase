@@ -14,7 +14,6 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
-const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 
 /// Message handler for WebSocket events
@@ -25,38 +24,31 @@ pub const MessageHandler = struct {
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
     subscription_engine: *SubscriptionEngine,
-    write_coordinator: *WriteCoordinator,
     schema_manager: *const SchemaManager,
     connection_manager: ?*anyopaque = null, // Type-erased back-reference to ConnectionManager
     security_config: SecurityConfig,
 
     /// Initialize message handler with all required components
     pub fn init(
+        self: *MessageHandler,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
         storage_engine: *StorageEngine,
         subscription_engine: *SubscriptionEngine,
-        write_coordinator: *WriteCoordinator,
         schema_manager: *const SchemaManager,
         security_config: SecurityConfig,
-    ) !*MessageHandler {
-        const self = try allocator.create(MessageHandler);
-        errdefer allocator.destroy(self);
-
+    ) !void {
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
             .subscription_engine = subscription_engine,
-            .write_coordinator = write_coordinator,
             .schema_manager = schema_manager,
             .security_config = security_config,
             .connection_manager = null,
         };
-
-        return self;
     }
 
     pub fn setConnectionManager(self: *MessageHandler, manager: *anyopaque) void {
@@ -65,7 +57,7 @@ pub const MessageHandler = struct {
 
     /// Clean up message handler resources
     pub fn deinit(self: *MessageHandler) void {
-        self.allocator.destroy(self);
+        _ = self;
     }
 
     /// Handle WebSocket message event
@@ -390,7 +382,8 @@ pub const MessageHandler = struct {
                 });
             }
 
-            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table, doc_id, columns.items);
+            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
+            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items, capture);
 
             for (columns.items) |col| {
                 self.allocator.free(col.name);
@@ -413,7 +406,8 @@ pub const MessageHandler = struct {
             }
 
             const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
-            try self.write_coordinator.coordinateSet(arena_allocator, namespace, table, doc_id, &col);
+            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
+            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col, capture);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -434,11 +428,13 @@ pub const MessageHandler = struct {
         const doc_id = segments[1];
 
         if (segments.len == 2) {
-            try self.write_coordinator.coordinateRemove(arena_allocator, namespace, table, doc_id, null);
+            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
+            try self.storage_engine.deleteDocument(table, doc_id, namespace, capture);
         } else {
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            try self.write_coordinator.coordinateRemove(arena_allocator, namespace, table, doc_id, resolved.name);
+            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
+            try self.storage_engine.updateField(table, doc_id, namespace, resolved.name, .nil, capture);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);

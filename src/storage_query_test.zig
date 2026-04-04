@@ -16,9 +16,10 @@ test "StorageEngine: selectQuery basic equality" {
         sth.makeField("age", .integer, false),
     };
     const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-query-basic", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-basic", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Seed data
     try seedUser(allocator, engine, "1", "Alice", 30);
@@ -54,9 +55,10 @@ test "StorageEngine: selectQuery with OR and ordering" {
         sth.makeField("age", .integer, false),
     };
     const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-query-or", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-complex", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     try seedUser(allocator, engine, "1", "Alice", 30);
     try seedUser(allocator, engine, "2", "Bob", 25);
@@ -100,9 +102,10 @@ test "StorageEngine: selectQuery pagination (after)" {
         sth.makeField("score", .integer, false),
     };
     const table = schema_manager.Table{ .name = "scores", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-query-page", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-index", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // IDs are used as secondary sort key
     try seedScore(engine, "id1", 100);
@@ -149,14 +152,14 @@ fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
     };
-    try engine.insertOrReplace("users", id, "ns", &cols);
+    try engine.insertOrReplace("users", id, "ns", &cols, false);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
         .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
     };
-    try engine.insertOrReplace("scores", id, "ns", &cols);
+    try engine.insertOrReplace("scores", id, "ns", &cols, false);
 }
 
 fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
@@ -173,9 +176,10 @@ test "StorageEngine: LIKE wildcard escaping" {
         sth.makeField("data", .text, false),
     };
     const table = schema_manager.Table{ .name = "wildcards", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-wildcard-escape", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Seed data
     const ns = "ns";
@@ -313,5 +317,5 @@ fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []cons
     const cols = [_]storage_engine.ColumnValue{
         .{ .name = "data", .value = data_p },
     };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols);
+    try engine.insertOrReplace("wildcards", id, namespace, &cols, false);
 }

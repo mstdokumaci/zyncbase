@@ -8,7 +8,8 @@ const routeWithArena = message_helpers.routeWithArena;
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "conn-init", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-init", &.{});
     defer app.deinit();
 
     var ws = createMockWebSocket();
@@ -24,7 +25,8 @@ test "Connection - init and deinit" {
 
 test "Connection - add subscription IDs" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "conn-subs", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-subs", &.{});
     defer app.deinit();
 
     var ws = createMockWebSocket();
@@ -121,10 +123,13 @@ fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { r
     };
 }
 
-fn setupHandlerWithArraySchema(
-    allocator: std.mem.Allocator,
-    prefix: []const u8,
-) !AppTestContext {
+fn setupAppWithSchema(app: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: schema_manager.Schema) !void {
+    try app.initWithSchema(allocator, prefix, schema);
+}
+
+test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEMENT" {
+    const allocator = testing.allocator;
+
     // Manually build schema with array field
     const fields = try allocator.alloc(schema_manager.Field, 2);
     fields[0] = .{
@@ -156,13 +161,8 @@ fn setupHandlerWithArraySchema(
     };
     defer schema_manager.freeSchema(allocator, schema);
 
-    return AppTestContext.initWithSchema(allocator, prefix, schema);
-}
-
-test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEMENT" {
-    const allocator = testing.allocator;
-
-    var app = try setupHandlerWithArraySchema(allocator, "mh-array-invalid");
+    var app: AppTestContext = undefined;
+    try setupAppWithSchema(&app, allocator, "mh-array-invalid", schema);
     defer app.deinit();
 
     // Build an array payload with a nested map (non-literal element)
@@ -197,7 +197,7 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
     defer sc.deinit();
     const conn = sc.conn;
 
-    const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+    const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -217,7 +217,40 @@ test "StoreSet: array field with non-literal element returns INVALID_ARRAY_ELEME
 
 test "StoreSet: array field with valid literal array succeeds" {
     const allocator = testing.allocator;
-    var app = try setupHandlerWithArraySchema(allocator, "mh-array-valid");
+
+    // Manually build schema with array field
+    const fields = try allocator.alloc(schema_manager.Field, 2);
+    fields[0] = .{
+        .name = try allocator.dupe(u8, "tags"),
+        .sql_type = .array,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+    fields[1] = .{
+        .name = try allocator.dupe(u8, "name"),
+        .sql_type = .text,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+
+    const tables = try allocator.alloc(schema_manager.Table, 1);
+    tables[0] = .{
+        .name = try allocator.dupe(u8, "items"),
+        .fields = fields,
+    };
+
+    const schema = schema_manager.Schema{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    defer schema_manager.freeSchema(allocator, schema);
+
+    var app: AppTestContext = undefined;
+    try setupAppWithSchema(&app, allocator, "mh-array-valid", schema);
     defer app.deinit();
 
     // Build a valid array of integers
@@ -247,7 +280,7 @@ test "StoreSet: array field with valid literal array succeeds" {
     defer sc.deinit();
     const conn = sc.conn;
 
-    const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+    const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     const result = try parseResponse(allocator, response);
     defer allocator.free(result.resp_type);
@@ -261,7 +294,40 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xDEAD_C0DE);
     const rand = prng.random();
-    var app = try setupHandlerWithArraySchema(allocator, "mh-prop9");
+
+    // Manually build schema with array field
+    const fields = try allocator.alloc(schema_manager.Field, 2);
+    fields[0] = .{
+        .name = try allocator.dupe(u8, "tags"),
+        .sql_type = .array,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+    fields[1] = .{
+        .name = try allocator.dupe(u8, "name"),
+        .sql_type = .text,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+
+    const tables = try allocator.alloc(schema_manager.Table, 1);
+    tables[0] = .{
+        .name = try allocator.dupe(u8, "items"),
+        .fields = fields,
+    };
+
+    const schema = schema_manager.Schema{
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    defer schema_manager.freeSchema(allocator, schema);
+
+    var app: AppTestContext = undefined;
+    try setupAppWithSchema(&app, allocator, "mh-prop9", schema);
     defer app.deinit();
 
     var ws = createMockWebSocket();
@@ -296,7 +362,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+        const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -328,11 +394,16 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
             valid_array,
         );
         defer allocator.free(message);
+        var mock_ws = createMockWebSocket();
+        const mock_sc = try app.openScopedConnection(&mock_ws);
+        defer mock_sc.deinit();
+        const mock_conn = mock_sc.conn;
+
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+        const response = try message_helpers.routeWithArena(&app.handler, allocator, mock_conn, msg_info, parsed);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -374,7 +445,8 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
     const schema = schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
     defer schema_manager.freeSchema(allocator, schema);
 
-    var app = try AppTestContext.initWithSchema(allocator, "mh-resolve-field", schema);
+    var app: AppTestContext = undefined;
+    try setupAppWithSchema(&app, allocator, "mh-resolve-field", schema);
     defer app.deinit();
 
     var ws = createMockWebSocket();
@@ -391,10 +463,11 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
+        defer if (res.code) |c| allocator.free(c);
         try testing.expectEqualStrings("ok", res.resp_type);
     }
 
@@ -413,10 +486,11 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
+        defer if (res.code) |c| allocator.free(c);
         try testing.expectEqualStrings("ok", res.resp_type);
     }
 
@@ -434,7 +508,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try message_helpers.routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try message_helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -467,7 +541,8 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     const schema = schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
     defer schema_manager.freeSchema(allocator, schema);
 
-    var app = try AppTestContext.initWithSchema(allocator, "mh-deep-nested", schema);
+    var app: AppTestContext = undefined;
+    try setupAppWithSchema(&app, allocator, "mh-deep-nested", schema);
     defer app.deinit();
 
     var ws = createMockWebSocket();
@@ -485,7 +560,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response_copy = try routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response_copy = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response_copy);
 
         // Verify Set response is "ok"
@@ -507,7 +582,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response_copy = try routeWithArena(app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response_copy = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
         defer allocator.free(response_copy);
 
         // Parse actual value

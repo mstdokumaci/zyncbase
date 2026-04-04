@@ -17,7 +17,6 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const WriteCoordinator = @import("write_coordinator.zig").WriteCoordinator;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -71,13 +70,14 @@ test "logging: connection events" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var app = try AppTestContext.init(allocator, "logging-conn", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "logging-conn", &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
-    const memory_strategy = app.memory_strategy;
+    const manager = &app.manager;
+    const memory_strategy = &app.memory_strategy;
 
     // Test 1: Connection open logs connection ID
     // Note: We can't easily intercept std.log in tests, but we can verify
@@ -208,14 +208,15 @@ test "logging: error details" {
     const allocator = gpa.allocator();
 
     // Initialize components
-    var app = try AppTestContext.init(allocator, "logging-messages", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "logging-messages", &.{
         .{ .name = "_dummy", .fields = &.{"val"} },
         .{ .name = "data_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
-    const storage_engine = app.storage_engine;
+    const manager = &app.manager;
+    const storage_engine = &app.storage_engine;
 
     // Test 1: Message parsing errors are logged
     // We can't easily intercept logs, but we can verify the error path is taken
@@ -335,32 +336,30 @@ test "logging: level filtering" {
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
-        const sm2 = try sth.createSchemaManager(allocator, tables);
+        var sm2 = try sth.createSchemaManager(allocator, tables);
         defer sm2.deinit();
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm2, .{}, .{ .in_memory = true });
-        defer storage_engine.deinit();
-        var subscription_engine = try allocator.create(SubscriptionEngine);
-        subscription_engine.* = SubscriptionEngine.init(allocator);
-        defer {
-            subscription_engine.deinit();
-            allocator.destroy(subscription_engine);
-        }
-        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
-        defer write_coordinator.deinit();
 
-        var handler = try MessageHandler.init(
+        var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
+        defer subscription_engine.deinit();
+
+        var storage_engine: StorageEngine = undefined;
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true }, null, null);
+        defer storage_engine.deinit();
+
+        var handler: MessageHandler = undefined;
+        try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            storage_engine,
-            subscription_engine,
-            write_coordinator,
-            sm2,
+            &storage_engine,
+            &subscription_engine,
+            &sm2,
             .{},
         );
         defer handler.deinit();
 
-        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        var manager: ConnectionManager = undefined;
+        try manager.init(allocator, &memory_strategy, &handler);
         defer manager.deinit();
 
         // Trigger different log levels
@@ -418,32 +417,30 @@ test "logging: message formatting" {
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
-        const sm3 = try sth.createSchemaManager(allocator, tables);
+        var sm3 = try sth.createSchemaManager(allocator, tables);
         defer sm3.deinit();
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm3, .{}, .{ .in_memory = true });
-        defer storage_engine.deinit();
-        var subscription_engine = try allocator.create(SubscriptionEngine);
-        subscription_engine.* = SubscriptionEngine.init(allocator);
-        defer {
-            subscription_engine.deinit();
-            allocator.destroy(subscription_engine);
-        }
-        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
-        defer write_coordinator.deinit();
 
-        var handler = try MessageHandler.init(
+        var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
+        defer subscription_engine.deinit();
+
+        var storage_engine: StorageEngine = undefined;
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true }, null, null);
+        defer storage_engine.deinit();
+
+        var handler: MessageHandler = undefined;
+        try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            storage_engine,
-            subscription_engine,
-            write_coordinator,
-            sm3,
+            &storage_engine,
+            &subscription_engine,
+            &sm3,
             .{},
         );
         defer handler.deinit();
 
-        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        var manager: ConnectionManager = undefined;
+        try manager.init(allocator, &memory_strategy, &handler);
         defer manager.deinit();
 
         // Trigger various log messages
@@ -485,32 +482,30 @@ test "logging: message formatting" {
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
         tables[0] = schema_manager.Table{ .name = "test", .fields = &fields };
-        const sm4 = try sth.createSchemaManager(allocator, tables);
+        var sm4 = try sth.createSchemaManager(allocator, tables);
         defer sm4.deinit();
-        var storage_engine = try StorageEngine.init(allocator, &memory_strategy, test_dir, sm4, .{}, .{ .in_memory = true });
-        defer storage_engine.deinit();
-        var subscription_engine = try allocator.create(SubscriptionEngine);
-        subscription_engine.* = SubscriptionEngine.init(allocator);
-        defer {
-            subscription_engine.deinit();
-            allocator.destroy(subscription_engine);
-        }
-        var write_coordinator = try WriteCoordinator.init(allocator, storage_engine, subscription_engine, &memory_strategy);
-        defer write_coordinator.deinit();
 
-        var handler = try MessageHandler.init(
+        var subscription_engine = SubscriptionEngine.init(allocator);
+        defer subscription_engine.deinit();
+
+        var storage_engine: StorageEngine = undefined;
+        try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true }, null, null);
+        defer storage_engine.deinit();
+
+        var handler: MessageHandler = undefined;
+        try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            storage_engine,
-            subscription_engine,
-            write_coordinator,
-            sm4,
+            &storage_engine,
+            &subscription_engine,
+            &sm4,
             .{},
         );
         defer handler.deinit();
 
-        const manager = try ConnectionManager.init(allocator, &memory_strategy, handler);
+        var manager: ConnectionManager = undefined;
+        try manager.init(allocator, &memory_strategy, &handler);
         defer manager.deinit();
 
         // Test multiple connections to verify ID formatting
