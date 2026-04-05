@@ -8,7 +8,8 @@ test "StorageEngine: init and deinit" {
 
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "_dummy", .fields = &fields_arr };
-    var ctx = try sth.setupEngineWithOptions(allocator, "engine-init", table, .{ .in_memory = false });
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "engine-init", table, .{ .in_memory = false });
     defer ctx.deinit();
 
     // Verify database file was created
@@ -21,15 +22,16 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-crud", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-crud", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set a value
     const val_p = try msgpack.Payload.strToPayload("test", allocator);
     defer val_p.free(allocator);
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
+    try engine.insertOrReplace("items", "id1", "test_namespace", &cols, false);
     // Flush writes
     try engine.flushPendingWrites();
     // Get the value
@@ -45,9 +47,10 @@ test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-nonexistent", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-nonexistent", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     var managed = try engine.selectDocument(allocator, "items", "nonexistent", "test_namespace");
     defer managed.deinit();
@@ -58,21 +61,22 @@ test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-update", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-update", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set initial value
     const val_p1 = try msgpack.Payload.strToPayload("initial", allocator);
     defer val_p1.free(allocator);
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p1 }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
+    try engine.insertOrReplace("items", "id1", "test_namespace", &cols1, false);
     try engine.flushPendingWrites();
     // Update value
     const val_p2 = try msgpack.Payload.strToPayload("updated", allocator);
     defer val_p2.free(allocator);
     const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p2 }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols2);
+    try engine.insertOrReplace("items", "id1", "test_namespace", &cols2, false);
     try engine.flushPendingWrites();
     // Get the value
     var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
@@ -87,15 +91,16 @@ test "StorageEngine: delete document" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-delete", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-delete", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set a value
     const val_p = try msgpack.Payload.strToPayload("test", allocator);
     defer val_p.free(allocator);
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
+    try engine.insertOrReplace("items", "id1", "test_namespace", &cols, false);
     try engine.flushPendingWrites();
     // Verify it exists
     var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
@@ -103,7 +108,7 @@ test "StorageEngine: delete document" {
     const result1 = managed.value;
     try testing.expect(result1 != null);
     // Delete the document
-    try engine.deleteDocument("items", "id1", "test_namespace");
+    try engine.deleteDocument("items", "id1", "test_namespace", false);
     try engine.flushPendingWrites();
     // Verify it's gone
     var managed_after = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
@@ -115,19 +120,20 @@ test "StorageEngine: query collection" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("name", .text, false)};
     const table = sth.Table{ .name = "users", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-query", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-query", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set multiple documents
     const val_p1 = try msgpack.Payload.strToPayload("Alice", allocator);
     defer val_p1.free(allocator);
     const cols1 = [_]sth.ColumnValue{.{ .name = "name", .value = val_p1 }};
-    try engine.insertOrReplace("users", "1", "test_namespace", &cols1);
+    try engine.insertOrReplace("users", "1", "test_namespace", &cols1, false);
     const val_p2 = try msgpack.Payload.strToPayload("Bob", allocator);
     defer val_p2.free(allocator);
     const cols2 = [_]sth.ColumnValue{.{ .name = "name", .value = val_p2 }};
-    try engine.insertOrReplace("users", "2", "test_namespace", &cols2);
+    try engine.insertOrReplace("users", "2", "test_namespace", &cols2, false);
     try engine.flushPendingWrites();
     // Query for collection
     var managed = try engine.selectCollection(allocator, "users", "test_namespace");
@@ -138,19 +144,20 @@ test "StorageEngine: multiple namespaces" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-namespaces", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-namespaces", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set values in different namespaces
     const val_p1 = try msgpack.Payload.strToPayload("ns1", allocator);
     defer val_p1.free(allocator);
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p1 }};
-    try engine.insertOrReplace("items", "id1", "namespace1", &cols1);
+    try engine.insertOrReplace("items", "id1", "namespace1", &cols1, false);
     const val_p2 = try msgpack.Payload.strToPayload("ns2", allocator);
     defer val_p2.free(allocator);
     const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p2 }};
-    try engine.insertOrReplace("items", "id1", "namespace2", &cols2);
+    try engine.insertOrReplace("items", "id1", "namespace2", &cols2, false);
     try engine.flushPendingWrites();
     // Get values from different namespaces
     var managed1 = try engine.selectDocument(allocator, "items", "id1", "namespace1");
@@ -171,9 +178,10 @@ test "StorageEngine: transaction support" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "_dummy", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-tx", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-tx", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Initially no transaction should be active
     try testing.expect(!engine.isTransactionActive());
@@ -199,16 +207,17 @@ test "StorageEngine: automatic rollback in batch operations" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-auto-rollback", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-auto-rollback", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Queue some operations
     const val_p = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_p.free(allocator);
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
-    try engine.insertOrReplace("items", "id1", "test_ns", &cols);
-    try engine.insertOrReplace("items", "id2", "test_ns", &cols);
+    try engine.insertOrReplace("items", "id1", "test_ns", &cols, false);
+    try engine.insertOrReplace("items", "id2", "test_ns", &cols, false);
     // Wait for operations to be processed
     try engine.flushPendingWrites();
     // Verify no transaction is active after batch completes
@@ -228,14 +237,15 @@ test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-concurrent", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-concurrent", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Set some values
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
-    try engine.insertOrReplace("items", "id2", "test_namespace", &cols1);
+    try engine.insertOrReplace("items", "id1", "test_namespace", &cols1, false);
+    try engine.insertOrReplace("items", "id2", "test_namespace", &cols1, false);
     try engine.flushPendingWrites();
     // Perform multiple concurrent reads
     const Thread = struct {
@@ -270,11 +280,13 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
 
     {
         // Enqueue a burst of writes without waiting — deinit must flush them.
-        var ctx = try sth.setupEngineWithOptions(allocator, "engine-deinit-flush", table, .{ .in_memory = false });
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineWithOptions(&ctx, allocator, "engine-deinit-flush", table, .{ .in_memory = false });
+        errdefer ctx.deinit();
         // We dupe the test_dir because deinitNoCleanup will free the copy in ctx,
         // but we need it for the second part of the test.
         test_dir = try allocator.dupe(u8, ctx.test_context.test_dir);
-        const engine = ctx.engine;
+        const engine = &ctx.engine;
 
         for (0..num_keys) |i| {
             var id_buf: [32]u8 = undefined;
@@ -282,7 +294,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
             const key_val = try msgpack.Payload.strToPayload("val", allocator);
             defer key_val.free(allocator);
             const cols = [_]sth.ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i)) }};
-            try engine.insertOrReplace("items", id, "ns", &cols);
+            try engine.insertOrReplace("items", id, "ns", &cols, false);
         }
         // deinitNoCleanup will stop the engine but NOT delete the files.
         ctx.deinitNoCleanup();
@@ -292,11 +304,12 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
 
     // Reopen the same database and verify every key is present.
     // We use setupEngineWithDir which reuses the existing data.
-    var verify_ctx = try sth.setupEngineWithDir(allocator, test_dir, table, .{
+    var verify_ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithDir(&verify_ctx, allocator, test_dir, table, .{
         .in_memory = false,
     });
     defer verify_ctx.deinit();
-    const verify_engine = verify_ctx.engine;
+    const verify_engine = &verify_ctx.engine;
 
     for (0..num_keys) |i| {
         var id_buf: [32]u8 = undefined;
@@ -314,9 +327,10 @@ test "StorageEngine: client writes blocked during migration" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-migration-block", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-migration-block", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Simulate migration in progress
     engine.migration_active.store(true, .release);
@@ -324,22 +338,23 @@ test "StorageEngine: client writes blocked during migration" {
     // insertOrReplace should be blocked
     const val_p = msgpack.Payload.intToPayload(1);
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
-    const err1 = engine.insertOrReplace("items", "id1", "ns", &cols);
+    const err1 = engine.insertOrReplace("items", "id1", "ns", &cols, false);
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // updateField should be blocked
-    const err2 = engine.updateField("items", "id1", "ns", "val", val_p);
+    const err2 = engine.updateField("items", "id1", "ns", "val", val_p, false);
     try testing.expectError(sth.StorageError.MigrationInProgress, err2);
     // deleteDocument should be blocked
-    const err3 = engine.deleteDocument("items", "id1", "ns");
+    const err3 = engine.deleteDocument("items", "id1", "ns", false);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
 test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx = try sth.setupEngine(allocator, "engine-tx-race", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-tx-race", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // 1. Initial write_seq
     // sth.setupEngine executes DDL, so write_seq starts at 1
@@ -351,7 +366,7 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     const val_p = try msgpack.Payload.strToPayload("updated", allocator);
     defer val_p.free(allocator);
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
-    try engine.insertOrReplace("items", "id1", "ns", &cols);
+    try engine.insertOrReplace("items", "id1", "ns", &cols, false);
     // 4. Flush batch. This should increment write_seq to 2.
     try engine.flushPendingWrites();
     const seq1 = engine.write_seq.load(.acquire);

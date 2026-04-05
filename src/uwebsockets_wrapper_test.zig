@@ -16,7 +16,10 @@ test "WebSocketServer: init with valid config" {
         .ssl = false,
     };
 
-    const server = try WebSocketServer.init(allocator, config);
+    // TEST: Heap allocation to verify TSAN behavior
+    const server = try allocator.create(WebSocketServer);
+    defer allocator.destroy(server);
+    try server.init(allocator, config);
     defer server.deinit();
 
     try testing.expectEqual(false, server.ssl);
@@ -49,7 +52,9 @@ test "WebSocketServer: init with SSL config" {
         .ssl_key_path = key_path,
     };
 
-    const server = try WebSocketServer.init(allocator, config);
+    // SAFETY: Initialized by the following init call
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
     defer server.deinit();
 
     try testing.expectEqual(true, server.ssl);
@@ -64,7 +69,9 @@ test "WebSocketServer: registerWebSocketHandlers" {
         .ssl = false,
     };
 
-    const server = try WebSocketServer.init(allocator, config);
+    // SAFETY: Initialized by the following init call
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
     defer server.deinit();
 
     // Define handlers
@@ -105,7 +112,9 @@ test "MessageType: enum values" {
 }
 
 fn runFullLifecycleTest(allocator: Allocator, config: WebSocketServer.Config, address: []const u8, is_ssl: bool) !void {
-    const server = try WebSocketServer.init(allocator, config);
+    // SAFETY: Initialized by the following init call
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
     defer server.deinit();
 
     // In a real test we would start the server, but that's blocking

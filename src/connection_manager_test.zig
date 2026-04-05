@@ -6,7 +6,8 @@ const createMockWebSocket = message_helpers.createMockWebSocket;
 
 test "ConnectionManager - init and deinit" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "cm-init", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-init", &.{});
     defer app.deinit();
 
     try testing.expectEqual(@as(usize, 0), app.manager.map.count());
@@ -14,7 +15,8 @@ test "ConnectionManager - init and deinit" {
 
 test "ConnectionManager - onOpen and onClose" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "cm-open", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-open", &.{});
     defer app.deinit();
 
     var dummy_ws = createMockWebSocket();
@@ -33,7 +35,8 @@ test "ConnectionManager - onOpen and onClose" {
 
 test "ConnectionManager - max connections" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "cm-max", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "cm-max", &.{});
     defer app.deinit();
 
     // Set a small limit for testing
@@ -62,7 +65,8 @@ test "ConnectionManager - max connections" {
 
 test "ConnectionManager - acquire and release" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "cm-acquire", &.{});
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-id-reuse", &.{});
     defer app.deinit();
 
     var ws = createMockWebSocket();

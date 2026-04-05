@@ -10,12 +10,13 @@ const routeWithArena = helpers.routeWithArena;
 
 test "connection: open/close is inverse operation" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p1", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-inverse", &.{
+        .{ .name = "_dummy", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Test single connection open/close
     {
@@ -96,12 +97,13 @@ test "connection: open/close is inverse operation" {
 
 test "connection: thread-safe manager access" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p2", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p9", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Spawn multiple threads performing concurrent operations
     const num_threads = 10;
@@ -131,7 +133,7 @@ fn concurrentManagerOps(
     start_id: u64,
     count: usize,
 ) void {
-    const manager = app.manager;
+    const manager = &app.manager;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
@@ -160,12 +162,13 @@ fn concurrentManagerOps(
 // Additional property test: Concurrent reads should not block each other
 test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p3", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p10", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Pre-populate manager with connections
     const num_connections = 100;
@@ -204,7 +207,7 @@ fn concurrentReads(
     num_connections: usize,
     num_reads: usize,
 ) void {
-    const manager = app.manager;
+    const manager = &app.manager;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
@@ -223,7 +226,8 @@ fn concurrentReads(
 // Additional property test: Mixed concurrent operations
 test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p4", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p4", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
@@ -253,7 +257,7 @@ fn concurrentMixedOps(
     start_id: u64,
     count: usize,
 ) void {
-    const manager = app.manager;
+    const manager = &app.manager;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
@@ -287,12 +291,13 @@ fn concurrentMixedOps(
 // Property test: Clear operation is thread-safe
 test "connection: closeAll is thread-safe" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p4", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p4", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Add some initial connections
     var i: usize = 0;
@@ -342,12 +347,13 @@ fn addConnections(
 
 test "connection: unique IDs" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p5", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p5", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Test 1: Sequential connections should have unique IDs
     {
@@ -439,7 +445,8 @@ test "connection: unique IDs" {
     // Test 4: IDs should be unique across manager restarts (new manager instance)
     {
         // Create a second manager instance using the same context components (safely)
-        const manager2 = try ConnectionManager.init(allocator, app.memory_strategy, app.handler);
+        var manager2: ConnectionManager = undefined;
+        try manager2.init(allocator, &app.memory_strategy, &app.handler);
         defer manager2.deinit();
 
         // Open connections on both managers
@@ -498,12 +505,13 @@ fn openConnectionsConcurrently(
 
 test "message: all valid frames are parsed" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p7", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p7", &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Test 1: Valid StoreSet message should be parsed successfully
     {
@@ -513,7 +521,7 @@ test "message: all valid frames are parsed" {
         defer manager.onClose(&ws, 1000, "Normal closure");
 
         // Create a valid MessagePack message
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "table", "key1", "val" }, "value1");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "data_table", "key1", "val" }, "value1");
         defer allocator.free(message);
 
         // This should not throw a parsing error
@@ -530,7 +538,7 @@ test "message: all valid frames are parsed" {
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
 
-        const message = try msgpack.createStoreQueryMessage(allocator, 2, "test", "table", filter);
+        const message = try msgpack.createStoreQueryMessage(allocator, 2, "test", "data_table", filter);
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -543,7 +551,7 @@ test "message: all valid frames are parsed" {
         try manager.onOpen(&ws);
         defer manager.onClose(&ws, 1000, "Normal closure");
 
-        const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "table", "p", "val" }, "v");
+        const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "data_table", "p", "val" }, "v");
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -576,23 +584,24 @@ test "message: all valid frames are parsed" {
 // from the MessagePack map.
 test "message: type extraction" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p8", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p8", &.{
+        .{ .name = "data_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const handler = app.handler;
+    const handler = &app.handler;
 
     // Test 1: StoreSet type should be extractable
     {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "table", "key", "val" }, "val");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "data_table", "key", "val" }, "val");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
         try testing.expectEqualStrings("StoreSet", msg_info.type);
         try testing.expectEqual(@as(u64, 1), msg_info.id);
     }
@@ -601,14 +610,14 @@ test "message: type extraction" {
     {
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
-        const message = try msgpack.createStoreQueryMessage(allocator, 42, "test", "table", filter);
+        const message = try msgpack.createStoreQueryMessage(allocator, 42, "test", "data_table", filter);
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
         try testing.expectEqualStrings("StoreQuery", msg_info.type);
         try testing.expectEqual(@as(u64, 42), msg_info.id);
     }
@@ -624,7 +633,7 @@ test "message: type extraction" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const info = try handler.extractMessageInfo(parsed);
+            const info = try app.handler.extractMessageInfo(parsed);
             try testing.expectEqualStrings("StoreSet", info.type);
             try testing.expectEqual(@as(u64, 1), info.id);
         }
@@ -639,7 +648,7 @@ test "message: type extraction" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const info = try handler.extractMessageInfo(parsed);
+            const info = try app.handler.extractMessageInfo(parsed);
             try testing.expectEqualStrings("StoreQuery", info.type);
             try testing.expectEqual(@as(u64, 999), info.id);
         }
@@ -699,12 +708,13 @@ test "message: type extraction" {
 // routed to the appropriate handler function.
 test "message: request routing to handlers" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p9", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p9", &.{
         .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const handler = app.handler;
+    const handler = &app.handler;
 
     // Test 1: StoreSet message should route to handleStoreSet
     {
@@ -721,10 +731,10 @@ test "message: request routing to handlers" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
 
         // Route the message - should not error for recognized type
-        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -784,7 +794,7 @@ test "message: request routing to handlers" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
 
         const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
@@ -815,10 +825,10 @@ test "message: request routing to handlers" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try handler.extractMessageInfo(parsed);
+            const msg_info = try app.handler.extractMessageInfo(parsed);
 
             if (should_succeed[i]) {
-                const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+                const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
                 defer allocator.free(response);
                 try testing.expect(response.len > 0);
             } else {
@@ -836,12 +846,13 @@ test "message: request routing to handlers" {
 // the same correlation ID.
 test "message: response correlation by ID" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p10", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p10", &.{
         .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const handler = app.handler;
+    const handler = &app.handler;
 
     // Test 1: StoreSet response should include correlation ID
     {
@@ -859,10 +870,10 @@ test "message: response correlation by ID" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -954,10 +965,10 @@ test "message: response correlation by ID" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try handler.extractMessageInfo(parsed);
+            const msg_info = try app.handler.extractMessageInfo(parsed);
             try testing.expectEqual(corr_id, msg_info.id);
 
-            const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response);
 
             // Each response should contain its specific correlation ID
@@ -996,10 +1007,10 @@ test "message: response correlation by ID" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
         try testing.expectEqual(correlation_id, msg_info.id);
 
-        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -1027,12 +1038,13 @@ test "message: response correlation by ID" {
 // should be sent to the client.
 test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "handler-p11", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-p11", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const manager = app.manager;
+    const manager = &app.manager;
 
     // Test 1: Invalid MessagePack should trigger error response
     {

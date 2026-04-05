@@ -6,7 +6,8 @@ test "cache: concurrent reads never block" {
     const allocator = testing.allocator;
     const u32_cache = lockFreeCache(u32);
 
-    var cache = try u32_cache.init(allocator, .{}, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, .{}, null);
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -39,7 +40,7 @@ test "cache: concurrent reads never block" {
     var threads: [num_threads]std.Thread = undefined;
     for (&threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, ThreadContext.readerThread, .{ThreadContext{
-            .cache = cache,
+            .cache = &cache,
             .namespace = namespace,
             .reads = reads_per_thread,
             .counter = &successful_reads,
@@ -55,7 +56,8 @@ test "cache: ref_count lifecycle" {
     const allocator = testing.allocator;
     const u32_cache = lockFreeCache(u32);
 
-    var cache = try u32_cache.init(allocator, .{}, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, .{}, null);
     defer cache.deinit();
 
     const namespace = "test-namespace";
@@ -74,7 +76,8 @@ test "cache: update increments version" {
     const allocator = testing.allocator;
     const u32_cache = lockFreeCache(u32);
 
-    var cache = try u32_cache.init(allocator, .{}, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, .{}, null);
     defer cache.deinit();
 
     const namespace = "test";
@@ -90,7 +93,8 @@ test "cache: eviction" {
     const allocator = testing.allocator;
     const u32_cache = lockFreeCache(u32);
 
-    var cache = try u32_cache.init(allocator, .{}, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, .{}, null);
     defer cache.deinit();
 
     try cache.update("to-evict", 99);
@@ -110,7 +114,8 @@ test "cache: deep free via hook" {
         }
     };
 
-    var cache = try string_cache.init(allocator, .{}, context.deinitString);
+    var cache: string_cache = undefined;
+    try cache.init(allocator, .{}, context.deinitString);
     defer cache.deinit();
 
     const val = try allocator.dupe(u8, "hello world");

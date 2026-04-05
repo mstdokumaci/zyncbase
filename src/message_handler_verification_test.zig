@@ -8,39 +8,40 @@ const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 
+const table_defs = [_]helpers.TableDef{
+    .{ .name = "_dummy", .fields = &.{"val"} },
+    .{ .name = "data_table", .fields = &.{"val"} },
+};
+
 // Task 14 Verification: WebSocket connection lifecycle
 test "Verification: WebSocket connection lifecycle" {
     const allocator = testing.allocator;
-    var app = try AppTestContext.init(allocator, "verification-lifecycle", &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-mixed", &table_defs);
     defer app.deinit();
-
-    const manager = app.manager;
 
     // Test connection open
     var ws = createMockWebSocket();
-    try manager.onOpen(&ws);
+    try app.manager.onOpen(&ws);
     // Explicit close for middle-test state verification, plus defer for early failures
     var closed = false;
-    defer if (!closed) manager.onClose(&ws, 1000, "Cleanup");
+    defer if (!closed) app.manager.onClose(&ws, 1000, "Cleanup");
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
 
     // Verify connection exists in manager
-    const state = try manager.acquireConnection(conn_id);
+    const state = try app.manager.acquireConnection(conn_id);
     defer if (state.release()) app.memory_strategy.releaseConnection(state);
     try testing.expectEqual(conn_id, state.id);
     try testing.expectEqualStrings("default", state.namespace);
 
     // Test connection close
-    manager.onClose(&ws, 1000, "Normal closure");
+    app.manager.onClose(&ws, 1000, "Normal closure");
     closed = true;
 
     // Verify connection was removed
-    const result = manager.acquireConnection(conn_id);
+    const result = app.manager.acquireConnection(conn_id);
     if (result) |s| {
         _ = s.release();
         return error.TestExpectedError;
@@ -53,15 +54,9 @@ test "Verification: WebSocket connection lifecycle" {
 test "Verification: StoreSet message processing" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-storeset", &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-basic", &table_defs);
     defer app.deinit();
-
-    const handler = app.handler;
-    const manager = app.manager;
-    const storage_engine = app.storage_engine;
 
     // Create a proper MessagePack StoreSet message
     const message = try msgpack.createStoreSetMessage(
@@ -79,18 +74,18 @@ test "Verification: StoreSet message processing" {
     defer parsed.free(allocator);
 
     // Extract message info
-    const msg_info = try handler.extractMessageInfo(parsed);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
     try testing.expectEqualStrings("StoreSet", msg_info.type);
     try testing.expectEqual(@as(u64, 1), msg_info.id);
 
     // Route and process the message
     var ws = createMockWebSocket();
-    try manager.onOpen(&ws);
-    defer manager.onClose(&ws, 1000, "Normal closure");
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn = try manager.acquireConnection(ws.getConnId());
+    const conn = try app.manager.acquireConnection(ws.getConnId());
     defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-    const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response_copy);
 
     // Verify response indicates success
@@ -119,10 +114,10 @@ test "Verification: StoreSet message processing" {
     try testing.expect(found_type and found_id);
 
     // Wait for write to complete
-    try storage_engine.flushPendingWrites();
+    try app.storage_engine.flushPendingWrites();
 
     // Verify data was stored
-    var managed = try storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
+    var managed = try app.storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
     defer managed.deinit();
     const stored_doc = managed.value;
 
@@ -139,21 +134,16 @@ test "Verification: StoreSet message processing" {
 test "Verification: StoreQuery message processing" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-storequery", &.{
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-query", &table_defs);
     defer app.deinit();
-
-    const handler = app.handler;
-    const manager = app.manager;
-    const storage_engine = app.storage_engine;
 
     // First, store a value (typed storage)
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
     defer val_payload.free(allocator);
     const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
-    try storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
-    try storage_engine.flushPendingWrites();
+    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols, false);
+    try app.storage_engine.flushPendingWrites();
 
     // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
     var filter_map = msgpack.Payload.mapPayload(allocator);
@@ -183,18 +173,18 @@ test "Verification: StoreQuery message processing" {
     defer parsed.free(allocator);
 
     // Extract message info
-    const msg_info = try handler.extractMessageInfo(parsed);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
     try testing.expectEqualStrings("StoreQuery", msg_info.type);
     try testing.expectEqual(@as(u64, 2), msg_info.id);
 
     // Route and process the message
     var ws = createMockWebSocket();
-    try manager.onOpen(&ws);
-    defer manager.onClose(&ws, 1000, "Normal closure");
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn = try manager.acquireConnection(ws.getConnId());
+    const conn = try app.manager.acquireConnection(ws.getConnId());
     defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-    const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response_copy);
 
     // Verify response contains the value
@@ -232,14 +222,9 @@ test "Verification: StoreQuery message processing" {
 test "Verification: Error handling for invalid messages" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-errors", &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-concurrency", &table_defs);
     defer app.deinit();
-
-    const handler = app.handler;
-    const manager = app.manager;
 
     // Test 1: Invalid MessagePack should fail parsing
     {
@@ -268,26 +253,26 @@ test "Verification: Error handling for invalid messages" {
         const message = try buf.toOwnedSlice(allocator);
         defer allocator.free(message);
 
-        var reader_m: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader_m);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
         // Should fail to extract message info (missing id)
-        const result = handler.extractMessageInfo(parsed);
+        const result = app.handler.extractMessageInfo(parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
 
     // Test 3: Text messages should be rejected
     {
         var ws = createMockWebSocket();
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        try app.manager.onOpen(&ws);
+        defer app.manager.onClose(&ws, 1000, "Normal closure");
 
         const text_message = "text message";
 
         // Should handle error gracefully (not crash) and reject by returning early
         // from manager.onMessage due to non-binary type.
-        manager.onMessage(&ws, text_message, .text);
+        app.manager.onMessage(&ws, text_message, .text);
     }
 
     // Test 4: Unknown message type should fail routing
@@ -327,15 +312,15 @@ test "Verification: Error handling for invalid messages" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try handler.extractMessageInfo(parsed);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
 
         var ws = createMockWebSocket();
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
-        const conn = try manager.acquireConnection(ws.getConnId());
+        try app.manager.onOpen(&ws);
+        defer app.manager.onClose(&ws, 1000, "Normal closure");
+        const conn = try app.manager.acquireConnection(ws.getConnId());
         defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
 
-        const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
+        const result = routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         try testing.expectError(error.UnknownMessageType, result);
     }
 }
@@ -344,21 +329,18 @@ test "Verification: Error handling for invalid messages" {
 test "Verification: End-to-end StoreSet and StoreQuery flow" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-e2e", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-persistence", &.{
         .{ .name = "data_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
-    const handler = app.handler;
-    const manager = app.manager;
-    const storage_engine = app.storage_engine;
-
     // Open a connection
     var ws = createMockWebSocket();
-    try manager.onOpen(&ws);
-    defer manager.onClose(&ws, 1000, "Normal closure");
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn = try manager.acquireConnection(ws.getConnId());
+    const conn = try app.manager.acquireConnection(ws.getConnId());
     defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
 
     // Store multiple values
@@ -387,8 +369,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const parsed = try msgpack.decode(allocator, &reader_set);
             defer parsed.free(allocator);
 
-            const msg_info = try handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+            const msg_info = try app.handler.extractMessageInfo(parsed);
+            const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response_copy);
 
             // Verify success response
@@ -402,7 +384,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     }
 
     // Wait for writes to complete
-    try storage_engine.flushPendingWrites();
+    try app.storage_engine.flushPendingWrites();
 
     // Retrieve all values
     for (test_data, 0..) |td, i| {
@@ -432,8 +414,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+            const msg_info = try app.handler.extractMessageInfo(parsed);
+            const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response_copy);
 
             // Verify response contains the value
@@ -462,7 +444,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 
     // Also verify directly in storage engine
     for (test_data) |td| {
-        var managed = try storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
+        var managed = try app.storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
         defer managed.deinit();
         const stored_doc = managed.value;
         try testing.expect(stored_doc != null);
@@ -477,21 +459,16 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 test "Verification: StoreSubscribe message processing" {
     const allocator = testing.allocator;
 
-    var app = try AppTestContext.init(allocator, "verification-storesubscribe", &.{
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-subscribe", &table_defs);
     defer app.deinit();
-
-    const handler = app.handler;
-    const manager = app.manager;
-    const storage_engine = app.storage_engine;
 
     // 1. Store a value
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
     defer val_payload.free(allocator);
     const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
-    try storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
-    try storage_engine.flushPendingWrites();
+    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols, false);
+    try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
     var filter_map = msgpack.Payload.mapPayload(allocator);
@@ -519,20 +496,20 @@ test "Verification: StoreSubscribe message processing" {
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const msg_info = try handler.extractMessageInfo(parsed);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
 
     // 4. Route and process the message
     var ws = createMockWebSocket();
-    try manager.onOpen(&ws);
-    defer manager.onClose(&ws, 1000, "Normal closure");
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
 
-    const conn = try manager.acquireConnection(ws.getConnId());
+    const conn = try app.manager.acquireConnection(ws.getConnId());
     defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
 
     // Use an arena for routing to avoid leaks of the response map and its contents
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const result_raw = try handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
+    const result_raw = try app.handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
     const response = try allocator.dupe(u8, result_raw);
     defer allocator.free(response);
 

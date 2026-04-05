@@ -10,7 +10,8 @@ test "LockFreeCache: pool stability and leak test" {
         .reclamation_interval_ms = 10,
     };
 
-    var cache = try u32_cache.init(allocator, config, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, config, null);
     defer cache.deinit();
 
     const namespace = "test-leak";
@@ -46,7 +47,8 @@ test "LockFreeCache: pool exhaustion behavior" {
         .reclamation_interval_ms = 1000,
     };
 
-    var cache = try u32_cache.init(allocator, config, null);
+    var cache: u32_cache = undefined;
+    try cache.init(allocator, config, null);
     defer cache.deinit();
 
     const namespace = "test-exhaustion";

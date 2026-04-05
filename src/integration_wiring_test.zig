@@ -32,18 +32,18 @@ test "Integration: All components properly wired" {
     defer server.deinit();
 
     // Verify all components are initialized and correctly cross-linked
-    try testing.expect(@intFromPtr(server.memory_strategy) != 0);
-    try testing.expect(@intFromPtr(server.violation_tracker) != 0);
-    try testing.expect(@intFromPtr(server.subscription_engine) != 0);
-    try testing.expect(@intFromPtr(server.checkpoint_manager) != 0);
-    try testing.expect(@intFromPtr(server.storage_engine) != 0);
-    try testing.expect(@intFromPtr(server.websocket_server) != 0);
-    try testing.expect(@intFromPtr(server.message_handler) != 0);
+    try testing.expect(@intFromPtr(&server.memory_strategy) != 0);
+    try testing.expect(@intFromPtr(&server.violation_tracker) != 0);
+    try testing.expect(@intFromPtr(&server.subscription_engine) != 0);
+    try testing.expect(@intFromPtr(&server.checkpoint_manager) != 0);
+    try testing.expect(@intFromPtr(&server.storage_engine) != 0);
+    try testing.expect(@intFromPtr(&server.websocket_server) != 0);
+    try testing.expect(@intFromPtr(&server.message_handler) != 0);
 
     // Verify message handler's component wiring
-    try testing.expect(server.message_handler.storage_engine == server.storage_engine);
-    try testing.expect(server.message_handler.subscription_engine == server.subscription_engine);
-    try testing.expect(server.message_handler.violation_tracker == server.violation_tracker);
+    try testing.expect(server.message_handler.storage_engine == &server.storage_engine);
+    try testing.expect(server.message_handler.subscription_engine == &server.subscription_engine);
+    try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);
 
     // Verify initial operational state
     try testing.expect(server.shutdown_requested.load(.acquire) == false);
@@ -64,7 +64,7 @@ test "Integration: Error propagation through layers" {
     try testing.expect(doc == null);
 
     // Verify components have expected internal pointers
-    try testing.expect(server.message_handler.violation_tracker == server.violation_tracker);
+    try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);
 }
 
 test "Integration: Graceful shutdown propagation" {
@@ -82,8 +82,8 @@ test "Integration: Graceful shutdown propagation" {
     try testing.expect(server.shutdown_requested.load(.acquire) == true);
 
     // Verify components remain stable during shutdown sequence
-    try testing.expect(@intFromPtr(server.memory_strategy) != 0);
-    try testing.expect(@intFromPtr(server.storage_engine) != 0);
+    try testing.expect(@intFromPtr(&server.memory_strategy) != 0);
+    try testing.expect(@intFromPtr(&server.storage_engine) != 0);
 }
 
 test "Integration: WebSocket callback wiring" {
@@ -95,8 +95,8 @@ test "Integration: WebSocket callback wiring" {
     defer server.deinit();
 
     // Verify WebSocket server component is present
-    try testing.expect(@intFromPtr(server.websocket_server) != 0);
+    try testing.expect(@intFromPtr(&server.websocket_server) != 0);
 
     // Verify critical callback dependencies
-    try testing.expect(@intFromPtr(server.message_handler) != 0);
+    try testing.expect(@intFromPtr(&server.message_handler) != 0);
 }

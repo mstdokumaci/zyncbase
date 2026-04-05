@@ -19,9 +19,10 @@ test "property: random query filters on StorageEngine" {
     };
     const table = schema_manager.Table{ .name = "entities", .fields = &fields_arr };
 
-    var ctx = try sth.setupEngine(allocator, "query-property", table);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-query-p1", table);
     defer ctx.deinit();
-    const engine = ctx.engine;
+    const engine = &ctx.engine;
 
     // Seed some data
     try seedEntities(allocator, engine, 100);
@@ -63,7 +64,7 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
             .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
             .{ .name = "score", .value = msgpack.Payload.floatToPayload(score) },
         };
-        try engine.insertOrReplace("entities", id, "ns1", &cols);
+        try engine.insertOrReplace("entities", id, "ns1", &cols, false);
     }
     try engine.flushPendingWrites();
 }

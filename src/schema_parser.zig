@@ -126,7 +126,6 @@ pub const Schema = struct {
 };
 
 pub const SchemaMetadata = struct {
-    schema: *const Schema,
     table_metadata: std.StringHashMap(TableMetadata),
 
     pub fn init(allocator: Allocator, schema: *const Schema) !SchemaMetadata {
@@ -135,7 +134,6 @@ pub const SchemaMetadata = struct {
             try table_metadata.put(t.name, try TableMetadata.init(allocator, t));
         }
         return .{
-            .schema = schema,
             .table_metadata = table_metadata,
         };
     }

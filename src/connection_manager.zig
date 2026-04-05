@@ -23,11 +23,11 @@ pub const ConnectionManager = struct {
     max_connections: usize = 100_000,
 
     pub fn init(
+        self: *ConnectionManager,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
-    ) !*ConnectionManager {
-        const self = try allocator.create(ConnectionManager);
+    ) !void {
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,
@@ -35,7 +35,6 @@ pub const ConnectionManager = struct {
             .map = std.AutoHashMap(u64, *Connection).init(memory_strategy.generalAllocator()),
             .mutex = .{},
         };
-        return self;
     }
 
     pub fn deinit(self: *ConnectionManager) void {
@@ -51,7 +50,6 @@ pub const ConnectionManager = struct {
         }
         self.map.deinit();
         self.mutex.unlock();
-        self.allocator.destroy(self);
     }
 
     /// Close all active connections for graceful shutdown

@@ -12,7 +12,8 @@ test "connection: state deallocation on close" {
 
     // Test 1: Single connection open and close
     {
-        var app = try AppTestContext.init(allocator, "state-p1", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-basic", &.{});
         defer app.deinit();
 
         var dummy_ws = createMockWebSocket();
@@ -36,7 +37,8 @@ test "connection: state deallocation on close" {
 
     // Test 2: Multiple connections open and close
     {
-        var app = try AppTestContext.init(allocator, "state-p2", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p2", &.{});
         defer app.deinit();
 
         const num_connections = 100;
@@ -60,7 +62,8 @@ test "connection: state deallocation on close" {
 
     // Test 3: Connection with subscriptions
     {
-        var app = try AppTestContext.init(allocator, "state-p3", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p3", &.{});
         defer app.deinit();
 
         var dummy_ws = createMockWebSocket();
@@ -85,7 +88,8 @@ test "connection: state deallocation on close" {
 
     // Test 4: Clear all connections at once
     {
-        var app = try AppTestContext.init(allocator, "state-p4", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p4", &.{});
         defer app.deinit();
 
         const num_connections = 50;
@@ -107,7 +111,8 @@ test "connection: state deallocation on close" {
 
     // Test 5: Stress test with many connections
     {
-        var app = try AppTestContext.init(allocator, "state-p5", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p5", &.{});
         defer app.deinit();
 
         const iterations = 1000;
@@ -131,7 +136,8 @@ test "connection: state deallocation on close" {
 
     // Test 6: Concurrent connection state deallocation
     {
-        var app = try AppTestContext.init(allocator, "state-p6", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p6", &.{});
         defer app.deinit();
 
         const worker = struct {
@@ -167,7 +173,8 @@ test "connection: state deallocation on close" {
 
     // Test 7: Registry deinit deallocates all remaining connections
     {
-        var app = try AppTestContext.init(allocator, "state-p7", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-p7", &.{});
         // We don't defer app.deinit() here so we can call it manually to verify it handles remaining conns
         // Wait, app.deinit() is exactly what we want to test.
 
@@ -190,7 +197,8 @@ test "connection: state deallocation edge cases" {
 
     // Test: Remove non-existent connection (should not crash)
     {
-        var app = try AppTestContext.init(allocator, "state-e1", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-inverse", &.{});
         defer app.deinit();
 
         // Try to remove a connection that doesn't exist
@@ -200,7 +208,8 @@ test "connection: state deallocation edge cases" {
 
     // Test: Connection with empty subscription list
     {
-        var app = try AppTestContext.init(allocator, "state-e2", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-e2", &.{});
         defer app.deinit();
 
         var dummy_ws = createMockWebSocket();
@@ -211,7 +220,8 @@ test "connection: state deallocation edge cases" {
 
     // Test: Connection with large subscription list
     {
-        var app = try AppTestContext.init(allocator, "state-e3", &.{});
+        var app: AppTestContext = undefined;
+        try app.init(allocator, "state-e3", &.{});
         defer app.deinit();
 
         var dummy_ws = createMockWebSocket();

@@ -104,7 +104,8 @@ test "ws: callbacks invoked for all events" {
             .ssl = false,
         };
 
-        const server = try WebSocketServer.init(allocator, config);
+        var server: WebSocketServer = undefined;
+        try server.init(allocator, config);
         defer server.deinit();
 
         // Build handlers based on test case
@@ -210,7 +211,8 @@ test "ws: message callback content and type" {
             .ssl = false,
         };
 
-        const server = try WebSocketServer.init(allocator, config);
+        var server: WebSocketServer = undefined;
+        try server.init(allocator, config);
         defer server.deinit();
 
         const handlers = WebSocketHandlers{
@@ -271,7 +273,8 @@ test "ws: close callback code and message" {
             .ssl = false,
         };
 
-        const server = try WebSocketServer.init(allocator, config);
+        var server: WebSocketServer = undefined;
+        try server.init(allocator, config);
         defer server.deinit();
 
         const handlers = WebSocketHandlers{
@@ -316,7 +319,8 @@ test "ws: callbacks invoked exactly once" {
         .ssl = false,
     };
 
-    const server = try WebSocketServer.init(allocator, config);
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
     defer server.deinit();
 
     const handlers = WebSocketHandlers{

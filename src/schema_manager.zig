@@ -24,11 +24,7 @@ pub const SchemaManager = struct {
     metadata: SchemaMetadata,
 
     /// Parse schema JSON, build indexed metadata, and discard the parser.
-    /// The returned SchemaManager is allocated on the heap and owned by the caller.
-    pub fn init(allocator: Allocator, json_text: []const u8) !*SchemaManager {
-        const self = try allocator.create(SchemaManager);
-        errdefer allocator.destroy(self);
-
+    pub fn init(self: *SchemaManager, allocator: Allocator, json_text: []const u8) !void {
         var parser = schema_parser.SchemaParser.init(allocator);
         const schema = try parser.parse(json_text);
         errdefer schema_parser.freeSchema(allocator, schema);
@@ -44,14 +40,12 @@ pub const SchemaManager = struct {
             .schema = schema,
             .metadata = metadata,
         };
-        return self;
     }
 
     /// Clean up schema and metadata resources.
     pub fn deinit(self: *SchemaManager) void {
         self.metadata.deinit();
         schema_parser.freeSchema(self.allocator, self.schema);
-        self.allocator.destroy(self);
     }
 
     /// Find a table metadata by name. Returns null if not found.

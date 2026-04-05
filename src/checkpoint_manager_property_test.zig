@@ -16,7 +16,8 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
     defer storage.deinit();
 
     // Initialize checkpoint manager with low thresholds for testing
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1024, // 1KB for testing
         .time_threshold_sec = 1, // 1 second for testing
         .checkpoint_mode = .passive,
@@ -53,7 +54,8 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
@@ -79,7 +81,8 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1000,
         .time_threshold_sec = 60,
         .checkpoint_mode = .passive,
@@ -106,7 +109,8 @@ test "checkpoint: failure handling - failed checkpoints increment counter" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
@@ -127,7 +131,8 @@ test "checkpoint: metrics accuracy - metrics reflect operations accurately" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
@@ -160,7 +165,8 @@ test "checkpoint: escalation logic - works correctly when needed" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,

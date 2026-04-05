@@ -11,7 +11,8 @@ test "CheckpointManager: initialization" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{});
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{});
     defer manager.deinit();
 
     // Verify initial state
@@ -27,7 +28,8 @@ test "CheckpointManager: shouldCheckpoint - size threshold" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1000,
         .time_threshold_sec = 3600, // 1 hour - won't trigger
     });
@@ -52,7 +54,8 @@ test "CheckpointManager: shouldCheckpoint - time threshold" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1000000, // 1MB - won't trigger
         .time_threshold_sec = 60, // 1 minute
     });
@@ -76,7 +79,8 @@ test "CheckpointManager: shouldCheckpoint - both thresholds" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .wal_size_threshold = 1000,
         .time_threshold_sec = 60,
     });
@@ -109,7 +113,8 @@ test "CheckpointManager: performCheckpoint - passive mode" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{});
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{});
     defer manager.deinit();
 
     const result = try manager.performCheckpoint(.passive);
@@ -125,7 +130,8 @@ test "CheckpointManager: performCheckpoint - all modes" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{});
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{});
     defer manager.deinit();
 
     // Test each checkpoint mode
@@ -144,7 +150,8 @@ test "CheckpointManager: performCheckpoint - metrics update" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{});
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{});
     defer manager.deinit();
 
     const metrics_before = manager.getMetrics();
@@ -173,7 +180,8 @@ test "CheckpointManager: getMetrics" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{});
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{});
     defer manager.deinit();
 
     // Set some values
@@ -229,7 +237,8 @@ test "CheckpointManager: performCheckpointWithEscalation - no escalation needed"
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .checkpoint_mode = .full, // Start with full mode
     });
     defer manager.deinit();
@@ -270,7 +279,8 @@ test "CheckpointManager: fast shutdown" {
     var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
     defer storage.deinit();
 
-    var manager = try CheckpointManager.init(allocator, storage, .{
+    var manager: CheckpointManager = undefined;
+    try manager.init(allocator, &storage, .{
         .check_interval_sec = 60, // Long interval
     });
     // No defer here, we control it manually
@@ -280,7 +290,7 @@ test "CheckpointManager: fast shutdown" {
 
     // Signal shutdown immediately
     manager.stop();
-    manager.deinit(); // This will join and destroy the manager
+    manager.deinit(); // This will join
 
     const end_time = std.time.milliTimestamp();
     const duration = end_time - start_time;

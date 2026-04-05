@@ -14,6 +14,7 @@ const SchemaManager = schema_manager.SchemaManager;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const types = @import("storage_engine/types.zig");
+const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
 pub const ColumnValue = types.ColumnValue;
@@ -56,7 +57,7 @@ pub const StorageEngine = struct {
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const SchemaManager,
-    metadata_cache: *metadata_cache_type,
+    metadata_cache: metadata_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
     /// before the DB read and only populate the cache if it hasn't advanced,
@@ -64,15 +65,26 @@ pub const StorageEngine = struct {
     write_seq: std.atomic.Value(u64),
     performance_config: PerformanceConfig,
     options: Options,
+    change_buffer: ChangeBuffer,
+    event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
+    notifier_ctx: ?*anyopaque,
 
     fn deinitPayload(allocator: Allocator, payload: *msgpack.Payload) void {
         payload.free(allocator);
     }
 
-    pub fn init(allocator: Allocator, memory_strategy: *MemoryStrategy, data_dir: []const u8, sm: *const SchemaManager, performance_config: PerformanceConfig, options: Options) !*StorageEngine {
+    pub fn init(
+        self: *StorageEngine,
+        allocator: Allocator,
+        memory_strategy: *MemoryStrategy,
+        data_dir: []const u8,
+        sm: *const SchemaManager,
+        performance_config: PerformanceConfig,
+        options: Options,
+        event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
+        notifier_ctx: ?*anyopaque,
+    ) !void {
         if (data_dir.len == 0 and !options.in_memory) return error.InvalidDataDir;
-        const self = try allocator.create(StorageEngine);
-        errdefer allocator.destroy(self);
 
         const db_path: [:0]const u8 = if (options.in_memory) uri: {
             // Use shared-cache in-memory database with a unique name to avoid crosstalk
@@ -99,7 +111,6 @@ pub const StorageEngine = struct {
         };
         errdefer allocator.free(db_path); // zwanzig-disable-line: deinit-lifecycle
 
-        // Open writer connection
         var writer_conn = try sqlite.Db.init(.{
             .mode = sqlite.Db.Mode{ .File = db_path },
             .open_flags = .{
@@ -117,9 +128,6 @@ pub const StorageEngine = struct {
         const num_readers = try std.Thread.getCpuCount();
         const reader_pool = try allocator.alloc(ReaderNode, num_readers);
         errdefer allocator.free(reader_pool);
-
-        const metadata_cache = try metadata_cache_type.init(allocator, .{}, deinitPayload);
-        errdefer metadata_cache.deinit();
 
         var initialized_readers: usize = 0;
         errdefer {
@@ -141,6 +149,12 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
+        const change_buffer = try ChangeBuffer.init(allocator);
+        errdefer {
+            var cb = change_buffer;
+            cb.deinit();
+        }
+
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
@@ -157,7 +171,8 @@ pub const StorageEngine = struct {
             .transaction_active = std.atomic.Value(bool).init(false),
             .write_seq = std.atomic.Value(u64).init(0),
             .schema_manager = sm,
-            .metadata_cache = metadata_cache,
+            // SAFETY: Initialized below
+            .metadata_cache = undefined,
             .flush_cond = .{},
             .write_mutex = .{},
             .pending_writes_count = std.atomic.Value(usize).init(0),
@@ -166,7 +181,14 @@ pub const StorageEngine = struct {
             .reconnection_config = .{},
             .write_cond = .{},
             .write_thread_ready = std.atomic.Value(bool).init(false),
+            .change_buffer = change_buffer,
+            .event_loop_notifier = event_loop_notifier,
+            .notifier_ctx = notifier_ctx,
+            .write_thread = null,
         };
+
+        try self.metadata_cache.init(allocator, .{}, deinitPayload);
+        errdefer self.metadata_cache.deinit();
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
@@ -190,8 +212,6 @@ pub const StorageEngine = struct {
                 self.write_cond.wait(&self.write_mutex);
             }
         }
-
-        return self;
     }
 
     pub fn deinit(self: *StorageEngine) void {
@@ -221,18 +241,17 @@ pub const StorageEngine = struct {
         self.write_queue.deinit();
         self.node_pool.deinit();
 
-        gpa.destroy(self);
+        // 6. Clean up change buffer
+        self.change_buffer.deinit();
     }
 
-    /// Get a StorageLayer interface for the CheckpointManager
-    pub fn getStorageLayer(self: *StorageEngine) !*@import("checkpoint_manager.zig").CheckpointManager.StorageLayer {
+    /// Initialize a StorageLayer interface for the CheckpointManager in-place
+    pub fn initStorageLayer(self: *StorageEngine, layer: *@import("checkpoint_manager.zig").CheckpointManager.StorageLayer) !void {
         const checkpoint_manager_mod = @import("checkpoint_manager.zig");
-        const storage_layer = try checkpoint_manager_mod.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
+        layer.* = try checkpoint_manager_mod.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
 
         // Store a reference to self for checkpoint execution
-        storage_layer.storage_engine = self;
-
-        return storage_layer;
+        layer.storage_engine = self;
     }
 
     /// Execute a checkpoint operation with the specified mode
@@ -381,9 +400,10 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
         columns: []const ColumnValue,
+        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
+        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns, change_capture);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -396,9 +416,10 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         field: []const u8,
         value: msgpack.Payload,
+        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
+        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value, change_capture);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -526,9 +547,10 @@ pub const StorageEngine = struct {
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
+        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace);
+        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace, change_capture);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

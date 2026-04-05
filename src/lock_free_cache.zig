@@ -125,27 +125,26 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
             }
         };
 
-        pub fn init(allocator: Allocator, config: Config, deinit_payload: ?*const fn (Allocator, *t) void) !*Self {
-            const cache = try allocator.create(Self);
+        pub fn init(self: *Self, allocator: Allocator, config: Config, deinit_payload: ?*const fn (Allocator, *t) void) !void {
             const entries = try allocator.create(std.StringHashMap(*CacheEntry));
             entries.* = std.StringHashMap(*CacheEntry).init(allocator);
 
-            cache.* = .{
+            self.* = .{
                 .entries = std.atomic.Value(*std.StringHashMap(*CacheEntry)).init(entries),
                 .allocator = allocator,
                 .defer_stack = std.atomic.Value(?*DeferNode).init(null),
-                // SAFETY: pool is initialized via cache.pool.init below
+                // SAFETY: pool is initialized via self.pool.init below
                 .pool = undefined,
                 .epoch_manager = EpochManager.init(),
                 .config = config,
                 .reclaim_active = std.atomic.Value(bool).init(true),
                 .deinit_payload = deinit_payload,
+                .reclaim_handle = null,
             };
 
-            try cache.pool.init(allocator, @intCast(@as(u32, @intCast(config.max_deferred_nodes))), null, null);
+            try self.pool.init(allocator, @intCast(@as(u32, @intCast(config.max_deferred_nodes))), null, null);
 
-            cache.reclaim_handle = try std.Thread.spawn(.{}, reclaimLoop, .{cache});
-            return cache;
+            self.reclaim_handle = try std.Thread.spawn(.{}, reclaimLoop, .{self});
         }
 
         pub fn deinit(self: *Self) void {
@@ -170,7 +169,6 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
 
             // Free the pool (contains the actual DeferNode storage)
             self.pool.deinit();
-            self.allocator.destroy(self);
         }
 
         pub const Error = error{

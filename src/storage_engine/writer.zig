@@ -15,6 +15,7 @@ pub fn buildInsertOrReplaceOp(
     id: []const u8,
     namespace: []const u8,
     columns: []const ColumnValue,
+    change_capture: bool,
 ) !WriteOp {
     try sm.validateColumns(table, columns);
 
@@ -62,6 +63,9 @@ pub fn buildInsertOrReplaceOp(
     }
     // Always update updated_at
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at");
+    if (change_capture) {
+        try sql_buf.appendSlice(allocator, " RETURNING *");
+    }
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -101,6 +105,7 @@ pub fn buildInsertOrReplaceOp(
             .sql = sql,
             .values = values,
             .timestamp = now,
+            .change_capture = change_capture,
             .completion_signal = null,
         },
     };
@@ -114,6 +119,7 @@ pub fn buildUpdateFieldOp(
     namespace: []const u8,
     field: []const u8,
     value: msgpack.Payload,
+    change_capture: bool,
 ) !WriteOp {
     try sm.validateField(table, field);
 
@@ -146,8 +152,8 @@ pub fn buildUpdateFieldOp(
         \\VALUES (?, ?, {s}, ?, ?)
         \\ON CONFLICT(id, namespace_id) DO UPDATE SET
         \\  {s} = excluded.{s},
-        \\  updated_at = excluded.updated_at
-    , .{ table, field, field_placeholder, field, field });
+        \\  updated_at = excluded.updated_at {s}
+    , .{ table, field, field_placeholder, field, field, if (change_capture) "RETURNING *" else "" });
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);
@@ -166,6 +172,7 @@ pub fn buildUpdateFieldOp(
             .sql = sql,
             .values = values,
             .timestamp = now,
+            .change_capture = change_capture,
             .completion_signal = null,
         },
     };
@@ -177,6 +184,7 @@ pub fn buildDeleteDocumentOp(
     table: []const u8,
     id: []const u8,
     namespace: []const u8,
+    change_capture: bool,
 ) !WriteOp {
     try sm.validateTable(table);
 
@@ -196,6 +204,7 @@ pub fn buildDeleteDocumentOp(
             .id = id_owned,
             .namespace = ns_owned,
             .sql = sql,
+            .change_capture = change_capture,
             .completion_signal = null,
         },
     };

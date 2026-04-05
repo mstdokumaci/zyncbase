@@ -24,7 +24,8 @@ test "buffer: message deallocation after processing" {
     }
     const allocator = gpa.allocator();
 
-    var app = try AppTestContext.init(allocator, "buffer-dealloc", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "buffer-basic", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
@@ -50,7 +51,7 @@ test "buffer: message deallocation after processing" {
         try testing.expectEqualStrings("StoreSet", msg_info.type);
 
         // Route the message
-        const response = try routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -96,7 +97,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -118,7 +119,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response);
         }
 
@@ -132,7 +133,7 @@ test "buffer: message deallocation after processing" {
             defer parsed.free(allocator);
 
             const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
             defer allocator.free(response);
         }
     }
@@ -185,7 +186,8 @@ test "buffer: concurrent message deallocation" {
     }
     const allocator = gpa.allocator();
 
-    var app = try AppTestContext.init(allocator, "buffer-concurrent", &.{
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "buffer-concurrent", &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
     defer app.deinit();
@@ -225,7 +227,7 @@ test "buffer: concurrent message deallocation" {
                 defer parsed.free(ctx.app.allocator);
 
                 const msg_info = try ctx.app.handler.extractMessageInfo(parsed);
-                const response = routeWithArena(ctx.app.handler, ctx.app.allocator, conn, msg_info, parsed) catch |err| {
+                const response = routeWithArena(&ctx.app.handler, ctx.app.allocator, conn, msg_info, parsed) catch |err| {
                     if (err == error.InvalidOperation) continue;
                     return err;
                 };
