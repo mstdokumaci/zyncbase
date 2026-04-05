@@ -136,6 +136,38 @@ pub const ParserError = error{
     OutOfMemory,
 };
 
+/// Parse a Base64-encoded JSON cursor tuple token into a Cursor.
+/// Expected decoded JSON shape: [sort_value, id]
+pub fn parseCursorToken(
+    allocator: std.mem.Allocator,
+    token: []const u8,
+) ParserError!Cursor {
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(token) catch
+        return error.InvalidMessageFormat;
+    const decoded = try allocator.alloc(u8, decoded_len);
+    defer allocator.free(decoded);
+
+    std.base64.standard.Decoder.decode(decoded, token) catch
+        return error.InvalidMessageFormat;
+    const json_cursor = decoded;
+
+    const cursor_payload = msgpack.jsonToPayload(json_cursor, allocator) catch
+        return error.InvalidMessageFormat;
+    defer cursor_payload.free(allocator);
+
+    if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
+    if (cursor_payload.arr[1] != .str) return error.InvalidMessageFormat;
+
+    return Cursor{
+        .sort_value = blk: {
+            const p = try cursor_payload.arr[0].deepClone(allocator);
+            errdefer p.free(allocator);
+            break :blk p;
+        },
+        .id = try allocator.dupe(u8, cursor_payload.arr[1].str.value()),
+    };
+}
+
 /// Parse a MessagePack Payload (expected to be a map) into a QueryFilter AST.
 /// Validates all field names against the provided schema for the target collection.
 /// The caller is responsible for calling `filter.deinit(allocator)` on success.
@@ -200,17 +232,9 @@ pub fn parseQueryFilter(
                 limit = @intCast(value.int);
             }
         } else if (std.mem.eql(u8, key, "after")) {
-            if (value != .arr or value.arr.len != 2) return error.InvalidMessageFormat;
-            if (value.arr[1] != .str) return error.InvalidMessageFormat;
+            if (value != .str) return error.InvalidMessageFormat;
             if (after) |old| old.deinit(allocator);
-            after = Cursor{
-                .sort_value = blk: {
-                    const p = try value.arr[0].deepClone(allocator);
-                    errdefer p.free(allocator);
-                    break :blk p;
-                },
-                .id = try allocator.dupe(u8, value.arr[1].str.value()),
-            };
+            after = try parseCursorToken(allocator, value.str.value());
         }
     }
 

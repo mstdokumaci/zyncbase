@@ -62,14 +62,20 @@ pub const ColumnValue = struct {
 /// Caller MUST call deinit() to release any potential cache handles.
 pub const ManagedPayload = struct {
     value: ?msgpack.Payload,
+    next_cursor_arr: ?msgpack.Payload = null,
     handle: ?metadata_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
     pub fn deinit(self: *ManagedPayload) void {
         if (self.handle) |*h| {
             h.release();
-        } else if (self.allocator) |alloc| {
-            if (self.value) |*p| p.free(alloc);
+        }
+
+        if (self.allocator) |alloc| {
+            if (self.handle == null) {
+                if (self.value) |*p| p.free(alloc);
+            }
+            if (self.next_cursor_arr) |*cursor| cursor.free(alloc);
         }
     }
 };
