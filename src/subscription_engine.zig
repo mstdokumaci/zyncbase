@@ -109,16 +109,7 @@ pub const SubscriptionEngine = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // 1. Create a cleaned, cursor-less filter to represent the shared filter identity.
-        // SubscriptionGroups are divided by filter conditions, NOT by the subscriber's current cursor.
-        var shared_filter = try filter.clone(self.allocator);
-        defer shared_filter.deinit(self.allocator);
-        if (shared_filter.after) |after_cursor| {
-            after_cursor.deinit(self.allocator);
-            shared_filter.after = null;
-        }
-
-        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, collection, shared_filter);
+        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, collection, filter);
         defer self.allocator.free(filter_key);
 
         var group_id: u64 = 0;
@@ -136,8 +127,14 @@ pub const SubscriptionEngine = struct {
             errdefer self.allocator.free(ns_copy);
             const coll_copy = try self.allocator.dupe(u8, collection);
             errdefer self.allocator.free(coll_copy);
-            var group_filter = try shared_filter.clone(self.allocator);
+
+            // Shared filter for the group must NOT contain cursor state.
+            var group_filter = try filter.clone(self.allocator);
             errdefer group_filter.deinit(self.allocator);
+            if (group_filter.after) |after_cursor| {
+                after_cursor.deinit(self.allocator);
+                group_filter.after = null;
+            }
 
             const group = SubscriptionGroup{
                 .id = group_id,

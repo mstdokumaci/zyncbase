@@ -615,8 +615,7 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         if (payload != .map) return error.InvalidPayload;
-        const sub_id_val = self.getPayloadFromMap(payload.map, "subId") orelse return error.MissingSubscriptionId;
-        const sub_id: u64 = if (sub_id_val == .uint) sub_id_val.uint else if (sub_id_val == .int and sub_id_val.int >= 0) @intCast(sub_id_val.int) else return error.InvalidSubscriptionId;
+        const sub_id = try self.extractSubId(payload.map);
 
         try self.subscription_engine.unsubscribe(conn.id, sub_id);
 
@@ -656,8 +655,7 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         if (payload != .map) return error.InvalidPayload;
 
-        const sub_id_val = self.getPayloadFromMap(payload.map, "subId") orelse return error.MissingSubscriptionId;
-        const sub_id: u64 = if (sub_id_val == .uint) sub_id_val.uint else if (sub_id_val == .int and sub_id_val.int >= 0) @intCast(sub_id_val.int) else return error.InvalidSubscriptionId;
+        const sub_id = try self.extractSubId(payload.map);
         const next_cursor_token = self.getStringFromMap(payload.map, "nextCursor") orelse return error.MissingRequiredFields;
 
         const requested_cursor = try query_parser.parseCursorToken(arena_allocator, next_cursor_token);
@@ -727,5 +725,15 @@ pub const MessageHandler = struct {
         }
 
         return try msgpack.encodePayload(arena_allocator, response);
+    }
+
+    fn extractSubId(self: *MessageHandler, map: msgpack.Map) !u64 {
+        const sub_id_val = self.getPayloadFromMap(map, "subId") orelse return error.MissingSubscriptionId;
+        return if (sub_id_val == .uint)
+            sub_id_val.uint
+        else if (sub_id_val == .int and sub_id_val.int >= 0)
+            @intCast(sub_id_val.int)
+        else
+            error.InvalidSubscriptionId;
     }
 };
