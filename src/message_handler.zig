@@ -593,7 +593,7 @@ pub const MessageHandler = struct {
         defer filter.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
-        try conn.subscription_ids.append(conn.allocator, sub_id);
+        try conn.addSubscription(sub_id);
 
         // Snapshot
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
@@ -621,12 +621,7 @@ pub const MessageHandler = struct {
         try self.subscription_engine.unsubscribe(conn.id, sub_id);
 
         // Remove from connection tracking
-        for (conn.subscription_ids.items, 0..) |tracked_id, i| {
-            if (tracked_id == sub_id) {
-                _ = conn.subscription_ids.swapRemove(i);
-                break;
-            }
-        }
+        conn.removeSubscription(sub_id);
 
         return try buildSuccessResponse(arena_allocator, msg_id);
     }

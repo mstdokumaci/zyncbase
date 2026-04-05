@@ -75,13 +75,36 @@ pub const Connection = struct {
     }
 
     /// Allocate the next subscription ID in O(1) time.
+    /// Thread-safe: Acquires connection's internal mutex.
     /// Returns error.SubscriptionIdExhausted if the counter wraps.
     pub fn allocateSubscriptionId(self: *Connection) !u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         if (self.next_subscription_id == 0) return error.SubscriptionIdExhausted;
 
         const id = self.next_subscription_id;
         self.next_subscription_id +%= 1;
         return id;
+    }
+
+    /// Thread-safe: Acquires connection's internal mutex to append a subscription ID.
+    pub fn addSubscription(self: *Connection, sub_id: u64) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.subscription_ids.append(self.allocator, sub_id);
+    }
+
+    /// Thread-safe: Acquires connection's internal mutex to remove a subscription ID.
+    pub fn removeSubscription(self: *Connection, sub_id: u64) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.subscription_ids.items, 0..) |tracked_id, i| {
+            if (tracked_id == sub_id) {
+                _ = self.subscription_ids.swapRemove(i);
+                break;
+            }
+        }
     }
 
     /// Increment the reference count.
