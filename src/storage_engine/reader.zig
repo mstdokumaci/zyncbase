@@ -160,9 +160,8 @@ pub fn buildSelectQuery(
 
             const sql_field = sort_field;
 
-            // Compound cursor boundary:
-            // ASC  => sort_field > ? OR (sort_field = ? AND id > ?)
-            // DESC => sort_field < ? OR (sort_field = ? AND id < ?)
+            // SQLite row-value comparison (requires SQLite 3.15.0+):
+            // (sort_field, id) > (?, ?)
             if (std.mem.eql(u8, sort_field, "id")) {
                 try sql_buf.appendSlice(allocator, "id ");
                 try sql_buf.appendSlice(allocator, op);
@@ -170,13 +169,9 @@ pub fn buildSelectQuery(
             } else {
                 try sql_buf.appendSlice(allocator, "(");
                 try sql_buf.appendSlice(allocator, sql_field);
-                try sql_buf.appendSlice(allocator, " ");
+                try sql_buf.appendSlice(allocator, ", id) ");
                 try sql_buf.appendSlice(allocator, op);
-                try sql_buf.appendSlice(allocator, " ? OR (");
-                try sql_buf.appendSlice(allocator, sql_field);
-                try sql_buf.appendSlice(allocator, " = ? AND id ");
-                try sql_buf.appendSlice(allocator, op);
-                try sql_buf.appendSlice(allocator, " ?))");
+                try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
             // Find sort field type for correct binding
@@ -197,13 +192,9 @@ pub fn buildSelectQuery(
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv_1 = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
-                errdefer sv_1.deinit(allocator);
-                try values.append(allocator, sv_1);
-
-                const sv_2 = try sv_1.clone(allocator);
-                errdefer sv_2.deinit(allocator);
-                try values.append(allocator, sv_2);
+                const sv = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+                errdefer sv.deinit(allocator);
+                try values.append(allocator, sv);
 
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
