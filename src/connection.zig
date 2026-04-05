@@ -20,6 +20,9 @@ pub const Connection = struct {
     /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
 
+    /// Monotonic subscription ID generator (per active session)
+    next_subscription_id: u64,
+
     /// Low-level WebSocket handle
     ws: WebSocket,
 
@@ -44,6 +47,7 @@ pub const Connection = struct {
         self.allocator = allocator;
         self.user_id = null;
         self.subscription_ids = .empty;
+        self.next_subscription_id = 1;
         self.mutex = .{};
         self.ref_count = std.atomic.Value(usize).init(0);
     }
@@ -67,6 +71,17 @@ pub const Connection = struct {
         self.user_id = null;
         self.namespace = "default";
         self.subscription_ids.clearRetainingCapacity();
+        self.next_subscription_id = 1;
+    }
+
+    /// Allocate the next subscription ID in O(1) time.
+    /// Returns error.SubscriptionIdExhausted if the counter wraps.
+    pub fn allocateSubscriptionId(self: *Connection) !u64 {
+        if (self.next_subscription_id == 0) return error.SubscriptionIdExhausted;
+
+        const id = self.next_subscription_id;
+        self.next_subscription_id +%= 1;
+        return id;
     }
 
     /// Increment the reference count.

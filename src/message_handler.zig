@@ -519,7 +519,8 @@ pub const MessageHandler = struct {
             error.TypeMismatch, error.ConstraintViolation => "SCHEMA_VALIDATION_FAILED",
             error.InvalidFieldName => "INVALID_FIELD_NAME",
             error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => "INVALID_MESSAGE",
-            error.MissingRequiredFields, error.MissingSubscriptionId, error.SubscriptionNotFound => "INVALID_MESSAGE_FORMAT",
+            error.MissingRequiredFields, error.MissingSubscriptionId => "INVALID_MESSAGE_FORMAT",
+            error.SubscriptionNotFound => "SUBSCRIPTION_NOT_FOUND",
             error.AuthFailed => "AUTH_FAILED",
             error.TokenExpired => "TOKEN_EXPIRED",
             error.PermissionDenied => "PERMISSION_DENIED",
@@ -573,18 +574,7 @@ pub const MessageHandler = struct {
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {
-        var candidate: u64 = 1;
-        while (candidate != 0) : (candidate += 1) {
-            var exists = false;
-            for (conn.subscription_ids.items) |existing| {
-                if (existing == candidate) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists) return candidate;
-        }
-        return error.SubscriptionIdExhausted;
+        return conn.allocateSubscriptionId();
     }
 
     fn handleStoreSubscribe(

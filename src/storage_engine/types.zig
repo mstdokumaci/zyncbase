@@ -91,6 +91,17 @@ pub const TypedValue = union(enum) {
     blob: []const u8, // Owned (for arrays/complex)
     nil: void,
 
+    pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
+        return switch (self) {
+            .integer => |v| .{ .integer = v },
+            .real => |v| .{ .real = v },
+            .text => |s| .{ .text = try allocator.dupe(u8, s) },
+            .boolean => |b| .{ .boolean = b },
+            .blob => |b| .{ .blob = try allocator.dupe(u8, b) },
+            .nil => .nil,
+        };
+    }
+
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {
             .text => |s| allocator.free(s),

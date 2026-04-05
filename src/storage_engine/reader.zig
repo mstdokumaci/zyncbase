@@ -190,7 +190,7 @@ pub fn buildSelectQuery(
             errdefer sv_1.deinit(allocator);
             try values.append(allocator, sv_1);
 
-            const sv_2 = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+            const sv_2 = try sv_1.clone(allocator);
             errdefer sv_2.deinit(allocator);
             try values.append(allocator, sv_2);
 
