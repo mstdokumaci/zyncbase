@@ -179,16 +179,16 @@ pub fn createStoreSubscribeMessage(
     namespace: []const u8,
     collection: []const u8,
     filter: msgpack_utils.Payload,
-    subscription_id: u64,
+    _subscription_id: u64,
 ) ![]u8 {
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
+    _ = _subscription_id;
     try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreSubscribe", allocator));
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
     try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
     try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
-    try p.mapPut("subscription_id", msgpack_utils.Payload.uintToPayload(subscription_id));
 
     // Flat filter fields
     if (filter == .map) {
