@@ -1,10 +1,20 @@
-Store API Reference handles synchronized data validated against [Schema persisted to SQLite synchronized across clients Table of Contents Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access Target items properties dot-notation arrays `store.get(path) Read value state tree```typescript
+Store API Reference handles synchronized data validated against [Schema.md persisted to SQLite synchronized across clients Table of Contents [Direct Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access (CRUD Target items properties using dot-notation arrays strict rules path Path Target Depth Allowed Operations Behavior **Collection**'users `1` `create` `query `listen` **Append-only `set `remove entire collection **Document**.u1 `2` `get` `set `remove `listen CRUD** `set` upserts `remove` deletes **Field**.u1.name `3+` `get` `set `listen **Updates clear field `set to `null` `remove` forbidden `store.create(collection value)` Creates new document SDK generates time-sortable ID (UUIDv7) calls `set````typescript
+// ID is generated locally for immediate optimistic UI rendering
+const id = client.store.create('elements', { type: 'rect', x: 10 })
+````string generated ID `store.get(path value state tree```typescript
 const element = client.store.get('elements.rect-1')
-```**Returns** by path depth): **Array of Objects** path points to collection.store.get('users `Array<User> **Single specific document'users.u1 **Scalar value** path specific field.u1.name `string `undefined path not found `store.set(path, value)` Write value applied locally synced Reverted if server rejects **Conflict Resolution** Server-Time Last-Write-Wins (LWW) at Path level```typescript
-client.store.set('user.name', 'Alice')
-````set()` fire-and-forget errors reported via `client.on('error) See [Error Handling-propagation). calling `set()` document path `elements.rect-1 SDK extracts ID merges into stored object include `id` in value `void` `store.remove(path) Removes value specified path```typescript
+```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar value** specific field `string `undefined path not found `store.set(path, value) Write value or upsert document **Optimistic applied locally synced Reverted if server rejects **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null triggers schema validation field required```typescript
+// Upsert a full document. ID is extracted from path if needed.
+client.store.set('users.u1', { name: 'Alice', status: 'active' })
+
+// Update a specific field
+client.store.set('users.u1.status', 'offline')
+
+// Clear an optional field (instead of remove)
+client.store.set('users.u1.address', null)
+```Server-Time Last-Write-Wins (LWW) Path level `set() fire-and-forget errors reported via `client.on('error) [Error Handling `void `store.remove(path) Deletes document target 2) Targeting collection 1) field 3+) throws error remove field use `store.set(path, null)```typescript
 client.store.remove('elements.rect-1')
-````store.listen(path callback updates specific path```typescript
+````remove() fire-and-forget errors reported via `client.on('error [Error Handling-propagation). `void` `store.listen(path callback)` updates specific path```typescript
 const unlisten = client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
@@ -22,7 +32,7 @@ if (users.nextCursor) {
     limit: 50
   })
 }
-```**Parameters `collection Name query 'users 'events `options` Query options `where` Filter conditions `orderBy Sort order `limit` Max results return `after` Opaque token next page `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(collection options callback) Subscribe filtered query results-time).```typescript
+```**Parameters `collection Name query 'users 'events `options` Query options `where` Filter conditions `orderBy Sort order `limit` Max results return > 0 `after` Opaque token next page `Promise<Array nextCursor string null standard JavaScript Array additional `nextCursor` property `store.subscribe(collection options callback) Subscribe filtered query results-time).```typescript
 const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
   where: { status: { eq: 'active' } },
   limit: 50
@@ -37,7 +47,15 @@ await client.store.batch([
   { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
   { op: 'remove', path: 'temporary_locks.123' }
 ])
-```**Limits** Max 500 operations per batch Only `set `remove` allowed Path Syntax (Strings vs Arrays methods accept dot-notation strings Arrays Array canonical format Addressing Data Paths variadic follow logical progression from collections to documents specific fields Target Pattern Array Dot Example **Collection**[collection]'users' **Document**[collection, id'users' 'u1'.u1' **Field**[collection, id, field]'users 'name'users.u1.name' **Nested Field**[collection, id ...fields]'users' 'u1 'address 'city'users.u1.address.city' Why use Arrays? preferred dealing with variables IDs dots```typescript
+```Max 500 operations per batch `set `remove allowed Utilities `client.utils.id() Generates time-sortable UID or client Useful generating IDs batch operations `store.create` relational keys set```typescript
+const userId = client.utils.id();
+const profileId = client.utils.id();
+
+client.store.batch([
+  { op: 'set', path: `users.${userId}`, value: { name: 'Alice' } },
+  { op: 'set', path: `profiles.${profileId}`, value: { user_id: userId } }
+])
+```Path Syntax (Strings vs Arrays methods accept dot-notation strings Arrays Array canonical format Addressing Data Paths variadic follow logical progression from collections to documents specific fields Target Pattern Array Dot Example **Collection**[collection]`['users']` **Document**[collection, id'users' 'u1'.u1' **Field**[collection, id, field]'users' 'u1 'name'users.u1.name' **Nested Field**[collection, id, ...fields]'users' 'u1 'address 'city''users.u1.address.city' Why use Arrays? preferred dealing with variables IDs dots```typescript
 const userId = 'alice.smith' // Dot in ID!
 
 // ❌ Dot-notation breaks (ambiguous)

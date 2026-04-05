@@ -64,14 +64,14 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   ],
   "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
   "limit":   50,
-  "after":   "eyJpZCI6... "
+  "after":   "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id]))
 }
 ```"ok"```
 {
   "type":       "ok",
   "id":         6,
   "value":      [ ... ],    // Array of matching items
-  "nextCursor": "eyJpZCI6... " // Opaque token for next page, null if end
+  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id])) or null
 }
 ````StoreSubscribe filtered query results real `store.subscribe(collection opts cb```
 {
@@ -88,21 +88,32 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type":       "ok",
   "id":         7,
-  "subId":      "sub-def-456",
+  "subId":      456,
   "value":      [ ... ],
-  "hasMore":    true
+  "hasMore":    true,
+  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
 }
 ````StoreLoadMore historical data subscription```
 {
-  "type":  "StoreLoadMore",
-  "id":    8,
-  "subId": "sub-def-456"
+  "type":       "StoreLoadMore",
+  "id":         8,
+  "subId":      456,
+  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
 }
-```"ok server responds `ok` message pushes `StoreDelta` additional items After subscription pushes `StoreDelta messages query result changes `StoreUnsubscribe` Stop updates query subscription```
+```"ok"```
+{
+  "type":       "ok",
+  "id":         8,
+  "subId":      456,
+  "value":      [ ... ],
+  "hasMore":    true,
+  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+}
+```subscription server pushes `StoreDelta query result changes `StoreUnsubscribe Stop updates subscription```
 {
   "type":  "StoreUnsubscribe",
   "id":    9,
-  "subId": "sub-def-456"
+  "subId": 456
 }
 ```"ok"```
 {
@@ -279,4 +290,4 @@ Origin: https://app.example.com
   "type":    "ok",
   "allowed": true
 }
-```Message Summary Direction SDK method Response C→S `StoreSet` `store.set(path value) `ok` C→S `StoreRemove.remove(path) `ok` C→S `StoreBatch `store.batch(ops `ok` C→S `StoreQuery` `store.get(path).query(collection opts) `ok` `nextCursor C→S `StoreSubscribe` `store.listen(path.subscribe(collection opts `ok `subId `value `hasMore` C→S `StoreUnsubscribe` `ok C→S `StoreLoadMore`.loadMore() `ok` `StoreDelta` C→S `PresenceSet`.set(data) `ok` C→S `PresenceSubscribe(cb)` `ok `subId` `users` C→S `PresenceUnsubscribe` `ok C→S `PresenceRemove` `presence.remove()` `ok` C→S `StoreSetNamespace` `client.setStoreNamespace(ns) `ok` C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` Push `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
+```Message Summary Direction SDK method Response C→S `StoreSet` `store.set(path value) `ok` C→S `StoreRemove `store.remove(path) `ok` C→S `StoreBatch `store.batch(ops `ok` C→S `StoreQuery` `store.get(path).query(collection opts `ok `nextCursor C→S `StoreSubscribe` `store.listen(path.subscribe(collection `ok `subId `value `hasMore C→S `StoreUnsubscribe` function `ok C→S `StoreLoadMore`.loadMore() `ok `subId `value `hasMore `nextCursor C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe`.subscribe(cb)` `ok `subId `users` C→S `PresenceUnsubscribe` `ok C→S `PresenceRemove`.remove() `ok` C→S `StoreSetNamespace` `client.setStoreNamespace(ns) `ok` C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` Push `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
