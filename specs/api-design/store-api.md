@@ -130,7 +130,7 @@ if (users.nextCursor) {
 - `options` (object) - Query options:
   - `where` (object) - Filter conditions
   - `orderBy` (object) - Sort order
-  - `limit` (number) - Max results to return
+  - `limit` (number) - Max results to return (must be > 0)
   - `after` (string) - Opaque token for the next page (cursor)
 
 **Returns**: `Promise<Array & { nextCursor: string | null }>` - A standard JavaScript Array with an additional `nextCursor` property.

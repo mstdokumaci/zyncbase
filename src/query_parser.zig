@@ -231,6 +231,7 @@ pub fn parseQueryFilter(
             } else if (value == .int and value.int >= 0) {
                 limit = @intCast(value.int);
             }
+            if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
             if (after) |old| old.deinit(allocator);

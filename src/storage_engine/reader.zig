@@ -163,15 +163,21 @@ pub fn buildSelectQuery(
             // Compound cursor boundary:
             // ASC  => sort_field > ? OR (sort_field = ? AND id > ?)
             // DESC => sort_field < ? OR (sort_field = ? AND id < ?)
-            try sql_buf.appendSlice(allocator, "(");
-            try sql_buf.appendSlice(allocator, sql_field);
-            try sql_buf.appendSlice(allocator, " ");
-            try sql_buf.appendSlice(allocator, op);
-            try sql_buf.appendSlice(allocator, " ? OR (");
-            try sql_buf.appendSlice(allocator, sql_field);
-            try sql_buf.appendSlice(allocator, " = ? AND id ");
-            try sql_buf.appendSlice(allocator, op);
-            try sql_buf.appendSlice(allocator, " ?))");
+            if (std.mem.eql(u8, sort_field, "id")) {
+                try sql_buf.appendSlice(allocator, "id ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " ?");
+            } else {
+                try sql_buf.appendSlice(allocator, "(");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, " ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " ? OR (");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, " = ? AND id ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " ?))");
+            }
 
             // Find sort field type for correct binding
             var sort_ft: schema_manager.FieldType = .text;
@@ -186,17 +192,23 @@ pub fn buildSelectQuery(
             if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
             if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
 
-            const sv_1 = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
-            errdefer sv_1.deinit(allocator);
-            try values.append(allocator, sv_1);
+            if (std.mem.eql(u8, sort_field, "id")) {
+                const ci = try allocator.dupe(u8, cursor.id);
+                errdefer allocator.free(ci);
+                try values.append(allocator, TypedValue{ .text = ci });
+            } else {
+                const sv_1 = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+                errdefer sv_1.deinit(allocator);
+                try values.append(allocator, sv_1);
 
-            const sv_2 = try sv_1.clone(allocator);
-            errdefer sv_2.deinit(allocator);
-            try values.append(allocator, sv_2);
+                const sv_2 = try sv_1.clone(allocator);
+                errdefer sv_2.deinit(allocator);
+                try values.append(allocator, sv_2);
 
-            const ci = try allocator.dupe(u8, cursor.id);
-            errdefer allocator.free(ci);
-            try values.append(allocator, TypedValue{ .text = ci });
+                const ci = try allocator.dupe(u8, cursor.id);
+                errdefer allocator.free(ci);
+                try values.append(allocator, TypedValue{ .text = ci });
+            }
         }
 
         try sql_buf.appendSlice(allocator, ")");
@@ -700,9 +712,7 @@ pub fn execQuery(
         const limit: usize = @intCast(limit_u32);
 
         if (arr.items.len > limit) {
-            if (limit > 0) {
-                next_cursor_arr = try extractCursorTupleFromRow(allocator, arr.items[limit - 1], sort_field);
-            }
+            next_cursor_arr = try extractCursorTupleFromRow(allocator, arr.items[limit - 1], sort_field);
 
             var i: usize = limit;
             while (i < arr.items.len) : (i += 1) {

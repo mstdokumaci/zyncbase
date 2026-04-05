@@ -109,7 +109,16 @@ pub const SubscriptionEngine = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, collection, filter);
+        // 1. Create a cleaned, cursor-less filter to represent the shared filter identity.
+        // SubscriptionGroups are divided by filter conditions, NOT by the subscriber's current cursor.
+        var shared_filter = try filter.clone(self.allocator);
+        defer shared_filter.deinit(self.allocator);
+        if (shared_filter.after) |after_cursor| {
+            after_cursor.deinit(self.allocator);
+            shared_filter.after = null;
+        }
+
+        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, collection, shared_filter);
         defer self.allocator.free(filter_key);
 
         var group_id: u64 = 0;
@@ -127,19 +136,14 @@ pub const SubscriptionEngine = struct {
             errdefer self.allocator.free(ns_copy);
             const coll_copy = try self.allocator.dupe(u8, collection);
             errdefer self.allocator.free(coll_copy);
-            var filter_copy = try filter.clone(self.allocator);
-            errdefer filter_copy.deinit(self.allocator);
-            // Cursor state is per-subscriber and must not be embedded in shared group filters.
-            if (filter_copy.after) |after_cursor| {
-                after_cursor.deinit(self.allocator);
-                filter_copy.after = null;
-            }
+            var group_filter = try shared_filter.clone(self.allocator);
+            errdefer group_filter.deinit(self.allocator);
 
             const group = SubscriptionGroup{
                 .id = group_id,
                 .namespace = ns_copy,
                 .collection = coll_copy,
-                .filter = filter_copy,
+                .filter = group_filter,
             };
             try self.groups.put(self.allocator, group_id, group);
             try self.groups_by_filter.put(self.allocator, try self.allocator.dupe(u8, filter_key), group_id);
