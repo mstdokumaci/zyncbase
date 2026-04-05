@@ -63,6 +63,9 @@ pub fn buildInsertOrReplaceOp(
     }
     // Always update updated_at
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at");
+    if (change_capture) {
+        try sql_buf.appendSlice(allocator, " RETURNING *");
+    }
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -149,8 +152,8 @@ pub fn buildUpdateFieldOp(
         \\VALUES (?, ?, {s}, ?, ?)
         \\ON CONFLICT(id, namespace_id) DO UPDATE SET
         \\  {s} = excluded.{s},
-        \\  updated_at = excluded.updated_at
-    , .{ table, field, field_placeholder, field, field });
+        \\  updated_at = excluded.updated_at {s}
+    , .{ table, field, field_placeholder, field, field, if (change_capture) "RETURNING *" else "" });
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);

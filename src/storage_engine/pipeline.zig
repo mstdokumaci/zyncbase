@@ -91,6 +91,7 @@ pub fn executeBatch(
     for (ops) |op| {
         switch (op) {
             .insert => |iop| {
+                const table_metadata = sm.getTable(iop.table) orelse return StorageError.UnknownTable;
                 var old_row: ?msgpack.Payload = null;
                 if (iop.change_capture) {
                     const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache);
@@ -100,18 +101,14 @@ pub fn executeBatch(
                         std.log.err("Failed to capture old state (pre-INSERT) for {s}: {}", .{ iop.table, err });
                     }
                 }
-                executeInsert(allocator, conn, iop) catch |err| {
+                const maybe_new_row = executeInsert(allocator, conn, iop, table_metadata.table.*) catch |err| {
                     if (old_row) |*r| r.free(allocator);
                     const classified_err = reader.classifyError(err);
                     reader.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
                     return classified_err;
                 };
+
                 if (iop.change_capture) {
-                    const maybe_new_row = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache) catch |err| {
-                        std.log.err("Failed to capture new state (post-INSERT) for {s}: {}", .{ iop.table, err });
-                        if (old_row) |*r| r.free(allocator);
-                        continue;
-                    };
                     if (maybe_new_row) |*new_row| {
                         const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
                         pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row.*) catch |err| {
@@ -120,12 +117,14 @@ pub fn executeBatch(
                             new_row.free(allocator);
                         };
                     } else {
-                        std.log.err("Failed to capture new state for {s} after successful INSERT (not found)", .{iop.table});
+                        std.log.err("Failed to capture new state (post-INSERT) via RETURNING for {s}", .{iop.table});
                         if (old_row) |*r| r.free(allocator);
+                        continue;
                     }
                 }
             },
             .update => |uop| {
+                const table_metadata = sm.getTable(uop.table) orelse return StorageError.UnknownTable;
                 var old_row: ?msgpack.Payload = null;
                 if (uop.change_capture) {
                     const capture_res = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache);
@@ -135,18 +134,14 @@ pub fn executeBatch(
                         std.log.err("Failed to capture old state (pre-UPDATE) for {s}: {}", .{ uop.table, err });
                     }
                 }
-                executeUpdate(allocator, conn, uop) catch |err| {
+                const maybe_new_row = executeUpdate(allocator, conn, uop, table_metadata.table.*) catch |err| {
                     if (old_row) |*r| r.free(allocator);
                     const classified_err = reader.classifyError(err);
                     reader.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
                     return classified_err;
                 };
+
                 if (uop.change_capture) {
-                    const maybe_new_row = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache) catch |err| {
-                        std.log.err("Failed to capture new state (post-UPDATE) for {s}: {}", .{ uop.table, err });
-                        if (old_row) |*r| r.free(allocator);
-                        continue;
-                    };
                     if (maybe_new_row) |*new_row| {
                         pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row.*) catch |err| {
                             std.log.err("Failed to capture row change: {}", .{err});
@@ -154,8 +149,9 @@ pub fn executeBatch(
                             new_row.free(allocator);
                         };
                     } else {
-                        std.log.err("Failed to capture new state for {s} after successful UPDATE (not found)", .{uop.table});
+                        std.log.err("Failed to capture new state (post-UPDATE) via RETURNING for {s}", .{uop.table});
                         if (old_row) |*r| r.free(allocator);
+                        continue;
                     }
                 }
             },
@@ -519,7 +515,8 @@ pub fn executeInsert(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
-) !void {
+    table_schema: schema_manager.Table,
+) !?msgpack.Payload {
     const sql = op.sql;
     var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
     defer stmt.deinit();
@@ -546,14 +543,19 @@ pub fn executeInsert(
     bind_idx += 1;
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
-    if (rc != sqlite.c.SQLITE_DONE) return reader.classifyStepError(conn);
+    if (op.change_capture and rc == sqlite.c.SQLITE_ROW) {
+        return try reader.decodeRow(allocator, stmt, table_schema);
+    }
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return reader.classifyStepError(conn);
+    return null;
 }
 
 pub fn executeUpdate(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
-) !void {
+    table_schema: schema_manager.Table,
+) !?msgpack.Payload {
     const sql = op.sql;
     var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
     defer stmt.deinit();
@@ -570,7 +572,11 @@ pub fn executeUpdate(
     if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
-    if (rc != sqlite.c.SQLITE_DONE) return reader.classifyStepError(conn);
+    if (op.change_capture and rc == sqlite.c.SQLITE_ROW) {
+        return try reader.decodeRow(allocator, stmt, table_schema);
+    }
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return reader.classifyStepError(conn);
+    return null;
 }
 
 pub fn executeDelete(

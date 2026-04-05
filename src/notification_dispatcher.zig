@@ -69,29 +69,53 @@ pub const NotificationDispatcher = struct {
         var common = std.ArrayListUnmanaged(u8).empty;
         const writer = common.writer(alloc);
 
-        // MsgPack Map header (FixMap 0x85) for common prefix of the notification message
-        const setup = struct {
-            fn run(c: OwnedRowChange, a: Allocator, w: anytype) !void {
-                try w.writeByte(0x85);
-                try msgpack.encode(try Payload.strToPayload("type", a), w);
-                try msgpack.encode(try Payload.strToPayload("StoreDelta", a), w);
-                try msgpack.encode(try Payload.strToPayload("namespace", a), w);
-                try msgpack.encode(try Payload.strToPayload(c.namespace, a), w);
-                try msgpack.encode(try Payload.strToPayload("collection", a), w);
-                try msgpack.encode(try Payload.strToPayload(c.collection, a), w);
-                try msgpack.encode(try Payload.strToPayload("value", a), w);
+        const msg_fixmap_5: []const u8 = "\x85"; // FixMap w/ 5 elements
+        const msg_key_type: []const u8 = "\xa4type";
+        const msg_val_store_delta: []const u8 = "\xaaStoreDelta";
+        const msg_key_namespace: []const u8 = "\xa9namespace";
+        const msg_key_collection: []const u8 = "\xacollection";
+        const msg_key_value: []const u8 = "\xa5value";
+        const msg_key_sub_id: []const u8 = "\xafsubscription_id";
 
-                const val_p = if (c.operation == .delete) .nil else c.new_row orelse .nil;
-                try msgpack.encode(val_p, w);
-
-                try msgpack.encode(try Payload.strToPayload("subscription_id", a), w);
+        const encoder = struct {
+            fn writeStr(w: anytype, s: []const u8) !void {
+                if (s.len <= 31) {
+                    try w.writeByte(0xa0 | @as(u8, @intCast(s.len)));
+                } else if (s.len <= 0xff) {
+                    try w.writeByte(0xd9);
+                    try w.writeByte(@as(u8, @intCast(s.len)));
+                } else if (s.len <= 0xffff) {
+                    try w.writeByte(0xda);
+                    try w.writeInt(u16, @as(u16, @intCast(s.len)), .big);
+                } else {
+                    try w.writeByte(0xdb);
+                    try w.writeInt(u32, @as(u32, @intCast(s.len)), .big);
+                }
+                try w.writeAll(s);
             }
-        }.run;
-
-        setup(change, alloc, writer) catch |err| {
-            std.log.err("NotificationDispatcher prefix encoding failed: {}", .{err});
-            return;
         };
+
+        const encode_res = blk: {
+            writer.writeAll(msg_fixmap_5) catch break :blk false;
+            writer.writeAll(msg_key_type) catch break :blk false;
+            writer.writeAll(msg_val_store_delta) catch break :blk false;
+            writer.writeAll(msg_key_namespace) catch break :blk false;
+            encoder.writeStr(writer, change.namespace) catch break :blk false;
+            writer.writeAll(msg_key_collection) catch break :blk false;
+            encoder.writeStr(writer, change.collection) catch break :blk false;
+            writer.writeAll(msg_key_value) catch break :blk false;
+
+            const val_p = if (change.operation == .delete) Payload.nil else change.new_row orelse Payload.nil;
+            msgpack.encode(val_p, writer) catch break :blk false;
+
+            writer.writeAll(msg_key_sub_id) catch break :blk false;
+            break :blk true;
+        };
+
+        if (!encode_res) {
+            std.log.err("NotificationDispatcher prefix encoding failed for {s}:{s}", .{ change.namespace, change.collection });
+            return;
+        }
 
         const prefix = common.items;
         var out = std.ArrayListUnmanaged(u8).empty;

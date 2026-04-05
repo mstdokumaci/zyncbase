@@ -493,6 +493,24 @@ pub fn appendConditionSql(
     }
 }
 
+pub fn decodeRow(
+    allocator: Allocator,
+    stmt: sqlite.DynamicStatement,
+    table_schema: schema_manager.Table,
+) !msgpack.Payload {
+    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+    defer allocator.free(col_contexts);
+
+    var map = msgpack.Payload.mapPayload(allocator);
+    errdefer map.free(allocator);
+
+    for (col_contexts, 0..) |ctx, i| {
+        const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
+        try map.mapPut(ctx.name, val);
+    }
+    return map;
+}
+
 pub fn execSelectDocument(
     allocator: Allocator,
     reader: *sqlite.Db,
@@ -516,17 +534,7 @@ pub fn execSelectDocument(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
 
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
-    defer allocator.free(col_contexts);
-
-    var map = msgpack.Payload.mapPayload(allocator);
-    errdefer map.free(allocator);
-
-    for (col_contexts, 0..) |ctx, i| {
-        const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
-        try map.mapPut(ctx.name, val);
-    }
-    return map;
+    return try decodeRow(allocator, stmt, table_schema);
 }
 
 pub fn execSelectScalar(
