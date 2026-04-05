@@ -560,19 +560,6 @@ pub const MessageHandler = struct {
         return encoded;
     }
 
-    fn cursorFromTuplePayload(allocator: Allocator, tuple: msgpack.Payload) !query_parser.Cursor {
-        if (tuple != .arr or tuple.arr.len != 2) return error.InvalidMessageFormat;
-        if (tuple.arr[1] != .str) return error.InvalidMessageFormat;
-
-        const sort_value = try tuple.arr[0].deepClone(allocator);
-        errdefer sort_value.free(allocator);
-
-        return query_parser.Cursor{
-            .sort_value = sort_value,
-            .id = try allocator.dupe(u8, tuple.arr[1].str.value()),
-        };
-    }
-
     fn generateSubscriptionId(conn: *Connection) !u64 {
         return conn.allocateSubscriptionId();
     }
@@ -599,12 +586,7 @@ pub const MessageHandler = struct {
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
 
-        const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
-            .connection_id = conn.id,
-            .id = sub_id,
-        };
-
-        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results, sub_key);
+        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
     }
 
     fn handleStoreUnsubscribe(
@@ -643,7 +625,7 @@ pub const MessageHandler = struct {
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
 
-        return self.buildQueryResponse(arena_allocator, msg_id, null, &results, null);
+        return self.buildQueryResponse(arena_allocator, msg_id, null, &results);
     }
 
     fn handleStoreLoadMore(
@@ -666,15 +648,17 @@ pub const MessageHandler = struct {
             .id = sub_id,
         };
 
-        try self.subscription_engine.setSubscriberCursor(sub_key, requested_cursor);
-
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
+
+        // Inject the requested cursor into the base query for this one-time execution.
+        if (sub_query.filter.after) |old| old.deinit(arena_allocator);
+        sub_query.filter.after = try requested_cursor.clone(arena_allocator);
 
         var results = try self.storage_engine.selectQuery(arena_allocator, sub_query.collection, sub_query.namespace, sub_query.filter);
         defer results.deinit();
 
-        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results, sub_key);
+        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
     }
 
     fn buildQueryResponse(
@@ -683,8 +667,8 @@ pub const MessageHandler = struct {
         msg_id: u64,
         sub_id: ?u64,
         results: *storage_mod.ManagedPayload,
-        sub_key: ?subscription_mod.SubscriptionGroup.SubscriberKey,
     ) ![]const u8 {
+        _ = self;
         var response = msgpack.Payload.mapPayload(arena_allocator);
         defer response.free(arena_allocator);
 
@@ -711,17 +695,8 @@ pub const MessageHandler = struct {
             const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
             defer arena_allocator.free(encoded_cursor);
             try response.mapPut("nextCursor", try msgpack.Payload.strToPayload(encoded_cursor, arena_allocator));
-
-            if (sub_key) |key| {
-                const next_cursor = try cursorFromTuplePayload(arena_allocator, cursor_tuple);
-                defer next_cursor.deinit(arena_allocator);
-                try self.subscription_engine.setSubscriberCursor(key, next_cursor);
-            }
         } else {
             try response.mapPut("nextCursor", .nil);
-            if (sub_key) |key| {
-                try self.subscription_engine.setSubscriberCursor(key, null);
-            }
         }
 
         return try msgpack.encodePayload(arena_allocator, response);

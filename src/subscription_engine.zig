@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const query_parser = @import("query_parser.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
-const Cursor = query_parser.Cursor;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 
@@ -58,8 +57,6 @@ pub const SubscriptionEngine = struct {
     groups_by_collection: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u64)) = .empty,
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
-    /// (conn_id, sub_id) -> last pagination cursor for this subscriber
-    subscriber_cursors: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, Cursor) = .empty,
 
     next_group_id: u64 = 1,
     mutex: std.Thread.RwLock = .{},
@@ -85,16 +82,10 @@ pub const SubscriptionEngine = struct {
             g.deinit(self.allocator);
         }
 
-        var it_cursors = self.subscriber_cursors.valueIterator();
-        while (it_cursors.next()) |cursor| {
-            cursor.deinit(self.allocator);
-        }
-
         self.groups_by_filter.deinit(self.allocator);
         self.groups_by_collection.deinit(self.allocator);
         self.groups.deinit(self.allocator);
         self.active_subs.deinit(self.allocator);
-        self.subscriber_cursors.deinit(self.allocator);
     }
 
     /// Registers a new subscriber to a query. Returns true if first sub in group.
@@ -163,14 +154,6 @@ pub const SubscriptionEngine = struct {
         try group_ptr.subscribers.put(self.allocator, sub_key, {});
         try self.active_subs.put(self.allocator, sub_key, group_id);
 
-        if (self.subscriber_cursors.fetchRemove(sub_key)) |entry| {
-            var old_cursor = entry.value;
-            old_cursor.deinit(self.allocator);
-        }
-        if (filter.after) |after_cursor| {
-            try self.subscriber_cursors.put(self.allocator, sub_key, try after_cursor.clone(self.allocator));
-        }
-
         return first_in_group;
     }
 
@@ -184,10 +167,6 @@ pub const SubscriptionEngine = struct {
         const group_ptr = self.groups.getPtr(group_id) orelse return;
         _ = group_ptr.subscribers.remove(sub_key);
         _ = self.active_subs.remove(sub_key);
-        if (self.subscriber_cursors.fetchRemove(sub_key)) |entry| {
-            var old_cursor = entry.value;
-            old_cursor.deinit(self.allocator);
-        }
 
         if (group_ptr.subscribers.count() == 0) {
             // Group became empty - remove it
@@ -260,37 +239,11 @@ pub const SubscriptionEngine = struct {
         var filter_copy = try group.filter.clone(allocator);
         errdefer filter_copy.deinit(allocator);
 
-        if (self.subscriber_cursors.get(sub_key)) |cursor| {
-            if (filter_copy.after) |old_after| old_after.deinit(allocator);
-            filter_copy.after = try cursor.clone(allocator);
-        }
-
         return SubscriptionQuery{
             .namespace = ns_copy,
             .collection = coll_copy,
             .filter = filter_copy,
         };
-    }
-
-    /// Sets/overwrites the per-subscriber pagination cursor.
-    pub fn setSubscriberCursor(
-        self: *SubscriptionEngine,
-        sub_key: SubscriptionGroup.SubscriberKey,
-        cursor: ?Cursor,
-    ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (!self.active_subs.contains(sub_key)) return error.SubscriptionNotFound;
-
-        if (self.subscriber_cursors.fetchRemove(sub_key)) |entry| {
-            var old_cursor = entry.value;
-            old_cursor.deinit(self.allocator);
-        }
-
-        if (cursor) |c| {
-            try self.subscriber_cursors.put(self.allocator, sub_key, try c.clone(self.allocator));
-        }
     }
 
     /// Checks if there are any active subscriptions for the given collection/namespace.
