@@ -15,6 +15,23 @@ The Store API handles durable, synchronized data. Everything in this namespace i
 
 Target specific items or properties using dot-notation or arrays.
 
+There are strict rules on what you can write based on the depth of the path:
+
+| Path Target | Depth | Allowed Operations | Behavior |
+| :--- | :--- | :--- | :--- |
+| **Collection** (`'users'`) | `1` | `create`, `query`, `listen` | **Append-only for writes**. You cannot `set` or `remove` an entire collection. |
+| **Document** (`'users.u1'`) | `2` | `get`, `set`, `remove`, `listen` | **Full CRUD**. `set` upserts the document, `remove` deletes it. |
+| **Field** (`'users.u1.name'`) | `3+` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
+
+### `store.create(collection, value)`
+Creates a new document within a collection. The SDK synchronously generates a time-sortable ID (UUIDv7) and calls `set` under the hood.
+
+```typescript
+// ID is generated locally for immediate optimistic UI rendering
+const id = client.store.create('elements', { type: 'rect', x: 10 })
+```
+**Returns**: `string` (The generated ID)
+
 ### `store.get(path)`
 Read a value from the state tree.
 ```typescript
@@ -27,23 +44,41 @@ const element = client.store.get('elements.rect-1')
 - `undefined`: If the path is not found
 
 ### `store.set(path, value)`
-Write a value. **Optimistic by default**: applied locally first, then synced. Reverted if the server rejects it.
-**Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the Path level.
+Write a value or upsert a document. **Optimistic by default**: applied locally first, then synced. Reverted if the server rejects it.
+
+**Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
+**Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required.
+
 ```typescript
-client.store.set('user.name', 'Alice')
+// Upsert a full document. ID is extracted from path if needed.
+client.store.set('users.u1', { name: 'Alice', status: 'active' })
+
+// Update a specific field
+client.store.set('users.u1.status', 'offline')
+
+// Clear an optional field (instead of remove)
+client.store.set('users.u1.address', null)
 ```
 
-**Error Handling**: Since `set()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
+**Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the Path level.
 
-**ID Extraction**: When calling `set()` on a document path (e.g., `elements.rect-1`), the SDK automatically extracts the ID (`rect-1`) from the path and merges it into the stored object. You do not need to include `id` in the value.
+**Error Handling**: Since `set()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
 
 **Returns**: `void`
 
 ### `store.remove(path)`
-Removes a value at the specified path.
+Deletes an entire document.
+
+**Path Constraints**: Must target a **Document** (exactly depth 2). Targeting a collection (depth 1) or a field (depth 3+) throws an error. To remove a field, use `store.set(path, null)`.
+
 ```typescript
 client.store.remove('elements.rect-1')
 ```
+
+**Error Handling**: Since `remove()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
+
+**Returns**: `void`
+
 
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
@@ -141,6 +176,23 @@ await client.store.batch([
 **Limits**: 
 - Max 500 operations per batch.
 - Only `set` and `remove` allowed.
+
+---
+
+## Utilities
+
+### `client.utils.id()`
+Generates a time-sortable UID (UUIDv7 or ULID) synchronously on the client. Useful for generating IDs for batch operations where `store.create` cannot be used directly because relational keys need to be explicitly set.
+
+```typescript
+const userId = client.utils.id();
+const profileId = client.utils.id();
+
+client.store.batch([
+  { op: 'set', path: `users.${userId}`, value: { name: 'Alice' } },
+  { op: 'set', path: `profiles.${profileId}`, value: { user_id: userId } }
+])
+```
 
 ---
 
