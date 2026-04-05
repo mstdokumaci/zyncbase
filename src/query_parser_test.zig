@@ -99,11 +99,9 @@ test "query with orderBy and after" {
     order_inner[1] = msgpack.Payload.uintToPayload(1); // desc
     try root.mapPut("orderBy", .{ .arr = order_inner });
 
-    // after: ["val", "cursor_token"]
-    var after_inner = try allocator.alloc(msgpack.Payload, 2);
-    after_inner[0] = try msgpack.Payload.strToPayload("val", allocator);
-    after_inner[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
-    try root.mapPut("after", .{ .arr = after_inner });
+    // after: Base64(JSON(["val", "cursor_token"]))
+    const after_token = "WyJ2YWwiLCAiY3Vyc29yX3Rva2VuIl0=";
+    try root.mapPut("after", try msgpack.Payload.strToPayload(after_token, allocator));
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
@@ -118,6 +116,27 @@ test "query with orderBy and after" {
     try testing.expectEqualStrings("created_at", filter.order_by.?.field);
     try testing.expectEqual(true, filter.order_by.?.desc);
     try testing.expectEqualStrings("cursor_token", filter.after.?.id);
+}
+
+test "query rejects invalid Base64 after cursor token" {
+    const allocator = testing.allocator;
+
+    var root = msgpack.Payload.mapPayload(allocator);
+    defer root.free(allocator);
+
+    // after: invalid Base64 token
+    try root.mapPut("after", try msgpack.Payload.strToPayload("%%%INVALID_BASE64%%%", allocator));
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "items",
+        .fields = &[_][]const u8{"created_at"},
+    }});
+    defer sm.deinit();
+
+    try testing.expectError(
+        error.InvalidMessageFormat,
+        query_parser.parseQueryFilter(allocator, &sm, "items", root),
+    );
 }
 
 test "isNull condition (no value tuple)" {

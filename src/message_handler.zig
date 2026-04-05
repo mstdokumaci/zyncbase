@@ -518,8 +518,9 @@ pub const MessageHandler = struct {
             error.UnknownField => "FIELD_NOT_FOUND",
             error.TypeMismatch, error.ConstraintViolation => "SCHEMA_VALIDATION_FAILED",
             error.InvalidFieldName => "INVALID_FIELD_NAME",
-            error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat => "INVALID_MESSAGE",
-            error.MissingRequiredFields => "INVALID_MESSAGE_FORMAT",
+            error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => "INVALID_MESSAGE",
+            error.MissingRequiredFields, error.MissingSubscriptionId => "INVALID_MESSAGE_FORMAT",
+            error.SubscriptionNotFound => "SUBSCRIPTION_NOT_FOUND",
             error.AuthFailed => "AUTH_FAILED",
             error.TokenExpired => "TOKEN_EXPIRED",
             error.PermissionDenied => "PERMISSION_DENIED",
@@ -549,6 +550,20 @@ pub const MessageHandler = struct {
         return null;
     }
 
+    fn encodeCursor(allocator: Allocator, cursor: msgpack.Payload) ![]const u8 {
+        const json_cursor = try msgpack.payloadToJson(cursor, allocator);
+        defer allocator.free(json_cursor);
+
+        const encoded_len = std.base64.standard.Encoder.calcSize(json_cursor.len);
+        const encoded = try allocator.alloc(u8, encoded_len);
+        _ = std.base64.standard.Encoder.encode(encoded, json_cursor);
+        return encoded;
+    }
+
+    fn generateSubscriptionId(conn: *Connection) !u64 {
+        return conn.allocateSubscriptionId();
+    }
+
     fn handleStoreSubscribe(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
@@ -556,33 +571,22 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
+        if (payload != .map) return error.InvalidPayload;
         const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
-        const sub_id_p = self.getPayloadFromMap(payload.map, "subscription_id") orelse return error.MissingSubscriptionId;
-        const sub_id: u64 = if (sub_id_p == .uint) sub_id_p.uint else if (sub_id_p == .int) @intCast(sub_id_p.int) else return error.InvalidSubscriptionId;
+        const sub_id = try generateSubscriptionId(conn);
 
         const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, collection, payload);
         defer filter.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
-        try conn.subscription_ids.append(conn.allocator, sub_id);
-
-        var response = msgpack.Payload.mapPayload(arena_allocator);
-        try response.mapPut("type", try msgpack.Payload.strToPayload("StoreSubscribeResponse", arena_allocator));
-        try response.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-        try response.mapPut("subscription_id", msgpack.Payload.uintToPayload(sub_id));
+        try conn.addSubscription(sub_id);
 
         // Snapshot
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
-        if (results.value) |val| {
-            try response.mapPut("value", val);
-            results.value = null; // Transfer ownership to response
-        } else {
-            try response.mapPut("value", msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
-        }
 
-        return try msgpack.encodePayload(arena_allocator, response);
+        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
     }
 
     fn handleStoreUnsubscribe(
@@ -593,18 +597,12 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         if (payload != .map) return error.InvalidPayload;
-        const sub_id_val = self.getPayloadFromMap(payload.map, "subscription_id") orelse return error.MissingSubscriptionId;
-        const sub_id: u64 = if (sub_id_val == .uint) sub_id_val.uint else if (sub_id_val == .int) @intCast(sub_id_val.int) else return error.InvalidSubscriptionId;
+        const sub_id = try self.extractSubId(payload.map);
 
         try self.subscription_engine.unsubscribe(conn.id, sub_id);
 
         // Remove from connection tracking
-        for (conn.subscription_ids.items, 0..) |tracked_id, i| {
-            if (tracked_id == sub_id) {
-                _ = conn.subscription_ids.swapRemove(i);
-                break;
-            }
-        }
+        conn.removeSubscription(sub_id);
 
         return try buildSuccessResponse(arena_allocator, msg_id);
     }
@@ -627,20 +625,7 @@ pub const MessageHandler = struct {
         var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
         defer results.deinit();
 
-        var response = msgpack.Payload.mapPayload(arena_allocator);
-        defer response.free(arena_allocator);
-
-        try response.mapPut("type", try msgpack.Payload.strToPayload("StoreQueryResponse", arena_allocator));
-        try response.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-
-        if (results.value) |val| {
-            try response.mapPut("value", val);
-            results.value = null; // Transfer ownership to response
-        } else {
-            try response.mapPut("value", msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
-        }
-
-        return try msgpack.encodePayload(arena_allocator, response);
+        return self.buildQueryResponse(arena_allocator, msg_id, null, &results);
     }
 
     fn handleStoreLoadMore(
@@ -650,6 +635,80 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        return self.handleStoreQuery(arena_allocator, conn, msg_id, payload);
+        if (payload != .map) return error.InvalidPayload;
+
+        const sub_id = try self.extractSubId(payload.map);
+        const next_cursor_token = self.getStringFromMap(payload.map, "nextCursor") orelse return error.MissingRequiredFields;
+
+        const requested_cursor = try query_parser.parseCursorToken(arena_allocator, next_cursor_token);
+        defer requested_cursor.deinit(arena_allocator);
+
+        const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
+            .connection_id = conn.id,
+            .id = sub_id,
+        };
+
+        var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
+        defer sub_query.deinit(arena_allocator);
+
+        // Inject the requested cursor into the base query for this one-time execution.
+        if (sub_query.filter.after) |old| old.deinit(arena_allocator);
+        sub_query.filter.after = try requested_cursor.clone(arena_allocator);
+
+        var results = try self.storage_engine.selectQuery(arena_allocator, sub_query.collection, sub_query.namespace, sub_query.filter);
+        defer results.deinit();
+
+        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
+    }
+
+    fn buildQueryResponse(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        msg_id: u64,
+        sub_id: ?u64,
+        results: *storage_mod.ManagedPayload,
+    ) ![]const u8 {
+        _ = self;
+        var response = msgpack.Payload.mapPayload(arena_allocator);
+        defer response.free(arena_allocator);
+
+        try response.mapPut("type", try msgpack.Payload.strToPayload("ok", arena_allocator));
+        try response.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+
+        if (sub_id) |sid| {
+            try response.mapPut("subId", msgpack.Payload.uintToPayload(sid));
+        }
+
+        if (results.value) |val| {
+            try response.mapPut("value", val);
+            results.value = null; // Transfer ownership to response
+        } else {
+            try response.mapPut("value", msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
+        }
+
+        const has_more = results.next_cursor_arr != null;
+        if (sub_id != null) {
+            try response.mapPut("hasMore", msgpack.Payload{ .bool = has_more });
+        }
+
+        if (results.next_cursor_arr) |cursor_tuple| {
+            const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
+            defer arena_allocator.free(encoded_cursor);
+            try response.mapPut("nextCursor", try msgpack.Payload.strToPayload(encoded_cursor, arena_allocator));
+        } else {
+            try response.mapPut("nextCursor", .nil);
+        }
+
+        return try msgpack.encodePayload(arena_allocator, response);
+    }
+
+    fn extractSubId(self: *MessageHandler, map: msgpack.Map) !u64 {
+        const sub_id_val = self.getPayloadFromMap(map, "subId") orelse return error.MissingSubscriptionId;
+        return if (sub_id_val == .uint)
+            sub_id_val.uint
+        else if (sub_id_val == .int and sub_id_val.int >= 0)
+            @intCast(sub_id_val.int)
+        else
+            error.InvalidSubscriptionId;
     }
 };

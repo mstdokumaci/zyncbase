@@ -118,14 +118,20 @@ pub const SubscriptionEngine = struct {
             errdefer self.allocator.free(ns_copy);
             const coll_copy = try self.allocator.dupe(u8, collection);
             errdefer self.allocator.free(coll_copy);
-            const filter_copy = try filter.clone(self.allocator);
-            errdefer filter_copy.deinit(self.allocator);
+
+            // Shared filter for the group must NOT contain cursor state.
+            var group_filter = try filter.clone(self.allocator);
+            errdefer group_filter.deinit(self.allocator);
+            if (group_filter.after) |after_cursor| {
+                after_cursor.deinit(self.allocator);
+                group_filter.after = null;
+            }
 
             const group = SubscriptionGroup{
                 .id = group_id,
                 .namespace = ns_copy,
                 .collection = coll_copy,
-                .filter = filter_copy,
+                .filter = group_filter,
             };
             try self.groups.put(self.allocator, group_id, group);
             try self.groups_by_filter.put(self.allocator, try self.allocator.dupe(u8, filter_key), group_id);
@@ -197,6 +203,47 @@ pub const SubscriptionEngine = struct {
                 g.deinit(self.allocator);
             }
         }
+    }
+
+    pub const SubscriptionQuery = struct {
+        namespace: []const u8,
+        collection: []const u8,
+        filter: QueryFilter,
+
+        pub fn deinit(self: *SubscriptionQuery, allocator: Allocator) void {
+            allocator.free(self.namespace);
+            allocator.free(self.collection);
+            self.filter.deinit(allocator);
+        }
+    };
+
+    /// Returns a safe, cloned query context for a subscriber.
+    /// Caller owns the returned data and must call `deinit`.
+    pub fn getSubscriptionQuery(
+        self: *SubscriptionEngine,
+        allocator: Allocator,
+        sub_key: SubscriptionGroup.SubscriberKey,
+    ) !?SubscriptionQuery {
+        self.mutex.lockShared();
+        defer self.mutex.unlockShared();
+
+        const group_id = self.active_subs.get(sub_key) orelse return null;
+        const group = self.groups.get(group_id) orelse return null;
+
+        const ns_copy = try allocator.dupe(u8, group.namespace);
+        errdefer allocator.free(ns_copy);
+
+        const coll_copy = try allocator.dupe(u8, group.collection);
+        errdefer allocator.free(coll_copy);
+
+        var filter_copy = try group.filter.clone(allocator);
+        errdefer filter_copy.deinit(allocator);
+
+        return SubscriptionQuery{
+            .namespace = ns_copy,
+            .collection = coll_copy,
+            .filter = filter_copy,
+        };
     }
 
     /// Checks if there are any active subscriptions for the given collection/namespace.

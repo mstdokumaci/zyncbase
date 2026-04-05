@@ -537,8 +537,23 @@ pub const StorageEngine = struct {
         const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
         defer query_res.deinit(allocator);
 
-        const payload = try reader.execQuery(allocator, &node.conn, query_res.sql, query_res.values, table_metadata.table.*);
-        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
+        const sort_field = if (filter.order_by) |o| o.field else "id";
+        const exec_res = try reader.execQuery(
+            allocator,
+            &node.conn,
+            query_res.sql,
+            query_res.values,
+            table_metadata.table.*,
+            filter.limit,
+            sort_field,
+        );
+
+        return ManagedPayload{
+            .value = exec_res.data,
+            .next_cursor_arr = exec_res.next_cursor_arr,
+            .handle = null,
+            .allocator = allocator,
+        };
     }
 
     /// DELETE a document from a table.

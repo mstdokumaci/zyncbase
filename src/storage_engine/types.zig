@@ -62,14 +62,20 @@ pub const ColumnValue = struct {
 /// Caller MUST call deinit() to release any potential cache handles.
 pub const ManagedPayload = struct {
     value: ?msgpack.Payload,
+    next_cursor_arr: ?msgpack.Payload = null,
     handle: ?metadata_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
     pub fn deinit(self: *ManagedPayload) void {
         if (self.handle) |*h| {
             h.release();
-        } else if (self.allocator) |alloc| {
-            if (self.value) |*p| p.free(alloc);
+        }
+
+        if (self.allocator) |alloc| {
+            if (self.handle == null) {
+                if (self.value) |*p| p.free(alloc);
+            }
+            if (self.next_cursor_arr) |*cursor| cursor.free(alloc);
         }
     }
 };
@@ -84,6 +90,17 @@ pub const TypedValue = union(enum) {
     boolean: bool,
     blob: []const u8, // Owned (for arrays/complex)
     nil: void,
+
+    pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
+        return switch (self) {
+            .integer => |v| .{ .integer = v },
+            .real => |v| .{ .real = v },
+            .text => |s| .{ .text = try allocator.dupe(u8, s) },
+            .boolean => |b| .{ .boolean = b },
+            .blob => |b| .{ .blob = try allocator.dupe(u8, b) },
+            .nil => .nil,
+        };
+    }
 
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {

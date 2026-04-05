@@ -75,7 +75,7 @@ pub const NotificationDispatcher = struct {
         const msg_key_namespace: []const u8 = "\xa9namespace";
         const msg_key_collection: []const u8 = "\xacollection";
         const msg_key_value: []const u8 = "\xa5value";
-        const msg_key_sub_id: []const u8 = "\xafsubscription_id";
+        const msg_key_sub_id: []const u8 = "\xa5subId";
 
         const encoder = struct {
             fn writeStr(w: anytype, s: []const u8) !void {

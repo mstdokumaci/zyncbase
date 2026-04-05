@@ -73,6 +73,16 @@ pub const QueryResult = struct {
     }
 };
 
+pub const ExecQueryResult = struct {
+    data: msgpack.Payload,
+    next_cursor_arr: ?msgpack.Payload = null,
+
+    pub fn deinit(self: *ExecQueryResult, allocator: Allocator) void {
+        self.data.free(allocator);
+        if (self.next_cursor_arr) |*cursor| cursor.free(allocator);
+    }
+};
+
 pub fn buildSelectQuery(
     allocator: Allocator,
     table_metadata: schema_manager.TableMetadata,
@@ -150,12 +160,19 @@ pub fn buildSelectQuery(
 
             const sql_field = sort_field;
 
-            // SQLite row-value comparison: (sort_field, id) > (?, ?)
-            try sql_buf.appendSlice(allocator, "(");
-            try sql_buf.appendSlice(allocator, sql_field);
-            try sql_buf.appendSlice(allocator, ", id) ");
-            try sql_buf.appendSlice(allocator, op);
-            try sql_buf.appendSlice(allocator, " (?, ?)");
+            // SQLite row-value comparison (requires SQLite 3.15.0+):
+            // (sort_field, id) > (?, ?)
+            if (std.mem.eql(u8, sort_field, "id")) {
+                try sql_buf.appendSlice(allocator, "id ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " ?");
+            } else {
+                try sql_buf.appendSlice(allocator, "(");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, ", id) ");
+                try sql_buf.appendSlice(allocator, op);
+                try sql_buf.appendSlice(allocator, " (?, ?)");
+            }
 
             // Find sort field type for correct binding
             var sort_ft: schema_manager.FieldType = .text;
@@ -170,13 +187,19 @@ pub fn buildSelectQuery(
             if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
             if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
 
-            const sv = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
-            errdefer sv.deinit(allocator);
-            try values.append(allocator, sv);
+            if (std.mem.eql(u8, sort_field, "id")) {
+                const ci = try allocator.dupe(u8, cursor.id);
+                errdefer allocator.free(ci);
+                try values.append(allocator, TypedValue{ .text = ci });
+            } else {
+                const sv = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+                errdefer sv.deinit(allocator);
+                try values.append(allocator, sv);
 
-            const ci = try allocator.dupe(u8, cursor.id);
-            errdefer allocator.free(ci);
-            try values.append(allocator, TypedValue{ .text = ci });
+                const ci = try allocator.dupe(u8, cursor.id);
+                errdefer allocator.free(ci);
+                try values.append(allocator, TypedValue{ .text = ci });
+            }
         }
 
         try sql_buf.appendSlice(allocator, ")");
@@ -194,10 +217,11 @@ pub fn buildSelectQuery(
         try sql_buf.appendSlice(allocator, "id ASC");
     }
 
-    // 4.. LIMIT
+    // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
+        const effective_limit: u32 = if (l == std.math.maxInt(u32)) l else l + 1;
         try sql_buf.appendSlice(allocator, " LIMIT ");
-        try std.fmt.format(sql_buf.writer(allocator), "{}", .{l});
+        try std.fmt.format(sql_buf.writer(allocator), "{}", .{effective_limit});
     }
 
     return QueryResult{
@@ -605,13 +629,40 @@ pub fn execSelectCollection(
     return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
 }
 
+fn extractCursorTupleFromRow(
+    allocator: Allocator,
+    row: msgpack.Payload,
+    sort_field: []const u8,
+) !msgpack.Payload {
+    if (row != .map) return error.InvalidMessageFormat;
+
+    const sort_val = (try row.mapGet(sort_field)) orelse return error.InvalidMessageFormat;
+    const id_val = (try row.mapGet("id")) orelse return error.InvalidMessageFormat;
+
+    const sort_clone = try sort_val.deepClone(allocator);
+    errdefer sort_clone.free(allocator);
+
+    const id_clone = try id_val.deepClone(allocator);
+    errdefer id_clone.free(allocator);
+
+    const tuple_items = try allocator.alloc(msgpack.Payload, 2);
+    errdefer allocator.free(tuple_items);
+
+    tuple_items[0] = sort_clone;
+    tuple_items[1] = id_clone;
+
+    return msgpack.Payload{ .arr = tuple_items };
+}
+
 pub fn execQuery(
     allocator: Allocator,
     db: *sqlite.Db,
     sql: []const u8,
     values: []const TypedValue,
     table_schema: schema_manager.Table,
-) !msgpack.Payload {
+    requested_limit: ?u32,
+    sort_field: []const u8,
+) !ExecQueryResult {
     var stmt = db.prepareDynamic(sql) catch |err| {
         return classifyError(err);
     };
@@ -626,6 +677,9 @@ pub fn execQuery(
         for (arr.items) |item| item.free(allocator);
         arr.deinit(allocator);
     }
+
+    var next_cursor_arr: ?msgpack.Payload = null;
+    errdefer if (next_cursor_arr) |*cursor| cursor.free(allocator);
 
     const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
     defer allocator.free(col_contexts);
@@ -645,5 +699,22 @@ pub fn execQuery(
         try arr.append(allocator, map);
     }
 
-    return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
+    if (requested_limit) |limit_u32| {
+        const limit: usize = @intCast(limit_u32);
+
+        if (arr.items.len > limit) {
+            next_cursor_arr = try extractCursorTupleFromRow(allocator, arr.items[limit - 1], sort_field);
+
+            var i: usize = limit;
+            while (i < arr.items.len) : (i += 1) {
+                arr.items[i].free(allocator);
+            }
+            arr.items.len = limit;
+        }
+    }
+
+    return ExecQueryResult{
+        .data = msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) },
+        .next_cursor_arr = next_cursor_arr,
+    };
 }

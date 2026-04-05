@@ -7,6 +7,7 @@ const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
+const query_parser = @import("query_parser.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -202,7 +203,7 @@ test "Verification: StoreQuery message processing" {
         if (key == .str) {
             const key_str = key.str.value();
             if (std.mem.eql(u8, key_str, "type")) {
-                try testing.expectEqualStrings("StoreQueryResponse", val.str.value());
+                try testing.expectEqualStrings("ok", val.str.value());
                 found_type = true;
             } else if (std.mem.eql(u8, key_str, "value")) {
                 try testing.expect(val == .arr);
@@ -216,6 +217,82 @@ test "Verification: StoreQuery message processing" {
         }
     }
     try testing.expect(found_type and found_value);
+}
+
+test "Verification: StoreQuery includes opaque nextCursor token when more data exists" {
+    const allocator = testing.allocator;
+
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-query-pagination", &table_defs);
+    defer app.deinit();
+
+    // Insert two rows so a limited query must return nextCursor
+    const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
+    defer val_a.free(allocator);
+    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_a }};
+    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a, false);
+
+    const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
+    defer val_b.free(allocator);
+    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_b }};
+    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b, false);
+
+    try app.storage_engine.flushPendingWrites();
+
+    // Build filter: orderBy created_at DESC, limit 1
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var order_tuple = try allocator.alloc(msgpack.Payload, 2);
+    order_tuple[0] = try msgpack.Payload.strToPayload("created_at", allocator);
+    order_tuple[1] = msgpack.Payload.uintToPayload(1);
+    try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
+    try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
+
+    const message = try msgpack.createStoreQueryMessage(
+        allocator,
+        42,
+        "test_namespace",
+        "data_table",
+        filter_map,
+    );
+    defer allocator.free(message);
+
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const msg_info = try app.handler.extractMessageInfo(parsed);
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
+
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    defer allocator.free(response_copy);
+
+    var resp_reader: std.Io.Reader = .fixed(response_copy);
+    const resp_parsed = try msgpack.decode(allocator, &resp_reader);
+    defer resp_parsed.free(allocator);
+
+    const response_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("ok", response_type.str.value());
+
+    const value = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+    try testing.expect(value == .arr);
+    try testing.expectEqual(@as(usize, 1), value.arr.len);
+
+    const next_cursor = msgpack.getMapValue(resp_parsed, "nextCursor") orelse return error.TestExpectedError;
+    try testing.expect(next_cursor == .str);
+    try testing.expect(next_cursor.str.value().len > 0);
+
+    // Validate token decodes as [sort_value, id]
+    const cursor = try query_parser.parseCursorToken(allocator, next_cursor.str.value());
+    defer cursor.deinit(allocator);
+    try testing.expect(cursor.id.len > 0);
 }
 
 // Task 14 Verification: Error handling for invalid messages
@@ -519,8 +596,20 @@ test "Verification: StoreSubscribe message processing" {
     defer resp_parsed.free(allocator);
 
     try testing.expect(resp_parsed == .map);
+
     const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
-    try testing.expectEqualStrings("StoreSubscribeResponse", msg_type.str.value());
+    try testing.expectEqualStrings("ok", msg_type.str.value());
+
+    const sub_id = msgpack.getMapValue(resp_parsed, "subId") orelse return error.TestExpectedError;
+    try testing.expect(sub_id == .uint);
+    try testing.expect(sub_id.uint > 0);
+
+    const has_more = msgpack.getMapValue(resp_parsed, "hasMore") orelse return error.TestExpectedError;
+    try testing.expect(has_more == .bool);
+    try testing.expectEqual(false, has_more.bool);
+
+    const next_cursor = msgpack.getMapValue(resp_parsed, "nextCursor") orelse return error.TestExpectedError;
+    try testing.expect(next_cursor == .nil);
 
     const results_p = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
     try testing.expect(results_p == .arr);
@@ -529,4 +618,124 @@ test "Verification: StoreSubscribe message processing" {
     const doc = results_p.arr[0];
     const got_val = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
     try testing.expectEqualStrings("stored_value", got_val.str.value());
+}
+
+test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
+    const allocator = testing.allocator;
+
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "verify-loadmore", &table_defs);
+    defer app.deinit();
+
+    // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
+    const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
+    defer val_a.free(allocator);
+    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_a }};
+    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a, false);
+
+    const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
+    defer val_b.free(allocator);
+    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_b }};
+    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b, false);
+
+    try app.storage_engine.flushPendingWrites();
+
+    // Build subscribe filter with deterministic sort + limit
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var order_tuple = try allocator.alloc(msgpack.Payload, 2);
+    order_tuple[0] = try msgpack.Payload.strToPayload("created_at", allocator);
+    order_tuple[1] = msgpack.Payload.uintToPayload(1); // DESC
+    try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
+    try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
+
+    // Subscribe (server will assign subId)
+    const subscribe_message = try msgpack.createStoreSubscribeMessage(
+        allocator,
+        77,
+        "test_namespace",
+        "data_table",
+        filter_map,
+        9999,
+    );
+    defer allocator.free(subscribe_message);
+
+    var subscribe_reader: std.Io.Reader = .fixed(subscribe_message);
+    const subscribe_parsed = try msgpack.decode(allocator, &subscribe_reader);
+    defer subscribe_parsed.free(allocator);
+    const subscribe_info = try app.handler.extractMessageInfo(subscribe_parsed);
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "Normal closure");
+
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    const subscribe_response_copy = try routeWithArena(&app.handler, allocator, conn, subscribe_info, subscribe_parsed);
+    defer allocator.free(subscribe_response_copy);
+
+    var subscribe_resp_reader: std.Io.Reader = .fixed(subscribe_response_copy);
+    const subscribe_resp = try msgpack.decode(allocator, &subscribe_resp_reader);
+    defer subscribe_resp.free(allocator);
+
+    const subscribe_type = msgpack.getMapValue(subscribe_resp, "type") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("ok", subscribe_type.str.value());
+
+    const sub_id_payload = msgpack.getMapValue(subscribe_resp, "subId") orelse return error.TestExpectedError;
+    try testing.expect(sub_id_payload == .uint);
+    const sub_id = sub_id_payload.uint;
+
+    const next_cursor_payload = msgpack.getMapValue(subscribe_resp, "nextCursor") orelse return error.TestExpectedError;
+    try testing.expect(next_cursor_payload == .str);
+    const next_cursor = next_cursor_payload.str.value();
+
+    const has_more_payload = msgpack.getMapValue(subscribe_resp, "hasMore") orelse return error.TestExpectedError;
+    try testing.expect(has_more_payload == .bool);
+    try testing.expectEqual(true, has_more_payload.bool);
+
+    // Build StoreLoadMore with { subId, nextCursor }
+    var load_more_map = msgpack.Payload.mapPayload(allocator);
+    defer load_more_map.free(allocator);
+    try load_more_map.mapPut("type", try msgpack.Payload.strToPayload("StoreLoadMore", allocator));
+    try load_more_map.mapPut("id", msgpack.Payload.uintToPayload(78));
+    try load_more_map.mapPut("subId", msgpack.Payload.uintToPayload(sub_id));
+    try load_more_map.mapPut("nextCursor", try msgpack.Payload.strToPayload(next_cursor, allocator));
+
+    var load_buf: std.ArrayList(u8) = .{};
+    defer load_buf.deinit(allocator);
+    try msgpack.encode(load_more_map, load_buf.writer(allocator));
+    const load_more_message = try load_buf.toOwnedSlice(allocator);
+    defer allocator.free(load_more_message);
+
+    var load_reader: std.Io.Reader = .fixed(load_more_message);
+    const load_parsed = try msgpack.decode(allocator, &load_reader);
+    defer load_parsed.free(allocator);
+    const load_info = try app.handler.extractMessageInfo(load_parsed);
+
+    const load_response_copy = try routeWithArena(&app.handler, allocator, conn, load_info, load_parsed);
+    defer allocator.free(load_response_copy);
+
+    var load_resp_reader: std.Io.Reader = .fixed(load_response_copy);
+    const load_resp = try msgpack.decode(allocator, &load_resp_reader);
+    defer load_resp.free(allocator);
+
+    const load_type = msgpack.getMapValue(load_resp, "type") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("ok", load_type.str.value());
+
+    const load_sub_id = msgpack.getMapValue(load_resp, "subId") orelse return error.TestExpectedError;
+    try testing.expect(load_sub_id == .uint);
+    try testing.expectEqual(sub_id, load_sub_id.uint);
+
+    const load_value = msgpack.getMapValue(load_resp, "value") orelse return error.TestExpectedError;
+    try testing.expect(load_value == .arr);
+    try testing.expectEqual(@as(usize, 1), load_value.arr.len);
+
+    const load_has_more = msgpack.getMapValue(load_resp, "hasMore") orelse return error.TestExpectedError;
+    try testing.expect(load_has_more == .bool);
+    try testing.expectEqual(false, load_has_more.bool);
+
+    const load_next_cursor = msgpack.getMapValue(load_resp, "nextCursor") orelse return error.TestExpectedError;
+    try testing.expect(load_next_cursor == .nil);
 }
