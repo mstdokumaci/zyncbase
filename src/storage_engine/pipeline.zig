@@ -525,7 +525,7 @@ pub fn executeInsert(
     bind_idx += 1;
 
     for (op.values) |val| {
-        try reader.bindTypedValue(stmt, bind_idx, val);
+        try val.bindSQLite(stmt, bind_idx);
         bind_idx += 1;
     }
 
@@ -559,7 +559,7 @@ pub fn executeUpdate(
 
     if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, id_z.ptr, @intCast(op.id.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 2, ns_z.ptr, @intCast(op.namespace.len)) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    try reader.bindTypedValue(stmt, 3, op.values[0]);
+    try op.values[0].bindSQLite(stmt, 3);
     if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
     if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
 

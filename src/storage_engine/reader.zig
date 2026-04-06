@@ -195,7 +195,7 @@ pub fn buildSelectQuery(
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv = try payloadToTypedValue(allocator, sort_ft, cursor.sort_value);
+                const sv = try TypedValue.fromPayload(allocator, sort_ft, cursor.sort_value);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
 
@@ -263,31 +263,6 @@ pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u
     std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
 }
 
-pub fn validateValueType(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
-    const match = switch (ft) {
-        .text => value == .str,
-        .integer => value == .uint or value == .int,
-        .real => value == .float or value == .uint or value == .int,
-        .boolean => value == .bool,
-        .array => value == .arr,
-    };
-    if (!match) return StorageError.TypeMismatch;
-}
-
-pub fn payloadToTypedValue(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
-    if (value == .nil) return .nil;
-    return switch (ft) {
-        .text => switch (value) {
-            .str => |s| TypedValue{ .text = try allocator.dupe(u8, s.value()) },
-            else => StorageError.TypeMismatch,
-        },
-        .integer => TypedValue{ .integer = try msgpack.payloadAsInt(value) },
-        .real => TypedValue{ .real = try msgpack.payloadAsFloat(value) },
-        .boolean => TypedValue{ .boolean = try msgpack.payloadAsBool(value) },
-        .array => TypedValue{ .blob = try msgpack.payloadToJson(value, allocator) },
-    };
-}
-
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -298,18 +273,6 @@ pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
         try out.append(allocator, c);
     }
     return out.toOwnedSlice(allocator);
-}
-
-pub fn bindTypedValue(stmt: sqlite.DynamicStatement, index: c_int, value: TypedValue) !void {
-    const rc = switch (value) {
-        .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
-        .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-        .text => |s| types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, index, s.ptr, @intCast(s.len)),
-        .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-        .blob => |b| types.zyncbase_sqlite3_bind_blob_transient(stmt.stmt, index, b.ptr, @intCast(b.len)),
-        .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
-    };
-    if (rc != sqlite.c.SQLITE_OK) return error.SQLiteError;
 }
 
 pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_manager.Field) !msgpack.Payload {
@@ -335,13 +298,6 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
             const s = if (ptr != null) ptr[0..len] else "";
             break :blk try msgpack.Payload.strToPayload(s, allocator);
         },
-        sqlite.c.SQLITE_BLOB => blk: {
-            const ptr = sqlite.c.sqlite3_column_blob(stmt.stmt, i);
-            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
-            const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
-            var reader: std.Io.Reader = .fixed(b);
-            break :blk msgpack.decodeTrusted(allocator, &reader) catch try msgpack.Payload.strToPayload(b, allocator);
-        },
         else => .nil,
     };
 }
@@ -350,16 +306,22 @@ pub fn resolveColumnContext(
     stmt: sqlite.DynamicStatement,
     i: c_int,
     table_metadata: schema_manager.TableMetadata,
-) ColumnContext {
-    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i) orelse @panic("sqlite3_column_name returned NULL: OOM or Statement Corrupted");
+) ?ColumnContext {
+    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i) orelse {
+        std.log.err("sqlite3_column_name returned NULL: OOM or Statement Corrupted", .{});
+        return null;
+    };
     const col_name = std.mem.span(col_name_c);
 
-    // Assert that the column name exists in our pre-allocated payloads cache.
-    // This is guaranteed because ZyncBase only generates SQL for schema-defined fields
-    // and standard system columns (id, namespace_id, created_at, updated_at).
-    const key = table_metadata.field_payloads.get(col_name) orelse unreachable;
+    // If the column name cannot be found in our pre-allocated payloads cache,
+    // skip it and log an error. This handles schema drift gracefully.
+    const key = table_metadata.field_payloads.get(col_name) orelse {
+        std.log.err("Schema Cache out of sync: Column '{s}' not found in field_payloads", .{col_name});
+        return null;
+    };
 
     return ColumnContext{
+        .index = i,
         .name = key.str.value(),
         .field = table_metadata.getField(col_name),
         .key = key,
@@ -372,13 +334,17 @@ pub fn resolveAllColumnContexts(
     table_metadata: schema_manager.TableMetadata,
 ) ![]ColumnContext {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
-    const col_contexts = try allocator.alloc(ColumnContext, col_count);
-    errdefer allocator.free(col_contexts);
+    var contexts_list: std.ArrayListUnmanaged(ColumnContext) = .empty;
+    defer contexts_list.deinit(allocator);
+    try contexts_list.ensureTotalCapacity(allocator, col_count);
 
-    for (col_contexts, 0..) |*ctx, i| {
-        ctx.* = resolveColumnContext(stmt, @intCast(i), table_metadata);
+    var i: c_int = 0;
+    while (i < @as(c_int, @intCast(col_count))) : (i += 1) {
+        if (resolveColumnContext(stmt, i, table_metadata)) |ctx| {
+            try contexts_list.append(allocator, ctx);
+        }
     }
-    return col_contexts;
+    return try contexts_list.toOwnedSlice(allocator);
 }
 
 pub fn appendConditionSql(
@@ -404,42 +370,42 @@ pub fn appendConditionSql(
         .eq => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " = ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .ne => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " != ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " > ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " < ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " >= ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " <= ?");
-            const tv = try payloadToTypedValue(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
@@ -486,13 +452,13 @@ pub fn appendConditionSql(
                     for (val.arr, 0..) |v, i| {
                         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                         try sql_buf.appendSlice(allocator, "?");
-                        const tv = try payloadToTypedValue(allocator, ft, v);
+                        const tv = try TypedValue.fromPayload(allocator, ft, v);
                         errdefer tv.deinit(allocator);
                         try values.append(allocator, tv);
                     }
                 } else {
                     try sql_buf.appendSlice(allocator, "?");
-                    const tv = try payloadToTypedValue(allocator, ft, val);
+                    const tv = try TypedValue.fromPayload(allocator, ft, val);
                     errdefer tv.deinit(allocator);
                     try values.append(allocator, tv);
                 }
@@ -513,8 +479,8 @@ pub fn decodeRow(
     var map = msgpack.Payload.mapPayload(allocator);
     errdefer map.free(allocator);
 
-    for (col_contexts, 0..) |ctx, i| {
-        const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
+    for (col_contexts) |ctx| {
+        const val = try readColumnValue(allocator, stmt, ctx.index, ctx.field);
         try map.mapPut(ctx.name, val);
     }
     return map;
@@ -604,8 +570,8 @@ pub fn execSelectCollection(
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
-        for (col_contexts, 0..) |ctx, i| {
-            const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
+        for (col_contexts) |ctx| {
+            const val = try readColumnValue(allocator, stmt, ctx.index, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         try arr.append(allocator, map);
@@ -654,7 +620,7 @@ pub fn execQuery(
     defer stmt.deinit();
 
     for (values, 0..) |v, i| {
-        try bindTypedValue(stmt, @intCast(i + 1), v);
+        try v.bindSQLite(stmt, @intCast(i + 1));
     }
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;

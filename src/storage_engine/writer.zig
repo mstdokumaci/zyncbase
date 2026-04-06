@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
-const reader = @import("reader.zig");
 const TypedValue = types.TypedValue;
 const WriteOp = types.WriteOp;
 const ColumnValue = types.ColumnValue;
@@ -81,7 +80,7 @@ pub fn buildInsertOrReplaceOp(
                 break;
             }
         }
-        values[i] = try reader.payloadToTypedValue(allocator, field_type, col.value);
+        values[i] = try types.TypedValue.fromPayload(allocator, field_type, col.value);
         initialized_count += 1;
     }
 
@@ -124,7 +123,7 @@ pub fn buildUpdateFieldOp(
         if (std.mem.eql(u8, f.name, field)) {
             field_sql_type = f.sql_type;
             if (value != .nil) {
-                try reader.validateValueType(field_sql_type, value);
+                try types.TypedValue.validateValue(field_sql_type, value);
             }
             break;
         }
@@ -136,7 +135,7 @@ pub fn buildUpdateFieldOp(
         values[0].deinit(allocator);
         allocator.free(values);
     }
-    values[0] = try reader.payloadToTypedValue(allocator, field_sql_type, value);
+    values[0] = try types.TypedValue.fromPayload(allocator, field_sql_type, value);
 
     // Use jsonb(?) placeholder for array fields, ? for others
     const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
