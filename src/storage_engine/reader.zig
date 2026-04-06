@@ -16,19 +16,9 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
-    try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        if (f.sql_type == .array) {
-            try sql_buf.appendSlice(allocator, ", json(");
-            try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.appendSlice(allocator, ") AS ");
-            try sql_buf.appendSlice(allocator, f.name);
-        } else {
-            try sql_buf.append(allocator, ',');
-            try sql_buf.appendSlice(allocator, f.name);
-        }
-    }
-    try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+    try sql_buf.appendSlice(allocator, "SELECT ");
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=?");
     return sql_buf.toOwnedSlice(allocator);
@@ -46,19 +36,9 @@ pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_man
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
-    try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        if (f.sql_type == .array) {
-            try sql_buf.appendSlice(allocator, ", json(");
-            try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.appendSlice(allocator, ") AS ");
-            try sql_buf.appendSlice(allocator, f.name);
-        } else {
-            try sql_buf.append(allocator, ',');
-            try sql_buf.appendSlice(allocator, f.name);
-        }
-    }
-    try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+    try sql_buf.appendSlice(allocator, "SELECT ");
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
     return sql_buf.toOwnedSlice(allocator);
@@ -100,19 +80,9 @@ pub fn buildSelectQuery(
     }
 
     // 1.. SELECT clause
-    try sql_buf.appendSlice(allocator, "SELECT id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        try sql_buf.appendSlice(allocator, ", ");
-        if (f.sql_type == .array) {
-            try sql_buf.appendSlice(allocator, "json(");
-            try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.appendSlice(allocator, ") AS ");
-            try sql_buf.appendSlice(allocator, f.name);
-        } else {
-            try sql_buf.appendSlice(allocator, f.name);
-        }
-    }
-    try sql_buf.appendSlice(allocator, ", created_at, updated_at FROM ");
+    try sql_buf.appendSlice(allocator, "SELECT ");
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
 
     // 2.. WHERE clause

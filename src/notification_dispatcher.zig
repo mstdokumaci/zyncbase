@@ -32,6 +32,7 @@ pub const NotificationDispatcher = struct {
             std.log.err("NotificationDispatcher drain failed: {}", .{err});
             return;
         };
+
         if (self.drain_buf.items.len == 0) return;
         defer {
             for (self.drain_buf.items) |*change| change.deinit(self.allocator);
@@ -66,17 +67,6 @@ pub const NotificationDispatcher = struct {
         };
         if (matches.len == 0) return;
 
-        var common = std.ArrayListUnmanaged(u8).empty;
-        const writer = common.writer(alloc);
-
-        const msg_fixmap_5: []const u8 = "\x85"; // FixMap w/ 5 elements
-        const msg_key_type: []const u8 = "\xa4type";
-        const msg_val_store_delta: []const u8 = "\xaaStoreDelta";
-        const msg_key_namespace: []const u8 = "\xa9namespace";
-        const msg_key_collection: []const u8 = "\xacollection";
-        const msg_key_value: []const u8 = "\xa5value";
-        const msg_key_sub_id: []const u8 = "\xa5subId";
-
         const encoder = struct {
             fn writeStr(w: anytype, s: []const u8) !void {
                 if (s.len <= 31) {
@@ -95,40 +85,74 @@ pub const NotificationDispatcher = struct {
             }
         };
 
-        const encode_res = blk: {
-            writer.writeAll(msg_fixmap_5) catch break :blk false;
-            writer.writeAll(msg_key_type) catch break :blk false;
-            writer.writeAll(msg_val_store_delta) catch break :blk false;
-            writer.writeAll(msg_key_namespace) catch break :blk false;
-            encoder.writeStr(writer, change.namespace) catch break :blk false;
-            writer.writeAll(msg_key_collection) catch break :blk false;
-            encoder.writeStr(writer, change.collection) catch break :blk false;
-            writer.writeAll(msg_key_value) catch break :blk false;
-
-            const val_p = if (change.operation == .delete) Payload.nil else change.new_row orelse Payload.nil;
-            msgpack.encode(val_p, writer) catch break :blk false;
-
-            writer.writeAll(msg_key_sub_id) catch break :blk false;
-            break :blk true;
-        };
-
-        if (!encode_res) {
-            std.log.err("NotificationDispatcher prefix encoding failed for {s}:{s}", .{ change.namespace, change.collection });
-            return;
-        }
-
-        const prefix = common.items;
         var out = std.ArrayListUnmanaged(u8).empty;
         for (matches) |match| {
             out.clearRetainingCapacity();
-            out.appendSlice(alloc, prefix) catch |err| {
-                std.log.err("NotificationDispatcher match append content failed: {}", .{err});
-                continue;
+            const writer = out.writer(alloc);
+
+            const id_payload = blk: {
+                const row = if (change.new_row) |new_row|
+                    new_row
+                else if (change.old_row) |old_row|
+                    old_row
+                else
+                    break :blk null;
+
+                break :blk (row.mapGet("id") catch null) orelse null;
             };
-            msgpack.encode(Payload.uintToPayload(match.subscription_id), out.writer(alloc)) catch |err| {
-                std.log.err("NotificationDispatcher match encode sub_id failed: {}", .{err});
+
+            if (id_payload == null) {
+                std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });
                 continue;
+            }
+
+            const is_delete = change.operation == .delete;
+
+            const encode_res = blk: {
+                // {
+                //   "type": "StoreDelta",
+                //   "subId": <u64>,
+                //   "ops": [
+                //     {
+                //       "op": "set" | "remove",
+                //       "path": [collection, id],
+                //       "value": <row> // only for set
+                //     }
+                //   ]
+                // }
+                writer.writeByte(0x83) catch break :blk false;
+
+                encoder.writeStr(writer, "type") catch break :blk false;
+                encoder.writeStr(writer, "StoreDelta") catch break :blk false;
+
+                encoder.writeStr(writer, "subId") catch break :blk false;
+                msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch break :blk false;
+
+                encoder.writeStr(writer, "ops") catch break :blk false;
+                writer.writeByte(0x91) catch break :blk false; // array(1)
+
+                writer.writeByte(if (is_delete) 0x82 else 0x83) catch break :blk false; // map(2|3)
+
+                encoder.writeStr(writer, "op") catch break :blk false;
+                encoder.writeStr(writer, if (is_delete) "remove" else "set") catch break :blk false;
+
+                encoder.writeStr(writer, "path") catch break :blk false;
+                writer.writeByte(0x92) catch break :blk false; // array(2)
+                encoder.writeStr(writer, change.collection) catch break :blk false;
+                msgpack.encode(id_payload.?, writer) catch break :blk false;
+
+                if (!is_delete) {
+                    encoder.writeStr(writer, "value") catch break :blk false;
+                    msgpack.encode(change.new_row orelse Payload.nil, writer) catch break :blk false;
+                }
+
+                break :blk true;
             };
+
+            if (!encode_res) {
+                std.log.err("NotificationDispatcher delta encoding failed for {s}:{s}", .{ change.namespace, change.collection });
+                continue;
+            }
 
             const conn = cm.acquireConnection(match.connection_id) catch |err| {
                 std.log.debug("Failed to acquire connection {} for notification: {}", .{ match.connection_id, err });

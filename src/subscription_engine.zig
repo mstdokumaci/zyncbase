@@ -423,11 +423,7 @@ pub const SubscriptionEngine = struct {
     }
 
     fn evaluateCondition(cond: Condition, row: Payload) !bool {
-        const val = (try row.mapGet(cond.field)) orelse {
-            // Check for potential nested field that was not flattened in current row
-            // (Only happens for partially updated rows during event prop)
-            return cond.op == .isNull;
-        };
+        const val = (try row.mapGet(cond.field)) orelse return cond.op == .isNull;
 
         return switch (cond.op) {
             .eq => payloadsEqual(val, cond.value orelse return false),
