@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
-const reader = @import("reader.zig");
 const TypedValue = types.TypedValue;
 const WriteOp = types.WriteOp;
 const ColumnValue = types.ColumnValue;
@@ -15,7 +14,6 @@ pub fn buildInsertOrReplaceOp(
     id: []const u8,
     namespace: []const u8,
     columns: []const ColumnValue,
-    change_capture: bool,
 ) !WriteOp {
     try sm.validateColumns(table, columns);
 
@@ -62,10 +60,7 @@ pub fn buildInsertOrReplaceOp(
         try sql_buf.appendSlice(allocator, col.name);
     }
     // Always update updated_at
-    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at");
-    if (change_capture) {
-        try sql_buf.appendSlice(allocator, " RETURNING *");
-    }
+    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING *");
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -85,7 +80,7 @@ pub fn buildInsertOrReplaceOp(
                 break;
             }
         }
-        values[i] = try reader.payloadToTypedValue(allocator, field_type, col.value);
+        values[i] = try types.TypedValue.fromPayload(allocator, field_type, col.value);
         initialized_count += 1;
     }
 
@@ -105,7 +100,6 @@ pub fn buildInsertOrReplaceOp(
             .sql = sql,
             .values = values,
             .timestamp = now,
-            .change_capture = change_capture,
             .completion_signal = null,
         },
     };
@@ -119,7 +113,6 @@ pub fn buildUpdateFieldOp(
     namespace: []const u8,
     field: []const u8,
     value: msgpack.Payload,
-    change_capture: bool,
 ) !WriteOp {
     try sm.validateField(table, field);
 
@@ -130,7 +123,7 @@ pub fn buildUpdateFieldOp(
         if (std.mem.eql(u8, f.name, field)) {
             field_sql_type = f.sql_type;
             if (value != .nil) {
-                try reader.validateValueType(field_sql_type, value);
+                try types.TypedValue.validateValue(field_sql_type, value);
             }
             break;
         }
@@ -142,7 +135,7 @@ pub fn buildUpdateFieldOp(
         values[0].deinit(allocator);
         allocator.free(values);
     }
-    values[0] = try reader.payloadToTypedValue(allocator, field_sql_type, value);
+    values[0] = try types.TypedValue.fromPayload(allocator, field_sql_type, value);
 
     // Use jsonb(?) placeholder for array fields, ? for others
     const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
@@ -152,8 +145,8 @@ pub fn buildUpdateFieldOp(
         \\VALUES (?, ?, {s}, ?, ?)
         \\ON CONFLICT(id, namespace_id) DO UPDATE SET
         \\  {s} = excluded.{s},
-        \\  updated_at = excluded.updated_at {s}
-    , .{ table, field, field_placeholder, field, field, if (change_capture) "RETURNING *" else "" });
+        \\  updated_at = excluded.updated_at RETURNING *
+    , .{ table, field, field_placeholder, field, field });
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);
@@ -172,7 +165,6 @@ pub fn buildUpdateFieldOp(
             .sql = sql,
             .values = values,
             .timestamp = now,
-            .change_capture = change_capture,
             .completion_signal = null,
         },
     };
@@ -184,11 +176,10 @@ pub fn buildDeleteDocumentOp(
     table: []const u8,
     id: []const u8,
     namespace: []const u8,
-    change_capture: bool,
 ) !WriteOp {
     try sm.validateTable(table);
 
-    const sql = try std.fmt.allocPrint(allocator, "DELETE FROM {s} WHERE id=? AND namespace_id=?", .{table});
+    const sql = try std.fmt.allocPrint(allocator, "DELETE FROM {s} WHERE id=? AND namespace_id=? RETURNING *", .{table});
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);
@@ -204,7 +195,6 @@ pub fn buildDeleteDocumentOp(
             .id = id_owned,
             .namespace = ns_owned,
             .sql = sql,
-            .change_capture = change_capture,
             .completion_signal = null,
         },
     };

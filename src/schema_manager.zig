@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const schema_parser = @import("schema_parser.zig");
 const types = @import("storage_engine/types.zig");
-const msgpack = @import("msgpack_utils.zig");
 
 // Re-export all schema types so consumers import only schema_manager.zig
 pub const Schema = schema_parser.Schema;
@@ -32,7 +31,7 @@ pub const SchemaManager = struct {
         const metadata = try SchemaMetadata.init(allocator, &schema);
         errdefer {
             var m = metadata;
-            m.deinit();
+            m.deinit(allocator);
         }
 
         self.* = .{
@@ -44,7 +43,7 @@ pub const SchemaManager = struct {
 
     /// Clean up schema and metadata resources.
     pub fn deinit(self: *SchemaManager) void {
-        self.metadata.deinit();
+        self.metadata.deinit(self.allocator);
         schema_parser.freeSchema(self.allocator, self.schema);
     }
 
@@ -78,20 +77,8 @@ pub const SchemaManager = struct {
             const f = table_metadata.getField(col.name) orelse return types.StorageError.UnknownField;
             if (f.required and col.value == .nil) return types.StorageError.NullNotAllowed;
             if (col.value != .nil) {
-                try validateValueType(f.sql_type, col.value);
+                try types.TypedValue.validateValue(f.sql_type, col.value);
             }
         }
     }
 };
-
-/// Helper to validate a msgpack payload against a field type.
-pub fn validateValueType(ft: FieldType, value: msgpack.Payload) !void {
-    const match = switch (ft) {
-        .text => value == .str,
-        .integer => value == .uint or value == .int,
-        .real => value == .float or value == .uint or value == .int,
-        .boolean => value == .bool,
-        .array => value == .arr,
-    };
-    if (!match) return types.StorageError.TypeMismatch;
-}

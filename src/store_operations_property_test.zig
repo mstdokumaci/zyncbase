@@ -374,7 +374,7 @@ test "store: engine query integration" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
-        try app.storage_engine.insertOrReplace("test", "key1", "test", &cols, false);
+        try app.storage_engine.insertOrReplace("test", "key1", "test", &cols);
         try app.storage_engine.flushPendingWrites();
 
         var filter_map = msgpack.Payload.mapPayload(allocator);

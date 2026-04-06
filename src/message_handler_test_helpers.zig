@@ -64,7 +64,7 @@ pub const AppTestContext = struct {
         const metadata = try schema_manager.SchemaMetadata.init(allocator, &cloned_schema);
         errdefer {
             var m = metadata;
-            m.deinit();
+            m.deinit(allocator);
         }
 
         const sm = SchemaManager{

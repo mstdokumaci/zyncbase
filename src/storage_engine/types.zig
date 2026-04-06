@@ -50,6 +50,8 @@ pub const StorageError = error{
     NotDir,
     /// Required condition value is missing
     MissingConditionValue,
+    /// Low-level SQLite error that doesn't match specific classified types
+    SQLiteError,
 };
 
 /// A column name + msgpack value pair for storage inserts/updates.
@@ -109,6 +111,48 @@ pub const TypedValue = union(enum) {
             else => {},
         }
     }
+
+    /// Validates if a msgpack.Payload is compatible with a schema field type.
+    pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
+        if (value == .nil) return;
+        const match = switch (ft) {
+            .text => value == .str,
+            .integer => value == .int or value == .uint,
+            .real => value == .float or value == .uint or value == .int,
+            .boolean => value == .bool,
+            .array => value == .arr,
+        };
+        if (!match) return StorageError.TypeMismatch;
+    }
+
+    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
+    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
+    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
+        if (value == .nil) return .nil;
+        return switch (ft) {
+            .text => switch (value) {
+                .str => |s| TypedValue{ .text = try allocator.dupe(u8, s.value()) },
+                else => StorageError.TypeMismatch,
+            },
+            .integer => TypedValue{ .integer = try msgpack.payloadAsInt(value) },
+            .real => TypedValue{ .real = try msgpack.payloadAsFloat(value) },
+            .boolean => TypedValue{ .boolean = try msgpack.payloadAsBool(value) },
+            .array => TypedValue{ .blob = try msgpack.payloadToJson(value, allocator) },
+        };
+    }
+
+    /// Binds the typed value to a SQLite statement query parameter slot.
+    pub fn bindSQLite(self: TypedValue, stmt: sqlite.DynamicStatement, index: c_int) !void {
+        const rc = switch (self) {
+            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
+            .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
+            .text => |s| zyncbase_sqlite3_bind_text_transient(stmt.stmt, index, s.ptr, @intCast(s.len)),
+            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
+            .blob => |b| zyncbase_sqlite3_bind_blob_transient(stmt.stmt, index, b.ptr, @intCast(b.len)),
+            .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
+        };
+        if (rc != sqlite.c.SQLITE_OK) return StorageError.SQLiteError;
+    }
 };
 
 /// SQLite checkpoint modes
@@ -150,7 +194,9 @@ pub const ReconnectionConfig = struct {
 };
 
 pub const ColumnContext = struct {
+    index: c_int,
     name: []const u8,
+    key: msgpack.Payload,
     field: ?schema_manager.Field,
 };
 
@@ -166,7 +212,6 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     update: struct {
@@ -176,7 +221,6 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     delete: struct {
@@ -184,7 +228,6 @@ pub const WriteOp = union(enum) {
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     ddl: struct {

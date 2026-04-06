@@ -122,7 +122,7 @@ pub const ZyncBaseServer = struct {
         // Initialize storage engine, which now requires a schema and notification callbacks
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
-            self.allocator,
+            self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             config.data_dir,
             &self.schema_manager,
