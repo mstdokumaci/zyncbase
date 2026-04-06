@@ -4,138 +4,161 @@
 // ─── Schema types ─────────────────────────────────────────────────────────────
 
 interface SchemaField {
-  type: "string" | "integer" | "number" | "boolean" | "array" | "object";
-  fields?: Record<string, SchemaField>;
+	type: "string" | "integer" | "number" | "boolean" | "array" | "object";
+	fields?: Record<string, SchemaField>;
 }
 
 interface SchemaCollection {
-  fields: Record<string, SchemaField>;
-  required?: string[];
+	fields: Record<string, SchemaField>;
+	required?: string[];
 }
 
 interface SchemaFile {
-  version: string;
-  store: Record<string, SchemaCollection>;
+	version: string;
+	store: Record<string, SchemaCollection>;
 }
 
 // ─── Argument parsing ─────────────────────────────────────────────────────────
 
 function parseArgs(argv: string[]): { schema: string; out: string } | null {
-  let schema: string | null = null;
-  let out: string | null = null;
+	let schema: string | null = null;
+	let out: string | null = null;
 
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--schema" && i + 1 < argv.length) {
-      schema = argv[++i];
-    } else if (argv[i] === "--out" && i + 1 < argv.length) {
-      out = argv[++i];
-    }
-  }
+	for (let i = 0; i < argv.length; i++) {
+		if (argv[i] === "--schema" && i + 1 < argv.length) {
+			schema = argv[++i];
+		} else if (argv[i] === "--out" && i + 1 < argv.length) {
+			out = argv[++i];
+		}
+	}
 
-  if (!schema || !out) return null;
-  return { schema, out };
+	if (!schema || !out) return null;
+	return { schema, out };
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
-function validateFieldNames(store: Record<string, SchemaCollection>): string | null {
-  for (const [collectionName, collection] of Object.entries(store)) {
-    const error = validateFieldsRecursive(collection.fields, collectionName);
-    if (error) return error;
-  }
-  return null;
+function validateFieldNames(
+	store: Record<string, SchemaCollection>,
+): string | null {
+	for (const [collectionName, collection] of Object.entries(store)) {
+		const error = validateFieldsRecursive(collection.fields, collectionName);
+		if (error) return error;
+	}
+	return null;
 }
 
 function validateFieldsRecursive(
-  fields: Record<string, SchemaField>,
-  context: string
+	fields: Record<string, SchemaField>,
+	context: string,
 ): string | null {
-  for (const [fieldName, field] of Object.entries(fields)) {
-    if (fieldName.includes("__")) {
-      return `Field name "${fieldName}" in "${context}" contains "__" which is the reserved flattening separator.`;
-    }
-    if (field.type === "object" && field.fields) {
-      const error = validateFieldsRecursive(field.fields, `${context}.${fieldName}`);
-      if (error) return error;
-    }
-  }
-  return null;
+	for (const [fieldName, field] of Object.entries(fields)) {
+		if (fieldName.includes("__")) {
+			return `Field name "${fieldName}" in "${context}" contains "__" which is the reserved flattening separator.`;
+		}
+		if (field.type === "object" && field.fields) {
+			const error = validateFieldsRecursive(
+				field.fields,
+				`${context}.${fieldName}`,
+			);
+			if (error) return error;
+		}
+	}
+	return null;
 }
 
 // ─── Type emitter ─────────────────────────────────────────────────────────────
 
 const TS_TYPE_MAP: Record<string, string> = {
-  string: "string",
-  integer: "number",
-  number: "number",
-  boolean: "boolean",
-  array: "unknown[]",
+	string: "string",
+	integer: "number",
+	number: "number",
+	boolean: "boolean",
+	array: "unknown[]",
 };
 
 /**
  * Emit TypeScript type for a single SchemaField.
  * For object fields, emits an inline interface up to maxDepth.
  */
-function emitFieldType(field: SchemaField, required: Set<string>, indent: string, depth: number, maxDepth: number): string {
-  if (field.type === "object" && field.fields && depth < maxDepth) {
-    return emitInlineInterface(field.fields, required, indent, depth, maxDepth);
-  }
-  if (field.type === "object") {
-    return "Record<string, unknown>";
-  }
-  return TS_TYPE_MAP[field.type] ?? "unknown";
+function emitFieldType(
+	field: SchemaField,
+	required: Set<string>,
+	indent: string,
+	depth: number,
+	maxDepth: number,
+): string {
+	if (field.type === "object" && field.fields && depth < maxDepth) {
+		return emitInlineInterface(field.fields, required, indent, depth, maxDepth);
+	}
+	if (field.type === "object") {
+		return "Record<string, unknown>";
+	}
+	return TS_TYPE_MAP[field.type] ?? "unknown";
 }
 
 function emitInlineInterface(
-  fields: Record<string, SchemaField>,
-  required: Set<string>,
-  indent: string,
-  depth: number,
-  maxDepth: number
+	fields: Record<string, SchemaField>,
+	required: Set<string>,
+	indent: string,
+	depth: number,
+	maxDepth: number,
 ): string {
-  const innerIndent = indent + "  ";
-  const lines: string[] = ["{"];
-  for (const [fieldName, field] of Object.entries(fields)) {
-    const isRequired = required.has(fieldName);
-    const optMark = isRequired ? "" : "?";
-    const typeStr = emitFieldType(field, new Set<string>(), innerIndent, depth + 1, maxDepth);
-    lines.push(`${innerIndent}${fieldName}${optMark}: ${typeStr};`);
-  }
-  lines.push(`${indent}}`);
-  return lines.join("\n");
+	const innerIndent = indent + "  ";
+	const lines: string[] = ["{"];
+	for (const [fieldName, field] of Object.entries(fields)) {
+		const isRequired = required.has(fieldName);
+		const optMark = isRequired ? "" : "?";
+		const typeStr = emitFieldType(
+			field,
+			new Set<string>(),
+			innerIndent,
+			depth + 1,
+			maxDepth,
+		);
+		lines.push(`${innerIndent}${fieldName}${optMark}: ${typeStr};`);
+	}
+	lines.push(`${indent}}`);
+	return lines.join("\n");
 }
 
 /**
  * Emit the ZyncBaseSchema interface.
  */
 function emitZyncBaseSchema(store: Record<string, SchemaCollection>): string {
-  const lines: string[] = ["export interface ZyncBaseSchema {"];
-  for (const [collectionName, collection] of Object.entries(store)) {
-    const requiredSet = new Set(collection.required ?? []);
-    const innerIndent = "  ";
-    lines.push(`  ${collectionName}: {`);
-    for (const [fieldName, field] of Object.entries(collection.fields)) {
-      const isRequired = requiredSet.has(fieldName);
-      const optMark = isRequired ? "" : "?";
-      const typeStr = emitFieldType(field, requiredSet, innerIndent + "  ", 1, 5);
-      lines.push(`    ${fieldName}${optMark}: ${typeStr};`);
-    }
-    lines.push("  };");
-  }
-  lines.push("}");
-  return lines.join("\n");
+	const lines: string[] = ["export interface ZyncBaseSchema {"];
+	for (const [collectionName, collection] of Object.entries(store)) {
+		const requiredSet = new Set(collection.required ?? []);
+		const innerIndent = "  ";
+		lines.push(`  ${collectionName}: {`);
+		for (const [fieldName, field] of Object.entries(collection.fields)) {
+			const isRequired = requiredSet.has(fieldName);
+			const optMark = isRequired ? "" : "?";
+			const typeStr = emitFieldType(
+				field,
+				requiredSet,
+				innerIndent + "  ",
+				1,
+				5,
+			);
+			lines.push(`    ${fieldName}${optMark}: ${typeStr};`);
+		}
+		lines.push("  };");
+	}
+	lines.push("}");
+	return lines.join("\n");
 }
 
 /**
  * Emit ValidCollections as a union of string literals.
  */
 function emitValidCollections(store: Record<string, SchemaCollection>): string {
-  const collections = Object.keys(store);
-  if (collections.length === 0) {
-    return "export type ValidCollections = never;";
-  }
-  const union = collections.map((c) => `"${c}"`).join(" | ");
-  return `export type ValidCollections = ${union};`;
+	const collections = Object.keys(store);
+	if (collections.length === 0) {
+		return "export type ValidCollections = never;";
+	}
+	const union = collections.map((c) => `"${c}"`).join(" | ");
+	return `export type ValidCollections = ${union};`;
 }
 
 /**
@@ -143,21 +166,21 @@ function emitValidCollections(store: Record<string, SchemaCollection>): string {
  * Returns arrays of field name segments.
  */
 function collectFieldPaths(
-  fields: Record<string, SchemaField>,
-  depth: number,
-  maxDepth: number
+	fields: Record<string, SchemaField>,
+	depth: number,
+	maxDepth: number,
 ): string[][] {
-  const paths: string[][] = [];
-  for (const [fieldName, field] of Object.entries(fields)) {
-    paths.push([fieldName]);
-    if (field.type === "object" && field.fields && depth < maxDepth) {
-      const nested = collectFieldPaths(field.fields, depth + 1, maxDepth);
-      for (const nestedPath of nested) {
-        paths.push([fieldName, ...nestedPath]);
-      }
-    }
-  }
-  return paths;
+	const paths: string[][] = [];
+	for (const [fieldName, field] of Object.entries(fields)) {
+		paths.push([fieldName]);
+		if (field.type === "object" && field.fields && depth < maxDepth) {
+			const nested = collectFieldPaths(field.fields, depth + 1, maxDepth);
+			for (const nestedPath of nested) {
+				paths.push([fieldName, ...nestedPath]);
+			}
+		}
+	}
+	return paths;
 }
 
 /**
@@ -165,100 +188,113 @@ function collectFieldPaths(
  * Tuples: [collection, string] | [collection, string, field] | [collection, string, field, nested] | ...
  */
 function emitValidPaths(store: Record<string, SchemaCollection>): string {
-  const tuples: string[] = [];
+	const tuples: string[] = [];
 
-  for (const [collectionName, collection] of Object.entries(store)) {
-    // [collection, string] — document-level path
-    tuples.push(`["${collectionName}", string]`);
+	for (const [collectionName, collection] of Object.entries(store)) {
+		// [collection, string] — document-level path
+		tuples.push(`["${collectionName}", string]`);
 
-    // Collect all field paths up to depth 5 (3 nesting levels beyond collection+doc)
-    const fieldPaths = collectFieldPaths(collection.fields, 1, 3);
-    for (const fieldPath of fieldPaths) {
-      const segments = [`"${collectionName}"`, "string", ...fieldPath.map((f) => `"${f}"`)];
-      tuples.push(`[${segments.join(", ")}]`);
-    }
-  }
+		// Collect all field paths up to depth 5 (3 nesting levels beyond collection+doc)
+		const fieldPaths = collectFieldPaths(collection.fields, 1, 3);
+		for (const fieldPath of fieldPaths) {
+			const segments = [
+				`"${collectionName}"`,
+				"string",
+				...fieldPath.map((f) => `"${f}"`),
+			];
+			tuples.push(`[${segments.join(", ")}]`);
+		}
+	}
 
-  if (tuples.length === 0) {
-    return "export type ValidPaths = never;";
-  }
+	if (tuples.length === 0) {
+		return "export type ValidPaths = never;";
+	}
 
-  const union = tuples.join("\n  | ");
-  return `export type ValidPaths =\n  | ${union};`;
+	const union = tuples.join("\n  | ");
+	return `export type ValidPaths =\n  | ${union};`;
 }
 
 // ─── Test exports (used by generate.test.ts) ─────────────────────────────────
 
-export { emitValidPaths as emitValidPathsForTest, collectFieldPaths as collectFieldPathsForTest };
+export {
+	collectFieldPaths as collectFieldPathsForTest,
+	emitValidPaths as emitValidPathsForTest,
+};
 
 /**
  * Generate the full types output for a given store (used in tests).
  */
-export function generateTypesForTest(store: Record<string, SchemaCollection>): string {
-  const parts: string[] = [
-    "// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
-    "",
-    emitZyncBaseSchema(store),
-    "",
-    emitValidCollections(store),
-    "",
-    emitValidPaths(store),
-    "",
-  ];
-  return parts.join("\n");
+export function generateTypesForTest(
+	store: Record<string, SchemaCollection>,
+): string {
+	const parts: string[] = [
+		"// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
+		"",
+		emitZyncBaseSchema(store),
+		"",
+		emitValidCollections(store),
+		"",
+		emitValidPaths(store),
+		"",
+	];
+	return parts.join("\n");
 }
 
-export type { SchemaField, SchemaCollection, SchemaFile };
+export type { SchemaCollection, SchemaField, SchemaFile };
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export async function generate(argv: string[]): Promise<void> {
-  const args = parseArgs(argv);
-  if (!args) {
-    process.stderr.write("Usage: bunx @zyncbase/client generate --schema <path> --out <path>\n");
-    process.exit(1);
-  }
+	const args = parseArgs(argv);
+	if (!args) {
+		process.stderr.write(
+			"Usage: bunx @zyncbase/client generate --schema <path> --out <path>\n",
+		);
+		process.exit(1);
+	}
 
-  // Read schema file
-  const schemaFile = Bun.file(args.schema);
-  const exists = await schemaFile.exists();
-  if (!exists) {
-    process.stderr.write(`Error: Schema file not found: ${args.schema}\n`);
-    process.exit(1);
-  }
+	// Read schema file
+	const schemaFile = Bun.file(args.schema);
+	const exists = await schemaFile.exists();
+	if (!exists) {
+		process.stderr.write(`Error: Schema file not found: ${args.schema}\n`);
+		process.exit(1);
+	}
 
-  let schemaData: SchemaFile;
-  try {
-    const text = await schemaFile.text();
-    schemaData = JSON.parse(text) as SchemaFile;
-  } catch {
-    process.stderr.write(`Error: Invalid JSON in schema file: ${args.schema}\n`);
-    process.exit(1);
-  }
+	let schemaData: SchemaFile;
+	try {
+		const text = await schemaFile.text();
+		schemaData = JSON.parse(text) as SchemaFile;
+	} catch {
+		process.stderr.write(
+			`Error: Invalid JSON in schema file: ${args.schema}\n`,
+		);
+		process.exit(1);
+	}
 
-  // Validate field names
-  const validationError = validateFieldNames(schemaData.store ?? {});
-  if (validationError) {
-    process.stderr.write(`Error: ${validationError}\n`);
-    process.exit(1);
-  }
+	// Validate field names
+	const validationError = validateFieldNames(schemaData.store ?? {});
+	if (validationError) {
+		process.stderr.write(`Error: ${validationError}\n`);
+		process.exit(1);
+	}
 
-  // Emit types
-  const parts: string[] = [
-    "// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
-    "",
-    emitZyncBaseSchema(schemaData.store ?? {}),
-    "",
-    emitValidCollections(schemaData.store ?? {}),
-    "",
-    emitValidPaths(schemaData.store ?? {}),
-    "",
-  ];
+	// Emit types
+	const parts: string[] = [
+		"// Auto-generated by bunx @zyncbase/client generate. Do not edit manually.",
+		"",
+		emitZyncBaseSchema(schemaData.store ?? {}),
+		"",
+		emitValidCollections(schemaData.store ?? {}),
+		"",
+		emitValidPaths(schemaData.store ?? {}),
+		"",
+	];
 
-  await Bun.write(args.out, parts.join("\n"));
+	await Bun.write(args.out, parts.join("\n"));
 }
 
 // Run when invoked directly
 if (import.meta.main) {
-  await generate(process.argv.slice(2));
+	await generate(process.argv.slice(2));
 }

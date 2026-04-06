@@ -1,14 +1,14 @@
 // Public API re-exports
 
 export { createClient, ZyncBaseClient } from "./client.js";
-export { ZyncBaseError, ErrorCodes } from "./errors.js";
-export { generateUUIDv7 } from "./uuid.js";
+export { ErrorCodes, ZyncBaseError } from "./errors.js";
 export type {
-  ClientOptions,
-  Store,
-  Path,
-  QueryOptions,
-  BatchOperation,
-  SubscriptionHandle,
-  LifecycleEvent,
+	BatchOperation,
+	ClientOptions,
+	LifecycleEvent,
+	Path,
+	QueryOptions,
+	Store,
+	SubscriptionHandle,
 } from "./types.js";
+export { generateUUIDv7 } from "./uuid.js";

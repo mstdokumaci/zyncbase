@@ -1,6 +1,6 @@
 // Path Normalizer
 
-import { ZyncBaseError, ErrorCodes } from "./errors";
+import { ErrorCodes, ZyncBaseError } from "./errors";
 
 export type Path = string | string[];
 
@@ -22,10 +22,10 @@ export type Path = string | string[];
  *   ["users", "u1", "address", "city"] → ["users", "u1", "address__city"]
  */
 export function encodeWirePath(segments: string[]): string[] {
-  if (segments.length <= 2) return segments;
-  // Join nested segments with "__" to match server's flattened schema columns.
-  const fieldPath = segments.slice(2).join("__");
-  return [segments[0], segments[1], fieldPath];
+	if (segments.length <= 2) return segments;
+	// Join nested segments with "__" to match server's flattened schema columns.
+	const fieldPath = segments.slice(2).join("__");
+	return [segments[0], segments[1], fieldPath];
 }
 
 /**
@@ -34,49 +34,49 @@ export function encodeWirePath(segments: string[]): string[] {
  * Splits the field segment (index 2) on "__" to restore nested segments.
  */
 export function decodeWirePath(wirePath: string[]): string[] {
-  if (wirePath.length <= 2) return wirePath;
-  const parts = wirePath[2].split("__");
-  return [wirePath[0], wirePath[1], ...parts];
+	if (wirePath.length <= 2) return wirePath;
+	const parts = wirePath[2].split("__");
+	return [wirePath[0], wirePath[1], ...parts];
 }
 
 export function normalizePath(path: Path): string[] {
-  if (typeof path === "string") {
-    if (path.length === 0) {
-      throw new ZyncBaseError("Path must not be empty", {
-        code: ErrorCodes.INVALID_PATH,
-        category: "client",
-        retryable: false,
-      });
-    }
-    const segments = path.split(".");
-    for (const segment of segments) {
-      if (segment.length === 0) {
-        throw new ZyncBaseError(`Path contains empty segment: "${path}"`, {
-          code: ErrorCodes.INVALID_PATH,
-          category: "client",
-          retryable: false,
-        });
-      }
-    }
-    return segments;
-  }
+	if (typeof path === "string") {
+		if (path.length === 0) {
+			throw new ZyncBaseError("Path must not be empty", {
+				code: ErrorCodes.INVALID_PATH,
+				category: "client",
+				retryable: false,
+			});
+		}
+		const segments = path.split(".");
+		for (const segment of segments) {
+			if (segment.length === 0) {
+				throw new ZyncBaseError(`Path contains empty segment: "${path}"`, {
+					code: ErrorCodes.INVALID_PATH,
+					category: "client",
+					retryable: false,
+				});
+			}
+		}
+		return segments;
+	}
 
-  // Array input
-  if (path.length === 0) {
-    throw new ZyncBaseError("Path must not be empty", {
-      code: ErrorCodes.INVALID_PATH,
-      category: "client",
-      retryable: false,
-    });
-  }
-  for (const segment of path) {
-    if (segment.length === 0) {
-      throw new ZyncBaseError("Path contains empty segment", {
-        code: ErrorCodes.INVALID_PATH,
-        category: "client",
-        retryable: false,
-      });
-    }
-  }
-  return path;
+	// Array input
+	if (path.length === 0) {
+		throw new ZyncBaseError("Path must not be empty", {
+			code: ErrorCodes.INVALID_PATH,
+			category: "client",
+			retryable: false,
+		});
+	}
+	for (const segment of path) {
+		if (segment.length === 0) {
+			throw new ZyncBaseError("Path contains empty segment", {
+				code: ErrorCodes.INVALID_PATH,
+				category: "client",
+				retryable: false,
+			});
+		}
+	}
+	return path;
 }

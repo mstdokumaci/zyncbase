@@ -1,26 +1,26 @@
 {
-  "version": "0.0.1",
-  "store": {
-    "tasks": {
-      "fields": {
-        "title": {
-          "type": "string"
-        },
-        "must_be_complete": {
-          "type": "object",
-          "fields": {
-            "before": {
-              "type": "integer"
-            },
-            "after": {
-              "type": "integer"
-            }
-          }
-        },
-        "tags": {
-          "type": "array"
-        }
-      }
-    }
-  }
+	"version": "0.0.1",
+	"store": {
+		"tasks": {
+			"fields": {
+				"title": {
+					"type": "string"
+				},
+				"must_be_complete": {
+					"type": "object",
+					"fields": {
+						"before": {
+							"type": "integer"
+						},
+						"after": {
+							"type": "integer"
+						}
+					}
+				},
+				"tags": {
+					"type": "array"
+				}
+			}
+		}
+	}
 }
