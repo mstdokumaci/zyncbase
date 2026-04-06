@@ -95,6 +95,7 @@ pub const TableMetadata = struct {
         for (table.fields) |f| {
             try field_map.put(f.name, f);
             const p = try msgpack.Payload.strToPayload(f.name, allocator);
+            errdefer p.free(allocator);
             try field_payloads.put(f.name, p);
         }
 
@@ -103,6 +104,7 @@ pub const TableMetadata = struct {
         for (system_cols) |sc| {
             if (!field_payloads.contains(sc)) {
                 const p = try msgpack.Payload.strToPayload(sc, allocator);
+                errdefer p.free(allocator);
                 try field_payloads.put(sc, p);
             }
         }

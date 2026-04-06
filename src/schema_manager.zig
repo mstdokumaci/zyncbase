@@ -31,7 +31,7 @@ pub const SchemaManager = struct {
         const metadata = try SchemaMetadata.init(allocator, &schema);
         errdefer {
             var m = metadata;
-            m.deinit();
+            m.deinit(allocator);
         }
 
         self.* = .{
