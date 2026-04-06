@@ -1,5 +1,32 @@
 import { ZyncBaseClient } from "./client";
 
+/**
+ * Wait for a store.listen callback to satisfy a predicate within a timeout.
+ * Resolves with the value when the predicate returns truthy, rejects on timeout.
+ */
+function waitForListen<T>(
+  client: ZyncBaseClient,
+  path: string[],
+  predicate: (val: any) => T | null | undefined | false,
+  timeoutMs = 2000
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unlisten();
+      reject(new Error(`Timeout waiting for ${path.join(".")} after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    const unlisten = client.store.listen(path, (val) => {
+      const result = predicate(val);
+      if (result) {
+        clearTimeout(timer);
+        unlisten();
+        resolve(result as T);
+      }
+    });
+  });
+}
+
 export async function run(port: number = 3000) {
   const clientA = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
   const clientB = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
@@ -15,25 +42,29 @@ export async function run(port: number = 3000) {
     console.log("Client A setting task 1...");
     await clientA.set(namespace, ["tasks", "1"], { title: "A's Task", tags: ["urgent", "home"] });
 
-    // 2. Client B gets task 1 and verifies
-    console.log("Client B waiting for task 1...");
-    const task1 = await clientB.waitFor(namespace, ["tasks", "1"], (val) => {
-      return val?.title === "A's Task" && Array.isArray(val.tags) && val.tags.includes("urgent") ? val : null;
-    });
+    // 2. Client B listens for task 1 via store.listen (bi-directional sync: A sets → B fires)
+    console.log("Client B waiting for task 1 via store.listen...");
+    const task1 = await waitForListen(
+      clientB,
+      ["tasks", "1"],
+      (val) => val?.title === "A's Task" && Array.isArray(val.tags) && val.tags.includes("urgent") ? val : null
+    );
     console.log("Client B received task 1:", task1);
 
     // 3. Client B sets task 2 with tags
     console.log("Client B setting task 2...");
     await clientB.set(namespace, ["tasks", "2"], { title: "B's Task", tags: ["work"] });
 
-    // 4. Client A gets task 2 and verifies
-    console.log("Client A waiting for task 2...");
-    const task2 = await clientA.waitFor(namespace, ["tasks", "2"], (val) => {
-      return val?.title === "B's Task" && Array.isArray(val.tags) && val.tags.includes("work") ? val : null;
-    });
+    // 4. Client A listens for task 2 via store.listen (bi-directional sync: B sets → A fires)
+    console.log("Client A waiting for task 2 via store.listen...");
+    const task2 = await waitForListen(
+      clientA,
+      ["tasks", "2"],
+      (val) => val?.title === "B's Task" && Array.isArray(val.tags) && val.tags.includes("work") ? val : null
+    );
     console.log("Client A received task 2:", task2);
 
-    // 5. Test nested object (must_be_complete)
+    // 5. Test nested object flatten/unflatten transparency (must_be_complete)
     console.log("Testing nested object (must_be_complete)...");
     const beforeTs = Math.floor(Date.now() / 1000);
     const afterTs = beforeTs + 3600;
@@ -42,9 +73,11 @@ export async function run(port: number = 3000) {
       must_be_complete: { before: beforeTs, after: afterTs }
     });
 
-    const task3 = await clientB.waitFor(namespace, ["tasks", "3"], (val) => {
-      return val?.must_be_complete?.before === beforeTs && val?.must_be_complete?.after === afterTs ? val : null;
-    });
+    const task3 = await waitForListen(
+      clientB,
+      ["tasks", "3"],
+      (val) => val?.must_be_complete?.before === beforeTs && val?.must_be_complete?.after === afterTs ? val : null
+    );
     console.log("Client B received task 3 with nested fields:", JSON.stringify(task3));
 
     // 6. Verify field-level update still works for nested fields
@@ -52,9 +85,11 @@ export async function run(port: number = 3000) {
     const newAfterTs = afterTs + 60;
     await clientB.set(namespace, ["tasks", "3", "must_be_complete", "after"], newAfterTs);
 
-    const finalTask3 = await clientA.waitFor(namespace, ["tasks", "3"], (val) => {
-      return val?.must_be_complete?.after === newAfterTs ? val : null;
-    });
+    const finalTask3 = await waitForListen(
+      clientA,
+      ["tasks", "3"],
+      (val) => val?.must_be_complete?.after === newAfterTs ? val : null
+    );
     console.log("Client A received field-level update for task 3 with nested fields:", JSON.stringify(finalTask3));
 
     // 7. Verify both clients see the same deterministic state (including nested objects)

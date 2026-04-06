@@ -5,10 +5,33 @@
     "": {
       "dependencies": {
         "@msgpack/msgpack": "^3.1.3",
+        "@zyncbase/client": "workspace:sdk/typescript",
+      },
+    },
+    "sdk/typescript": {
+      "name": "@zyncbase/client",
+      "version": "0.1.0",
+      "bin": {
+        "generate": "./dist/cli/generate.js",
+      },
+      "dependencies": {
+        "@msgpack/msgpack": "^3.1.3",
+      },
+      "devDependencies": {
+        "fast-check": "^3.0.0",
+        "typescript": "^5.0.0",
       },
     },
   },
   "packages": {
     "@msgpack/msgpack": ["@msgpack/msgpack@3.1.3", "", {}, "sha512-47XIizs9XZXvuJgoaJUIE2lFoID8ugvc0jzSHP+Ptfk8nTbnR8g788wv48N03Kx0UkAv559HWRQ3yzOgzlRNUA=="],
+
+    "@zyncbase/client": ["@zyncbase/client@workspace:sdk/typescript"],
+
+    "fast-check": ["fast-check@3.23.2", "", { "dependencies": { "pure-rand": "^6.1.0" } }, "sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A=="],
+
+    "pure-rand": ["pure-rand@6.1.0", "", {}, "sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
   }
 }
