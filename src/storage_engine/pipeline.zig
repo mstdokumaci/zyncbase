@@ -106,12 +106,13 @@ pub fn executeBatch(
                     return classified_err;
                 };
 
-                if (maybe_new_row) |*new_row| {
+                if (maybe_new_row) |new_row| {
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row.*) catch |err| {
+                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         if (old_row) |*r| r.free(allocator);
-                        new_row.free(allocator);
+                        var r = new_row;
+                        r.free(allocator);
                     };
                 } else {
                     // This is unexpected for an INSERT OR REPLACE.
@@ -136,11 +137,12 @@ pub fn executeBatch(
                     return classified_err;
                 };
 
-                if (maybe_new_row) |*new_row| {
-                    pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row.*) catch |err| {
+                if (maybe_new_row) |new_row| {
+                    pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         if (old_row) |*r| r.free(allocator);
-                        new_row.free(allocator);
+                        var r = new_row;
+                        r.free(allocator);
                     };
                 } else {
                     // If RETURNING * is empty, the row did not exist or was deleted concurrently.
@@ -159,10 +161,11 @@ pub fn executeBatch(
                 };
 
                 // For DELETE, the RETURNING * result IS the old row.
-                if (maybe_old_row) |*old_row| {
-                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table, .delete, old_row.*, null) catch |err| {
+                if (maybe_old_row) |old_row| {
+                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table, .delete, old_row, null) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
-                        old_row.free(allocator);
+                        var r = old_row;
+                        r.free(allocator);
                     };
                 } else {
                     // If RETURNING * is empty, the row did not exist or was already deleted.
