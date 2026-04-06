@@ -339,7 +339,8 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
             const ptr = sqlite.c.sqlite3_column_blob(stmt.stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
             const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
-            break :blk try msgpack.Payload.strToPayload(b, allocator);
+            var reader: std.Io.Reader = .fixed(b);
+            break :blk msgpack.decodeTrusted(allocator, &reader) catch try msgpack.Payload.strToPayload(b, allocator);
         },
         else => .nil,
     };
