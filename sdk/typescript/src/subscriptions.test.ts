@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, test } from "bun:test";
 import * as fc from "fast-check";
 import { SubscriptionTracker } from "./subscriptions";
 import type { StoreDelta, StoreSubscribe } from "./types";
@@ -13,8 +13,8 @@ describe("SubscriptionTracker", () => {
 			fc.property(fc.integer({ min: 1, max: 100000 }), (subId) => {
 				const tracker = new SubscriptionTracker();
 
-				const received: any[] = [];
-				const callback = (value: any) => received.push(value);
+				const received: unknown[] = [];
+				const callback = (value: unknown) => received.push(value);
 
 				const params: Omit<StoreSubscribe, "id"> = {
 					type: "StoreSubscribe",
@@ -51,8 +51,8 @@ describe("SubscriptionTracker", () => {
 				(registeredSubId, unregisteredSubId) => {
 					const tracker = new SubscriptionTracker();
 
-					const received: any[] = [];
-					const callback = (value: any) => received.push(value);
+					const received: unknown[] = [];
+					const callback = (value: unknown) => received.push(value);
 
 					tracker.register(registeredSubId, {
 						params: {

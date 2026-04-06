@@ -15,7 +15,6 @@ export class ZyncBaseClient {
 	private readonly tracker: SubscriptionTracker;
 	/** Error callbacks registered via client.on('error', cb). */
 	private readonly errorCallbacks: Array<(err: ZyncBaseError) => void> = [];
-	private _isFirstConnect = true;
 
 	constructor(options: ClientOptions) {
 		this.conn = new ConnectionManager(options);
@@ -80,7 +79,7 @@ export class ZyncBaseClient {
 	 * Register a lifecycle event listener.
 	 * 'error' events from fire-and-forget store operations are also routed here.
 	 */
-	on(event: LifecycleEvent, callback: (...args: any[]) => void): void {
+	on(event: LifecycleEvent, callback: (...args: unknown[]) => void): void {
 		if (event === "error") {
 			this.errorCallbacks.push(callback as (err: ZyncBaseError) => void);
 		}
@@ -91,7 +90,7 @@ export class ZyncBaseClient {
 	/**
 	 * Remove a lifecycle event listener.
 	 */
-	off(event: LifecycleEvent, callback: (...args: any[]) => void): void {
+	off(event: LifecycleEvent, callback: (...args: unknown[]) => void): void {
 		if (event === "error") {
 			const idx = this.errorCallbacks.indexOf(
 				callback as (err: ZyncBaseError) => void,
@@ -111,7 +110,6 @@ export class ZyncBaseClient {
 		// (Actual re-subscription logic relies on tracker.allSubIds())
 		const subIds = this.tracker.allSubIds();
 		if (subIds.length === 0) {
-			this._isFirstConnect = false;
 			return;
 		}
 

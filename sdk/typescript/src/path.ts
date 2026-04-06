@@ -40,43 +40,25 @@ export function decodeWirePath(wirePath: string[]): string[] {
 }
 
 export function normalizePath(path: Path): string[] {
-	if (typeof path === "string") {
-		if (path.length === 0) {
-			throw new ZyncBaseError("Path must not be empty", {
-				code: ErrorCodes.INVALID_PATH,
-				category: "client",
-				retryable: false,
-			});
-		}
-		const segments = path.split(".");
-		for (const segment of segments) {
-			if (segment.length === 0) {
-				throw new ZyncBaseError(`Path contains empty segment: "${path}"`, {
-					code: ErrorCodes.INVALID_PATH,
-					category: "client",
-					retryable: false,
-				});
-			}
-		}
-		return segments;
-	}
+	const segments = typeof path === "string" ? path.split(".") : path;
 
-	// Array input
-	if (path.length === 0) {
+	if (segments.length === 0) {
 		throw new ZyncBaseError("Path must not be empty", {
 			code: ErrorCodes.INVALID_PATH,
 			category: "client",
 			retryable: false,
 		});
 	}
-	for (const segment of path) {
+
+	for (const segment of segments) {
 		if (segment.length === 0) {
-			throw new ZyncBaseError("Path contains empty segment", {
+			const detail = typeof path === "string" ? `: "${path}"` : "";
+			throw new ZyncBaseError(`Path contains empty segment${detail}`, {
 				code: ErrorCodes.INVALID_PATH,
 				category: "client",
 				retryable: false,
 			});
 		}
 	}
-	return path;
+	return segments;
 }

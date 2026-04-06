@@ -1,5 +1,5 @@
 import type { ZyncBaseClient as SDKClient, Store } from "@zyncbase/client";
-import { createClient, ZyncBaseError } from "@zyncbase/client";
+import { createClient } from "@zyncbase/client";
 
 /**
  * Thin adapter wrapping the @zyncbase/client SDK.

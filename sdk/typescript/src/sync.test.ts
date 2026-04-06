@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { ConnectionManager } from "./connection";
+import { ZyncBaseError } from "./errors";
 import { StoreImpl } from "./store";
 import { SubscriptionTracker } from "./subscriptions";
 import type { OkResponse, StoreDelta } from "./types";
@@ -11,16 +12,17 @@ describe("Store Synchronization Integration", () => {
 
 		// Mock ConnectionManager
 		const mockConn = {
-			dispatch: mock(async (msg: any) => {
-				if (msg.type === "StoreSubscribe") {
+			dispatch: mock(async (msg: unknown) => {
+				const m = msg as Record<string, unknown>;
+				if (m.type === "StoreSubscribe") {
 					return {
 						type: "ok",
-						id: msg.id,
+						id: m.id,
 						subId: 101,
 						value: [{ id: "1", title: "Initial Task" }],
-					} as any;
+					} as unknown as OkResponse;
 				}
-				return { type: "ok", id: msg.id } as any;
+				return { type: "ok", id: m.id } as unknown as OkResponse;
 			}),
 			onDelta: (handler: (delta: StoreDelta) => void) => {
 				capturedDeltaHandler = handler;
@@ -34,7 +36,7 @@ describe("Store Synchronization Integration", () => {
 		mockConn.onDelta((delta) => tracker.dispatch(delta));
 
 		let callCount = 0;
-		let lastValue: any = null;
+		let lastValue: unknown = null;
 
 		// 1. Start listening
 		const unlisten = store.listen(["tasks", "1"], (val) => {
@@ -45,11 +47,11 @@ describe("Store Synchronization Integration", () => {
 		// 1. Initial snapshot check
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(callCount).toBe(1);
-		expect(lastValue.title).toBe("Initial Task");
+		expect((lastValue as Record<string, unknown>).title).toBe("Initial Task");
 
 		// 2. Test live update
 		if (capturedDeltaHandler) {
-			(capturedDeltaHandler as any)({
+			(capturedDeltaHandler as (d: unknown) => void)({
 				type: "StoreDelta",
 				subId: 101,
 				ops: [
@@ -58,7 +60,7 @@ describe("Store Synchronization Integration", () => {
 			});
 		}
 		expect(callCount).toBe(2);
-		expect(lastValue.title).toBe("Live Update");
+		expect((lastValue as Record<string, unknown>).title).toBe("Live Update");
 
 		unlisten();
 	});
@@ -99,8 +101,8 @@ describe("Store Synchronization Integration", () => {
 		try {
 			await store.get(["tasks", "1", "non_existent"]);
 			throw new Error("Should have thrown");
-		} catch (err: any) {
-			expect(err.code).toBe("FIELD_NOT_FOUND");
+		} catch (err) {
+			expect((err as Record<string, unknown>).code).toBe("FIELD_NOT_FOUND");
 		}
 	});
 
@@ -108,9 +110,11 @@ describe("Store Synchronization Integration", () => {
 		const tracker = new SubscriptionTracker();
 		const mockConn = {
 			dispatch: mock(async () => {
-				const err = new Error("Collection not found");
-				(err as any).code = "COLLECTION_NOT_FOUND";
-				throw err;
+				throw new ZyncBaseError("Collection not found", {
+					code: "COLLECTION_NOT_FOUND",
+					category: "validation",
+					retryable: false,
+				});
 			}),
 			onDelta: () => {},
 			getStoreNamespace: () => "public",
@@ -121,8 +125,10 @@ describe("Store Synchronization Integration", () => {
 		try {
 			await store.get(["missing_table", "1"]);
 			throw new Error("Should have thrown");
-		} catch (err: any) {
-			expect(err.code).toBe("COLLECTION_NOT_FOUND");
+		} catch (err) {
+			expect((err as Record<string, unknown>).code).toBe(
+				"COLLECTION_NOT_FOUND",
+			);
 		}
 	});
 
@@ -130,9 +136,11 @@ describe("Store Synchronization Integration", () => {
 		const tracker = new SubscriptionTracker();
 		const mockConn = {
 			dispatch: mock(async () => {
-				const err = new Error("Schema validation failed");
-				(err as any).code = "SCHEMA_VALIDATION_FAILED";
-				throw err;
+				throw new ZyncBaseError("Schema validation failed", {
+					code: "SCHEMA_VALIDATION_FAILED",
+					category: "validation",
+					retryable: false,
+				});
 			}),
 			onDelta: () => {},
 			getStoreNamespace: () => "public",
@@ -143,8 +151,10 @@ describe("Store Synchronization Integration", () => {
 		try {
 			await store.set(["tasks", "1", "title"], 12345);
 			throw new Error("Should have thrown");
-		} catch (err: any) {
-			expect(err.code).toBe("SCHEMA_VALIDATION_FAILED");
+		} catch (err) {
+			expect((err as Record<string, unknown>).code).toBe(
+				"SCHEMA_VALIDATION_FAILED",
+			);
 		}
 	});
 });
@@ -153,25 +163,28 @@ describe("Store Listen Reconstruction", () => {
 	test("should unflatten initial snapshot with complex flattened keys", async () => {
 		const tracker = new SubscriptionTracker();
 		const mockConn = {
-			dispatch: mock(async (msg: any) => ({
-				type: "ok",
-				id: msg.id,
-				subId: 202,
-				value: [
-					{
-						id: "2",
-						title: "Complex Task",
-						meta__author: "Mustafa",
-						meta__priority: 1,
-					},
-				],
-			})),
+			dispatch: mock(async (msg: unknown) => {
+				const m = msg as Record<string, unknown>;
+				return {
+					type: "ok",
+					id: m.id,
+					subId: 202,
+					value: [
+						{
+							id: "2",
+							title: "Complex Task",
+							meta__author: "Mustafa",
+							meta__priority: 1,
+						},
+					],
+				} as unknown as OkResponse;
+			}),
 			onDelta: () => {},
 			getStoreNamespace: () => "public",
 		} as unknown as ConnectionManager;
 
 		const store = new StoreImpl(mockConn, tracker);
-		let captured: any = null;
+		let captured: unknown = null;
 
 		store.listen(["tasks", "2"], (val) => {
 			captured = val;
@@ -181,9 +194,11 @@ describe("Store Listen Reconstruction", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(captured).not.toBeNull();
-		expect(captured.title).toBe("Complex Task");
-		expect(captured.meta).toBeDefined();
-		expect(captured.meta.author).toBe("Mustafa");
-		expect(captured.meta.priority).toBe(1);
+		const c = captured as Record<string, unknown>;
+		expect(c.title).toBe("Complex Task");
+		expect(c.meta).toBeDefined();
+		const meta = c.meta as Record<string, unknown>;
+		expect(meta.author).toBe("Mustafa");
+		expect(meta.priority).toBe(1);
 	});
 });

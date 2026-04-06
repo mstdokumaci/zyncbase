@@ -29,7 +29,7 @@ interface ZyncBaseErrorOptions {
 	retryAfter?: number;
 	requestId?: number;
 	path?: string[];
-	details?: Record<string, string[]>;
+	details?: Record<string, unknown>;
 }
 
 function deriveCategory(code: string): {
@@ -78,7 +78,7 @@ export class ZyncBaseError extends Error {
 	retryAfter?: number;
 	requestId?: number;
 	path?: string[];
-	details?: Record<string, string[]>;
+	details?: Record<string, unknown>;
 
 	constructor(message: string, options: ZyncBaseErrorOptions) {
 		super(message);
@@ -101,7 +101,7 @@ export class ZyncBaseError extends Error {
 		retryAfter?: number;
 		requestId?: number;
 		path?: string[];
-		details?: Record<string, string[]>;
+		details?: Record<string, unknown>;
 	}): ZyncBaseError {
 		const { category, retryable } = deriveCategory(payload.code);
 		return new ZyncBaseError(payload.message, {

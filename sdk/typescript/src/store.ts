@@ -22,15 +22,15 @@ import { generateUUIDv7 } from "./uuid.js";
  *   flatten({ a: { b: 1, c: 2 } }) → { "a__b": 1, "a__c": 2 }
  */
 export function flatten(
-	obj: Record<string, any>,
+	obj: Record<string, unknown>,
 	prefix = "",
-): Record<string, any> {
-	const result: Record<string, any> = {};
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
 	for (const key of Object.keys(obj)) {
 		const fullKey = prefix ? `${prefix}__${key}` : key;
 		const value = obj[key];
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			const nested = flatten(value, fullKey);
+			const nested = flatten(value as Record<string, unknown>, fullKey);
 			for (const nestedKey of Object.keys(nested)) {
 				result[nestedKey] = nested[nestedKey];
 			}
@@ -47,8 +47,10 @@ export function flatten(
  * Example:
  *   unflatten({ "a__b": 1, "a__c": 2 }) → { a: { b: 1, c: 2 } }
  */
-export function unflatten(obj: Record<string, any>): Record<string, any> {
-	const result: Record<string, any> = {};
+export function unflatten(
+	obj: Record<string, unknown>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
 	for (const key of Object.keys(obj)) {
 		const parts = key.split("__");
 		let current = result;
@@ -61,7 +63,7 @@ export function unflatten(obj: Record<string, any>): Record<string, any> {
 			) {
 				current[part] = {};
 			}
-			current = current[part];
+			current = current[part] as Record<string, unknown>;
 		}
 		current[parts[parts.length - 1]] = obj[key];
 	}
@@ -86,35 +88,39 @@ const OP_CODES: Record<string, number> = {
 	isNotNull: 12,
 };
 
-type WireCondition = [string, number] | [string, number, any];
+type WireCondition = [string, number] | [string, number, unknown];
 
 /**
  * Encode a single condition object (e.g. { age: { gte: 18 } }) into wire tuples.
  * Nested field paths are flattened with `__`.
  */
 function encodeConditionObject(
-	obj: Record<string, any>,
+	obj: Record<string, unknown>,
 	prefix = "",
 ): WireCondition[] {
 	const conditions: WireCondition[] = [];
 	for (const [key, val] of Object.entries(obj)) {
 		const fieldKey = prefix ? `${prefix}__${key}` : key;
 		if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+			const v = val as Record<string, unknown>;
 			// Check if this is an operator object (has known op keys)
-			const opKeys = Object.keys(val).filter((k) => k in OP_CODES);
+			const opKeys = Object.keys(v).filter((k) => k in OP_CODES);
 			if (opKeys.length > 0) {
 				for (const op of opKeys) {
 					const code = OP_CODES[op];
 					if (op === "isNull" || op === "isNotNull") {
 						conditions.push([fieldKey, code]);
 					} else {
-						conditions.push([fieldKey, code, val[op]]);
+						conditions.push([fieldKey, code, v[op]]);
 					}
 				}
 			} else {
 				// Nested field object — recurse
-				conditions.push(...encodeConditionObject(val, fieldKey));
+				conditions.push(...encodeConditionObject(v, fieldKey));
 			}
+		} else {
+			// Direct equality
+			conditions.push([fieldKey, OP_CODES.eq, val]);
 		}
 	}
 	return conditions;
@@ -133,14 +139,17 @@ export function encodeQueryOptions(options: QueryOptions): {
 	const result: ReturnType<typeof encodeQueryOptions> = {};
 
 	if (options.where) {
-		const { or, ...rest } = options.where as any;
+		const where = options.where as Record<string, unknown>;
+		const { or, ...rest } = where;
 		const conditions = encodeConditionObject(rest);
 		if (conditions.length > 0) result.conditions = conditions;
 
 		if (Array.isArray(or)) {
 			const orConditions: WireCondition[] = [];
 			for (const clause of or) {
-				orConditions.push(...encodeConditionObject(clause));
+				orConditions.push(
+					...encodeConditionObject(clause as Record<string, unknown>),
+				);
 			}
 			if (orConditions.length > 0) result.orConditions = orConditions;
 		}
@@ -168,7 +177,7 @@ export class StoreImpl {
 
 	// ─── Writes ────────────────────────────────────────────────────────────────
 
-	async set(path: Path, value: any): Promise<void> {
+	async set(path: Path, value: unknown): Promise<void> {
 		const segments = normalizePath(path);
 		if (segments.length === 1) {
 			throw new ZyncBaseError("store.set requires a path of depth 2 or more", {
@@ -186,7 +195,7 @@ export class StoreImpl {
 			typeof value === "object" &&
 			!Array.isArray(value)
 		) {
-			wireValue = flatten(value);
+			wireValue = flatten(value as Record<string, unknown>);
 		}
 		const wirePath = encodeWirePath(segments);
 		try {
@@ -195,9 +204,20 @@ export class StoreImpl {
 				path: wirePath,
 				value: wireValue,
 			});
-		} catch (err: any) {
-			this.emitError?.(err);
-			throw err;
+		} catch (err) {
+			const e =
+				err instanceof ZyncBaseError
+					? err
+					: new ZyncBaseError(
+							err instanceof Error ? err.message : "Set failed",
+							{
+								code: ErrorCodes.INTERNAL_ERROR,
+								category: "server",
+								retryable: true,
+							},
+						);
+			this.emitError?.(e);
+			throw e;
 		}
 	}
 
@@ -217,20 +237,31 @@ export class StoreImpl {
 		const wirePath = encodeWirePath(segments);
 		try {
 			await this.conn.dispatch({ type: "StoreRemove", path: wirePath });
-		} catch (err: any) {
-			this.emitError?.(err);
-			throw err;
+		} catch (err) {
+			const e =
+				err instanceof ZyncBaseError
+					? err
+					: new ZyncBaseError(
+							err instanceof Error ? err.message : "Remove failed",
+							{
+								code: ErrorCodes.INTERNAL_ERROR,
+								category: "server",
+								retryable: true,
+							},
+						);
+			this.emitError?.(e);
+			throw e;
 		}
 	}
 
 	// ─── Create ────────────────────────────────────────────────────────────────
 
-	async create(collection: string, value: any): Promise<string> {
+	async create(collection: string, value: unknown): Promise<string> {
 		const uuid = generateUUIDv7();
 		const segments = [collection, uuid];
 		let wireValue = value;
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			wireValue = flatten(value);
+			wireValue = flatten(value as Record<string, unknown>);
 		}
 		const wirePath = encodeWirePath(segments);
 		try {
@@ -239,26 +270,37 @@ export class StoreImpl {
 				path: wirePath,
 				value: wireValue,
 			});
-		} catch (err: any) {
-			this.emitError?.(err);
-			throw err;
+		} catch (err) {
+			const e =
+				err instanceof ZyncBaseError
+					? err
+					: new ZyncBaseError(
+							err instanceof Error ? err.message : "Create failed",
+							{
+								code: ErrorCodes.INTERNAL_ERROR,
+								category: "server",
+								retryable: true,
+							},
+						);
+			this.emitError?.(e);
+			throw e;
 		}
 		return uuid;
 	}
 
-	async push(collection: string, value: any): Promise<string> {
+	async push(collection: string, value: unknown): Promise<string> {
 		// For now, push is the same as create.
 		return this.create(collection, value);
 	}
 
-	async update(path: Path, value: any): Promise<void> {
+	async update(path: Path, value: unknown): Promise<void> {
 		// For now, update is synonymous with set (doc-level merging is handled by storage engine)
 		return this.set(path, value);
 	}
 
 	// ─── Reads ─────────────────────────────────────────────────────────────────
 
-	get(path: Path): Promise<any> {
+	get(path: Path): Promise<unknown> {
 		const segments = normalizePath(path);
 
 		if (segments.length === 1) {
@@ -269,15 +311,15 @@ export class StoreImpl {
 					collection: segments[0],
 				})
 				.then((ok) => {
-					const rows: any[] = ok.value ?? [];
+					const rows: unknown[] = ok.value ?? [];
 					return rows.map((row) =>
 						row !== null && typeof row === "object" && !Array.isArray(row)
-							? unflatten(row)
+							? unflatten(row as Record<string, unknown>)
 							: row,
 					);
 				})
 				.catch((err) => {
-					this.emitError?.(err);
+					this._emitError(err);
 					throw err;
 				});
 		}
@@ -291,11 +333,11 @@ export class StoreImpl {
 					conditions: [["id", 0, segments[1]]],
 				})
 				.then((ok) => {
-					const rows: any[] = ok.value ?? [];
+					const rows: unknown[] = ok.value ?? [];
 					if (rows.length === 0) return null;
 					const row = rows[0];
 					return row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row)
+						? unflatten(row as Record<string, unknown>)
 						: row;
 				});
 		}
@@ -308,14 +350,17 @@ export class StoreImpl {
 				conditions: [["id", 0, segments[1]]],
 			})
 			.then((ok) => {
-				const rows: any[] = ok.value ?? [];
+				const rows: unknown[] = ok.value ?? [];
 				if (rows.length === 0) return undefined;
-				const row = rows[0];
-				const record = unflatten(rows[0]);
+				const record = unflatten(rows[0] as Record<string, unknown>);
 
-				let val = record;
+				let val: unknown = record;
 				for (const part of segments.slice(2)) {
-					if (val === null || typeof val !== "object" || !(part in val)) {
+					if (
+						val === null ||
+						typeof val !== "object" ||
+						!(part in (val as Record<string, unknown>))
+					) {
 						throw new ZyncBaseError(
 							`Field ${part} not found at path ${segments.join(".")}`,
 							{
@@ -325,7 +370,7 @@ export class StoreImpl {
 							},
 						);
 					}
-					val = val[part];
+					val = (val as Record<string, unknown>)[part];
 				}
 				return val;
 			});
@@ -334,7 +379,7 @@ export class StoreImpl {
 	query(
 		collection: string,
 		options?: QueryOptions,
-	): Promise<any[] & { nextCursor: string | null }> {
+	): Promise<unknown[] & { nextCursor: string | null }> {
 		const encoded = options ? encodeQueryOptions(options) : {};
 		return this.conn
 			.dispatch({
@@ -343,13 +388,14 @@ export class StoreImpl {
 				...encoded,
 			})
 			.then((ok) => {
-				const rows: any[] = (ok.value ?? []).map((row: any) =>
+				const rows = (ok.value ?? []).map((row: unknown) =>
 					row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row)
+						? unflatten(row as Record<string, unknown>)
 						: row,
 				);
-				(rows as any).nextCursor = ok.nextCursor ?? null;
-				return rows as any[] & { nextCursor: string | null };
+				const result = rows as unknown[] & { nextCursor: string | null };
+				result.nextCursor = ok.nextCursor ?? null;
+				return result;
 			});
 	}
 
@@ -367,7 +413,7 @@ export class StoreImpl {
 		}
 
 		// Validate all paths first
-		const wireOps: (["s", string[], any] | ["r", string[]])[] = [];
+		const wireOps: (["s", string[], unknown] | ["r", string[]])[] = [];
 		for (const op of operations) {
 			let segments: string[];
 			try {
@@ -384,7 +430,7 @@ export class StoreImpl {
 					typeof wireValue === "object" &&
 					!Array.isArray(wireValue)
 				) {
-					wireValue = flatten(wireValue);
+					wireValue = flatten(wireValue as Record<string, unknown>);
 				}
 				wireOps.push(["s", wirePath, wireValue]);
 			} else {
@@ -402,7 +448,7 @@ export class StoreImpl {
 
 	// ─── Subscriptions ─────────────────────────────────────────────────────────
 
-	listen(path: Path, callback: (value: any) => void): () => void {
+	listen(path: Path, callback: (value: unknown) => void): () => void {
 		const segments = normalizePath(path);
 
 		let subscribeParams: Omit<StoreSubscribe, "id">;
@@ -464,8 +510,9 @@ export class StoreImpl {
 						const delta: StoreDelta = { type: "StoreDelta", subId, ops: [] };
 						const collection = segments[0];
 						if (Array.isArray(ok.value)) {
-							for (const item of ok.value as any[]) {
-								const id = item.id || segments[1]; // Use existing ID or from path
+							for (const item of ok.value as unknown[]) {
+								const i = item as Record<string, unknown>;
+								const id = (i.id as string) || segments[1];
 								delta.ops.push({
 									op: "set",
 									path: [collection, id],
@@ -473,8 +520,8 @@ export class StoreImpl {
 								});
 							}
 						} else if (ok.value !== null) {
-							const val = ok.value as any;
-							const id = val.id || segments[1];
+							const val = ok.value as Record<string, unknown>;
+							const id = (val.id as string) || segments[1];
 							delta.ops.push({ op: "set", path: [collection, id], value: val });
 						}
 						this.tracker.dispatch(delta);
@@ -498,7 +545,7 @@ export class StoreImpl {
 	subscribe(
 		collection: string,
 		options: QueryOptions,
-		callback: (results: any[]) => void,
+		callback: (results: unknown[]) => void,
 	): SubscriptionHandle {
 		const encoded = encodeQueryOptions(options);
 		const subscribeParams: Omit<StoreSubscribe, "id"> = {
@@ -532,7 +579,7 @@ export class StoreImpl {
 				if (subId !== null) {
 					this.tracker.register(subId, {
 						params: subscribeParams,
-						callbacks: [callback],
+						callbacks: [callback as (v: unknown) => void],
 						projection: null,
 					});
 				}

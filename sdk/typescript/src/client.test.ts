@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { encode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
 import type { ClientOptions } from "./types";
@@ -14,10 +14,10 @@ class MockWebSocket {
 	binaryType: string = "";
 	sentMessages: Uint8Array[] = [];
 
-	onopen: ((event: any) => void) | null = null;
-	onclose: ((event: any) => void) | null = null;
-	onerror: ((event: any) => void) | null = null;
-	onmessage: ((event: any) => void) | null = null;
+	onopen: ((event: unknown) => void) | null = null;
+	onclose: ((event: unknown) => void) | null = null;
+	onerror: ((event: unknown) => void) | null = null;
+	onmessage: ((event: unknown) => void) | null = null;
 
 	send(data: Uint8Array) {
 		this.sentMessages.push(data);
@@ -43,18 +43,20 @@ const OriginalWebSocket = globalThis.WebSocket;
 
 function installMockWebSocket() {
 	mockWs = new MockWebSocket();
-	(globalThis as any).WebSocket = class {
+	(globalThis as unknown as { WebSocket: unknown }).WebSocket = class {
 		static OPEN = MockWebSocket.OPEN;
 		static CLOSING = MockWebSocket.CLOSING;
 		static CLOSED = MockWebSocket.CLOSED;
 		constructor(_url: string) {
-			return mockWs as any;
+			// biome-ignore lint/correctness/noConstructorReturn: required for mocking pattern
+			return mockWs as unknown as WebSocket;
 		}
 	};
 }
 
 function restoreWebSocket() {
-	(globalThis as any).WebSocket = OriginalWebSocket;
+	(globalThis as unknown as { WebSocket: unknown }).WebSocket =
+		OriginalWebSocket;
 }
 
 const defaultOptions: ClientOptions = {
@@ -75,7 +77,7 @@ describe("createClient", () => {
 
 	test("does not open a WebSocket before connect() is called", () => {
 		let wsCreated = false;
-		(globalThis as any).WebSocket = class {
+		(globalThis as unknown as { WebSocket: unknown }).WebSocket = class {
 			static OPEN = 1;
 			constructor() {
 				wsCreated = true;
@@ -131,7 +133,7 @@ describe("ZyncBaseClient", () => {
 	test("client.on('error', cb) receives errors from fire-and-forget store.set", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
-		const errors: any[] = [];
+		const errors: unknown[] = [];
 		client.on("error", (err) => errors.push(err));
 
 		const p = client.connect();
@@ -147,7 +149,7 @@ describe("ZyncBaseClient", () => {
 		await new Promise((r) => setTimeout(r, 0)); // flush microtasks
 		const lastMsg = mockWs.sentMessages[mockWs.sentMessages.length - 1];
 		const { decode } = await import("@msgpack/msgpack");
-		const decoded = decode(lastMsg) as any;
+		const decoded = decode(lastMsg) as Record<string, unknown>;
 
 		const errorResponse = encode({
 			type: "error",
@@ -160,7 +162,7 @@ describe("ZyncBaseClient", () => {
 
 		await setPromise;
 		expect(errors.length).toBeGreaterThan(0);
-		expect(errors[0].code).toBe("INTERNAL_ERROR");
+		expect((errors[0] as Record<string, unknown>).code).toBe("INTERNAL_ERROR");
 
 		restoreWebSocket();
 	});

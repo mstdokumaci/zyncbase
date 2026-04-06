@@ -1,5 +1,13 @@
 import { ZyncBaseClient } from "./client";
 
+/** Mock Task for testing */
+interface MockTask {
+	id: string;
+	title?: string;
+	tags?: string[] | null;
+	must_be_complete?: { before: number | null; after: number | null } | null;
+}
+
 /**
  * Wait for a store.listen callback to satisfy a predicate within a timeout.
  * Resolves with the value when the predicate returns truthy, rejects on timeout.
@@ -7,7 +15,7 @@ import { ZyncBaseClient } from "./client";
 function waitForListen<T>(
 	client: ZyncBaseClient,
 	path: string[],
-	predicate: (val: any) => T | null | undefined | false,
+	predicate: (val: MockTask) => T | null | undefined | false,
 	timeoutMs = 2000,
 ): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -18,8 +26,8 @@ function waitForListen<T>(
 			);
 		}, timeoutMs);
 
-		const unlisten = client.store.listen(path, (val) => {
-			const result = predicate(val);
+		const unlisten = client.store.listen(path, (val: unknown) => {
+			const result = predicate(val as MockTask);
 			if (result) {
 				clearTimeout(timer);
 				unlisten();
@@ -114,7 +122,7 @@ export async function run(port: number = 3000) {
 		);
 
 		// 7. Verify both clients see the same deterministic state (including nested objects)
-		const getSnapshot = (tasks: any[]) =>
+		const getSnapshot = (tasks: MockTask[]) =>
 			JSON.stringify(
 				tasks
 					.map((t) => ({
@@ -123,7 +131,7 @@ export async function run(port: number = 3000) {
 						tags: t.tags,
 						must_be_complete: t.must_be_complete,
 					}))
-					.sort((a, b) => a.id.localeCompare(b.id)),
+					.sort((a, b) => (a.id as string).localeCompare(b.id as string)),
 			);
 
 		const expected = JSON.stringify([
@@ -147,11 +155,11 @@ export async function run(port: number = 3000) {
 			},
 		]);
 
-		const tasksA = (await clientA.get(namespace, ["tasks"])) as any[];
+		const tasksA = (await clientA.get(namespace, ["tasks"])) as MockTask[];
 		if (getSnapshot(tasksA) !== expected)
 			throw new Error(`Client A mismatch. Got: ${getSnapshot(tasksA)}`);
 
-		const tasksB = (await clientB.get(namespace, ["tasks"])) as any[];
+		const tasksB = (await clientB.get(namespace, ["tasks"])) as MockTask[];
 		if (getSnapshot(tasksB) !== expected)
 			throw new Error(`Client B mismatch. Got: ${getSnapshot(tasksB)}`);
 

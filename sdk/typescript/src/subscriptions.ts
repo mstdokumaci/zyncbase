@@ -18,7 +18,7 @@ export interface SubscriptionEntry {
 	/** Original StoreSubscribe params — used for replay on reconnect. */
 	params: Omit<StoreSubscribe, "id">;
 	/** Registered callbacks to invoke when a delta arrives. */
-	callbacks: Array<(value: any) => void>;
+	callbacks: Array<(value: unknown) => void>;
 	/** Projection info; null for store.subscribe (collection-level) registrations. */
 	projection: ListenProjection | null;
 }
@@ -146,38 +146,30 @@ export class SubscriptionTracker {
 
 	/**
 	 * Apply SDK-side field projection for store.listen registrations.
-	 *
-	 * Delta op paths from the server are wire-encoded: the field segment is a
-	 * single "__"-joined string (e.g. ["address__city"]). We reconstruct a flat
-	 * record from those keys, then unflatten it before returning to the caller.
-	 *
-	 * - depth 1 (collection): pass the full ops array as-is.
-	 * - depth 2 (document): reconstruct + unflatten the record.
-	 * - depth 3+ (field): reconstruct + unflatten, then extract the specific field.
-	 *
-	 * For store.subscribe (projection === null): pass the full ops array as-is.
 	 */
 	private _project(
 		delta: StoreDelta,
 		projection: ListenProjection | null,
-	): any {
-		if (projection === null) {
+	): unknown {
+		if (projection === null || projection.depth === 1) {
 			// store.subscribe — deliver raw ops
 			return delta.ops;
 		}
 
-		const { depth, field } = projection;
+		const record = this._reconstructRecord(delta.ops);
 
-		if (depth === 1) {
-			// Collection-level listen — deliver raw ops
-			return delta.ops;
+		if (projection.depth === 2 || projection.field === null) {
+			// Document-level listen — return the unflattened record
+			return record;
 		}
 
-		// depth 2+ — reconstruct record state from delta ops.
-		// Server sends full paths: ["table", "doc_id", "field", "subfield"].
-		// We need to slice off the first two segments to get the record-relative path.
-		const flat: Record<string, any> = {};
-		for (const op of delta.ops) {
+		// depth 3+ — extract the specific nested field
+		return this._getField(record, projection.field);
+	}
+
+	private _reconstructRecord(ops: StoreDelta["ops"]): unknown {
+		const flat: Record<string, unknown> = {};
+		for (const op of ops) {
 			// Relative path starting from the record root
 			const relativePath = op.path.slice(2);
 
@@ -187,35 +179,26 @@ export class SubscriptionTracker {
 					return op.value !== null &&
 						typeof op.value === "object" &&
 						!Array.isArray(op.value)
-						? unflatten(op.value)
+						? unflatten(op.value as Record<string, unknown>)
 						: op.value;
 				}
 				if (op.op === "remove") return null;
 			}
 
 			const key = relativePath.join("__");
-			if (op.op === "set") {
-				flat[key] = op.value;
-			} else if (op.op === "remove") {
-				flat[key] = undefined;
-			}
+			flat[key] = op.op === "set" ? op.value : undefined;
 		}
 
 		// Unflatten to restore nested structure for the caller
-		const record = unflatten(flat);
+		return unflatten(flat);
+	}
 
-		if (depth === 2 || field === null) {
-			// Document-level listen — return the unflattened record
-			return record;
-		}
-
-		// depth 3+ — extract the specific nested field
-		// `field` is the dot-notation field path from the original listen call (e.g. "address.city")
-		const fieldParts = field.split(".");
-		let value: any = record;
-		for (const part of fieldParts) {
+	private _getField(record: unknown, fieldPath: string): unknown {
+		const parts = fieldPath.split(".");
+		let value = record;
+		for (const part of parts) {
 			if (value == null || typeof value !== "object") return undefined;
-			value = value[part];
+			value = (value as Record<string, unknown>)[part];
 		}
 		return value;
 	}

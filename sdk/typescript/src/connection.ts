@@ -11,7 +11,7 @@ import type {
 	StoreDelta,
 } from "./types";
 
-type EventHandler = (...args: any[]) => void;
+type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
 type DeltaHandler = (delta: StoreDelta) => void;
 
@@ -29,7 +29,7 @@ export class ConnectionManager {
 	private nextMsgId = 1;
 	private pendingQueue: Map<
 		number,
-		{ resolve: (value: any) => void; reject: (reason: any) => void }
+		{ resolve: (value: OkResponse) => void; reject: (reason: unknown) => void }
 	> = new Map();
 
 	// Lifecycle event registry
@@ -178,14 +178,16 @@ export class ConnectionManager {
 	 * Encode a message object, assign a msg_id, add to pendingQueue, send it,
 	 * and return a Promise that resolves/rejects when the server responds.
 	 */
-	dispatch(msg: Record<string, any>): Promise<OkResponse> {
+	dispatch(msg: Record<string, unknown>): Promise<OkResponse> {
 		const id = this.nextMsgId++;
 
-		const msgWithId: any = { ...msg, id };
+		const msgWithId: Record<string, unknown> = { ...msg, id };
 		if (!msgWithId.namespace) {
-			if (msgWithId.type?.startsWith("Store")) {
+			if ((msgWithId.type as string | undefined)?.startsWith("Store")) {
 				msgWithId.namespace = this.storeNamespace;
-			} else if (msgWithId.type?.startsWith("Presence")) {
+			} else if (
+				(msgWithId.type as string | undefined)?.startsWith("Presence")
+			) {
 				msgWithId.namespace = this.presenceNamespace;
 			}
 		}
@@ -252,7 +254,7 @@ export class ConnectionManager {
 		if (!this.eventListeners.has(event)) {
 			this.eventListeners.set(event, []);
 		}
-		this.eventListeners.get(event)!.push(handler);
+		this.eventListeners.get(event)?.push(handler);
 	}
 
 	/** Remove a lifecycle event listener. */
@@ -264,7 +266,7 @@ export class ConnectionManager {
 		}
 	}
 
-	private emit(event: LifecycleEvent, ...args: any[]): void {
+	private emit(event: LifecycleEvent, ...args: unknown[]): void {
 		const handlers = this.eventListeners.get(event);
 		if (handlers) {
 			for (const h of handlers) {
@@ -300,47 +302,49 @@ export class ConnectionManager {
 				data instanceof ArrayBuffer ? new Uint8Array(data) : data,
 			) as InboundMessage;
 		} catch {
-			// Malformed frame — discard silently
 			return;
 		}
 
-		if (!msg || typeof msg !== "object" || !("type" in msg)) {
-			return;
+		if (!msg || typeof msg !== "object" || !("type" in msg)) return;
+
+		const type = (msg as unknown as Record<string, unknown>).type as string;
+		const id = (msg as unknown as Record<string, unknown>).id ?? "push";
+		console.log(`[SDK] << ${type} (id=${id}):`, JSON.stringify(msg));
+
+		switch (type) {
+			case "ok":
+				this._handleOkResponse(msg as OkResponse);
+				break;
+			case "error":
+				this._handleErrorResponse(msg as ErrorResponse);
+				break;
+			case "StoreDelta":
+				this._handleDeltaPush(msg as StoreDelta);
+				break;
 		}
 
-		const type = (msg as any).type as string;
-		console.log(
-			`[SDK] << ${type} (id=${(msg as any).id || "push"}):`,
-			JSON.stringify(msg),
-		);
+		if (this.messageHandler) this.messageHandler(msg);
+	}
 
-		if (type === "ok") {
-			const ok = msg as OkResponse;
-			const entry = this.pendingQueue.get(ok.id);
-			if (entry) {
-				this.pendingQueue.delete(ok.id);
-				entry.resolve(ok);
-			}
-			// unknown id → discard silently
-		} else if (type === "error") {
-			const err = msg as ErrorResponse;
-			const entry = this.pendingQueue.get(err.id);
-			if (entry) {
-				this.pendingQueue.delete(err.id);
-				entry.reject(ZyncBaseError.fromServerResponse(err));
-			}
-			// unknown id → discard silently
-		} else if (type === "StoreDelta") {
-			const delta = msg as StoreDelta;
-			if (this.deltaHandler) {
-				this.deltaHandler(delta);
-			}
+	private _handleOkResponse(ok: OkResponse): void {
+		const entry = this.pendingQueue.get(ok.id);
+		if (entry) {
+			this.pendingQueue.delete(ok.id);
+			entry.resolve(ok);
 		}
-		// Any other type → discard silently
+	}
 
-		// Also forward to generic message handler if registered
-		if (this.messageHandler) {
-			this.messageHandler(msg);
+	private _handleErrorResponse(err: ErrorResponse): void {
+		const entry = this.pendingQueue.get(err.id);
+		if (entry) {
+			this.pendingQueue.delete(err.id);
+			entry.reject(ZyncBaseError.fromServerResponse(err));
+		}
+	}
+
+	private _handleDeltaPush(delta: StoreDelta): void {
+		if (this.deltaHandler) {
+			this.deltaHandler(delta);
 		}
 	}
 }

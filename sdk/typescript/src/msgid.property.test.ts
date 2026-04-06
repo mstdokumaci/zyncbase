@@ -22,9 +22,9 @@ class MockWebSocket {
 	sentMessages: Uint8Array[] = [];
 
 	onopen: (() => void) | null = null;
-	onclose: ((event: any) => void) | null = null;
-	onerror: ((event: any) => void) | null = null;
-	onmessage: ((event: any) => void) | null = null;
+	onclose: ((event: unknown) => void) | null = null;
+	onerror: ((event: unknown) => void) | null = null;
+	onmessage: ((event: unknown) => void) | null = null;
 
 	constructor(_url: string) {
 		// Trigger open asynchronously (next microtask)
@@ -43,62 +43,73 @@ class MockWebSocket {
 	}
 }
 
+async function runMsgIdPropertyTest(n: number): Promise<boolean> {
+	// Install mock WebSocket globally
+	const originalWebSocket = (globalThis as unknown as { WebSocket: unknown })
+		.WebSocket;
+	(globalThis as unknown as { WebSocket: unknown }).WebSocket = MockWebSocket;
+
+	try {
+		const options: ClientOptions = {
+			url: "ws://localhost:9999",
+			reconnect: false,
+		};
+
+		const manager = new ConnectionManager(options);
+		await manager.connect();
+
+		// Dispatch N messages (they'll be pending since no responses come)
+		const dispatchPromises: Promise<unknown>[] = [];
+		for (let i = 0; i < n; i++) {
+			dispatchPromises.push(
+				manager
+					.dispatch({ type: "StoreQuery", collection: "test" })
+					.catch(() => {
+						// Ignore rejections from disconnect cleanup
+					}),
+			);
+		}
+
+		// Wait briefly for all dispatches to hit the "socket"
+		await Promise.resolve();
+
+		// Collect the sent messages from the mock WebSocket
+		const mockWs = (manager as unknown as { ws: MockWebSocket })
+			.ws as MockWebSocket;
+		const sentMessages = mockWs.sentMessages;
+
+		// Decode each sent Uint8Array to extract the id field
+		const ids: number[] = sentMessages.map((bytes) => {
+			const decoded = decode(bytes) as Record<string, unknown>;
+			return decoded.id as number;
+		});
+
+		// Clean up
+		manager.disconnect();
+
+		// Assert we got exactly N ids
+		if (ids.length !== n) return false;
+
+		// Assert ids are [1, 2, 3, ..., N] — strictly increasing, no duplicates
+		for (let i = 0; i < ids.length; i++) {
+			if (ids[i] !== i + 1) return false;
+		}
+
+		// Double-check uniqueness via Set
+		const unique = new Set(ids);
+		if (unique.size !== ids.length) return false;
+
+		return true;
+	} finally {
+		(globalThis as unknown as { WebSocket: unknown }).WebSocket =
+			originalWebSocket;
+	}
+}
+
 describe("ConnectionManager", () => {
 	test("Property 4: msg_id values are strictly increasing integers with no duplicates", async () => {
 		await fc.assert(
-			fc.asyncProperty(fc.integer({ min: 2, max: 100 }), async (n) => {
-				// Install mock WebSocket globally
-				const originalWebSocket = (globalThis as any).WebSocket;
-				(globalThis as any).WebSocket = MockWebSocket;
-
-				const options: ClientOptions = {
-					url: "ws://localhost:9999",
-					reconnect: false,
-				};
-
-				const manager = new ConnectionManager(options);
-				await manager.connect();
-
-				// Dispatch N messages (they'll be pending since no responses come)
-				const dispatchPromises: Promise<any>[] = [];
-				for (let i = 0; i < n; i++) {
-					dispatchPromises.push(
-						manager
-							.dispatch({ type: "StoreQuery", collection: "test" })
-							.catch(() => {
-								// Ignore rejections from disconnect cleanup
-							}),
-					);
-				}
-
-				// Collect the sent messages from the mock WebSocket
-				const mockWs = (manager as any).ws as MockWebSocket;
-				const sentMessages = mockWs.sentMessages;
-
-				// Decode each sent Uint8Array to extract the id field
-				const ids: number[] = sentMessages.map((bytes) => {
-					const decoded = decode(bytes) as Record<string, any>;
-					return decoded.id as number;
-				});
-
-				// Clean up
-				manager.disconnect();
-				(globalThis as any).WebSocket = originalWebSocket;
-
-				// Assert we got exactly N ids
-				if (ids.length !== n) return false;
-
-				// Assert ids are [1, 2, 3, ..., N] — strictly increasing, no duplicates
-				for (let i = 0; i < ids.length; i++) {
-					if (ids[i] !== i + 1) return false;
-				}
-
-				// Double-check uniqueness via Set
-				const unique = new Set(ids);
-				if (unique.size !== ids.length) return false;
-
-				return true;
-			}),
+			fc.asyncProperty(fc.integer({ min: 2, max: 100 }), runMsgIdPropertyTest),
 			{ numRuns: 100 },
 		);
 	});

@@ -104,7 +104,7 @@ function emitInlineInterface(
 	depth: number,
 	maxDepth: number,
 ): string {
-	const innerIndent = indent + "  ";
+	const innerIndent = `${indent}  `;
 	const lines: string[] = ["{"];
 	for (const [fieldName, field] of Object.entries(fields)) {
 		const isRequired = required.has(fieldName);
@@ -137,7 +137,7 @@ function emitZyncBaseSchema(store: Record<string, SchemaCollection>): string {
 			const typeStr = emitFieldType(
 				field,
 				requiredSet,
-				innerIndent + "  ",
+				`${innerIndent}  `,
 				1,
 				5,
 			);

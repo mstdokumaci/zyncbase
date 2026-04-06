@@ -1,7 +1,6 @@
-import { type ChildProcess, spawn, spawnSync } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
-import { ZyncBaseClient } from "./client";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
@@ -63,7 +62,7 @@ function checkBuild() {
 		: null;
 
 	if (forceBuild || !binaryStats || latestSource > binaryStats.mtimeMs) {
-		const timeStr = new Date().toLocaleTimeString("en-GB", { hour12: false });
+		const _timeStr = new Date().toLocaleTimeString("en-GB", { hour12: false });
 		log(`Building ZyncBase server (ReleaseFast)...`);
 		const start = Date.now();
 		const result = spawnSync("zig", ["build", "-Doptimize=ReleaseFast"], {
@@ -83,7 +82,7 @@ function checkBuild() {
 async function wait_for_port(port: number, retries = 50): Promise<void> {
 	for (let i = 0; i < retries; i++) {
 		try {
-			const socket = new (require("net").Socket)();
+			const socket = new (require("node:net").Socket)();
 			await new Promise<void>((resolve, reject) => {
 				socket.setTimeout(100);
 				socket.on("connect", () => {
@@ -101,7 +100,7 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 				socket.connect(port, "127.0.0.1");
 			});
 			return;
-		} catch (err) {
+		} catch (_err) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 	}
@@ -111,9 +110,9 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 async function start_server(configPath: string): Promise<ChildProcess> {
 	// Kill any process on the port first to avoid stale connections
 	try {
-		const { execSync } = require("child_process");
+		const { execSync } = require("node:child_process");
 		execSync(`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`);
-	} catch (e) {}
+	} catch (_e) {}
 
 	const server = spawn(SERVER_BIN, ["--config", configPath], {
 		stdio: "inherit",

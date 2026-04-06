@@ -39,7 +39,7 @@ export interface StatusDetail {
 // ─── SDK-side query types (Prisma-style, encoded to wire tuples before sending) ──
 
 export interface QueryOptions {
-	where?: Record<string, any>; // e.g. { age: { gte: 18 }, status: { eq: 'active' } }
+	where?: Record<string, unknown>; // e.g. { age: { gte: 18 }, status: { eq: 'active' } }
 	orderBy?: Record<string, "asc" | "desc">; // e.g. { created_at: 'desc' }
 	limit?: number;
 	after?: string; // opaque cursor token
@@ -48,7 +48,7 @@ export interface QueryOptions {
 export interface BatchOperation {
 	op: "set" | "remove";
 	path: Path;
-	value?: any;
+	value?: unknown;
 }
 
 export interface SubscriptionHandle {
@@ -61,31 +61,31 @@ export interface SubscriptionHandle {
 
 export interface Store {
 	/** Set a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	set(path: Path, value: any): Promise<void>;
+	set(path: Path, value: unknown): Promise<void>;
 	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
 	remove(path: Path): Promise<void>;
 	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
-	create(collection: string, value: any): Promise<string>;
+	create(collection: string, value: unknown): Promise<string>;
 	/** Push a new value to a collection with an auto-generated ULID/UUID. Returns a Promise of the ID. */
-	push(collection: string, value: any): Promise<string>;
+	push(collection: string, value: unknown): Promise<string>;
 	/** Merge fields into an existing document. Returns a Promise that resolves when the server acknowledges. */
-	update(path: Path, value: any): Promise<void>;
+	update(path: Path, value: unknown): Promise<void>;
 	/** Get current value(s) in a one-off read. */
-	get(path: Path): Promise<any>;
+	get(path: Path): Promise<unknown>;
 	/** Listen for changes at a path. Returns an unlisten function. */
-	listen(path: Path, callback: (value: any) => void): () => void;
+	listen(path: Path, callback: (value: unknown) => void): () => void;
 	/** Subscribe to a collection with complex queries. */
 	subscribe(
 		collection: string,
 		options: QueryOptions,
-		callback: (results: any[]) => void,
+		callback: (results: unknown[]) => void,
 	): SubscriptionHandle;
 	// Batch — async
 	batch(operations: BatchOperation[]): Promise<void>;
 	query(
 		collection: string,
 		options?: QueryOptions,
-	): Promise<any[] & { nextCursor: string | null }>;
+	): Promise<unknown[] & { nextCursor: string | null }>;
 }
 
 // ─── Outbound wire messages: writes ──────────────────────────────────────────
@@ -95,7 +95,7 @@ export interface StoreSet {
 	id: number;
 	namespace: string;
 	path: string[];
-	value: any;
+	value: unknown;
 }
 
 export interface StoreRemove {
@@ -110,7 +110,7 @@ export interface StoreBatch {
 	type: "StoreBatch";
 	id: number;
 	namespace: string;
-	ops: (["s", string[], any] | ["r", string[]])[];
+	ops: (["s", string[], unknown] | ["r", string[]])[];
 }
 
 // ─── Outbound wire messages: reads (one-shot) ─────────────────────────────────
@@ -120,8 +120,8 @@ export interface StoreQuery {
 	id: number;
 	namespace: string;
 	collection: string;
-	conditions?: [field: string, op: number, value?: any][];
-	orConditions?: [field: string, op: number, value?: any][];
+	conditions?: [field: string, op: number, value?: unknown][];
+	orConditions?: [field: string, op: number, value?: unknown][];
 	orderBy?: [field: string, descFlag: number];
 	limit?: number;
 	after?: string; // opaque Base64 cursor
@@ -134,8 +134,8 @@ export interface StoreSubscribe {
 	id: number;
 	namespace: string;
 	collection: string;
-	conditions?: [field: string, op: number, value?: any][];
-	orConditions?: [field: string, op: number, value?: any][];
+	conditions?: [field: string, op: number, value?: unknown][];
+	orConditions?: [field: string, op: number, value?: unknown][];
 	orderBy?: [field: string, descFlag: number];
 	limit?: number;
 }
@@ -165,12 +165,12 @@ export type OutboundMessage =
 
 // ─── Inbound wire messages ────────────────────────────────────────────────────
 
-/** Success response for any request. Extra fields present depending on request type. */
+/** Success response for unknown request. Extra fields present depending on request type. */
 export interface OkResponse {
 	type: "ok";
 	id: number;
 	// StoreQuery response fields:
-	value?: any[];
+	value?: unknown[];
 	nextCursor?: string | null;
 	// StoreSubscribe response fields:
 	subId?: number;
@@ -184,7 +184,7 @@ export interface ErrorResponse {
 	message: string;
 	category?: string;
 	retryAfter?: number;
-	details?: Record<string, any>;
+	details?: Record<string, unknown>;
 }
 
 /** Server push — record-level delta for an active subscription. No request id. */
@@ -192,7 +192,8 @@ export interface StoreDelta {
 	type: "StoreDelta";
 	subId: number;
 	ops: Array<
-		{ op: "set"; path: string[]; value: any } | { op: "remove"; path: string[] }
+		| { op: "set"; path: string[]; value: unknown }
+		| { op: "remove"; path: string[] }
 	>;
 }
 
