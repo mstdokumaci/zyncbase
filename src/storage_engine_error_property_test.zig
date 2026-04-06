@@ -60,7 +60,7 @@ test "storage: error handling read-only filesystem" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
@@ -91,7 +91,7 @@ test "storage: error handling constraint violations" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
@@ -99,7 +99,7 @@ test "storage: error handling constraint violations" {
         const val_payload = try msgpack.Payload.strToPayload("value2", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
@@ -135,7 +135,7 @@ test "storage: error handling transaction rollback on error" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.rollbackTransaction();
     {
@@ -164,7 +164,7 @@ test "storage: error handling concurrent access safety" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols, false);
+        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -206,7 +206,7 @@ test "storage: error handling empty paths" {
         const val_payload = try msgpack.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "empty", "", &cols, false);
+        try storage.insertOrReplace("data_table", "empty", "", &cols);
     }
     try storage.flushPendingWrites();
     {
@@ -238,7 +238,7 @@ test "storage: error handling large values" {
         const val_payload = try msgpack.Payload.strToPayload(large_value, allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("test", "large_key", "test", &cols, false);
+        try storage.insertOrReplace("test", "large_key", "test", &cols);
     }
     try storage.flushPendingWrites();
     {
@@ -263,7 +263,7 @@ test "storage: error handling delete non-existent key" {
     var storage: StorageEngine = undefined;
     try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
-    try storage.deleteDocument("test", "nonexistent", "test", false);
+    try storage.deleteDocument("test", "nonexistent", "test");
     try storage.flushPendingWrites();
     {
         var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");

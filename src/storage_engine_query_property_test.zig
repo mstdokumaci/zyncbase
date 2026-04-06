@@ -64,7 +64,7 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
             .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
             .{ .name = "score", .value = msgpack.Payload.floatToPayload(score) },
         };
-        try engine.insertOrReplace("entities", id, "ns1", &cols, false);
+        try engine.insertOrReplace("entities", id, "ns1", &cols);
     }
     try engine.flushPendingWrites();
 }

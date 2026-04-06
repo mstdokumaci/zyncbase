@@ -152,14 +152,14 @@ fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
     };
-    try engine.insertOrReplace("users", id, "ns", &cols, false);
+    try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
         .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
     };
-    try engine.insertOrReplace("scores", id, "ns", &cols, false);
+    try engine.insertOrReplace("scores", id, "ns", &cols);
 }
 
 fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
@@ -167,6 +167,91 @@ fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
     defer key_p.free(std.testing.allocator);
     const val = payload.map.get(key_p) orelse return error.KeyNotFound;
     return val.str.value();
+}
+
+fn expectArrayFieldEquals(
+    allocator: std.mem.Allocator,
+    row: msgpack.Payload,
+    field_name: []const u8,
+    expected: []const []const u8,
+) !void {
+    var field_key = try msgpack.Payload.strToPayload(field_name, allocator);
+    defer field_key.free(allocator);
+
+    const field_val = row.map.get(field_key) orelse return error.KeyNotFound;
+    try testing.expect(field_val == .arr);
+    try testing.expectEqual(expected.len, field_val.arr.len);
+
+    for (expected, field_val.arr) |exp, got| {
+        try testing.expectEqualStrings(exp, got.str.value());
+    }
+}
+
+fn expectMissingMapKey(
+    allocator: std.mem.Allocator,
+    row: msgpack.Payload,
+    key_name: []const u8,
+) !void {
+    var key = try msgpack.Payload.strToPayload(key_name, allocator);
+    defer key.free(allocator);
+    try testing.expect(row.map.get(key) == null);
+}
+
+test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        sth.makeField("name", .text, false),
+        sth.makeField("tags", .array, false),
+        sth.makeField("labels", .array, false),
+    };
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-array-projection-aliased-multi-field", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
+    defer tags_payload.free(allocator);
+    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
+    defer labels_payload.free(allocator);
+    const name_payload = try msgpack.Payload.strToPayload("Task 1", allocator);
+    defer name_payload.free(allocator);
+
+    const cols = [_]ColumnValue{
+        .{ .name = "name", .value = name_payload },
+        .{ .name = "tags", .value = tags_payload },
+        .{ .name = "labels", .value = labels_payload },
+    };
+    try engine.insertOrReplace("items", "id1", "ns", &cols);
+    try engine.flushPendingWrites();
+
+    var filter = query_parser.QueryFilter{};
+    defer filter.deinit(allocator);
+
+    const conds = try allocator.alloc(query_parser.Condition, 1);
+    conds[0] = .{
+        .field = try allocator.dupe(u8, "name"),
+        .op = .eq,
+        .value = try msgpack.Payload.strToPayload("Task 1", allocator),
+    };
+    filter.conditions = conds;
+
+    var managed = try engine.selectQuery(allocator, "items", "ns", filter);
+    defer managed.deinit();
+
+    const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+    try testing.expectEqual(@as(usize, 1), results.arr.len);
+
+    const row = results.arr[0];
+
+    // Positive contract: array fields are decoded under their schema field names.
+    try expectArrayFieldEquals(allocator, row, "tags", &.{ "urgent", "home" });
+    try expectArrayFieldEquals(allocator, row, "labels", &.{ "work", "p1" });
+
+    // Negative contract: raw expression names never leak into row keys.
+    try expectMissingMapKey(allocator, row, "json(tags)");
+    try expectMissingMapKey(allocator, row, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -317,5 +402,5 @@ fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []cons
     const cols = [_]storage_engine.ColumnValue{
         .{ .name = "data", .value = data_p },
     };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols, false);
+    try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }
