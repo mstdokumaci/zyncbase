@@ -169,27 +169,59 @@ fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
     return val.str.value();
 }
 
-test "StorageEngine: selectQuery array projection uses normalized field name" {
+fn expectArrayFieldEquals(
+    allocator: std.mem.Allocator,
+    row: msgpack.Payload,
+    field_name: []const u8,
+    expected: []const []const u8,
+) !void {
+    var field_key = try msgpack.Payload.strToPayload(field_name, allocator);
+    defer field_key.free(allocator);
+
+    const field_val = row.map.get(field_key) orelse return error.KeyNotFound;
+    try testing.expect(field_val == .arr);
+    try testing.expectEqual(expected.len, field_val.arr.len);
+
+    for (expected, field_val.arr) |exp, got| {
+        try testing.expectEqualStrings(exp, got.str.value());
+    }
+}
+
+fn expectMissingMapKey(
+    allocator: std.mem.Allocator,
+    row: msgpack.Payload,
+    key_name: []const u8,
+) !void {
+    var key = try msgpack.Payload.strToPayload(key_name, allocator);
+    defer key.free(allocator);
+    try testing.expect(row.map.get(key) == null);
+}
+
+test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("name", .text, false),
         sth.makeField("tags", .array, false),
+        sth.makeField("labels", .array, false),
     };
     const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "query-array-projection-normalized", table);
+    try sth.setupEngine(&ctx, allocator, "query-array-projection-aliased-multi-field", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
 
     const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
     defer tags_payload.free(allocator);
+    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
+    defer labels_payload.free(allocator);
     const name_payload = try msgpack.Payload.strToPayload("Task 1", allocator);
     defer name_payload.free(allocator);
 
     const cols = [_]ColumnValue{
         .{ .name = "name", .value = name_payload },
         .{ .name = "tags", .value = tags_payload },
+        .{ .name = "labels", .value = labels_payload },
     };
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
@@ -213,17 +245,13 @@ test "StorageEngine: selectQuery array projection uses normalized field name" {
 
     const row = results.arr[0];
 
-    var tags_key = try msgpack.Payload.strToPayload("tags", allocator);
-    defer tags_key.free(allocator);
-    const tags_val = row.map.get(tags_key) orelse return error.KeyNotFound;
-    try testing.expect(tags_val == .arr);
-    try testing.expectEqual(@as(usize, 2), tags_val.arr.len);
-    try testing.expectEqualStrings("urgent", tags_val.arr[0].str.value());
-    try testing.expectEqualStrings("home", tags_val.arr[1].str.value());
+    // Positive contract: array fields are decoded under their schema field names.
+    try expectArrayFieldEquals(allocator, row, "tags", &.{ "urgent", "home" });
+    try expectArrayFieldEquals(allocator, row, "labels", &.{ "work", "p1" });
 
-    var json_alias_key = try msgpack.Payload.strToPayload("json(tags)", allocator);
-    defer json_alias_key.free(allocator);
-    try testing.expect(row.map.get(json_alias_key) == null);
+    // Negative contract: raw expression names never leak into row keys.
+    try expectMissingMapKey(allocator, row, "json(tags)");
+    try expectMissingMapKey(allocator, row, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {

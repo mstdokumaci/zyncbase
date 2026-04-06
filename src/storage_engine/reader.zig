@@ -21,7 +21,8 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
         if (f.sql_type == .array) {
             try sql_buf.appendSlice(allocator, ", json(");
             try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.append(allocator, ')');
+            try sql_buf.appendSlice(allocator, ") AS ");
+            try sql_buf.appendSlice(allocator, f.name);
         } else {
             try sql_buf.append(allocator, ',');
             try sql_buf.appendSlice(allocator, f.name);
@@ -35,7 +36,7 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
 
 pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_name: []const u8, field_ctx: ?schema_manager.Field) ![]const u8 {
     if (field_ctx != null and field_ctx.?.sql_type == .array) {
-        return try std.fmt.allocPrint(allocator, "SELECT json({s}) FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, table_name });
+        return try std.fmt.allocPrint(allocator, "SELECT json({s}) AS {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, field_name, table_name });
     } else {
         return try std.fmt.allocPrint(allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, table_name });
     }
@@ -50,7 +51,8 @@ pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_man
         if (f.sql_type == .array) {
             try sql_buf.appendSlice(allocator, ", json(");
             try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.append(allocator, ')');
+            try sql_buf.appendSlice(allocator, ") AS ");
+            try sql_buf.appendSlice(allocator, f.name);
         } else {
             try sql_buf.append(allocator, ',');
             try sql_buf.appendSlice(allocator, f.name);
@@ -104,7 +106,8 @@ pub fn buildSelectQuery(
         if (f.sql_type == .array) {
             try sql_buf.appendSlice(allocator, "json(");
             try sql_buf.appendSlice(allocator, f.name);
-            try sql_buf.appendSlice(allocator, ")");
+            try sql_buf.appendSlice(allocator, ") AS ");
+            try sql_buf.appendSlice(allocator, f.name);
         } else {
             try sql_buf.appendSlice(allocator, f.name);
         }
@@ -349,14 +352,7 @@ pub fn resolveColumnContext(
     table_metadata: schema_manager.TableMetadata,
 ) !ColumnContext {
     const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i);
-    const raw_name = std.mem.span(col_name_c);
-
-    // Normalize projected column names like `json(tags)` back to `tags`
-    // before metadata lookup and key selection.
-    const col_name = if (std.mem.startsWith(u8, raw_name, "json(") and std.mem.endsWith(u8, raw_name, ")"))
-        raw_name[5 .. raw_name.len - 1]
-    else
-        raw_name;
+    const col_name = std.mem.span(col_name_c);
 
     const key = if (table_metadata.field_payloads.get(col_name)) |p|
         p
