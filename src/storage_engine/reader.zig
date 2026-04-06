@@ -346,25 +346,20 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
 }
 
 pub fn resolveColumnContext(
-    allocator: Allocator,
     stmt: sqlite.DynamicStatement,
     i: c_int,
     table_metadata: schema_manager.TableMetadata,
-) !ColumnContext {
-    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i);
+) ColumnContext {
+    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i) orelse @panic("sqlite3_column_name returned NULL: OOM or Statement Corrupted");
     const col_name = std.mem.span(col_name_c);
 
-    const key = if (table_metadata.field_payloads.get(col_name)) |p|
-        p
-    else
-        // Fallback: This should rarely be hit as schema and system columns are cached.
-        try msgpack.Payload.strToPayload(col_name, allocator);
+    // Assert that the column name exists in our pre-allocated payloads cache.
+    // This is guaranteed because ZyncBase only generates SQL for schema-defined fields
+    // and standard system columns (id, namespace_id, created_at, updated_at).
+    const key = table_metadata.field_payloads.get(col_name) orelse unreachable;
 
     return ColumnContext{
-        .name = switch (key) {
-            .str => |s| s.value(),
-            else => col_name,
-        },
+        .name = key.str.value(),
         .field = table_metadata.getField(col_name),
         .key = key,
     };
@@ -380,7 +375,7 @@ pub fn resolveAllColumnContexts(
     errdefer allocator.free(col_contexts);
 
     for (col_contexts, 0..) |*ctx, i| {
-        ctx.* = try resolveColumnContext(allocator, stmt, @intCast(i), table_metadata);
+        ctx.* = resolveColumnContext(stmt, @intCast(i), table_metadata);
     }
     return col_contexts;
 }
