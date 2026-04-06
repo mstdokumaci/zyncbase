@@ -29,7 +29,7 @@ export class ZyncBaseClient {
 	 * Set a value at the given path.
 	 * Now natively awaits the server's acknowledgement.
 	 */
-	async set(ns: string, path: string[], value: any): Promise<void> {
+	async set(ns: string, path: string[], value: unknown): Promise<void> {
 		await this.client.setStoreNamespace(ns);
 		return await this.client.store.set(path, value);
 	}
@@ -37,7 +37,7 @@ export class ZyncBaseClient {
 	/**
 	 * Get the value at the given path.
 	 */
-	async get(ns: string, path: string[]): Promise<any> {
+	async get(ns: string, path: string[]): Promise<unknown> {
 		await this.client.setStoreNamespace(ns);
 		return await this.client.store.get(path);
 	}

@@ -1,5 +1,5 @@
-import * as fs from "node:fs";
-import * as path_pkg from "node:path";
+import * as fs from "fs";
+import * as path_pkg from "path";
 import { ZyncBaseClient } from "./client";
 
 export async function run(

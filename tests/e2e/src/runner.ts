@@ -1,6 +1,7 @@
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { type ChildProcess, execSync, spawn, spawnSync } from "child_process";
+import * as fs from "fs";
+import { Socket } from "net";
+import * as path from "path";
 
 const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
@@ -24,32 +25,34 @@ function cleanupArtifactDir() {
 	}
 }
 
+function scanSourceDir(d: string, latest: number): number {
+	let currentLatest = latest;
+	const entries = fs.readdirSync(d, { withFileTypes: true });
+	for (const entry of entries) {
+		const fullPath = path.join(d, entry.name);
+		if (entry.isDirectory()) {
+			currentLatest = scanSourceDir(fullPath, currentLatest);
+		} else if (
+			entry.name.endsWith(".zig") ||
+			entry.name.endsWith(".c") ||
+			entry.name.endsWith(".cpp") ||
+			entry.name.endsWith(".h")
+		) {
+			const stats = fs.statSync(fullPath);
+			if (stats.mtimeMs > currentLatest) {
+				currentLatest = stats.mtimeMs;
+			}
+		}
+	}
+	return currentLatest;
+}
+
 function getLatestSourceTimestamp(dirs: string[]): number {
 	let latest = 0;
 	for (const dir of dirs) {
 		const fullDir = path.resolve(dir);
 		if (!fs.existsSync(fullDir)) continue;
-
-		const scan = (d: string) => {
-			const entries = fs.readdirSync(d, { withFileTypes: true });
-			for (const entry of entries) {
-				const fullPath = path.join(d, entry.name);
-				if (entry.isDirectory()) {
-					scan(fullPath);
-				} else if (
-					entry.name.endsWith(".zig") ||
-					entry.name.endsWith(".c") ||
-					entry.name.endsWith(".cpp") ||
-					entry.name.endsWith(".h")
-				) {
-					const stats = fs.statSync(fullPath);
-					if (stats.mtimeMs > latest) {
-						latest = stats.mtimeMs;
-					}
-				}
-			}
-		};
-		scan(fullDir);
+		latest = scanSourceDir(fullDir, latest);
 	}
 	return latest;
 }
@@ -82,14 +85,14 @@ function checkBuild() {
 async function wait_for_port(port: number, retries = 50): Promise<void> {
 	for (let i = 0; i < retries; i++) {
 		try {
-			const socket = new (require("node:net").Socket)();
+			const socket = new Socket();
 			await new Promise<void>((resolve, reject) => {
 				socket.setTimeout(100);
 				socket.on("connect", () => {
 					socket.destroy();
 					resolve();
 				});
-				socket.on("error", (err: any) => {
+				socket.on("error", (err: unknown) => {
 					socket.destroy();
 					reject(err);
 				});
@@ -110,7 +113,6 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 async function start_server(configPath: string): Promise<ChildProcess> {
 	// Kill any process on the port first to avoid stale connections
 	try {
-		const { execSync } = require("node:child_process");
 		execSync(`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`);
 	} catch (_e) {}
 

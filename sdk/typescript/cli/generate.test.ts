@@ -3,9 +3,9 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 // tsc spawns are slow — give the compile test plenty of time
 setDefaultTimeout(120_000);
 
-import * as os from "node:os";
-import * as path from "node:path";
 import * as fc from "fast-check";
+import * as os from "os";
+import * as path from "path";
 
 import {
 	collectFieldPathsForTest,

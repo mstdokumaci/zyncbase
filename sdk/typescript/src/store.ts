@@ -94,6 +94,23 @@ type WireCondition = [string, number] | [string, number, unknown];
  * Encode a single condition object (e.g. { age: { gte: 18 } }) into wire tuples.
  * Nested field paths are flattened with `__`.
  */
+function encodeOperatorObject(
+	fieldKey: string,
+	v: Record<string, unknown>,
+	opKeys: string[],
+): WireCondition[] {
+	const conditions: WireCondition[] = [];
+	for (const op of opKeys) {
+		const code = OP_CODES[op];
+		if (op === "isNull" || op === "isNotNull") {
+			conditions.push([fieldKey, code]);
+		} else {
+			conditions.push([fieldKey, code, v[op]]);
+		}
+	}
+	return conditions;
+}
+
 function encodeConditionObject(
 	obj: Record<string, unknown>,
 	prefix = "",
@@ -101,26 +118,21 @@ function encodeConditionObject(
 	const conditions: WireCondition[] = [];
 	for (const [key, val] of Object.entries(obj)) {
 		const fieldKey = prefix ? `${prefix}__${key}` : key;
-		if (val !== null && typeof val === "object" && !Array.isArray(val)) {
-			const v = val as Record<string, unknown>;
-			// Check if this is an operator object (has known op keys)
-			const opKeys = Object.keys(v).filter((k) => k in OP_CODES);
-			if (opKeys.length > 0) {
-				for (const op of opKeys) {
-					const code = OP_CODES[op];
-					if (op === "isNull" || op === "isNotNull") {
-						conditions.push([fieldKey, code]);
-					} else {
-						conditions.push([fieldKey, code, v[op]]);
-					}
-				}
-			} else {
-				// Nested field object — recurse
-				conditions.push(...encodeConditionObject(v, fieldKey));
-			}
-		} else {
+
+		if (val === null || typeof val !== "object" || Array.isArray(val)) {
 			// Direct equality
 			conditions.push([fieldKey, OP_CODES.eq, val]);
+			continue;
+		}
+
+		const v = val as Record<string, unknown>;
+		// Check if this is an operator object (has known op keys)
+		const opKeys = Object.keys(v).filter((k) => k in OP_CODES);
+		if (opKeys.length > 0) {
+			conditions.push(...encodeOperatorObject(fieldKey, v, opKeys));
+		} else {
+			// Nested field object — recurse
+			conditions.push(...encodeConditionObject(v, fieldKey));
 		}
 	}
 	return conditions;
@@ -129,6 +141,16 @@ function encodeConditionObject(
 /**
  * Encode SDK-side QueryOptions into wire-format fields for StoreQuery / StoreSubscribe.
  */
+function extractOrConditions(or: unknown[]): WireCondition[] {
+	const orConditions: WireCondition[] = [];
+	for (const clause of or) {
+		orConditions.push(
+			...encodeConditionObject(clause as Record<string, unknown>),
+		);
+	}
+	return orConditions;
+}
+
 export function encodeQueryOptions(options: QueryOptions): {
 	conditions?: WireCondition[];
 	orConditions?: WireCondition[];
@@ -139,18 +161,12 @@ export function encodeQueryOptions(options: QueryOptions): {
 	const result: ReturnType<typeof encodeQueryOptions> = {};
 
 	if (options.where) {
-		const where = options.where as Record<string, unknown>;
-		const { or, ...rest } = where;
+		const { or, ...rest } = options.where as Record<string, unknown>;
 		const conditions = encodeConditionObject(rest);
 		if (conditions.length > 0) result.conditions = conditions;
 
 		if (Array.isArray(or)) {
-			const orConditions: WireCondition[] = [];
-			for (const clause of or) {
-				orConditions.push(
-					...encodeConditionObject(clause as Record<string, unknown>),
-				);
-			}
+			const orConditions = extractOrConditions(or);
 			if (orConditions.length > 0) result.orConditions = orConditions;
 		}
 	}
@@ -412,50 +428,96 @@ export class StoreImpl {
 			);
 		}
 
-		// Validate all paths first
 		const wireOps: (["s", string[], unknown] | ["r", string[]])[] = [];
 		for (const op of operations) {
-			let segments: string[];
-			try {
-				segments = normalizePath(op.path);
-			} catch (err) {
-				return Promise.reject(err);
-			}
+			const segments = normalizePath(op.path);
 			const wirePath = encodeWirePath(segments);
-			if (op.op === "set") {
-				let wireValue = op.value;
-				if (
-					segments.length === 2 &&
-					wireValue !== null &&
-					typeof wireValue === "object" &&
-					!Array.isArray(wireValue)
-				) {
-					wireValue = flatten(wireValue as Record<string, unknown>);
-				}
-				wireOps.push(["s", wirePath, wireValue]);
-			} else {
+
+			if (op.op === "remove") {
 				wireOps.push(["r", wirePath]);
+				continue;
 			}
+
+			let wireValue = op.value;
+			if (
+				segments.length === 2 &&
+				wireValue !== null &&
+				typeof wireValue === "object" &&
+				!Array.isArray(wireValue)
+			) {
+				wireValue = flatten(wireValue as Record<string, unknown>);
+			}
+			wireOps.push(["s", wirePath, wireValue]);
 		}
 
 		return this.conn
-			.dispatch({
-				type: "StoreBatch",
-				ops: wireOps,
-			})
+			.dispatch({ type: "StoreBatch", ops: wireOps })
 			.then(() => undefined);
 	}
 
 	// ─── Subscriptions ─────────────────────────────────────────────────────────
 
+	private _handleSubscriptionResponse(
+		ok: { subId?: number; value?: unknown },
+		segments: string[],
+		subscribeParams: Omit<StoreSubscribe, "id">,
+		callback: (value: unknown) => void,
+		projection: import("./subscriptions.js").ListenProjection,
+		unlistenState: { unlistenCalled: boolean },
+	): void {
+		if (unlistenState.unlistenCalled) {
+			if (ok.subId !== undefined) {
+				this.conn
+					.dispatch({ type: "StoreUnsubscribe", subId: ok.subId })
+					.catch(() => {});
+			}
+			return;
+		}
+
+		const subId = ok.subId ?? null;
+		if (subId === null) return;
+
+		this.tracker.register(subId, {
+			params: subscribeParams,
+			callbacks: [callback],
+			projection,
+		});
+
+		// Feed initial snapshot if provided
+		if (ok.value !== undefined) {
+			this._dispatchInitialSnapshot(subId, segments, ok.value);
+		}
+	}
+
+	private _dispatchInitialSnapshot(
+		subId: number,
+		segments: string[],
+		value: unknown,
+	): void {
+		const delta: StoreDelta = { type: "StoreDelta", subId, ops: [] };
+		const collection = segments[0];
+
+		if (Array.isArray(value)) {
+			for (const item of value as unknown[]) {
+				const i = item as Record<string, unknown>;
+				const id = (i.id as string) || segments[1];
+				delta.ops.push({ op: "set", path: [collection, id], value: item });
+			}
+		} else if (value !== null) {
+			const val = value as Record<string, unknown>;
+			const id = (val.id as string) || segments[1];
+			delta.ops.push({ op: "set", path: [collection, id], value: val });
+		}
+
+		this.tracker.dispatch(delta);
+	}
+
 	listen(path: Path, callback: (value: unknown) => void): () => void {
 		const segments = normalizePath(path);
-
 		let subscribeParams: Omit<StoreSubscribe, "id">;
 		let projection: import("./subscriptions.js").ListenProjection;
 
 		if (segments.length === 1) {
-			// Collection-level listen
 			subscribeParams = {
 				type: "StoreSubscribe",
 				namespace: this.conn.getStoreNamespace(),
@@ -463,81 +525,46 @@ export class StoreImpl {
 			};
 			projection = { field: null, depth: 1 };
 		} else {
-			// depth-2+: subscribe to collection with id eq condition
 			subscribeParams = {
 				type: "StoreSubscribe",
 				namespace: this.conn.getStoreNamespace(),
 				collection: segments[0],
 				conditions: [["id", 0, segments[1]]],
 			};
-			if (segments.length === 2) {
-				projection = { field: null, depth: 2 };
-			} else {
-				// depth-3+: project specific field
-				const fieldPath = segments.slice(2).join(".");
-				projection = { field: fieldPath, depth: segments.length };
-			}
+			const field = segments.length === 2 ? null : segments.slice(2).join(".");
+			projection = { field, depth: segments.length };
 		}
 
-		// We need to send the subscribe and get back a subId.
-		// listen() is synchronous (returns unlisten fn), but the subscribe is async.
-		// We store a placeholder and update once the response arrives.
-		let subId: number | null = null;
-		let unlistenCalled = false;
+		const unlistenState = {
+			unlistenCalled: false,
+			subId: null as number | null,
+		};
 
 		this.conn
 			.dispatch({ ...subscribeParams })
 			.then((ok) => {
-				if (unlistenCalled) {
-					if (ok.subId !== undefined) {
-						this.conn
-							.dispatch({ type: "StoreUnsubscribe", subId: ok.subId })
-							.catch(() => {});
-					}
-					return;
-				}
-
-				subId = ok.subId ?? null;
-				if (subId !== null) {
-					this.tracker.register(subId, {
-						params: subscribeParams,
-						callbacks: [callback],
-						projection,
-					});
-
-					// Feed initial snapshot if provided
-					if (ok.value !== undefined) {
-						const delta: StoreDelta = { type: "StoreDelta", subId, ops: [] };
-						const collection = segments[0];
-						if (Array.isArray(ok.value)) {
-							for (const item of ok.value as unknown[]) {
-								const i = item as Record<string, unknown>;
-								const id = (i.id as string) || segments[1];
-								delta.ops.push({
-									op: "set",
-									path: [collection, id],
-									value: item,
-								});
-							}
-						} else if (ok.value !== null) {
-							const val = ok.value as Record<string, unknown>;
-							const id = (val.id as string) || segments[1];
-							delta.ops.push({ op: "set", path: [collection, id], value: val });
-						}
-						this.tracker.dispatch(delta);
-					}
-				}
+				unlistenState.subId = ok.subId ?? null;
+				this._handleSubscriptionResponse(
+					ok,
+					segments,
+					subscribeParams,
+					callback,
+					projection,
+					unlistenState,
+				);
 			})
 			.catch((err) => {
 				this._emitError(err);
 			});
 
 		return () => {
-			unlistenCalled = true;
-			if (subId !== null) {
-				this.tracker.unregister(subId);
-				this.conn.dispatch({ type: "StoreUnsubscribe", subId }).catch(() => {});
-				subId = null;
+			unlistenState.unlistenCalled = true;
+			if (unlistenState.subId !== null) {
+				this.tracker.unregister(unlistenState.subId);
+				this.conn
+					.dispatch({ type: "StoreUnsubscribe", subId: unlistenState.subId })
+					.catch(() => {});
+				unlistenState.subId = null;
 			}
 		};
 	}

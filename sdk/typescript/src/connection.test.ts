@@ -13,10 +13,10 @@ class MockWebSocket {
 	binaryType: string = "";
 	sentMessages: Uint8Array[] = [];
 
-	onopen: ((event: any) => void) | null = null;
-	onclose: ((event: any) => void) | null = null;
-	onerror: ((event: any) => void) | null = null;
-	onmessage: ((event: any) => void) | null = null;
+	onopen: ((event: Record<string, unknown>) => void) | null = null;
+	onclose: ((event: Record<string, unknown>) => void) | null = null;
+	onerror: ((event: Record<string, unknown>) => void) | null = null;
+	onmessage: ((event: Record<string, unknown>) => void) | null = null;
 
 	send(data: Uint8Array) {
 		this.sentMessages.push(data);
@@ -51,7 +51,7 @@ const defaultOptions: ClientOptions = {
 };
 
 /** encode() may return a Uint8Array view into a larger buffer; this returns an exact-size ArrayBuffer */
-function encodeToBuffer(msg: any): ArrayBuffer {
+function encodeToBuffer(msg: unknown): ArrayBuffer {
 	const encoded = encode(msg);
 	return encoded.buffer.slice(
 		encoded.byteOffset,
@@ -62,6 +62,7 @@ function encodeToBuffer(msg: any): ArrayBuffer {
 function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 	const mockWs = new MockWebSocket();
 	// Patch global WebSocket
+	// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 	(globalThis as any).WebSocket = class {
 		constructor() {
 			return mockWs;
@@ -102,7 +103,7 @@ describe("ConnectionManager", () => {
 		test("emits 'statusChange' with 'connected' on open", async () => {
 			const { manager, mockWs } = makeManager();
 			const statuses: string[] = [];
-			manager.on("statusChange", (s: string) => statuses.push(s));
+			manager.on("statusChange", (s: unknown) => statuses.push(s as string));
 			const connectPromise = manager.connect();
 			mockWs.triggerOpen();
 			await connectPromise;
@@ -137,8 +138,8 @@ describe("ConnectionManager", () => {
 				value: 2,
 			});
 
-			const msg1 = decode(mockWs.sentMessages[0]) as any;
-			const msg2 = decode(mockWs.sentMessages[1]) as any;
+			const msg1 = decode(mockWs.sentMessages[0]) as Record<string, unknown>;
+			const msg2 = decode(mockWs.sentMessages[1]) as Record<string, unknown>;
 
 			expect(msg1.id).toBe(1);
 			expect(msg2.id).toBe(2);
@@ -214,7 +215,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerOpen();
 			await connectPromise;
 
-			const received: any[] = [];
+			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
 
 			const delta = {
@@ -225,7 +226,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
 			expect(received).toHaveLength(1);
-			expect(received[0].subId).toBe(42);
+			expect((received[0] as Record<string, unknown>).subId).toBe(42);
 		});
 
 		test("StoreDelta does not affect pendingQueue", async () => {
@@ -266,8 +267,8 @@ describe("ConnectionManager", () => {
 
 		test("emits 'error' on WebSocket error", async () => {
 			const { manager, mockWs } = makeManager();
-			const errors: any[] = [];
-			manager.on("error", (e: any) => errors.push(e));
+			const errors: unknown[] = [];
+			manager.on("error", (e: unknown) => errors.push(e));
 
 			const connectPromise = manager.connect();
 			mockWs.triggerError();
@@ -277,7 +278,9 @@ describe("ConnectionManager", () => {
 			} catch {}
 
 			expect(errors).toHaveLength(1);
-			expect(errors[0].code).toBe("CONNECTION_FAILED");
+			expect((errors[0] as Record<string, unknown>).code).toBe(
+				"CONNECTION_FAILED",
+			);
 		});
 
 		test("rejects all pending requests when connection closes", async () => {
@@ -330,7 +333,7 @@ describe("ConnectionManager", () => {
 
 	describe("send()", () => {
 		test("throws if WebSocket is not open", () => {
-			const { manager, mockWs } = makeManager();
+			const { manager } = makeManager();
 			// Don't connect — ws is null
 			expect(() => manager.send(new Uint8Array([1, 2, 3]))).toThrow();
 		});
@@ -355,12 +358,14 @@ describe("ConnectionManager", () => {
 	describe("reconnection — exponential backoff", () => {
 		test("emits 'reconnecting' on unexpected close when reconnect=true", async () => {
 			const mockWs = new MockWebSocket();
+			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 			(globalThis as any).WebSocket = class {
 				constructor() {
 					return mockWs;
 				}
 				static OPEN = MockWebSocket.OPEN;
 			};
+
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
 				reconnect: true,
@@ -387,12 +392,14 @@ describe("ConnectionManager", () => {
 
 		test("does NOT reconnect when reconnect=false", async () => {
 			const mockWs = new MockWebSocket();
+			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 			(globalThis as any).WebSocket = class {
 				constructor() {
 					return mockWs;
 				}
 				static OPEN = MockWebSocket.OPEN;
 			};
+
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
 				reconnect: false,
@@ -415,12 +422,14 @@ describe("ConnectionManager", () => {
 
 		test("emits 'disconnected' and stops when maxReconnectAttempts exceeded", async () => {
 			const mockWs = new MockWebSocket();
+			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 			(globalThis as any).WebSocket = class {
 				constructor() {
 					return mockWs;
 				}
 				static OPEN = MockWebSocket.OPEN;
 			};
+
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
 				reconnect: true,
@@ -447,6 +456,7 @@ describe("ConnectionManager", () => {
 		test("cancels reconnect timer on disconnect()", async () => {
 			const mockWs = new MockWebSocket();
 			let wsInstances = 0;
+			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 			(globalThis as any).WebSocket = class {
 				constructor() {
 					wsInstances++;
@@ -454,6 +464,7 @@ describe("ConnectionManager", () => {
 				}
 				static OPEN = MockWebSocket.OPEN;
 			};
+
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
 				reconnect: true,
@@ -478,12 +489,14 @@ describe("ConnectionManager", () => {
 
 		test("does NOT reconnect on intentional disconnect()", async () => {
 			const mockWs = new MockWebSocket();
+			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
 			(globalThis as any).WebSocket = class {
 				constructor() {
 					return mockWs;
 				}
 				static OPEN = MockWebSocket.OPEN;
 			};
+
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
 				reconnect: true,

@@ -174,15 +174,9 @@ export class SubscriptionTracker {
 			const relativePath = op.path.slice(2);
 
 			if (relativePath.length === 0) {
-				// Whole document update
-				if (op.op === "set") {
-					return op.value !== null &&
-						typeof op.value === "object" &&
-						!Array.isArray(op.value)
-						? unflatten(op.value as Record<string, unknown>)
-						: op.value;
-				}
-				if (op.op === "remove") return null;
+				const rootResult = this._handleRootOp(op);
+				if (rootResult !== undefined) return rootResult;
+				continue;
 			}
 
 			const key = relativePath.join("__");
@@ -191,6 +185,18 @@ export class SubscriptionTracker {
 
 		// Unflatten to restore nested structure for the caller
 		return unflatten(flat);
+	}
+
+	private _handleRootOp(op: StoreDelta["ops"][number]): unknown {
+		if (op.op === "remove") return null;
+		if (op.op === "set") {
+			return op.value !== null &&
+				typeof op.value === "object" &&
+				!Array.isArray(op.value)
+				? unflatten(op.value as Record<string, unknown>)
+				: op.value;
+		}
+		return undefined;
 	}
 
 	private _getField(record: unknown, fieldPath: string): unknown {
