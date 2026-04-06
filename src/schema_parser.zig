@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const msgpack = @import("msgpack_utils.zig");
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -78,20 +79,46 @@ pub const Table = struct {
 pub const TableMetadata = struct {
     table: *const Table,
     field_map: std.StringHashMap(Field),
+    field_payloads: std.StringHashMap(msgpack.Payload),
 
     pub fn init(allocator: Allocator, table: *const Table) !TableMetadata {
         var field_map = std.StringHashMap(Field).init(allocator);
+        errdefer field_map.deinit();
+
+        var field_payloads = std.StringHashMap(msgpack.Payload).init(allocator);
+        errdefer {
+            var it = field_payloads.valueIterator();
+            while (it.next()) |p| p.free(allocator);
+            field_payloads.deinit();
+        }
+
         for (table.fields) |f| {
             try field_map.put(f.name, f);
+            const p = try msgpack.Payload.strToPayload(f.name, allocator);
+            try field_payloads.put(f.name, p);
         }
+
+        // Also cache system columns that aren't in the schema fields but appear in queries
+        const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
+        for (system_cols) |sc| {
+            if (!field_payloads.contains(sc)) {
+                const p = try msgpack.Payload.strToPayload(sc, allocator);
+                try field_payloads.put(sc, p);
+            }
+        }
+
         return .{
             .table = table,
             .field_map = field_map,
+            .field_payloads = field_payloads,
         };
     }
 
-    pub fn deinit(self: *TableMetadata) void {
+    pub fn deinit(self: *TableMetadata, allocator: Allocator) void {
         self.field_map.deinit();
+        var it = self.field_payloads.valueIterator();
+        while (it.next()) |p| p.free(allocator);
+        self.field_payloads.deinit();
     }
 
     pub fn getField(self: *const TableMetadata, name: []const u8) ?Field {
@@ -138,10 +165,10 @@ pub const SchemaMetadata = struct {
         };
     }
 
-    pub fn deinit(self: *SchemaMetadata) void {
+    pub fn deinit(self: *SchemaMetadata, allocator: Allocator) void {
         var it = self.table_metadata.iterator();
         while (it.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
         self.table_metadata.deinit();
     }

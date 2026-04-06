@@ -132,7 +132,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata.table.*, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -144,7 +144,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (or_conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata.table.*, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -336,58 +336,55 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
             const ptr = sqlite.c.sqlite3_column_blob(stmt.stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
             const b: []const u8 = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else "";
-            var any_reader: std.Io.Reader = .fixed(b);
-            break :blk msgpack.decodeTrusted(allocator, &any_reader) catch
-                try msgpack.Payload.strToPayload(b, allocator);
+            break :blk try msgpack.Payload.strToPayload(b, allocator);
         },
         else => .nil,
     };
 }
 
 pub fn resolveColumnContext(
+    allocator: Allocator,
     stmt: sqlite.DynamicStatement,
     i: c_int,
-    table_schema: schema_manager.Table,
-) ColumnContext {
-    const col_name_ptr = sqlite.c.sqlite3_column_name(stmt.stmt, i);
-    const raw_name = std.mem.span(col_name_ptr);
+    table_metadata: schema_manager.TableMetadata,
+) !ColumnContext {
+    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i);
+    const raw_name = std.mem.span(col_name_c);
+
+    // Normalize projected column names like `json(tags)` back to `tags`
+    // before metadata lookup and key selection.
     const col_name = if (std.mem.startsWith(u8, raw_name, "json(") and std.mem.endsWith(u8, raw_name, ")"))
         raw_name[5 .. raw_name.len - 1]
     else
         raw_name;
 
-    const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-    var field_ctx: ?schema_manager.Field = null;
-    var is_system = false;
-    for (system_cols) |sc| {
-        if (std.mem.eql(u8, col_name, sc)) {
-            is_system = true;
-            break;
-        }
-    }
-    if (!is_system) {
-        for (table_schema.fields) |f| {
-            if (std.mem.eql(u8, f.name, col_name)) {
-                field_ctx = f;
-                break;
-            }
-        }
-    }
+    const key = if (table_metadata.field_payloads.get(col_name)) |p|
+        p
+    else
+        // Fallback: This should rarely be hit as schema and system columns are cached.
+        try msgpack.Payload.strToPayload(col_name, allocator);
 
-    return .{ .name = col_name, .field = field_ctx };
+    return ColumnContext{
+        .name = switch (key) {
+            .str => |s| s.value(),
+            else => col_name,
+        },
+        .field = table_metadata.getField(col_name),
+        .key = key,
+    };
 }
 
 pub fn resolveAllColumnContexts(
     allocator: Allocator,
     stmt: sqlite.DynamicStatement,
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
 ) ![]ColumnContext {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
     const col_contexts = try allocator.alloc(ColumnContext, col_count);
     errdefer allocator.free(col_contexts);
 
     for (col_contexts, 0..) |*ctx, i| {
-        ctx.* = resolveColumnContext(stmt, @intCast(i), table_schema);
+        ctx.* = try resolveColumnContext(allocator, stmt, @intCast(i), table_metadata);
     }
     return col_contexts;
 }
@@ -396,18 +393,14 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
     cond: query_parser.Condition,
 ) !void {
     const sql_field = cond.field;
 
-    var ft: schema_manager.FieldType = .text;
-    for (table_schema.fields) |f| {
-        if (std.mem.eql(u8, f.name, sql_field)) {
-            ft = f.sql_type;
-            break;
-        }
-    }
+    const field = table_metadata.getField(sql_field);
+    var ft: schema_manager.FieldType = if (field) |f| f.sql_type else .text;
+
     if (std.mem.eql(u8, cond.field, "id")) ft = .text;
     if (std.mem.eql(u8, cond.field, "namespace_id")) ft = .text;
     if (std.mem.eql(u8, cond.field, "created_at")) ft = .integer;
@@ -520,9 +513,9 @@ pub fn appendConditionSql(
 pub fn decodeRow(
     allocator: Allocator,
     stmt: sqlite.DynamicStatement,
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     var map = msgpack.Payload.mapPayload(allocator);
@@ -541,7 +534,7 @@ pub fn execSelectDocument(
     sql: []const u8,
     id: []const u8,
     namespace: []const u8,
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
 ) !?msgpack.Payload {
     var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
     defer stmt.deinit();
@@ -558,7 +551,7 @@ pub fn execSelectDocument(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
 
-    return try decodeRow(allocator, stmt, table_schema);
+    return try decodeRow(allocator, stmt, table_metadata);
 }
 
 pub fn execSelectScalar(
@@ -592,7 +585,7 @@ pub fn execSelectCollection(
     reader: *sqlite.Db,
     sql: []const u8,
     namespace: []const u8,
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
     var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
     defer stmt.deinit();
@@ -608,7 +601,7 @@ pub fn execSelectCollection(
         arr.deinit(allocator);
     }
 
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {
@@ -659,7 +652,7 @@ pub fn execQuery(
     db: *sqlite.Db,
     sql: []const u8,
     values: []const TypedValue,
-    table_schema: schema_manager.Table,
+    table_metadata: schema_manager.TableMetadata,
     requested_limit: ?u32,
     sort_field: []const u8,
 ) !ExecQueryResult {
@@ -681,7 +674,7 @@ pub fn execQuery(
     var next_cursor_arr: ?msgpack.Payload = null;
     errdefer if (next_cursor_arr) |*cursor| cursor.free(allocator);
 
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_schema);
+    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {

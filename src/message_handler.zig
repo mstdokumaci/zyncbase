@@ -382,8 +382,7 @@ pub const MessageHandler = struct {
                 });
             }
 
-            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items, capture);
+            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
 
             for (columns.items) |col| {
                 self.allocator.free(col.name);
@@ -406,8 +405,7 @@ pub const MessageHandler = struct {
             }
 
             const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
-            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col, capture);
+            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -428,13 +426,11 @@ pub const MessageHandler = struct {
         const doc_id = segments[1];
 
         if (segments.len == 2) {
-            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
-            try self.storage_engine.deleteDocument(table, doc_id, namespace, capture);
+            try self.storage_engine.deleteDocument(table, doc_id, namespace);
         } else {
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            const capture = self.subscription_engine.hasSubscriptions(namespace, table);
-            try self.storage_engine.updateField(table, doc_id, namespace, resolved.name, .nil, capture);
+            try self.storage_engine.updateField(table, doc_id, namespace, resolved.name, .nil);
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);

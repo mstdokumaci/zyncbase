@@ -151,6 +151,7 @@ pub const ReconnectionConfig = struct {
 
 pub const ColumnContext = struct {
     name: []const u8,
+    key: msgpack.Payload,
     field: ?schema_manager.Field,
 };
 
@@ -166,7 +167,6 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     update: struct {
@@ -176,7 +176,6 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     delete: struct {
@@ -184,7 +183,6 @@ pub const WriteOp = union(enum) {
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
-        change_capture: bool = false,
         completion_signal: ?*CompletionSignal = null,
     },
     ddl: struct {

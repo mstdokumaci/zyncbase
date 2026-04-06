@@ -400,10 +400,9 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
         columns: []const ColumnValue,
-        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns, change_capture);
+        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -416,10 +415,9 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         field: []const u8,
         value: msgpack.Payload,
-        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value, change_capture);
+        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -459,7 +457,7 @@ pub const StorageEngine = struct {
         // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try reader.execSelectDocument(allocator, &node.conn, sql, id, namespace, table_metadata.table.*);
+        const payload = try reader.execSelectDocument(allocator, &node.conn, sql, id, namespace, table_metadata);
         if (payload) |p| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -514,7 +512,7 @@ pub const StorageEngine = struct {
         const sql = try reader.buildSelectCollectionSql(allocator, table_metadata);
         defer allocator.free(sql);
 
-        const payload = try reader.execSelectCollection(allocator, &node.conn, sql, namespace, table_metadata.table.*);
+        const payload = try reader.execSelectCollection(allocator, &node.conn, sql, namespace, table_metadata);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -543,7 +541,7 @@ pub const StorageEngine = struct {
             &node.conn,
             query_res.sql,
             query_res.values,
-            table_metadata.table.*,
+            table_metadata,
             filter.limit,
             sort_field,
         );
@@ -562,10 +560,9 @@ pub const StorageEngine = struct {
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
-        change_capture: bool,
     ) !void {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace, change_capture);
+        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

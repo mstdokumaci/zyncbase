@@ -152,14 +152,14 @@ fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
     };
-    try engine.insertOrReplace("users", id, "ns", &cols, false);
+    try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
         .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
     };
-    try engine.insertOrReplace("scores", id, "ns", &cols, false);
+    try engine.insertOrReplace("scores", id, "ns", &cols);
 }
 
 fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
@@ -167,6 +167,63 @@ fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
     defer key_p.free(std.testing.allocator);
     const val = payload.map.get(key_p) orelse return error.KeyNotFound;
     return val.str.value();
+}
+
+test "StorageEngine: selectQuery array projection uses normalized field name" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        sth.makeField("name", .text, false),
+        sth.makeField("tags", .array, false),
+    };
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-array-projection-normalized", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
+    defer tags_payload.free(allocator);
+    const name_payload = try msgpack.Payload.strToPayload("Task 1", allocator);
+    defer name_payload.free(allocator);
+
+    const cols = [_]ColumnValue{
+        .{ .name = "name", .value = name_payload },
+        .{ .name = "tags", .value = tags_payload },
+    };
+    try engine.insertOrReplace("items", "id1", "ns", &cols);
+    try engine.flushPendingWrites();
+
+    var filter = query_parser.QueryFilter{};
+    defer filter.deinit(allocator);
+
+    const conds = try allocator.alloc(query_parser.Condition, 1);
+    conds[0] = .{
+        .field = try allocator.dupe(u8, "name"),
+        .op = .eq,
+        .value = try msgpack.Payload.strToPayload("Task 1", allocator),
+    };
+    filter.conditions = conds;
+
+    var managed = try engine.selectQuery(allocator, "items", "ns", filter);
+    defer managed.deinit();
+
+    const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+    try testing.expectEqual(@as(usize, 1), results.arr.len);
+
+    const row = results.arr[0];
+
+    var tags_key = try msgpack.Payload.strToPayload("tags", allocator);
+    defer tags_key.free(allocator);
+    const tags_val = row.map.get(tags_key) orelse return error.KeyNotFound;
+    try testing.expect(tags_val == .arr);
+    try testing.expectEqual(@as(usize, 2), tags_val.arr.len);
+    try testing.expectEqualStrings("urgent", tags_val.arr[0].str.value());
+    try testing.expectEqualStrings("home", tags_val.arr[1].str.value());
+
+    var json_alias_key = try msgpack.Payload.strToPayload("json(tags)", allocator);
+    defer json_alias_key.free(allocator);
+    try testing.expect(row.map.get(json_alias_key) == null);
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -317,5 +374,5 @@ fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []cons
     const cols = [_]storage_engine.ColumnValue{
         .{ .name = "data", .value = data_p },
     };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols, false);
+    try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

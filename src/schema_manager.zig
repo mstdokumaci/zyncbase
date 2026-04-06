@@ -44,7 +44,7 @@ pub const SchemaManager = struct {
 
     /// Clean up schema and metadata resources.
     pub fn deinit(self: *SchemaManager) void {
-        self.metadata.deinit();
+        self.metadata.deinit(self.allocator);
         schema_parser.freeSchema(self.allocator, self.schema);
     }
 

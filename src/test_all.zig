@@ -24,6 +24,7 @@ test {
     _ = @import("storage_query_test.zig");
     _ = @import("change_buffer_test.zig");
     _ = @import("notification_dispatcher_test.zig");
+    _ = @import("sync_consistency_test.zig");
 
     // Property tests
     _ = @import("message_handler_property_test.zig");

@@ -54,7 +54,7 @@ test "storage: stability no crashes on concurrent errors" {
                 defer val_payload.free(t_ctx.allocator);
                 const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
                 // zwanzig-disable-next-line: swallowed-error
-                t_ctx.storage.insertOrReplace("test", key, "test", &cols, false) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 // zwanzig-disable-next-line: swallowed-error
                 var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
@@ -62,7 +62,7 @@ test "storage: stability no crashes on concurrent errors" {
                 _ = managed.value;
                 // Try to delete the value
                 // zwanzig-disable-next-line: swallowed-error
-                t_ctx.storage.deleteDocument("test", key, "test", false) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
@@ -100,7 +100,7 @@ test "storage: stability continues after transaction errors" {
     const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload.free(allocator);
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-    try storage.insertOrReplace("test", "key1", "test", &cols, false);
+    try storage.insertOrReplace("test", "key1", "test", &cols);
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
@@ -114,7 +114,7 @@ test "storage: stability continues after transaction errors" {
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try storage.insertOrReplace("test", "key2", "test", &cols2, false);
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
@@ -143,7 +143,7 @@ test "storage: stability handles rapid error conditions" {
     const val_payload = try msgpack.Payload.strToPayload("value", allocator);
     defer val_payload.free(allocator);
     const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-    try storage.insertOrReplace("test", "key", "test", &cols, false);
+    try storage.insertOrReplace("test", "key", "test", &cols);
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key", "test");
     defer managed.deinit();
@@ -170,7 +170,7 @@ test "storage: stability error recovery with valid operations" {
         const val_payload = try msgpack.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("test", key, "test", &cols, false);
+        try storage.insertOrReplace("test", key, "test", &cols);
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
             try testing.expectEqual(error.NoActiveTransaction, err);
@@ -205,11 +205,11 @@ test "storage: stability resource cleanup after errors" {
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try storage.insertOrReplace("test", "key1", "test", &cols1, false);
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try storage.insertOrReplace("test", "key2", "test", &cols2, false);
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
     // Verify transaction state is cleaned up
@@ -219,7 +219,7 @@ test "storage: stability resource cleanup after errors" {
     const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
     defer val_payload3.free(allocator);
     const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
-    try storage.insertOrReplace("test", "key3", "test", &cols3, false);
+    try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.commitTransaction();
     // Verify the committed data is there
     var managed = try storage.selectDocument(allocator, "test", "key3", "test");
@@ -243,14 +243,14 @@ test "storage: stability mixed error and success scenarios" {
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try storage.insertOrReplace("test", "key1", "test", &cols1, false);
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
     try storage.commitTransaction();
     // Failed transaction (rollback)
     try storage.beginTransaction();
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try storage.insertOrReplace("test", "key2", "test", &cols2, false);
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.rollbackTransaction();
     // Error (no active transaction)
     _ = storage.commitTransaction() catch |err| {
@@ -260,7 +260,7 @@ test "storage: stability mixed error and success scenarios" {
     const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
     defer val_payload3.free(allocator);
     const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
-    try storage.insertOrReplace("test", "key3", "test", &cols3, false);
+    try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
     var managed1 = try storage.selectDocument(allocator, "test", "key1", "test");
@@ -293,11 +293,11 @@ test "storage: stability concurrent reads during write errors" {
     const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
     defer val_payload1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try storage.insertOrReplace("test", "key1", "test", &cols1, false);
+    try storage.insertOrReplace("test", "key1", "test", &cols1);
     const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
     defer val_payload2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try storage.insertOrReplace("test", "key2", "test", &cols2, false);
+    try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
     const num_reader_threads = 4;
     var reader_threads: [num_reader_threads]std.Thread = undefined;
