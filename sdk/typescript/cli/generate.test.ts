@@ -167,10 +167,10 @@ type _Paths = ValidPaths;
 				]);
 
 				// Clean up
-				try {
-					Bun.file(typesFile);
-					Bun.file(importFile);
-				} catch {}
+try {
+	fs.unlinkSync(typesFile);
+	fs.unlinkSync(importFile);
+} catch {}
 
 				expect(result.exitCode).toBe(0);
 			}),
