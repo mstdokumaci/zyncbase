@@ -5,6 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const query_parser = @import("../query_parser.zig");
 const types = @import("types.zig");
+const sql_utils = @import("sql_utils.zig");
 
 const StorageError = types.StorageError;
 const TypedValue = types.TypedValue;
@@ -17,7 +18,7 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=?");
@@ -37,7 +38,7 @@ pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_man
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
@@ -81,7 +82,7 @@ pub fn buildSelectQuery(
 
     // 1.. SELECT clause
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
 
@@ -458,70 +459,61 @@ pub fn decodeRow(
 
 pub fn execSelectDocument(
     allocator: Allocator,
-    reader: *sqlite.Db,
-    sql: []const u8,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     id: []const u8,
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !?msgpack.Payload {
-    var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
-    defer stmt.deinit();
-
     const id_z = try allocator.dupeZ(u8, id);
     defer allocator.free(id_z);
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
-    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
 
-    const rc = sqlite.c.sqlite3_step(stmt.stmt);
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
+    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
 
-    return try decodeRow(allocator, stmt, table_metadata);
+    return try decodeRow(allocator, sqlite.DynamicStatement{ .db = db.db, .stmt = stmt }, table_metadata);
 }
 
 pub fn execSelectScalar(
     allocator: Allocator,
-    reader: *sqlite.Db,
-    sql: []const u8,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     id: []const u8,
     namespace: []const u8,
     field_ctx: ?schema_manager.Field,
 ) !?msgpack.Payload {
-    var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
-    defer stmt.deinit();
-
     const id_z = try allocator.dupeZ(u8, id);
     defer allocator.free(id_z);
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
-    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
 
-    const rc = sqlite.c.sqlite3_step(stmt.stmt);
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
+    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
 
-    return try readColumnValue(allocator, stmt, 0, field_ctx);
+    return try readColumnValue(allocator, sqlite.DynamicStatement{ .db = db.db, .stmt = stmt }, 0, field_ctx);
 }
 
 pub fn execSelectCollection(
     allocator: Allocator,
-    reader: *sqlite.Db,
-    sql: []const u8,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
-    var stmt = reader.prepareDynamic(sql) catch |err| return classifyError(err);
-    defer stmt.deinit();
-
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.bindTextTransient(stmt.stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (sql_utils.bindTextTransient(stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
@@ -529,19 +521,20 @@ pub fn execSelectCollection(
         arr.deinit(allocator);
     }
 
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
+    const dyn_stmt = sqlite.DynamicStatement{ .db = db.db, .stmt = stmt };
+    const col_contexts = try resolveAllColumnContexts(allocator, dyn_stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt.stmt);
+        const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(reader);
+        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
         for (col_contexts) |ctx| {
-            const val = try readColumnValue(allocator, stmt, ctx.index, ctx.field);
+            const val = try readColumnValue(allocator, dyn_stmt, ctx.index, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         try arr.append(allocator, map);
@@ -578,19 +571,15 @@ fn extractCursorTupleFromRow(
 pub fn execQuery(
     allocator: Allocator,
     db: *sqlite.Db,
-    sql: []const u8,
+    stmt: *sqlite.c.sqlite3_stmt,
     values: []const TypedValue,
     table_metadata: schema_manager.TableMetadata,
     requested_limit: ?u32,
     sort_field: []const u8,
 ) !ExecQueryResult {
-    var stmt = db.prepareDynamic(sql) catch |err| {
-        return classifyError(err);
-    };
-    defer stmt.deinit();
-
+    const dyn_stmt = sqlite.DynamicStatement{ .db = db.db, .stmt = stmt };
     for (values, 0..) |v, i| {
-        try v.bindSQLite(stmt, @intCast(i + 1));
+        try v.bindSQLite(dyn_stmt, @intCast(i + 1));
     }
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
@@ -602,19 +591,19 @@ pub fn execQuery(
     var next_cursor_arr: ?msgpack.Payload = null;
     errdefer if (next_cursor_arr) |*cursor| cursor.free(allocator);
 
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
+    const col_contexts = try resolveAllColumnContexts(allocator, dyn_stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt.stmt);
+        const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
-        for (col_contexts, 0..) |ctx, i| {
-            const val = try readColumnValue(allocator, stmt, @intCast(i), ctx.field);
+        for (col_contexts) |ctx| {
+            const val = try readColumnValue(allocator, dyn_stmt, ctx.index, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         try arr.append(allocator, map);

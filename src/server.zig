@@ -143,14 +143,12 @@ pub const ZyncBaseServer = struct {
                 defer self.memory_strategy.generalAllocator().free(ddl);
                 const ddl_z = try self.memory_strategy.generalAllocator().dupeZ(u8, ddl);
                 defer self.memory_strategy.generalAllocator().free(ddl_z);
-                self.storage_engine.writer_conn.execMulti(ddl_z, .{}) catch |err| {
-                    std.log.err("Failed to apply DDL for table '{s}': {}", .{ table.name, err });
-                    return err;
-                };
+                try self.storage_engine.execSetupSQL(ddl_z);
             }
 
             // Detect and execute migrations
-            var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), &self.storage_engine.writer_conn);
+            const setup_conn = try self.storage_engine.getSetupConn();
+            var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn);
             const plan = try detector.detectChanges(schema_ptr.*);
             defer detector.deinit(plan);
 
@@ -158,7 +156,7 @@ pub const ZyncBaseServer = struct {
                 std.log.info("Applying {} schema migration(s)", .{plan.changes.len});
                 var executor = MigrationExecutor.init(
                     self.memory_strategy.generalAllocator(),
-                    &self.storage_engine.writer_conn,
+                    setup_conn,
                     &gen,
                     .{},
                 );
@@ -167,6 +165,9 @@ pub const ZyncBaseServer = struct {
                     return err;
                 };
             }
+
+            // Lock the engine and start the runtime thread
+            try self.storage_engine.start();
         }
 
         // Initialize storage layer for checkpoint manager

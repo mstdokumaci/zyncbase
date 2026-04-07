@@ -14,6 +14,7 @@ const SchemaManager = schema_manager.SchemaManager;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const types = @import("storage_engine/types.zig");
+const sql_utils = @import("storage_engine/sql_utils.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
@@ -38,12 +39,16 @@ pub const StorageEngine = struct {
 
     pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
 
+    pub const State = enum(u8) { setup, running, shutdown };
+
     allocator: Allocator,
     db_path: [:0]const u8,
-    writer_conn: sqlite.Db,
+    _writer_conn: sqlite.Db,
+    writer_stmt_cache: sql_utils.StatementCache,
     reader_pool: []ReaderNode,
     write_queue: WriteQueue,
     write_thread: ?std.Thread = null,
+    state: std.atomic.Value(State),
     shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
     transaction_active: std.atomic.Value(bool),
@@ -132,6 +137,7 @@ pub const StorageEngine = struct {
         var initialized_readers: usize = 0;
         errdefer {
             for (reader_pool[0..initialized_readers]) |*node| {
+                node.stmt_cache.deinit(allocator);
                 node.conn.deinit();
             }
         }
@@ -145,6 +151,7 @@ pub const StorageEngine = struct {
                 .shared_cache = options.in_memory,
             });
             try connection.configureDatabase(&node.conn, false);
+            node.stmt_cache = sql_utils.StatementCache.init(allocator);
             node.mutex = .{};
             initialized_readers += 1;
         }
@@ -155,10 +162,14 @@ pub const StorageEngine = struct {
             cb.deinit();
         }
 
+        var writer_stmt_cache = sql_utils.StatementCache.init(allocator);
+        errdefer writer_stmt_cache.deinit(allocator);
+
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
-            .writer_conn = writer_conn,
+            ._writer_conn = writer_conn,
+            .writer_stmt_cache = writer_stmt_cache,
             .reader_pool = reader_pool,
             .performance_config = performance_config,
             .options = options,
@@ -185,6 +196,7 @@ pub const StorageEngine = struct {
             .event_loop_notifier = event_loop_notifier,
             .notifier_ctx = notifier_ctx,
             .write_thread = null,
+            .state = std.atomic.Value(StorageEngine.State).init(.setup),
         };
 
         try self.metadata_cache.init(allocator, .{}, deinitPayload);
@@ -195,43 +207,36 @@ pub const StorageEngine = struct {
 
         try self.write_queue.init(allocator, &self.node_pool);
         errdefer self.write_queue.deinit();
-
-        // Start write thread
-        self.write_thread = try std.Thread.spawn(.{}, pipeline.writeThreadLoop, .{self});
-        errdefer {
-            self.shutdown_requested.store(true, .release);
-            self.write_cond.signal();
-            if (self.write_thread) |thread| thread.join();
-        }
-
-        // Wait deterministically for the write thread to signal readiness
-        {
-            self.write_mutex.lock();
-            defer self.write_mutex.unlock();
-            while (!self.write_thread_ready.load(.acquire)) {
-                self.write_cond.wait(&self.write_mutex);
-            }
-        }
     }
 
     pub fn deinit(self: *StorageEngine) void {
-        const gpa = self.allocator; // Assuming allocator is the general purpose allocator
+        const old_state = self.state.swap(.shutdown, .acq_rel);
+        if (old_state == .shutdown) {
+            return;
+        }
 
-        // 1. Signal shutdown to the thread
-        self.shutdown_requested.store(true, .release);
-        self.write_cond.signal();
+        const gpa = self.allocator;
 
-        // 2. Wait for the thread to exit cleanly
-        if (self.write_thread) |thread| {
-            thread.join();
+        // 1. Signal shutdown to the thread only if it was running
+        if (old_state == .running) {
+            self.shutdown_requested.store(true, .release);
+            self.write_cond.signal();
+
+            // 2. Wait for the thread to exit cleanly
+            if (self.write_thread) |thread| {
+                thread.join();
+                self.write_thread = null;
+            }
         }
 
         // 3. Deinit cache
         self.metadata_cache.deinit();
-        self.writer_conn.deinit();
+        self.writer_stmt_cache.deinit(self.allocator);
+        self._writer_conn.deinit();
 
         // 4. Clean up readers
         for (self.reader_pool) |*node| {
+            node.stmt_cache.deinit(self.allocator);
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
@@ -254,9 +259,9 @@ pub const StorageEngine = struct {
         layer.storage_engine = self;
     }
 
-    /// Execute a checkpoint operation with the specified mode
     /// Returns statistics about the checkpoint operation
     pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
+        try self.ensureRunning();
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .checkpoint = .{
@@ -273,7 +278,7 @@ pub const StorageEngine = struct {
     }
 
     fn internalExecuteCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
-        return connection.internalExecuteCheckpoint(&self.writer_conn, self.allocator, self.db_path, self.options.in_memory, mode);
+        return connection.internalExecuteCheckpoint(&self._writer_conn, self.allocator, self.db_path, self.options.in_memory, mode);
     }
 
     /// Get the current WAL file size in bytes
@@ -282,6 +287,7 @@ pub const StorageEngine = struct {
     }
 
     pub fn beginTransaction(self: *StorageEngine) !void {
+        try self.ensureRunning();
         if (self.manual_transaction_active.load(.acquire)) {
             return StorageError.TransactionAlreadyActive;
         }
@@ -297,6 +303,7 @@ pub const StorageEngine = struct {
     }
 
     pub fn commitTransaction(self: *StorageEngine) !void {
+        try self.ensureRunning();
         if (!self.manual_transaction_active.load(.acquire)) {
             return StorageError.NoActiveTransaction;
         }
@@ -312,29 +319,13 @@ pub const StorageEngine = struct {
     }
 
     pub fn rollbackTransaction(self: *StorageEngine) !void {
+        try self.ensureRunning();
         if (!self.manual_transaction_active.load(.acquire)) {
             return StorageError.NoActiveTransaction;
         }
         var signal = WriteOp.CompletionSignal{};
         const op = WriteOp{
             .rollback_transaction = .{
-                .completion_signal = &signal,
-            },
-        };
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-        return signal.wait();
-    }
-
-    /// Execute DDL synchronously via the write thread.
-    pub fn execDDL(self: *StorageEngine, sql: []const u8) !void {
-        var signal = WriteOp.CompletionSignal{};
-        const sql_owned = try self.allocator.dupe(u8, sql);
-        // Ownership transferred to `op` immediately.
-
-        const op = WriteOp{
-            .ddl = .{
-                .sql = sql_owned,
                 .completion_signal = &signal,
             },
         };
@@ -354,7 +345,7 @@ pub const StorageEngine = struct {
         return connection.reconnectWithBackoff(
             self.db_path,
             self.options.in_memory,
-            &self.writer_conn,
+            &self._writer_conn,
             self.reader_pool,
             self.reconnection_config,
         );
@@ -364,9 +355,59 @@ pub const StorageEngine = struct {
         return connection.attemptReconnect(
             self.db_path,
             self.options.in_memory,
-            &self.writer_conn,
+            &self._writer_conn,
             self.reader_pool,
         );
+    }
+
+    pub fn ensureRunning(self: *StorageEngine) !void {
+        if (self.state.load(.acquire) != .running) {
+            return error.InvalidState;
+        }
+    }
+
+    /// Execute setup SQL (DDL/Migrations) before the engine starts.
+    /// This method is only allowed when the engine is in the 'setup' state.
+    pub fn execSetupSQL(self: *StorageEngine, sql: []const u8) !void {
+        if (self.state.load(.acquire) != .setup) {
+            std.log.err("execSetupSQL called outside of setup phase", .{});
+            return error.InvalidState;
+        }
+        try self._writer_conn.execMulti(sql, .{});
+        // Increment write_seq to notify readers that the state has changed (DDL/setup)
+        _ = self.write_seq.fetchAdd(1, .release);
+    }
+
+    /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
+    /// Once called, the schema is locked and only data operations are permitted.
+    pub fn start(self: *StorageEngine) !void {
+        if (self.state.load(.acquire) != .setup) {
+            return error.InvalidState;
+        }
+
+        // Spawn the write thread
+        self.write_thread = try std.Thread.spawn(.{}, pipeline.writeThreadLoop, .{self});
+        self.state.store(.running, .release);
+
+        // Wait deterministically for the write thread to signal readiness
+        {
+            self.write_mutex.lock();
+            defer self.write_mutex.unlock();
+            while (!self.write_thread_ready.load(.acquire)) {
+                self.write_cond.wait(&self.write_mutex);
+            }
+        }
+
+        std.log.info("Storage engine started (Runtime Phase)", .{});
+    }
+
+    /// Return the raw writer connection for setup-time tools (migrations).
+    /// Only allowed during the 'setup' phase.
+    pub fn getSetupConn(self: *StorageEngine) !*sqlite.Db {
+        if (self.state.load(.acquire) != .setup) {
+            return error.InvalidState;
+        }
+        return &self._writer_conn;
     }
 
     /// Push a write op and wake the write thread immediately.
@@ -401,6 +442,7 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         columns: []const ColumnValue,
     ) !void {
+        try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
         _ = self.pending_writes_count.fetchAdd(1, .release);
@@ -416,6 +458,7 @@ pub const StorageEngine = struct {
         field: []const u8,
         value: msgpack.Payload,
     ) !void {
+        try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
         _ = self.pending_writes_count.fetchAdd(1, .release);
@@ -430,6 +473,7 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
     ) !ManagedPayload {
+        try self.ensureRunning();
         try self.schema_manager.validateTable(table);
 
         const cache_key = try reader.getCacheKey(allocator, table, namespace, id);
@@ -457,7 +501,10 @@ pub const StorageEngine = struct {
         // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        const payload = try reader.execSelectDocument(allocator, &node.conn, sql, id, namespace, table_metadata);
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+        const payload = try reader.execSelectDocument(allocator, &node.conn, stmt, id, namespace, table_metadata);
         if (payload) |p| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -478,6 +525,7 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         field: []const u8,
     ) !ManagedPayload {
+        try self.ensureRunning();
         try self.schema_manager.validateField(table, field);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
@@ -490,7 +538,10 @@ pub const StorageEngine = struct {
         const sql = try reader.buildSelectFieldSql(allocator, table, field, field_ctx);
         defer allocator.free(sql);
 
-        const payload = try reader.execSelectScalar(allocator, &node.conn, sql, id, namespace, field_ctx);
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+        const payload = try reader.execSelectScalar(allocator, &node.conn, stmt, id, namespace, field_ctx);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -501,6 +552,7 @@ pub const StorageEngine = struct {
         table: []const u8,
         namespace: []const u8,
     ) !ManagedPayload {
+        try self.ensureRunning();
         try self.schema_manager.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
@@ -512,7 +564,10 @@ pub const StorageEngine = struct {
         const sql = try reader.buildSelectCollectionSql(allocator, table_metadata);
         defer allocator.free(sql);
 
-        const payload = try reader.execSelectCollection(allocator, &node.conn, sql, namespace, table_metadata);
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+        const payload = try reader.execSelectCollection(allocator, &node.conn, stmt, namespace, table_metadata);
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
@@ -524,6 +579,7 @@ pub const StorageEngine = struct {
         namespace: []const u8,
         filter: query_parser.QueryFilter,
     ) !ManagedPayload {
+        try self.ensureRunning();
         try self.schema_manager.validateTable(table);
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
@@ -536,10 +592,13 @@ pub const StorageEngine = struct {
         defer query_res.deinit(allocator);
 
         const sort_field = if (filter.order_by) |o| o.field else "id";
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
         const exec_res = try reader.execQuery(
             allocator,
             &node.conn,
-            query_res.sql,
+            stmt,
             query_res.values,
             table_metadata,
             filter.limit,
@@ -561,6 +620,7 @@ pub const StorageEngine = struct {
         id: []const u8,
         namespace: []const u8,
     ) !void {
+        try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace);
         _ = self.pending_writes_count.fetchAdd(1, .release);

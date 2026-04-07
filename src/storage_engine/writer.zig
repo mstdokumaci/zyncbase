@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
+const sql_utils = @import("sql_utils.zig");
 const TypedValue = types.TypedValue;
 const WriteOp = types.WriteOp;
 const ColumnValue = types.ColumnValue;
@@ -61,7 +62,7 @@ pub fn buildInsertOrReplaceOp(
     }
     // Always update updated_at
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -156,7 +157,7 @@ pub fn buildUpdateFieldOp(
     try sql_buf.appendSlice(allocator, field);
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
 
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -197,7 +198,7 @@ pub fn buildDeleteDocumentOp(
     try sql_buf.appendSlice(allocator, "DELETE FROM ");
     try sql_buf.appendSlice(allocator, table);
     try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=? RETURNING ");
-    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
 

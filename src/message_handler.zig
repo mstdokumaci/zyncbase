@@ -371,7 +371,12 @@ pub const MessageHandler = struct {
             }
 
             var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
-            defer columns.deinit(self.allocator);
+            defer {
+                for (columns.items) |col| {
+                    self.allocator.free(col.name);
+                }
+                columns.deinit(self.allocator);
+            }
 
             var it2 = value.map.iterator();
             while (it2.next()) |entry| {
@@ -383,10 +388,6 @@ pub const MessageHandler = struct {
             }
 
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
-
-            for (columns.items) |col| {
-                self.allocator.free(col.name);
-            }
         } else {
             // Partial update / deep path
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
