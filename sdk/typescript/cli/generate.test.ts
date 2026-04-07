@@ -171,7 +171,7 @@ type _Paths = ValidPaths;
 				try {
 					fs.unlinkSync(typesFile);
 					fs.unlinkSync(importFile);
-				} catch { }
+				} catch (e) { console.warn("Failed to clean up temporary test files:", e); }
 
 				expect(result.exitCode).toBe(0);
 			}),
