@@ -60,7 +60,8 @@ pub fn buildInsertOrReplaceOp(
         try sql_buf.appendSlice(allocator, col.name);
     }
     // Always update updated_at
-    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING *");
+    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
@@ -140,13 +141,24 @@ pub fn buildUpdateFieldOp(
     // Use jsonb(?) placeholder for array fields, ? for others
     const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
 
-    const sql = try std.fmt.allocPrint(allocator,
-        \\INSERT INTO {s} (id, namespace_id, {s}, created_at, updated_at)
-        \\VALUES (?, ?, {s}, ?, ?)
-        \\ON CONFLICT(id, namespace_id) DO UPDATE SET
-        \\  {s} = excluded.{s},
-        \\  updated_at = excluded.updated_at RETURNING *
-    , .{ table, field, field_placeholder, field, field });
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer sql_buf.deinit(allocator);
+
+    try sql_buf.appendSlice(allocator, "INSERT INTO ");
+    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, " (id, namespace_id, ");
+    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?, ");
+    try sql_buf.appendSlice(allocator, field_placeholder);
+    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, " = excluded.");
+    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
+
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+
+    const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);
@@ -179,7 +191,14 @@ pub fn buildDeleteDocumentOp(
 ) !WriteOp {
     try sm.validateTable(table);
 
-    const sql = try std.fmt.allocPrint(allocator, "DELETE FROM {s} WHERE id=? AND namespace_id=? RETURNING *", .{table});
+    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+    try sql_buf.appendSlice(allocator, "DELETE FROM ");
+    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=? RETURNING ");
+    try types.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
 
     const id_owned = try allocator.dupe(u8, id);

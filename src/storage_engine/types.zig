@@ -360,3 +360,26 @@ pub const WriteQueue = struct {
         return op;
     }
 };
+
+/// Appends the standard ZyncBase column projection list (id, namespace_id, all fields, timestamps)
+/// to the provided buffer. Array/object fields are wrapped in json() to ensure they return
+/// text even if stored as JSONB.
+pub fn appendProjectedColumnsSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: schema_manager.TableMetadata,
+) !void {
+    try buf.appendSlice(allocator, "id, namespace_id");
+    for (table_metadata.table.fields) |f| {
+        try buf.appendSlice(allocator, ", ");
+        if (f.sql_type == .array) {
+            try buf.appendSlice(allocator, "json(");
+            try buf.appendSlice(allocator, f.name);
+            try buf.appendSlice(allocator, ") AS ");
+            try buf.appendSlice(allocator, f.name);
+        } else {
+            try buf.appendSlice(allocator, f.name);
+        }
+    }
+    try buf.appendSlice(allocator, ", created_at, updated_at");
+}

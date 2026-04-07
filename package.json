@@ -1,4 +1,7 @@
 {
+    "workspaces": [
+        "sdk/*"
+    ],
     "scripts": {
         "test:e2e": "bun tests/e2e/src/runner.ts",
         "specs:compress": "uv run python scripts/compress_specs.py",
@@ -7,6 +10,10 @@
         "lint": "zig fmt src && zlint --deny-warnings && zig build lint && zig build check --summary all"
     },
     "dependencies": {
-        "@msgpack/msgpack": "^3.1.3"
+        "@msgpack/msgpack": "^3.1.3",
+        "@zyncbase/client": "workspace:*"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "2.4.10"
     }
 }

@@ -1,15 +1,15 @@
 {
-  "version": "0.0.1",
-  "store": {
-    "persistence": {
-      "fields": {
-        "status": {
-          "type": "string"
-        },
-        "timestamp": {
-          "type": "number"
-        }
-      }
-    }
-  }
+	"version": "0.0.1",
+	"store": {
+		"persistence": {
+			"fields": {
+				"status": {
+					"type": "string"
+				},
+				"timestamp": {
+					"type": "number"
+				}
+			}
+		}
+	}
 }
