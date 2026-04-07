@@ -1,4 +1,5 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import * as fs from "node:fs";
 
 // tsc spawns are slow — give the compile test plenty of time
 setDefaultTimeout(120_000);
@@ -167,10 +168,10 @@ type _Paths = ValidPaths;
 				]);
 
 				// Clean up
-try {
-	fs.unlinkSync(typesFile);
-	fs.unlinkSync(importFile);
-} catch {}
+				try {
+					fs.unlinkSync(typesFile);
+					fs.unlinkSync(importFile);
+				} catch { }
 
 				expect(result.exitCode).toBe(0);
 			}),

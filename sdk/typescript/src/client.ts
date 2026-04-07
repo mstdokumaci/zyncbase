@@ -123,8 +123,12 @@ export class ZyncBaseClient {
 				if (ok.subId !== undefined) {
 					oldToNew.set(oldId, ok.subId);
 				}
-			} catch {
-				// Replay for this specific subscription failed — skip
+			} catch (err) {
+				// Replay for this specific subscription failed — log it to aid debugging.
+				console.error(
+					`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
+					err,
+				);
 			}
 		});
 
