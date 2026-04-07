@@ -83,11 +83,11 @@ export class SubscriptionTracker {
 	 * the caller is responsible for assigning a fresh msg_id).
 	 */
 	async replayAll(
-		send: (params: Omit<StoreSubscribe, "id">) => Promise<void>,
+		send: (params: Omit<StoreSubscribe, "id">, subId: number) => Promise<void>,
 	): Promise<void> {
 		const promises: Promise<void>[] = [];
-		for (const entry of this.subscriptions.values()) {
-			promises.push(send(entry.params));
+		for (const [subId, entry] of this.subscriptions.entries()) {
+			promises.push(send(entry.params, subId));
 		}
 		await Promise.all(promises);
 	}

@@ -106,14 +106,17 @@ describe("SubscriptionTracker - replayAll", () => {
 					});
 				}
 
-				// Collect all params passed to send
-				const sent: Omit<StoreSubscribe, "id">[] = [];
-				await tracker.replayAll(async (params) => {
-					sent.push(params);
+				// Collect all params and subIds passed to send
+				const sent: { params: Omit<StoreSubscribe, "id">; subId: number }[] = [];
+				await tracker.replayAll(async (params, subId) => {
+					sent.push({ params, subId });
 				});
 
 				// send must be called exactly N times (once per subscription)
-				return sent.length === n;
+				return (
+					sent.length === n &&
+					sent.every((s) => s.params === tracker.get(s.subId)?.params)
+				);
 			}),
 			{ numRuns: 100 },
 		);

@@ -115,20 +115,11 @@ export class ZyncBaseClient {
 
 		const oldToNew = new Map<number, number>();
 
-		// We use the new async replayAll which awaits each dispatch.
-		// The previous implementation used an external array of promises;
-		// now it's encapsulated in SubscriptionTracker.
-		await this.tracker.replayAll(async (params) => {
-			// Find the old subId associated with these params to maintain the mapping.
-			// We look it up from the current active subscriptions.
-			const oldId = Array.from(this.tracker.allSubIds()).find((id) => {
-				const entry = this.tracker.get(id);
-				return entry && entry.params === params;
-			});
-
+		// Replay all subscriptions and map old subIds to new ones.
+		await this.tracker.replayAll(async (params, oldId) => {
 			try {
 				const ok = await this.conn.dispatch({ ...params });
-				if (ok.subId !== undefined && oldId !== undefined) {
+				if (ok.subId !== undefined) {
 					oldToNew.set(oldId, ok.subId);
 				}
 			} catch {
