@@ -28,6 +28,17 @@ runs:
       with:
         bun-version: latest
 
+    - name: Install System Dependencies
+      shell: bash
+      run: |
+        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+          echo "Installing libsqlite3-dev on Ubuntu"
+          sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+          echo "Installing sqlite on macOS"
+          brew install sqlite
+        fi
+
     - name: Apply patches
       shell: bash
       run: ./scripts/apply-patches.sh
