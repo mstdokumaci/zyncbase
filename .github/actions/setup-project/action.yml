@@ -31,10 +31,10 @@ runs:
     - name: Install System Dependencies
       shell: bash
       run: |
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-          echo "Installing libsqlite3-dev on Ubuntu"
+        if [[ "$(uname -s)" == "Linux" ]]; then
+          echo "Installing libsqlite3-dev on Linux"
           sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
+        elif [[ "$(uname -s)" == "Darwin" ]]; then
           echo "Installing sqlite on macOS"
           brew install sqlite
         fi
