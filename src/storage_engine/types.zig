@@ -9,10 +9,14 @@ const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
-/// We delegate transient binding to C to bypass Zig's strict runtime alignment
-/// checks for the special -1 pointer sentinel.
-pub extern fn zyncbase_sqlite3_bind_text_transient(stmt: ?*sqlite.c.sqlite3_stmt, i: c_int, zData: ?*const anyopaque, nData: c_int) c_int;
-pub extern fn zyncbase_sqlite3_bind_blob_transient(stmt: ?*sqlite.c.sqlite3_stmt, i: c_int, zData: ?*const anyopaque, nData: c_int) c_int;
+/// We use the library's built-in workaround for the special -1 pointer sentinel.
+pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
+    return sqlite.c.sqlite3_bind_text(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
+}
+
+pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
+    return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
+}
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -146,9 +150,9 @@ pub const TypedValue = union(enum) {
         const rc = switch (self) {
             .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
             .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-            .text => |s| zyncbase_sqlite3_bind_text_transient(stmt.stmt, index, s.ptr, @intCast(s.len)),
+            .text => |s| bindTextTransient(stmt.stmt, index, s),
             .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-            .blob => |b| zyncbase_sqlite3_bind_blob_transient(stmt.stmt, index, b.ptr, @intCast(b.len)),
+            .blob => |b| bindBlobTransient(stmt.stmt, index, b),
             .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
         };
         if (rc != sqlite.c.SQLITE_OK) return StorageError.SQLiteError;

@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, exe, sqlite_dep, sysroot, sanitize);
+    linkUWS(b, exe, sysroot, sanitize);
     b.installArtifact(exe);
 
     // Setup Test Targets
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_dep, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 
@@ -84,10 +84,10 @@ pub fn build(b: *std.Build) void {
     });
     exe_check.root_module.addImport("sqlite", sqlite_module);
     exe_check.root_module.addImport("msgpack", msgpack_module);
-    linkUWS(b, exe_check, sqlite_dep, sysroot, sanitize);
+    linkUWS(b, exe_check, sysroot, sanitize);
     check_step.dependOn(&exe_check.step);
 
-    const test_check = setupTest(b, target, optimize, sqlite_dep, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
+    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
     check_step.dependOn(&test_check.step);
 }
 
@@ -95,26 +95,24 @@ fn setupTest(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    sqlite_dep: *std.Build.Dependency,
     sqlite_module: *std.Build.Module,
     msgpack_module: *std.Build.Module,
-    root_file: []const u8,
+    file_path: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
     sysroot: ?[]const u8,
 ) *std.Build.Step.Compile {
     const t = b.addTest(.{
+        .name = "test",
         .root_module = b.createModule(.{
-            .root_source_file = b.path(root_file),
+            .root_source_file = b.path(file_path),
             .target = target,
             .optimize = optimize,
         }),
-        .filters = if (test_filter) |filter|
-            b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}))
-        else
-            &.{},
     });
-
+    if (test_filter) |filter| {
+        t.filters = b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}));
+    }
     t.root_module.addImport("sqlite", sqlite_module);
     t.root_module.addImport("msgpack", msgpack_module);
     if (sanitize) |san| {
@@ -122,18 +120,21 @@ fn setupTest(
             t.root_module.sanitize_thread = true;
         }
     }
-    linkUWS(b, t, sqlite_dep, sysroot, sanitize);
+    linkUWS(b, t, sysroot, sanitize);
     return t;
 }
 
-fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sqlite_dep: *std.Build.Dependency, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
     const target = step.root_module.resolved_target.?.result;
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
+    
+    // Use the library's static artifact
+    const sqlite_dep = b.dependency("sqlite", .{
+        .target = step.root_module.resolved_target.?,
+        .optimize = step.root_module.optimize.?,
+    });
     step.linkLibrary(sqlite_dep.artifact("sqlite"));
-
-    step.addIncludePath(sqlite_dep.path("."));
-    step.addIncludePath(sqlite_dep.path("c"));
 
     const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
 
@@ -265,10 +266,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sqlite_dep: *std.Build.
 
     step.addCSourceFile(.{
         .file = b.path("src/uws_stubs.c"),
-        .flags = stubs_flags,
-    });
-    step.addCSourceFile(.{
-        .file = b.path("src/storage_engine/sqlite_stubs.c"),
         .flags = stubs_flags,
     });
 

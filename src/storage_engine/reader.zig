@@ -472,8 +472,8 @@ pub fn execSelectDocument(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, id_z.ptr, @intCast(id.len)) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
-    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len)) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -498,8 +498,8 @@ pub fn execSelectScalar(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, id_z.ptr, @intCast(id.len)) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
-    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 2, ns_z.ptr, @intCast(namespace.len)) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     const rc = sqlite.c.sqlite3_step(stmt.stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -521,7 +521,7 @@ pub fn execSelectCollection(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (types.zyncbase_sqlite3_bind_text_transient(stmt.stmt, 1, ns_z.ptr, @intCast(namespace.len)) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
+    if (types.bindTextTransient(stmt.stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(reader);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
