@@ -130,7 +130,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sqlite_dep: *std.Build.
     const target = step.root_module.resolved_target.?.result;
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
-    step.linkSystemLibrary("sqlite3");
+    step.linkLibrary(sqlite_dep.artifact("sqlite"));
 
     step.addIncludePath(sqlite_dep.path("."));
     step.addIncludePath(sqlite_dep.path("c"));
