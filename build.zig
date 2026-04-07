@@ -162,24 +162,13 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.addIncludePath(b.path("src"));
 
     if (sysroot) |s| {
+        // CI: ensure C compiler finds SDK headers/libs
         step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{s}) });
-    }
-
-    if (target.os.tag == .macos) {
-        // Search common brew include/lib paths as brew-installed sqlite is keg-only
-        const brew_paths = [_][]const u8{
-            "/opt/homebrew/opt/sqlite",
-            "/usr/local/opt/sqlite",
-        };
-        for (brew_paths) |path| {
-            if (std.fs.cwd().access(path, .{})) |_| {
-                step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
-                step.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{path}) });
-            } else |_| {}
-        }
+        step.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{s}) });
     }
 
     if (target.os.tag == .linux) {
+        // CI: find host libsqlite3-dev headers during Linux cross-compilation
         step.addIncludePath(.{ .cwd_relative = "/usr/include" });
         step.linkSystemLibrary("dl");
     }
