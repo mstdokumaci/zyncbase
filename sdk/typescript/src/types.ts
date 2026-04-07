@@ -37,6 +37,7 @@ export interface ClientOptions {
 	maxReconnectDelay?: number; // ms, default: 30_000
 	maxReconnectAttempts?: number; // default: Infinity
 	reconnectJitter?: boolean; // default: true
+	debug?: boolean; // default: false
 }
 
 export interface StatusDetail {

@@ -29,6 +29,11 @@ export class SubscriptionTracker {
 	private readonly subscriptions = new Map<number, SubscriptionEntry>();
 	private readonly deltaQueue: StoreDelta[] = [];
 	private connected = true;
+	private debug = false;
+
+	setDebug(debug: boolean): void {
+		this.debug = debug;
+	}
 
 	/**
 	 * Register a new subscription entry keyed by the server-assigned subId.
@@ -134,10 +139,12 @@ export class SubscriptionTracker {
 		}
 
 		const projected = this._project(delta, entry.projection);
-		console.log(
-			`[SDK] Dispatching delta to listener (subId=${delta.subId}):`,
-			JSON.stringify(projected),
-		);
+		if (this.debug) {
+			console.log(
+				`[SDK] Dispatching delta to listener (subId=${delta.subId}):`,
+				JSON.stringify(projected),
+			);
+		}
 
 		for (const cb of entry.callbacks) {
 			cb(projected);

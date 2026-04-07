@@ -192,10 +192,12 @@ export class ConnectionManager {
 			}
 		}
 
-		console.log(
-			`[SDK] >> ${msgWithId.type} (id=${id}):`,
-			JSON.stringify(msgWithId),
-		);
+		if (this.options.debug) {
+			console.log(
+				`[SDK] >> ${msgWithId.type} (id=${id}):`,
+				JSON.stringify(msgWithId),
+			);
+		}
 		const encoded = encode(msgWithId) as Uint8Array;
 
 		return new Promise((resolve, reject) => {
@@ -309,7 +311,9 @@ export class ConnectionManager {
 
 		const type = (msg as unknown as Record<string, unknown>).type as string;
 		const id = (msg as unknown as Record<string, unknown>).id ?? "push";
-		console.log(`[SDK] << ${type} (id=${id}):`, JSON.stringify(msg));
+		if (this.options.debug) {
+			console.log(`[SDK] << ${type} (id=${id}):`, JSON.stringify(msg));
+		}
 
 		switch (type) {
 			case "ok":

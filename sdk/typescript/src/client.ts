@@ -19,6 +19,7 @@ export class ZyncBaseClient {
 	constructor(options: ClientOptions) {
 		this.conn = new ConnectionManager(options);
 		this.tracker = new SubscriptionTracker();
+		if (options.debug) this.tracker.setDebug(true);
 
 		// Wire the delta handler: tracker dispatches StoreDelta messages
 		this.conn.onDelta((delta) => {
