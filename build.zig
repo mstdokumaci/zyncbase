@@ -167,10 +167,16 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     if (target.os.tag == .macos) {
         // Search common brew include/lib paths as brew-installed sqlite is keg-only
-        step.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/include" });
-        step.addIncludePath(.{ .cwd_relative = "/usr/local/opt/sqlite/include" });
-        step.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/lib" });
-        step.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/sqlite/lib" });
+        const brew_paths = [_][]const u8{
+            "/opt/homebrew/opt/sqlite",
+            "/usr/local/opt/sqlite",
+        };
+        for (brew_paths) |path| {
+            if (std.fs.cwd().access(path, .{})) |_| {
+                step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
+                step.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{path}) });
+            } else |_| {}
+        }
     }
 
     if (target.os.tag == .linux) {
