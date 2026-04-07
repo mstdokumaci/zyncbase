@@ -129,6 +129,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     const target = step.root_module.resolved_target.?.result;
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
+    step.linkSystemLibrary("sqlite3");
 
     const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
 
@@ -160,6 +161,23 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.addIncludePath(b.path("vendor/bun/src/deps"));
     step.addIncludePath(b.path("src"));
 
+    if (sysroot) |s| {
+        step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{s}) });
+    }
+
+    if (target.os.tag == .macos) {
+        // Search common brew include/lib paths as brew-installed sqlite is keg-only
+        step.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/include" });
+        step.addIncludePath(.{ .cwd_relative = "/usr/local/opt/sqlite/include" });
+        step.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/lib" });
+        step.addLibraryPath(.{ .cwd_relative = "/usr/local/opt/sqlite/lib" });
+    }
+
+    if (target.os.tag == .linux) {
+        step.addIncludePath(.{ .cwd_relative = "/usr/include" });
+        step.linkSystemLibrary("dl");
+    }
+
     if (is_absolute) {
         step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libdecrepit.a", .{b_b_path}) });
         step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libssl.a", .{b_b_path}) });
@@ -168,10 +186,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         step.addObjectFile(b.path(b.fmt("{s}/libdecrepit.a", .{b_b_path})));
         step.addObjectFile(b.path(b.fmt("{s}/libssl.a", .{b_b_path})));
         step.addObjectFile(b.path(b.fmt("{s}/libcrypto.a", .{b_b_path})));
-    }
-
-    if (is_linux) {
-        step.linkSystemLibrary("dl");
     }
 
     const linux_flags: []const []const u8 = if (is_linux) &.{
