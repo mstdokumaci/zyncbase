@@ -97,22 +97,23 @@ fn setupTest(
     optimize: std.builtin.OptimizeMode,
     sqlite_module: *std.Build.Module,
     msgpack_module: *std.Build.Module,
-    file_path: []const u8,
+    root_file: []const u8,
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
     sysroot: ?[]const u8,
 ) *std.Build.Step.Compile {
     const t = b.addTest(.{
-        .name = "test",
         .root_module = b.createModule(.{
-            .root_source_file = b.path(file_path),
+            .root_source_file = b.path(root_file),
             .target = target,
             .optimize = optimize,
         }),
+        .filters = if (test_filter) |filter|
+            b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}))
+        else
+            &.{},
     });
-    if (test_filter) |filter| {
-        t.filters = b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}));
-    }
+
     t.root_module.addImport("sqlite", sqlite_module);
     t.root_module.addImport("msgpack", msgpack_module);
     if (sanitize) |san| {
@@ -129,7 +130,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.linkLibCpp();
     step.linkSystemLibrary("pthread");
     
-    // Use the library's static artifact
+    // Core Linkage fix: Ensure we link the library's static artifact to avoid needing external headers.
     const sqlite_dep = b.dependency("sqlite", .{
         .target = step.root_module.resolved_target.?,
         .optimize = step.root_module.optimize.?,
@@ -166,16 +167,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.addIncludePath(b.path("vendor/bun/src/deps"));
     step.addIncludePath(b.path("src"));
 
-    if (sysroot) |s| {
-        // CI: ensure C compiler finds SDK headers/libs
-        step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{s}) });
-    }
-
-    if (target.os.tag == .linux) {
-        step.addIncludePath(.{ .cwd_relative = "/usr/include" });
-        step.linkSystemLibrary("dl");
-    }
-
     if (is_absolute) {
         step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libdecrepit.a", .{b_b_path}) });
         step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libssl.a", .{b_b_path}) });
@@ -184,6 +175,10 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         step.addObjectFile(b.path(b.fmt("{s}/libdecrepit.a", .{b_b_path})));
         step.addObjectFile(b.path(b.fmt("{s}/libssl.a", .{b_b_path})));
         step.addObjectFile(b.path(b.fmt("{s}/libcrypto.a", .{b_b_path})));
+    }
+
+    if (is_linux) {
+        step.linkSystemLibrary("dl");
     }
 
     const linux_flags: []const []const u8 = if (is_linux) &.{
