@@ -6,6 +6,7 @@ import { encodeWirePath, normalizePath } from "./path.js";
 import type { SubscriptionTracker } from "./subscriptions.js";
 import type {
 	BatchOperation,
+	JsonValue,
 	Path,
 	QueryOptions,
 	StoreDelta,
@@ -22,15 +23,15 @@ import { generateUUIDv7 } from "./uuid.js";
  *   flatten({ a: { b: 1, c: 2 } }) → { "a__b": 1, "a__c": 2 }
  */
 export function flatten(
-	obj: Record<string, unknown>,
+	obj: Record<string, JsonValue>,
 	prefix = "",
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
+): Record<string, JsonValue> {
+	const result: Record<string, JsonValue> = {};
 	for (const key of Object.keys(obj)) {
 		const fullKey = prefix ? `${prefix}__${key}` : key;
 		const value = obj[key];
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			const nested = flatten(value as Record<string, unknown>, fullKey);
+			const nested = flatten(value as Record<string, JsonValue>, fullKey);
 			for (const nestedKey of Object.keys(nested)) {
 				result[nestedKey] = nested[nestedKey];
 			}
@@ -48,9 +49,9 @@ export function flatten(
  *   unflatten({ "a__b": 1, "a__c": 2 }) → { a: { b: 1, c: 2 } }
  */
 export function unflatten(
-	obj: Record<string, unknown>,
-): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
+	obj: Record<string, JsonValue>,
+): Record<string, JsonValue> {
+	const result: Record<string, JsonValue> = {};
 	for (const key of Object.keys(obj)) {
 		const parts = key.split("__");
 		let current = result;
@@ -63,7 +64,7 @@ export function unflatten(
 			) {
 				current[part] = {};
 			}
-			current = current[part] as Record<string, unknown>;
+			current = current[part] as Record<string, JsonValue>;
 		}
 		current[parts[parts.length - 1]] = obj[key];
 	}
@@ -88,7 +89,7 @@ const OP_CODES: Record<string, number> = {
 	isNotNull: 12,
 };
 
-type WireCondition = [string, number] | [string, number, unknown];
+type WireCondition = [string, number] | [string, number, JsonValue];
 
 /**
  * Encode a single condition object (e.g. { age: { gte: 18 } }) into wire tuples.
@@ -96,7 +97,7 @@ type WireCondition = [string, number] | [string, number, unknown];
  */
 function encodeOperatorObject(
 	fieldKey: string,
-	v: Record<string, unknown>,
+	v: Record<string, JsonValue>,
 	opKeys: string[],
 ): WireCondition[] {
 	const conditions: WireCondition[] = [];
@@ -105,14 +106,14 @@ function encodeOperatorObject(
 		if (op === "isNull" || op === "isNotNull") {
 			conditions.push([fieldKey, code]);
 		} else {
-			conditions.push([fieldKey, code, v[op]]);
+			conditions.push([fieldKey, code, v[op] as JsonValue]);
 		}
 	}
 	return conditions;
 }
 
 function encodeConditionObject(
-	obj: Record<string, unknown>,
+	obj: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>,
 	prefix = "",
 ): WireCondition[] {
 	const conditions: WireCondition[] = [];
@@ -121,18 +122,18 @@ function encodeConditionObject(
 
 		if (val === null || typeof val !== "object" || Array.isArray(val)) {
 			// Direct equality
-			conditions.push([fieldKey, OP_CODES.eq, val]);
+			conditions.push([fieldKey, OP_CODES.eq, val as JsonValue]);
 			continue;
 		}
 
-		const v = val as Record<string, unknown>;
+		const v = val as Record<string, JsonValue>;
 		// Check if this is an operator object (has known op keys)
 		const opKeys = Object.keys(v).filter((k) => k in OP_CODES);
 		if (opKeys.length > 0) {
 			conditions.push(...encodeOperatorObject(fieldKey, v, opKeys));
 		} else {
 			// Nested field object — recurse
-			conditions.push(...encodeConditionObject(v, fieldKey));
+			conditions.push(...encodeConditionObject(v as Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>, fieldKey));
 		}
 	}
 	return conditions;
@@ -141,14 +142,36 @@ function encodeConditionObject(
 /**
  * Encode SDK-side QueryOptions into wire-format fields for StoreQuery / StoreSubscribe.
  */
-function extractOrConditions(or: unknown[]): WireCondition[] {
+function extractOrConditions(
+	or: (Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>)[]
+): WireCondition[] {
 	const orConditions: WireCondition[] = [];
 	for (const clause of or) {
 		orConditions.push(
-			...encodeConditionObject(clause as Record<string, unknown>),
+			...encodeConditionObject(clause),
 		);
 	}
 	return orConditions;
+}
+
+function encodeWhereClause(where: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>): {
+	conditions?: WireCondition[];
+	orConditions?: WireCondition[];
+} {
+	const { or, ...rest } = where;
+	const result: { conditions?: WireCondition[]; orConditions?: WireCondition[] } = {};
+	const conditions = encodeConditionObject(rest);
+	if (conditions.length > 0) result.conditions = conditions;
+	if (Array.isArray(or)) {
+		const orConditions = extractOrConditions(or as (Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>)[]);
+		if (orConditions.length > 0) result.orConditions = orConditions;
+	}
+	return result;
+}
+
+function encodeOrderBy(orderBy: Record<string, "asc" | "desc">): [string, number] {
+	const [field, dir] = Object.entries(orderBy)[0];
+	return [field, dir === "desc" ? 1 : 0];
 }
 
 export function encodeQueryOptions(options: QueryOptions): {
@@ -161,19 +184,11 @@ export function encodeQueryOptions(options: QueryOptions): {
 	const result: ReturnType<typeof encodeQueryOptions> = {};
 
 	if (options.where) {
-		const { or, ...rest } = options.where as Record<string, unknown>;
-		const conditions = encodeConditionObject(rest);
-		if (conditions.length > 0) result.conditions = conditions;
-
-		if (Array.isArray(or)) {
-			const orConditions = extractOrConditions(or);
-			if (orConditions.length > 0) result.orConditions = orConditions;
-		}
+		Object.assign(result, encodeWhereClause(options.where));
 	}
 
 	if (options.orderBy) {
-		const [field, dir] = Object.entries(options.orderBy)[0];
-		result.orderBy = [field, dir === "desc" ? 1 : 0];
+		result.orderBy = encodeOrderBy(options.orderBy);
 	}
 
 	if (options.limit !== undefined) result.limit = options.limit;
@@ -193,7 +208,7 @@ export class StoreImpl {
 
 	// ─── Writes ────────────────────────────────────────────────────────────────
 
-	async set(path: Path, value: unknown): Promise<void> {
+	async set(path: Path, value: JsonValue): Promise<void> {
 		const segments = normalizePath(path);
 		if (segments.length === 1) {
 			throw new ZyncBaseError("store.set requires a path of depth 2 or more", {
@@ -204,14 +219,14 @@ export class StoreImpl {
 		}
 
 		// Flatten object values for depth-2 writes
-		let wireValue = value;
+		let wireValue: JsonValue = value;
 		if (
 			segments.length === 2 &&
 			value !== null &&
 			typeof value === "object" &&
 			!Array.isArray(value)
 		) {
-			wireValue = flatten(value as Record<string, unknown>);
+			wireValue = flatten(value as Record<string, JsonValue>);
 		}
 		const wirePath = encodeWirePath(segments);
 		try {
@@ -272,12 +287,12 @@ export class StoreImpl {
 
 	// ─── Create ────────────────────────────────────────────────────────────────
 
-	async create(collection: string, value: unknown): Promise<string> {
+	async create(collection: string, value: JsonValue): Promise<string> {
 		const uuid = generateUUIDv7();
 		const segments = [collection, uuid];
-		let wireValue = value;
+		let wireValue: JsonValue = value;
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			wireValue = flatten(value as Record<string, unknown>);
+			wireValue = flatten(value as Record<string, JsonValue>);
 		}
 		const wirePath = encodeWirePath(segments);
 		try {
@@ -304,19 +319,19 @@ export class StoreImpl {
 		return uuid;
 	}
 
-	async push(collection: string, value: unknown): Promise<string> {
+	async push(collection: string, value: JsonValue): Promise<string> {
 		// For now, push is the same as create.
 		return this.create(collection, value);
 	}
 
-	async update(path: Path, value: unknown): Promise<void> {
+	async update(path: Path, value: JsonValue): Promise<void> {
 		// For now, update is synonymous with set (doc-level merging is handled by storage engine)
 		return this.set(path, value);
 	}
 
 	// ─── Reads ─────────────────────────────────────────────────────────────────
 
-	get(path: Path): Promise<unknown> {
+	get(path: Path): Promise<JsonValue | null | undefined> {
 		const segments = normalizePath(path);
 
 		if (segments.length === 1) {
@@ -327,12 +342,12 @@ export class StoreImpl {
 					collection: segments[0],
 				})
 				.then((ok) => {
-					const rows: unknown[] = ok.value ?? [];
+					const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 					return rows.map((row) =>
 						row !== null && typeof row === "object" && !Array.isArray(row)
-							? unflatten(row as Record<string, unknown>)
+							? unflatten(row as Record<string, JsonValue>) as JsonValue
 							: row,
-					);
+					) as JsonValue;
 				})
 				.catch((err) => {
 					this._emitError(err);
@@ -349,12 +364,12 @@ export class StoreImpl {
 					conditions: [["id", 0, segments[1]]],
 				})
 				.then((ok) => {
-					const rows: unknown[] = ok.value ?? [];
+					const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 					if (rows.length === 0) return null;
 					const row = rows[0];
-					return row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row as Record<string, unknown>)
-						: row;
+					return (row !== null && typeof row === "object" && !Array.isArray(row)
+						? unflatten(row as Record<string, JsonValue>) as JsonValue
+						: row) as JsonValue;
 				});
 		}
 
@@ -366,16 +381,16 @@ export class StoreImpl {
 				conditions: [["id", 0, segments[1]]],
 			})
 			.then((ok) => {
-				const rows: unknown[] = ok.value ?? [];
+				const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 				if (rows.length === 0) return undefined;
-				const record = unflatten(rows[0] as Record<string, unknown>);
+				const record = unflatten(rows[0] as Record<string, JsonValue>) as Record<string, JsonValue>;
 
-				let val: unknown = record;
+				let val: JsonValue | undefined = record as JsonValue;
 				for (const part of segments.slice(2)) {
 					if (
 						val === null ||
 						typeof val !== "object" ||
-						!(part in (val as Record<string, unknown>))
+						!(part in (val as Record<string, JsonValue>))
 					) {
 						throw new ZyncBaseError(
 							`Field ${part} not found at path ${segments.join(".")}`,
@@ -386,7 +401,7 @@ export class StoreImpl {
 							},
 						);
 					}
-					val = (val as Record<string, unknown>)[part];
+					val = (val as Record<string, JsonValue>)[part];
 				}
 				return val;
 			});
@@ -395,7 +410,7 @@ export class StoreImpl {
 	query(
 		collection: string,
 		options?: QueryOptions,
-	): Promise<unknown[] & { nextCursor: string | null }> {
+	): Promise<JsonValue[] & { nextCursor: string | null }> {
 		const encoded = options ? encodeQueryOptions(options) : {};
 		return this.conn
 			.dispatch({
@@ -404,12 +419,12 @@ export class StoreImpl {
 				...encoded,
 			})
 			.then((ok) => {
-				const rows = (ok.value ?? []).map((row: unknown) =>
+				const rows = (ok.value ?? []).map((row: JsonValue) =>
 					row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row as Record<string, unknown>)
+						? unflatten(row as Record<string, JsonValue>) as JsonValue
 						: row,
 				);
-				const result = rows as unknown[] & { nextCursor: string | null };
+				const result = rows as JsonValue[] & { nextCursor: string | null };
 				result.nextCursor = ok.nextCursor ?? null;
 				return result;
 			});
@@ -428,7 +443,7 @@ export class StoreImpl {
 			);
 		}
 
-		const wireOps: (["s", string[], unknown] | ["r", string[]])[] = [];
+		const wireOps: (["s", string[], JsonValue] | ["r", string[]])[] = [];
 		for (const op of operations) {
 			const segments = normalizePath(op.path);
 			const wirePath = encodeWirePath(segments);
@@ -438,16 +453,16 @@ export class StoreImpl {
 				continue;
 			}
 
-			let wireValue = op.value;
+			let wireValue: JsonValue | undefined = op.value;
 			if (
 				segments.length === 2 &&
 				wireValue !== null &&
 				typeof wireValue === "object" &&
 				!Array.isArray(wireValue)
 			) {
-				wireValue = flatten(wireValue as Record<string, unknown>);
+				wireValue = flatten(wireValue as Record<string, JsonValue>) as JsonValue;
 			}
-			wireOps.push(["s", wirePath, wireValue]);
+			wireOps.push(["s", wirePath, wireValue ?? null]);
 		}
 
 		return this.conn
@@ -458,10 +473,10 @@ export class StoreImpl {
 	// ─── Subscriptions ─────────────────────────────────────────────────────────
 
 	private _handleSubscriptionResponse(
-		ok: { subId?: number; value?: unknown },
+		ok: { subId?: number; value?: JsonValue },
 		segments: string[],
 		subscribeParams: Omit<StoreSubscribe, "id">,
-		callback: (value: unknown) => void,
+		callback: (value: JsonValue) => void,
 		projection: import("./subscriptions.js").ListenProjection,
 		unlistenState: { unlistenCalled: boolean },
 	): void {
@@ -479,7 +494,7 @@ export class StoreImpl {
 
 		this.tracker.register(subId, {
 			params: subscribeParams,
-			callbacks: [callback],
+			callbacks: [callback as (value: unknown) => void],
 			projection,
 		});
 
@@ -492,19 +507,19 @@ export class StoreImpl {
 	private _dispatchInitialSnapshot(
 		subId: number,
 		segments: string[],
-		value: unknown,
+		value: JsonValue,
 	): void {
 		const delta: StoreDelta = { type: "StoreDelta", subId, ops: [] };
 		const collection = segments[0];
 
 		if (Array.isArray(value)) {
-			for (const item of value as unknown[]) {
-				const i = item as Record<string, unknown>;
+			for (const item of value as JsonValue[]) {
+				const i = item as Record<string, JsonValue>;
 				const id = (i.id as string) || segments[1];
 				delta.ops.push({ op: "set", path: [collection, id], value: item });
 			}
 		} else if (value !== null) {
-			const val = value as Record<string, unknown>;
+			const val = value as Record<string, JsonValue>;
 			const id = (val.id as string) || segments[1];
 			delta.ops.push({ op: "set", path: [collection, id], value: val });
 		}
@@ -512,7 +527,7 @@ export class StoreImpl {
 		this.tracker.dispatch(delta);
 	}
 
-	listen(path: Path, callback: (value: unknown) => void): () => void {
+	listen(path: Path, callback: (value: JsonValue) => void): () => void {
 		const segments = normalizePath(path);
 		let subscribeParams: Omit<StoreSubscribe, "id">;
 		let projection: import("./subscriptions.js").ListenProjection;
@@ -572,7 +587,7 @@ export class StoreImpl {
 	subscribe(
 		collection: string,
 		options: QueryOptions,
-		callback: (results: unknown[]) => void,
+		callback: (results: JsonValue[]) => void,
 	): SubscriptionHandle {
 		const encoded = encodeQueryOptions(options);
 		const subscribeParams: Omit<StoreSubscribe, "id"> = {

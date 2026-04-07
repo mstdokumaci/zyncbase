@@ -4,8 +4,8 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 setDefaultTimeout(120_000);
 
 import * as fc from "fast-check";
-import * as os from "os";
-import * as path from "path";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import {
 	collectFieldPathsForTest,

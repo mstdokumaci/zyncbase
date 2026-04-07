@@ -1,4 +1,5 @@
 // ZyncBaseError and ErrorCodes
+import type { JsonValue } from "./types.js";
 
 export const ErrorCodes = {
 	AUTH_FAILED: "AUTH_FAILED",
@@ -29,7 +30,7 @@ interface ZyncBaseErrorOptions {
 	retryAfter?: number;
 	requestId?: number;
 	path?: string[];
-	details?: Record<string, unknown>;
+	details?: Record<string, JsonValue>;
 }
 
 function deriveCategory(code: string): {
@@ -78,7 +79,7 @@ export class ZyncBaseError extends Error {
 	retryAfter?: number;
 	requestId?: number;
 	path?: string[];
-	details?: Record<string, unknown>;
+	details?: Record<string, JsonValue>;
 
 	constructor(message: string, options: ZyncBaseErrorOptions) {
 		super(message);
@@ -101,7 +102,7 @@ export class ZyncBaseError extends Error {
 		retryAfter?: number;
 		requestId?: number;
 		path?: string[];
-		details?: Record<string, unknown>;
+		details?: Record<string, JsonValue>;
 	}): ZyncBaseError {
 		const { category, retryable } = deriveCategory(payload.code);
 		return new ZyncBaseError(payload.message, {

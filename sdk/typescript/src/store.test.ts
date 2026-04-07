@@ -37,8 +37,9 @@ describe("flatten/unflatten", () => {
 					})
 					.filter(hasNoEmptyObjects),
 				(obj) => {
-					const result = unflatten(flatten(obj));
-					expect(result).toEqual(obj);
+					const typedObj = obj as Record<string, import("./types").JsonValue>;
+					const result = unflatten(flatten(typedObj));
+					expect(result).toEqual(typedObj);
 				},
 			),
 			{ numRuns: 100 },

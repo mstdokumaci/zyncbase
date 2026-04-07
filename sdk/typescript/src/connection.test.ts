@@ -61,14 +61,13 @@ function encodeToBuffer(msg: unknown): ArrayBuffer {
 
 function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 	const mockWs = new MockWebSocket();
-	// Patch global WebSocket
-	// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-	(globalThis as any).WebSocket = class {
-		constructor() {
-			return mockWs;
-		}
-		static OPEN = MockWebSocket.OPEN;
-	};
+	// Patch global WebSocket — regular function required so `new WebSocket(url)` works in production code
+	function wsFactory() {
+		return mockWs;
+	}
+	(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
+		OPEN: MockWebSocket.OPEN,
+	});
 	const manager = new ConnectionManager(defaultOptions);
 	return { manager, mockWs };
 }
@@ -358,13 +357,12 @@ describe("ConnectionManager", () => {
 	describe("reconnection — exponential backoff", () => {
 		test("emits 'reconnecting' on unexpected close when reconnect=true", async () => {
 			const mockWs = new MockWebSocket();
-			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-			(globalThis as any).WebSocket = class {
-				constructor() {
-					return mockWs;
-				}
-				static OPEN = MockWebSocket.OPEN;
-			};
+			function wsFactory1() {
+				return mockWs;
+			}
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory1, {
+				OPEN: MockWebSocket.OPEN,
+			});
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -392,13 +390,12 @@ describe("ConnectionManager", () => {
 
 		test("does NOT reconnect when reconnect=false", async () => {
 			const mockWs = new MockWebSocket();
-			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-			(globalThis as any).WebSocket = class {
-				constructor() {
-					return mockWs;
-				}
-				static OPEN = MockWebSocket.OPEN;
-			};
+			function wsFactory2() {
+				return mockWs;
+			}
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory2, {
+				OPEN: MockWebSocket.OPEN,
+			});
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -422,13 +419,12 @@ describe("ConnectionManager", () => {
 
 		test("emits 'disconnected' and stops when maxReconnectAttempts exceeded", async () => {
 			const mockWs = new MockWebSocket();
-			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-			(globalThis as any).WebSocket = class {
-				constructor() {
-					return mockWs;
-				}
-				static OPEN = MockWebSocket.OPEN;
-			};
+			function wsFactory3() {
+				return mockWs;
+			}
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory3, {
+				OPEN: MockWebSocket.OPEN,
+			});
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -456,14 +452,13 @@ describe("ConnectionManager", () => {
 		test("cancels reconnect timer on disconnect()", async () => {
 			const mockWs = new MockWebSocket();
 			let wsInstances = 0;
-			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-			(globalThis as any).WebSocket = class {
-				constructor() {
-					wsInstances++;
-					return mockWs;
-				}
-				static OPEN = MockWebSocket.OPEN;
-			};
+			function wsFactory4() {
+				wsInstances++;
+				return mockWs;
+			}
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory4, {
+				OPEN: MockWebSocket.OPEN,
+			});
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -489,13 +484,12 @@ describe("ConnectionManager", () => {
 
 		test("does NOT reconnect on intentional disconnect()", async () => {
 			const mockWs = new MockWebSocket();
-			// biome-ignore lint/correctness/noConstructorReturn: Mocking WebSocket to return a specific instance
-			(globalThis as any).WebSocket = class {
-				constructor() {
-					return mockWs;
-				}
-				static OPEN = MockWebSocket.OPEN;
-			};
+			function wsFactory5() {
+				return mockWs;
+			}
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory5, {
+				OPEN: MockWebSocket.OPEN,
+			});
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",

@@ -1,7 +1,7 @@
 // Subscription Tracker
 
 import { unflatten } from "./store.js";
-import type { StoreDelta, StoreSubscribe } from "./types.js";
+import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,7 +18,7 @@ export interface SubscriptionEntry {
 	/** Original StoreSubscribe params — used for replay on reconnect. */
 	params: Omit<StoreSubscribe, "id">;
 	/** Registered callbacks to invoke when a delta arrives. */
-	callbacks: Array<(value: unknown) => void>;
+	callbacks: Array<(value: JsonValue) => void>;
 	/** Projection info; null for store.subscribe (collection-level) registrations. */
 	projection: ListenProjection | null;
 }
@@ -150,7 +150,7 @@ export class SubscriptionTracker {
 	private _project(
 		delta: StoreDelta,
 		projection: ListenProjection | null,
-	): unknown {
+	): JsonValue {
 		if (projection === null || projection.depth === 1) {
 			// store.subscribe — deliver raw ops
 			return delta.ops;
@@ -164,11 +164,12 @@ export class SubscriptionTracker {
 		}
 
 		// depth 3+ — extract the specific nested field
-		return this._getField(record, projection.field);
+		const field = this._getField(record, projection.field);
+		return field !== undefined ? field : null;
 	}
 
-	private _reconstructRecord(ops: StoreDelta["ops"]): unknown {
-		const flat: Record<string, unknown> = {};
+	private _reconstructRecord(ops: StoreDelta["ops"]): JsonValue {
+		const flat: Record<string, JsonValue> = {};
 		for (const op of ops) {
 			// Relative path starting from the record root
 			const relativePath = op.path.slice(2);
@@ -180,31 +181,31 @@ export class SubscriptionTracker {
 			}
 
 			const key = relativePath.join("__");
-			flat[key] = op.op === "set" ? op.value : undefined;
+			flat[key] = op.op === "set" ? op.value : null;
 		}
 
 		// Unflatten to restore nested structure for the caller
 		return unflatten(flat);
 	}
 
-	private _handleRootOp(op: StoreDelta["ops"][number]): unknown {
+	private _handleRootOp(op: StoreDelta["ops"][number]): JsonValue | undefined {
 		if (op.op === "remove") return null;
 		if (op.op === "set") {
 			return op.value !== null &&
 				typeof op.value === "object" &&
 				!Array.isArray(op.value)
-				? unflatten(op.value as Record<string, unknown>)
+				? unflatten(op.value as Record<string, JsonValue>)
 				: op.value;
 		}
 		return undefined;
 	}
 
-	private _getField(record: unknown, fieldPath: string): unknown {
+	private _getField(record: JsonValue, fieldPath: string): JsonValue | undefined {
 		const parts = fieldPath.split(".");
-		let value = record;
+		let value: JsonValue | undefined = record;
 		for (const part of parts) {
-			if (value == null || typeof value !== "object") return undefined;
-			value = (value as Record<string, unknown>)[part];
+			if (value == null || typeof value !== "object" || Array.isArray(value)) return undefined;
+			value = (value as Record<string, JsonValue>)[part];
 		}
 		return value;
 	}

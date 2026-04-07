@@ -1,7 +1,5 @@
-import { type ChildProcess, execSync, spawn, spawnSync } from "child_process";
-import * as fs from "fs";
-import { Socket } from "net";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
@@ -68,10 +66,10 @@ function checkBuild() {
 		const _timeStr = new Date().toLocaleTimeString("en-GB", { hour12: false });
 		log(`Building ZyncBase server (ReleaseFast)...`);
 		const start = Date.now();
-		const result = spawnSync("zig", ["build", "-Doptimize=ReleaseFast"], {
-			stdio: "inherit",
+		const result = Bun.spawnSync(["zig", "build", "-Doptimize=ReleaseFast"], {
+			stdio: ["inherit", "inherit", "inherit"],
 		});
-		if (result.status !== 0) {
+		if (result.exitCode !== 0) {
 			console.error("Build failed");
 			process.exit(1);
 		}
@@ -85,22 +83,29 @@ function checkBuild() {
 async function wait_for_port(port: number, retries = 50): Promise<void> {
 	for (let i = 0; i < retries; i++) {
 		try {
-			const socket = new Socket();
 			await new Promise<void>((resolve, reject) => {
-				socket.setTimeout(100);
-				socket.on("connect", () => {
-					socket.destroy();
-					resolve();
-				});
-				socket.on("error", (err: unknown) => {
-					socket.destroy();
+				const timeout = setTimeout(() => {
+					reject(new Error("timeout"));
+				}, 100);
+				Bun.connect({
+					hostname: "127.0.0.1",
+					port,
+					socket: {
+						open(socket) {
+							clearTimeout(timeout);
+							socket.end();
+							resolve();
+						},
+						data() {},
+						error(_socket, err) {
+							clearTimeout(timeout);
+							reject(err);
+						},
+					},
+				}).catch((err) => {
+					clearTimeout(timeout);
 					reject(err);
 				});
-				socket.on("timeout", () => {
-					socket.destroy();
-					reject(new Error("timeout"));
-				});
-				socket.connect(port, "127.0.0.1");
 			});
 			return;
 		} catch (_err) {
@@ -110,14 +115,14 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 	throw new Error(`Timeout waiting for port ${port}`);
 }
 
-async function start_server(configPath: string): Promise<ChildProcess> {
+async function start_server(configPath: string): Promise<Bun.Subprocess> {
 	// Kill any process on the port first to avoid stale connections
 	try {
-		execSync(`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`);
+		Bun.spawnSync(["sh", "-c", `lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`]);
 	} catch (_e) {}
 
-	const server = spawn(SERVER_BIN, ["--config", configPath], {
-		stdio: "inherit",
+	const server = Bun.spawn([SERVER_BIN, "--config", configPath], {
+		stdio: ["inherit", "inherit", "inherit"],
 		cwd: process.cwd(),
 	});
 	await wait_for_port(PORT);
@@ -126,9 +131,9 @@ async function start_server(configPath: string): Promise<ChildProcess> {
 	return server;
 }
 
-async function stop_server(server: ChildProcess) {
+async function stop_server(server: Bun.Subprocess) {
 	server.kill();
-	await new Promise((resolve) => server.on("exit", resolve));
+	await server.exited;
 }
 
 import { run as runErrors } from "./test-errors";

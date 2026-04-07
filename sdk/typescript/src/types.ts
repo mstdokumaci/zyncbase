@@ -4,6 +4,16 @@ import type { ZyncBaseError } from "./errors";
 
 // ─── Primitive / utility types ───────────────────────────────────────────────
 
+export type JsonValue =
+	| string
+	| number
+	| boolean
+	| null
+	| JsonValue[]
+	| { [key: string]: JsonValue };
+
+export type JsonObject = { [key: string]: JsonValue };
+
 /** A data address: dot-notation string or string array. */
 export type Path = string | string[];
 
@@ -39,7 +49,7 @@ export interface StatusDetail {
 // ─── SDK-side query types (Prisma-style, encoded to wire tuples before sending) ──
 
 export interface QueryOptions {
-	where?: Record<string, unknown>; // e.g. { age: { gte: 18 }, status: { eq: 'active' } }
+	where?: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>; // e.g. { age: { gte: 18 }, or: [...] }
 	orderBy?: Record<string, "asc" | "desc">; // e.g. { created_at: 'desc' }
 	limit?: number;
 	after?: string; // opaque cursor token
@@ -48,7 +58,7 @@ export interface QueryOptions {
 export interface BatchOperation {
 	op: "set" | "remove";
 	path: Path;
-	value?: unknown;
+	value?: JsonValue;
 }
 
 export interface SubscriptionHandle {
@@ -61,31 +71,31 @@ export interface SubscriptionHandle {
 
 export interface Store {
 	/** Set a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	set(path: Path, value: unknown): Promise<void>;
+	set(path: Path, value: JsonValue): Promise<void>;
 	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
 	remove(path: Path): Promise<void>;
 	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
-	create(collection: string, value: unknown): Promise<string>;
+	create(collection: string, value: JsonValue): Promise<string>;
 	/** Push a new value to a collection with an auto-generated ULID/UUID. Returns a Promise of the ID. */
-	push(collection: string, value: unknown): Promise<string>;
+	push(collection: string, value: JsonValue): Promise<string>;
 	/** Merge fields into an existing document. Returns a Promise that resolves when the server acknowledges. */
-	update(path: Path, value: unknown): Promise<void>;
+	update(path: Path, value: JsonValue): Promise<void>;
 	/** Get current value(s) in a one-off read. */
-	get(path: Path): Promise<unknown>;
+	get(path: Path): Promise<JsonValue | null | undefined>;
 	/** Listen for changes at a path. Returns an unlisten function. */
-	listen(path: Path, callback: (value: unknown) => void): () => void;
+	listen(path: Path, callback: (value: JsonValue) => void): () => void;
 	/** Subscribe to a collection with complex queries. */
 	subscribe(
 		collection: string,
 		options: QueryOptions,
-		callback: (results: unknown[]) => void,
+		callback: (results: JsonValue[]) => void,
 	): SubscriptionHandle;
 	// Batch — async
 	batch(operations: BatchOperation[]): Promise<void>;
 	query(
 		collection: string,
 		options?: QueryOptions,
-	): Promise<unknown[] & { nextCursor: string | null }>;
+	): Promise<JsonValue[] & { nextCursor: string | null }>;
 }
 
 // ─── Outbound wire messages: writes ──────────────────────────────────────────
@@ -95,7 +105,7 @@ export interface StoreSet {
 	id: number;
 	namespace: string;
 	path: string[];
-	value: unknown;
+	value: JsonValue;
 }
 
 export interface StoreRemove {
@@ -110,7 +120,7 @@ export interface StoreBatch {
 	type: "StoreBatch";
 	id: number;
 	namespace: string;
-	ops: (["s", string[], unknown] | ["r", string[]])[];
+	ops: (["s", string[], JsonValue] | ["r", string[]])[];
 }
 
 // ─── Outbound wire messages: reads (one-shot) ─────────────────────────────────
@@ -120,8 +130,8 @@ export interface StoreQuery {
 	id: number;
 	namespace: string;
 	collection: string;
-	conditions?: [field: string, op: number, value?: unknown][];
-	orConditions?: [field: string, op: number, value?: unknown][];
+	conditions?: [field: string, op: number, value?: JsonValue][];
+	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
 	limit?: number;
 	after?: string; // opaque Base64 cursor
@@ -134,8 +144,8 @@ export interface StoreSubscribe {
 	id: number;
 	namespace: string;
 	collection: string;
-	conditions?: [field: string, op: number, value?: unknown][];
-	orConditions?: [field: string, op: number, value?: unknown][];
+	conditions?: [field: string, op: number, value?: JsonValue][];
+	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
 	limit?: number;
 }
@@ -170,7 +180,7 @@ export interface OkResponse {
 	type: "ok";
 	id: number;
 	// StoreQuery response fields:
-	value?: unknown[];
+	value?: JsonValue[];
 	nextCursor?: string | null;
 	// StoreSubscribe response fields:
 	subId?: number;
@@ -184,7 +194,7 @@ export interface ErrorResponse {
 	message: string;
 	category?: string;
 	retryAfter?: number;
-	details?: Record<string, unknown>;
+	details?: Record<string, JsonValue>;
 }
 
 /** Server push — record-level delta for an active subscription. No request id. */
@@ -192,7 +202,7 @@ export interface StoreDelta {
 	type: "StoreDelta";
 	subId: number;
 	ops: Array<
-		| { op: "set"; path: string[]; value: unknown }
+		| { op: "set"; path: string[]; value: JsonValue }
 		| { op: "remove"; path: string[] }
 	>;
 }
