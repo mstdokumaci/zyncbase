@@ -164,7 +164,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     if (sysroot) |s| {
         // CI: ensure C compiler finds SDK headers/libs
         step.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{s}) });
-        step.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{s}) });
     }
 
     if (target.os.tag == .linux) {
