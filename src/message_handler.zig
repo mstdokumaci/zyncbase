@@ -392,10 +392,9 @@ pub const MessageHandler = struct {
             // Partial update / deep path
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            const effective_field = resolved.name;
 
             // Validate against schema
-            if (tbl_md.getField(effective_field)) |fld| {
+            if (tbl_md.getField(resolved.name)) |fld| {
                 if (fld.sql_type == .array) {
                     msgpack.ensureLiteralArray(value) catch {
                         return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
@@ -405,6 +404,9 @@ pub const MessageHandler = struct {
                 return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
             }
 
+            // Defensive copy - ColumnValue.name must own its memory
+            const effective_field = try self.allocator.dupe(u8, resolved.name);
+            defer self.allocator.free(effective_field);
             const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         }
