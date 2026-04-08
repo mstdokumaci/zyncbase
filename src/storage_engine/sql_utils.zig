@@ -11,6 +11,7 @@ const Entry = struct {
     node: std.DoublyLinkedList.Node = .{},
 };
 
+/// Not thread-safe. Each thread must have its own instance.
 pub const StatementCache = struct {
     const LruList = std.DoublyLinkedList;
 
