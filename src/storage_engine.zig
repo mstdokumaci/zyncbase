@@ -151,7 +151,7 @@ pub const StorageEngine = struct {
                 .shared_cache = options.in_memory,
             });
             try connection.configureDatabase(&node.conn, false);
-            node.stmt_cache = sql_utils.StatementCache.init(allocator, performance_config.statement_cache_size);
+            node.stmt_cache.init(allocator, performance_config.statement_cache_size);
             node.mutex = .{};
             initialized_readers += 1;
         }
@@ -162,14 +162,12 @@ pub const StorageEngine = struct {
             cb.deinit();
         }
 
-        var writer_stmt_cache = sql_utils.StatementCache.init(allocator, performance_config.statement_cache_size);
-        errdefer writer_stmt_cache.deinit(allocator);
-
         self.* = .{
             .allocator = allocator,
             .db_path = db_path,
             ._writer_conn = writer_conn,
-            .writer_stmt_cache = writer_stmt_cache,
+            // SAFETY: Initialized below via .writer_stmt_cache.init().
+            .writer_stmt_cache = undefined,
             .reader_pool = reader_pool,
             .performance_config = performance_config,
             .options = options,
@@ -198,6 +196,9 @@ pub const StorageEngine = struct {
             .write_thread = null,
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
         };
+
+        self.writer_stmt_cache.init(allocator, self.performance_config.statement_cache_size);
+        errdefer self.writer_stmt_cache.deinit(allocator);
 
         try self.metadata_cache.init(allocator, .{}, deinitPayload);
         errdefer self.metadata_cache.deinit();
@@ -374,6 +375,12 @@ pub const StorageEngine = struct {
             return error.InvalidState;
         }
         try self._writer_conn.execMulti(sql, .{});
+        // Reset caches since DDL may have modified table structures, invalidating
+        // any cached prepared statements and metadata.
+        self.writer_stmt_cache.deinit(self.allocator);
+        self.writer_stmt_cache.init(self.allocator, self.performance_config.statement_cache_size);
+        self.metadata_cache.deinit();
+        try self.metadata_cache.init(self.allocator, .{}, deinitPayload);
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         _ = self.write_seq.fetchAdd(1, .release);
     }

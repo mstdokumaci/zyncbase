@@ -19,10 +19,12 @@ pub const StatementCache = struct {
     count: usize,
     cache_limit: usize,
 
-    pub fn init(allocator: Allocator, cache_limit: usize) StatementCache {
-        return .{
-            .map = std.StringHashMap(*LruList.Node).init(allocator),
-            .list = LruList{},
+    pub fn init(self: *StatementCache, allocator: Allocator, cache_limit: usize) void {
+        const map = std.StringHashMap(*LruList.Node).init(allocator);
+        const list = LruList{};
+        self.* = .{
+            .map = map,
+            .list = list,
             .count = 0,
             .cache_limit = cache_limit,
         };
