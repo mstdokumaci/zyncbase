@@ -151,7 +151,7 @@ pub const StorageEngine = struct {
                 .shared_cache = options.in_memory,
             });
             try connection.configureDatabase(&node.conn, false);
-            node.stmt_cache = sql_utils.StatementCache.init(allocator);
+            node.stmt_cache = sql_utils.StatementCache.init(allocator, performance_config.statement_cache_size);
             node.mutex = .{};
             initialized_readers += 1;
         }
@@ -162,7 +162,7 @@ pub const StorageEngine = struct {
             cb.deinit();
         }
 
-        var writer_stmt_cache = sql_utils.StatementCache.init(allocator);
+        var writer_stmt_cache = sql_utils.StatementCache.init(allocator, performance_config.statement_cache_size);
         errdefer writer_stmt_cache.deinit(allocator);
 
         self.* = .{

@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 
-pub const CACHE_LIMIT = 100;
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
@@ -19,12 +18,14 @@ pub const StatementCache = struct {
     map: std.StringHashMap(*LruList.Node),
     list: LruList,
     count: usize,
+    cache_limit: usize,
 
-    pub fn init(allocator: Allocator) StatementCache {
+    pub fn init(allocator: Allocator, cache_limit: usize) StatementCache {
         return .{
             .map = std.StringHashMap(*LruList.Node).init(allocator),
             .list = LruList{},
             .count = 0,
+            .cache_limit = cache_limit,
         };
     }
 
@@ -72,7 +73,7 @@ pub const StatementCache = struct {
         if (self.map.contains(sql)) return;
 
         // Evict if at capacity
-        if (self.count >= CACHE_LIMIT) {
+        if (self.count >= self.cache_limit) {
             if (self.list.last) |old_node| {
                 const old_entry: *Entry = @fieldParentPtr("node", old_node);
                 self.list.remove(old_node);
