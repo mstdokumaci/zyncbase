@@ -50,8 +50,9 @@ pub const EngineTestContext = struct {
             defer allocator.free(ddl);
             const ddl_z = try allocator.dupeZ(u8, ddl);
             defer allocator.free(ddl_z);
-            try self.engine.execDDL(ddl_z);
+            try self.engine.execSetupSQL(ddl_z);
         }
+        try self.engine.start();
     }
 
     pub fn deinit(self: *EngineTestContext) void {
@@ -208,8 +209,9 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
-        try ctx.engine.execDDL(ddl_z);
+        try ctx.engine.execSetupSQL(ddl_z);
     }
+    try ctx.engine.start();
 }
 
 pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payload {

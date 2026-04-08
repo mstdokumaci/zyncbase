@@ -371,7 +371,12 @@ pub const MessageHandler = struct {
             }
 
             var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
-            defer columns.deinit(self.allocator);
+            defer {
+                for (columns.items) |col| {
+                    self.allocator.free(col.name);
+                }
+                columns.deinit(self.allocator);
+            }
 
             var it2 = value.map.iterator();
             while (it2.next()) |entry| {
@@ -383,18 +388,13 @@ pub const MessageHandler = struct {
             }
 
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
-
-            for (columns.items) |col| {
-                self.allocator.free(col.name);
-            }
         } else {
             // Partial update / deep path
             const resolved = try resolveFieldName(self.allocator, segments[2..]);
             defer if (resolved.allocated) self.allocator.free(resolved.name);
-            const effective_field = resolved.name;
 
             // Validate against schema
-            if (tbl_md.getField(effective_field)) |fld| {
+            if (tbl_md.getField(resolved.name)) |fld| {
                 if (fld.sql_type == .array) {
                     msgpack.ensureLiteralArray(value) catch {
                         return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
@@ -404,7 +404,7 @@ pub const MessageHandler = struct {
                 return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
             }
 
-            const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
+            const col = [_]storage_mod.ColumnValue{.{ .name = resolved.name, .value = value }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         }
 

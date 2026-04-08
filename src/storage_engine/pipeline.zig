@@ -6,6 +6,7 @@ const connection = @import("connection.zig");
 const types = @import("types.zig");
 const schema_manager = @import("../schema_manager.zig");
 const msgpack = @import("../msgpack_utils.zig");
+const sql_utils = @import("sql_utils.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
 
@@ -20,6 +21,7 @@ fn getDocumentHelper(
     namespace: []const u8,
     id: []const u8,
     sql_cache: *std.StringHashMap([]const u8),
+    stmt_cache: *sql_utils.StatementCache,
 ) !?msgpack.Payload {
     const table_metadata = sm.getTable(table) orelse return null;
     const sql = if (sql_cache.get(table)) |s| s else blk: {
@@ -27,7 +29,9 @@ fn getDocumentHelper(
         try sql_cache.put(table, s);
         break :blk s;
     };
-    return reader.execSelectDocument(allocator, conn, sql, id, namespace, table_metadata);
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    defer mstmt.release();
+    return reader.execSelectDocument(allocator, conn, mstmt.stmt, id, namespace, table_metadata);
 }
 
 fn pushOwnedChange(
@@ -59,6 +63,7 @@ pub fn executeBatch(
     ops: []const WriteOp,
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
     sm: *const schema_manager.SchemaManager,
+    stmt_cache: *sql_utils.StatementCache,
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
 
@@ -71,8 +76,8 @@ pub fn executeBatch(
 
     if (!manual_transaction_active) {
         conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
-            const classified_err = reader.classifyError(err);
-            reader.logDatabaseError("executeBatch BEGIN", classified_err, "");
+            const classified_err = types.classifyError(err);
+            types.logDatabaseError("executeBatch BEGIN", classified_err, "");
             return classified_err;
         };
         transaction_active.store(true, .release);
@@ -81,8 +86,8 @@ pub fn executeBatch(
     errdefer {
         if (!manual_transaction_active) {
             conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
-                const classified_err = reader.classifyError(rollback_err);
-                reader.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
+                const classified_err = types.classifyError(rollback_err);
+                types.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
             };
             transaction_active.store(false, .release);
         }
@@ -93,16 +98,16 @@ pub fn executeBatch(
             .insert => |iop| {
                 const table_metadata = sm.getTable(iop.table) orelse return StorageError.UnknownTable;
                 var old_row: ?msgpack.Payload = null;
-                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache);
+                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
                 } else |err| {
                     std.log.err("Failed to capture old state (pre-INSERT) for {s}: {}", .{ iop.table, err });
                 }
-                const maybe_new_row = executeInsert(allocator, conn, iop, table_metadata) catch |err| {
+                const maybe_new_row = executeInsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |*r| r.free(allocator);
-                    const classified_err = reader.classifyError(err);
-                    reader.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
+                    const classified_err = types.classifyError(err);
+                    types.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
                     return classified_err;
                 };
 
@@ -124,16 +129,16 @@ pub fn executeBatch(
             .update => |uop| {
                 const table_metadata = sm.getTable(uop.table) orelse return StorageError.UnknownTable;
                 var old_row: ?msgpack.Payload = null;
-                const capture_res = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache);
+                const capture_res = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
                 } else |err| {
                     std.log.err("Failed to capture old state (pre-UPDATE) for {s}: {}", .{ uop.table, err });
                 }
-                const maybe_new_row = executeUpdate(allocator, conn, uop, table_metadata) catch |err| {
+                const maybe_new_row = executeUpdate(allocator, conn, uop, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |*r| r.free(allocator);
-                    const classified_err = reader.classifyError(err);
-                    reader.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
+                    const classified_err = types.classifyError(err);
+                    types.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
                     return classified_err;
                 };
 
@@ -154,9 +159,9 @@ pub fn executeBatch(
             },
             .delete => |dop| {
                 const table_metadata = sm.getTable(dop.table) orelse return StorageError.UnknownTable;
-                const maybe_old_row = executeDelete(allocator, conn, dop, table_metadata) catch |err| {
-                    const classified_err = reader.classifyError(err);
-                    reader.logDatabaseError("executeBatch DELETE", classified_err, dop.table);
+                const maybe_old_row = executeDelete(allocator, conn, dop, table_metadata, stmt_cache) catch |err| {
+                    const classified_err = types.classifyError(err);
+                    types.logDatabaseError("executeBatch DELETE", classified_err, dop.table);
                     return classified_err;
                 };
 
@@ -173,34 +178,14 @@ pub fn executeBatch(
                     std.log.debug("DELETE for {s}/{s}: no row found (already deleted)", .{ dop.table, dop.id });
                 }
             },
-            .ddl => |dop| {
-                // Clear SQL cache because schema changed
-                var cit = sql_cache.valueIterator();
-                while (cit.next()) |sql| allocator.free(sql.*);
-                sql_cache.clearRetainingCapacity();
-
-                const sql = dop.sql;
-                var it = std.mem.splitScalar(u8, sql, ';');
-                while (it.next()) |stmt_raw| {
-                    const stmt = std.mem.trim(u8, stmt_raw, " \r\n\t");
-                    if (stmt.len == 0) continue;
-
-                    conn.execDynamic(stmt, .{}, .{}) catch |err| {
-                        std.log.err("executeBatch DDL error: {}\nSQL:\n{s}", .{ err, stmt });
-                        const classified_err = reader.classifyError(err);
-                        reader.logDatabaseError("executeBatch DDL", classified_err, stmt);
-                        return classified_err;
-                    };
-                }
-            },
             .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable,
         }
     }
 
     if (!manual_transaction_active) {
         conn.exec("COMMIT", .{}, .{}) catch |err| {
-            const classified_err = reader.classifyError(err);
-            reader.logDatabaseError("executeBatch COMMIT", classified_err, "");
+            const classified_err = types.classifyError(err);
+            types.logDatabaseError("executeBatch COMMIT", classified_err, "");
             return classified_err;
         };
         transaction_active.store(false, .release);
@@ -222,6 +207,7 @@ pub fn flushBatch(
     change_buffer: *ChangeBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
+    stmt_cache: *sql_utils.StatementCache,
 ) void {
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
@@ -282,7 +268,7 @@ pub fn flushBatch(
         pending_changes.deinit(allocator);
     }
 
-    const result = executeBatch(allocator, conn, transaction_active, batch.items, &pending_changes, sm);
+    const result = executeBatch(allocator, conn, transaction_active, batch.items, &pending_changes, sm, stmt_cache);
     if (result) |_| {
         _ = write_seq.fetchAdd(1, .acq_rel);
 
@@ -308,7 +294,7 @@ pub fn flushBatch(
             }
         }
     } else |err| {
-        const classified_err = reader.classifyError(err);
+        const classified_err = types.classifyError(err);
         std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
@@ -355,7 +341,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
         while (batch.items.len < batch_size) {
             if (ctx.write_queue.pop()) |op| {
                 switch (op) {
-                    .insert, .update, .delete, .ddl => {
+                    .insert, .update, .delete => {
                         batch.append(ctx.allocator, op) catch |err| {
                             std.log.err("Failed to append to batch: {}", .{err});
                             op.deinit(ctx.allocator);
@@ -368,14 +354,14 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .begin_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
                         }
-                        if (ctx.writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
+                        if (ctx._writer_conn.exec("BEGIN TRANSACTION", .{}, .{})) |_| {
                             ctx.transaction_active.store(true, .release);
                             ctx.manual_transaction_active.store(true, .release);
                             if (top.completion_signal) |sig| sig.signal(null);
                         } else |err| {
-                            if (top.completion_signal) |sig| sig.signal(reader.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -384,7 +370,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .commit_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -394,7 +380,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                             ctx.write_mutex.unlock();
                             continue;
                         }
-                        if (ctx.writer_conn.exec("COMMIT", .{}, .{})) |_| {
+                        if (ctx._writer_conn.exec("COMMIT", .{}, .{})) |_| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
                             _ = ctx.write_seq.fetchAdd(1, .acq_rel);
@@ -402,7 +388,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                         } else |err| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
-                            if (top.completion_signal) |sig| sig.signal(reader.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -411,7 +397,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .rollback_transaction => |top| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
                         }
                         if (!ctx.transaction_active.load(.acquire)) {
                             if (top.completion_signal) |sig| sig.signal(StorageError.NoActiveTransaction);
@@ -421,14 +407,14 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                             ctx.write_mutex.unlock();
                             continue;
                         }
-                        if (ctx.writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
+                        if (ctx._writer_conn.exec("ROLLBACK", .{}, .{})) |_| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
                             if (top.completion_signal) |sig| sig.signal(null);
                         } else |err| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
-                            if (top.completion_signal) |sig| sig.signal(reader.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -437,12 +423,12 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                     },
                     .checkpoint => |cop| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
                         }
-                        if (connection.internalExecuteCheckpoint(&ctx.writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
+                        if (connection.internalExecuteCheckpoint(&ctx._writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
                             cop.completion_signal.signalWithResult(stats);
                         } else |err| {
-                            cop.completion_signal.signal(reader.classifyError(err));
+                            cop.completion_signal.signal(types.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -462,7 +448,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
             (batch.items.len > 0 and time_since_last >= batch_timeout);
 
         if (should_flush) {
-            flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
         } else {
             ctx.write_mutex.lock();
             defer ctx.write_mutex.unlock();
@@ -498,7 +484,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
     }
 
     if (batch.items.len > 0) {
-        flushBatch(ctx.allocator, &ctx.writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx);
+        flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
     }
 }
 
@@ -511,37 +497,34 @@ pub fn executeInsert(
     conn: *sqlite.Db,
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
+    stmt_cache: *sql_utils.StatementCache,
 ) !?msgpack.Payload {
     const sql = op.sql;
-    var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
-    defer stmt.deinit();
-
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    defer mstmt.release();
+    const stmt = mstmt.stmt;
 
     var bind_idx: c_int = 1;
-    if (types.bindTextTransient(stmt.stmt, bind_idx, id_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, bind_idx, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (types.bindTextTransient(stmt.stmt, bind_idx, ns_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
 
     for (op.values) |val| {
-        try val.bindSQLite(stmt, bind_idx);
+        try val.bindSQLite(conn, stmt, bind_idx);
         bind_idx += 1;
     }
 
-    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
 
-    const rc = sqlite.c.sqlite3_step(stmt.stmt);
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, stmt, table_metadata);
+        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
     }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return reader.classifyStepError(conn);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
 }
 
@@ -550,27 +533,24 @@ pub fn executeUpdate(
     conn: *sqlite.Db,
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
+    stmt_cache: *sql_utils.StatementCache,
 ) !?msgpack.Payload {
     const sql = op.sql;
-    var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
-    defer stmt.deinit();
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    defer mstmt.release();
+    const stmt = mstmt.stmt;
 
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
+    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    try op.values[0].bindSQLite(conn, stmt, 3);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
-    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    try op.values[0].bindSQLite(stmt, 3);
-    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    if (sqlite.c.sqlite3_bind_int64(stmt.stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-
-    const rc = sqlite.c.sqlite3_step(stmt.stmt);
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, stmt, table_metadata);
+        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
     }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return reader.classifyStepError(conn);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
 }
 
@@ -579,23 +559,20 @@ pub fn executeDelete(
     conn: *sqlite.Db,
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
+    stmt_cache: *sql_utils.StatementCache,
 ) !?msgpack.Payload {
     const sql = op.sql;
-    var stmt = conn.prepareDynamic(sql) catch |err| return reader.classifyError(err);
-    defer stmt.deinit();
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    defer mstmt.release();
+    const stmt = mstmt.stmt;
 
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
+    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
-    if (types.bindTextTransient(stmt.stmt, 1, id_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-    if (types.bindTextTransient(stmt.stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return reader.classifyStepError(conn);
-
-    const rc = sqlite.c.sqlite3_step(stmt.stmt);
+    const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, stmt, table_metadata);
+        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
     }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return reader.classifyStepError(conn);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
 }

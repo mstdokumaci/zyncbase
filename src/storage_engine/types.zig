@@ -5,18 +5,9 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
+const sql_utils = @import("sql_utils.zig");
 
 pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
-
-/// Safe bind helpers to avoid alignment errors with TSAN on ARM.
-/// We use the library's built-in workaround for the special -1 pointer sentinel.
-pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
-    return sqlite.c.sqlite3_bind_text(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
-}
-
-pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
-    return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
-}
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -146,18 +137,44 @@ pub const TypedValue = union(enum) {
     }
 
     /// Binds the typed value to a SQLite statement query parameter slot.
-    pub fn bindSQLite(self: TypedValue, stmt: sqlite.DynamicStatement, index: c_int) !void {
+    pub fn bindSQLite(self: TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int) !void {
         const rc = switch (self) {
-            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
-            .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-            .text => |s| bindTextTransient(stmt.stmt, index, s),
-            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-            .blob => |b| bindBlobTransient(stmt.stmt, index, b),
-            .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
+            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
+            .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
+            .text => |s| sql_utils.bindTextTransient(stmt, index, s),
+            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+            .blob => |b| sql_utils.bindBlobTransient(stmt, index, b),
+            .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         };
-        if (rc != sqlite.c.SQLITE_OK) return StorageError.SQLiteError;
+        if (rc != sqlite.c.SQLITE_OK) return classifyStepError(db);
     }
 };
+
+pub fn classifyError(err: anyerror) anyerror {
+    // Map SQLite errors to our specific error types
+    return switch (err) {
+        error.SQLiteConstraint => StorageError.ConstraintViolation,
+        error.SQLiteFull => StorageError.DiskFull,
+        error.SQLiteCorrupt, error.SQLiteNotADatabase => StorageError.DatabaseCorrupted,
+        error.SQLiteBusy, error.SQLiteLocked => StorageError.DatabaseLocked,
+        else => err,
+    };
+}
+
+pub fn classifyStepError(db: *sqlite.Db) anyerror {
+    const rc = sqlite.c.sqlite3_errcode(db.db);
+    return switch (rc) {
+        sqlite.c.SQLITE_CONSTRAINT => StorageError.ConstraintViolation,
+        sqlite.c.SQLITE_FULL => StorageError.DiskFull,
+        sqlite.c.SQLITE_CORRUPT, sqlite.c.SQLITE_NOTADB => StorageError.DatabaseCorrupted,
+        sqlite.c.SQLITE_BUSY, sqlite.c.SQLITE_LOCKED => StorageError.DatabaseLocked,
+        else => error.SQLiteError,
+    };
+}
+
+pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u8) void {
+    std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
+}
 
 /// SQLite checkpoint modes
 pub const CheckpointMode = enum {
@@ -174,6 +191,7 @@ pub const CheckpointMode = enum {
 pub const ReaderNode = struct {
     conn: sqlite.Db,
     mutex: std.Thread.Mutex,
+    stmt_cache: sql_utils.StatementCache,
 };
 
 pub const CheckpointStats = struct {
@@ -234,10 +252,6 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         completion_signal: ?*CompletionSignal = null,
     },
-    ddl: struct {
-        sql: []const u8,
-        completion_signal: ?*CompletionSignal,
-    },
 
     pub const CompletionSignal = struct {
         mutex: std.Thread.Mutex = .{},
@@ -281,7 +295,6 @@ pub const WriteOp = union(enum) {
             .insert => |op| op.completion_signal,
             .update => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
-            .ddl => |op| op.completion_signal,
         };
     }
 
@@ -307,9 +320,6 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.namespace);
                 allocator.free(op.table);
                 allocator.free(op.id);
-                allocator.free(op.sql);
-            },
-            .ddl => |op| {
                 allocator.free(op.sql);
             },
             else => {},
@@ -365,25 +375,4 @@ pub const WriteQueue = struct {
     }
 };
 
-/// Appends the standard ZyncBase column projection list (id, namespace_id, all fields, timestamps)
-/// to the provided buffer. Array/object fields are wrapped in json() to ensure they return
-/// text even if stored as JSONB.
-pub fn appendProjectedColumnsSql(
-    allocator: Allocator,
-    buf: *std.ArrayListUnmanaged(u8),
-    table_metadata: schema_manager.TableMetadata,
-) !void {
-    try buf.appendSlice(allocator, "id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        try buf.appendSlice(allocator, ", ");
-        if (f.sql_type == .array) {
-            try buf.appendSlice(allocator, "json(");
-            try buf.appendSlice(allocator, f.name);
-            try buf.appendSlice(allocator, ") AS ");
-            try buf.appendSlice(allocator, f.name);
-        } else {
-            try buf.appendSlice(allocator, f.name);
-        }
-    }
-    try buf.appendSlice(allocator, ", created_at, updated_at");
-}
+// SQL assembly helpers moved to sql_utils.zig

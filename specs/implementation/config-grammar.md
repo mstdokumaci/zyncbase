@@ -79,6 +79,7 @@ This document defines the formal grammar and property specification for `zyncbas
 | `messageBufferSize` | `number` | `1000` | Size of internal ring buffer for routing. |
 | `batchWrites` | `boolean` | `true` | Group multiple writes into single transactions. |
 | `batchTimeout` | `number` | `10` | Wait time for batching (ms). |
+| `statementCacheSize` | `number` | `100` | Max number of prepared statements to keep in cache per connection. |
 
 ---
 

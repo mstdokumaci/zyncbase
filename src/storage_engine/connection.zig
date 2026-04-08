@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const types = @import("types.zig");
-const reader = @import("reader.zig");
 
 const StorageError = types.StorageError;
 const CheckpointMode = types.CheckpointMode;
@@ -13,43 +12,43 @@ const ReaderNode = types.ReaderNode;
 pub fn configureDatabase(db: *sqlite.Db, is_writer: bool) !void {
     if (is_writer) {
         _ = db.pragma(void, .{}, "journal_mode", "wal") catch |err| {
-            const classified_err = reader.classifyError(err);
-            reader.logDatabaseError("configureDatabase journal_mode", classified_err, "");
+            const classified_err = types.classifyError(err);
+            types.logDatabaseError("configureDatabase journal_mode", classified_err, "");
             return classified_err;
         };
 
         _ = db.pragma(void, .{}, "wal_autocheckpoint", "1000") catch |err| {
-            const classified_err = reader.classifyError(err);
-            reader.logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
+            const classified_err = types.classifyError(err);
+            types.logDatabaseError("configureDatabase wal_autocheckpoint", classified_err, "");
             return classified_err;
         };
     }
 
     _ = db.pragma(void, .{}, "busy_timeout", "5000") catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("configureDatabase busy_timeout", classified_err, "");
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("configureDatabase busy_timeout", classified_err, "");
         return classified_err;
     };
 
     _ = db.pragma(void, .{}, "read_uncommitted", "true") catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("configureDatabase read_uncommitted", classified_err, "");
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("configureDatabase read_uncommitted", classified_err, "");
         return classified_err;
     };
 
     _ = db.pragma(void, .{}, "synchronous", "normal") catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("configureDatabase synchronous", classified_err, "");
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("configureDatabase synchronous", classified_err, "");
         return classified_err;
     };
     _ = db.pragma(void, .{}, "cache_size", "-64000") catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("configureDatabase cache_size", classified_err, "");
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("configureDatabase cache_size", classified_err, "");
         return classified_err;
     };
     _ = db.pragma(void, .{}, "mmap_size", "268435456") catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("configureDatabase mmap_size", classified_err, "");
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("configureDatabase mmap_size", classified_err, "");
         return classified_err;
     };
 }
@@ -84,8 +83,8 @@ pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path
         .restart => conn.one(CheckpointResult, "PRAGMA wal_checkpoint(RESTART)", .{}, .{}),
         .truncate => conn.one(CheckpointResult, "PRAGMA wal_checkpoint(TRUNCATE)", .{}, .{}),
     } catch |err| {
-        const classified_err = reader.classifyError(err);
-        reader.logDatabaseError("internalExecuteCheckpoint", classified_err, @tagName(mode));
+        const classified_err = types.classifyError(err);
+        types.logDatabaseError("internalExecuteCheckpoint", classified_err, @tagName(mode));
         return classified_err;
     };
 

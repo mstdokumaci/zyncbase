@@ -121,8 +121,9 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);
-        try engine.execDDL(ddl_z);
+        try engine.execSetupSQL(ddl_z);
     }
+    try engine.start();
 }
 
 pub fn cleanupTestEngine(engine: *StorageEngine, context: *TestContext) void {

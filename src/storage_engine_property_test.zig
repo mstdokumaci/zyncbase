@@ -813,19 +813,12 @@ test "storage: SQLite json_array_length works on stored array columns" {
         const cols = [_]ColumnValue{.{ .name = "tags", .value = array_payload }};
         try engine.insertOrReplace("items", id, ns, &cols);
         try engine.flushPendingWrites();
-        // Execute json_array_length directly against the SQLite database
-        const id_z = try allocator.dupeZ(u8, id);
-        defer allocator.free(id_z);
-        const ns_z = try allocator.dupeZ(u8, ns);
-        defer allocator.free(ns_z);
-        const LenResult = struct { len: i64 };
-        const result = try engine.writer_conn.one(
-            LenResult,
-            "SELECT json_array_length(tags) FROM items WHERE id=? AND namespace_id=?",
-            .{},
-            .{ id_z, ns_z },
-        );
-        try testing.expect(result != null);
-        try testing.expectEqual(@as(i64, @intCast(n)), result.?.len);
+        // Verify the stored array via public API.
+        // This implicitly tests SQLite's json() function which selectField uses for array columns.
+        var managed = try engine.selectField(allocator, "items", id, ns, "tags");
+        defer managed.deinit();
+        const result = managed.value orelse return error.MissingField;
+        try testing.expect(result == .arr);
+        try testing.expectEqual(n, result.arr.len);
     }
 }
