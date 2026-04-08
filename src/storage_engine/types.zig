@@ -137,18 +137,44 @@ pub const TypedValue = union(enum) {
     }
 
     /// Binds the typed value to a SQLite statement query parameter slot.
-    pub fn bindSQLite(self: TypedValue, stmt: sqlite.DynamicStatement, index: c_int) !void {
+    pub fn bindSQLite(self: TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int) !void {
         const rc = switch (self) {
-            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt.stmt, index, v),
-            .real => |v| sqlite.c.sqlite3_bind_double(stmt.stmt, index, v),
-            .text => |s| sql_utils.bindTextTransient(stmt.stmt, index, s),
-            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt.stmt, index, if (b) 1 else 0),
-            .blob => |b| sql_utils.bindBlobTransient(stmt.stmt, index, b),
-            .nil => sqlite.c.sqlite3_bind_null(stmt.stmt, index),
+            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
+            .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
+            .text => |s| sql_utils.bindTextTransient(stmt, index, s),
+            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+            .blob => |b| sql_utils.bindBlobTransient(stmt, index, b),
+            .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         };
-        if (rc != sqlite.c.SQLITE_OK) return StorageError.SQLiteError;
+        if (rc != sqlite.c.SQLITE_OK) return classifyStepError(db);
     }
 };
+
+pub fn classifyError(err: anyerror) anyerror {
+    // Map SQLite errors to our specific error types
+    return switch (err) {
+        error.SQLiteConstraint => StorageError.ConstraintViolation,
+        error.SQLiteFull => StorageError.DiskFull,
+        error.SQLiteCorrupt, error.SQLiteNotADatabase => StorageError.DatabaseCorrupted,
+        error.SQLiteBusy, error.SQLiteLocked => StorageError.DatabaseLocked,
+        else => err,
+    };
+}
+
+pub fn classifyStepError(db: *sqlite.Db) anyerror {
+    const rc = sqlite.c.sqlite3_errcode(db.db);
+    return switch (rc) {
+        sqlite.c.SQLITE_CONSTRAINT => StorageError.ConstraintViolation,
+        sqlite.c.SQLITE_FULL => StorageError.DiskFull,
+        sqlite.c.SQLITE_CORRUPT, sqlite.c.SQLITE_NOTADB => StorageError.DatabaseCorrupted,
+        sqlite.c.SQLITE_BUSY, sqlite.c.SQLITE_LOCKED => StorageError.DatabaseLocked,
+        else => error.SQLiteError,
+    };
+}
+
+pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u8) void {
+    std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
+}
 
 /// SQLite checkpoint modes
 pub const CheckpointMode = enum {

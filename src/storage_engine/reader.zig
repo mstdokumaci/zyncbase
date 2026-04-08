@@ -208,31 +208,7 @@ pub fn getCacheKey(allocator: Allocator, table: []const u8, namespace: []const u
     return try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table, namespace, id });
 }
 
-pub fn classifyError(err: anyerror) anyerror {
-    // Map SQLite errors to our specific error types
-    return switch (err) {
-        error.SQLiteConstraint => StorageError.ConstraintViolation,
-        error.SQLiteFull => StorageError.DiskFull,
-        error.SQLiteCorrupt, error.SQLiteNotADatabase => StorageError.DatabaseCorrupted,
-        error.SQLiteBusy, error.SQLiteLocked => StorageError.DatabaseLocked,
-        else => err,
-    };
-}
-
-pub fn classifyStepError(db: *sqlite.Db) anyerror {
-    const rc = sqlite.c.sqlite3_errcode(db.db);
-    return switch (rc) {
-        sqlite.c.SQLITE_CONSTRAINT => StorageError.ConstraintViolation,
-        sqlite.c.SQLITE_FULL => StorageError.DiskFull,
-        sqlite.c.SQLITE_CORRUPT, sqlite.c.SQLITE_NOTADB => StorageError.DatabaseCorrupted,
-        sqlite.c.SQLITE_BUSY, sqlite.c.SQLITE_LOCKED => StorageError.DatabaseLocked,
-        else => error.SQLiteError,
-    };
-}
-
-pub fn logDatabaseError(operation: []const u8, err: anyerror, context: []const u8) void {
-    std.log.debug("Database error during {s}: {} - Context: {s}", .{ operation, err, context });
-}
+// Error classification functions moved to types.zig
 
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
@@ -246,26 +222,27 @@ pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     return out.toOwnedSlice(allocator);
 }
 
-pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c_int, field: ?schema_manager.Field) !msgpack.Payload {
-    const col_type = sqlite.c.sqlite3_column_type(stmt.stmt, i);
+pub fn readColumnValue(allocator: Allocator, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !msgpack.Payload {
+    const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+    _ = db;
     if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
-        const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
-        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
+        const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
         const s = if (ptr != null) ptr[0..len] else "[]";
         return msgpack.jsonToPayload(s, allocator);
     }
     return switch (col_type) {
         sqlite.c.SQLITE_INTEGER => {
-            const val = sqlite.c.sqlite3_column_int64(stmt.stmt, i);
+            const val = sqlite.c.sqlite3_column_int64(stmt, i);
             if (field != null and field.?.sql_type == .boolean) {
                 return msgpack.Payload{ .bool = val != 0 };
             }
             return msgpack.Payload.intToPayload(val);
         },
-        sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt.stmt, i) },
+        sqlite.c.SQLITE_FLOAT => msgpack.Payload{ .float = sqlite.c.sqlite3_column_double(stmt, i) },
         sqlite.c.SQLITE_TEXT => blk: {
-            const ptr = sqlite.c.sqlite3_column_text(stmt.stmt, i);
-            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt.stmt, i));
+            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const s = if (ptr != null) ptr[0..len] else "";
             break :blk try msgpack.Payload.strToPayload(s, allocator);
         },
@@ -274,18 +251,18 @@ pub fn readColumnValue(allocator: Allocator, stmt: sqlite.DynamicStatement, i: c
 }
 
 pub fn resolveColumnContext(
-    stmt: sqlite.DynamicStatement,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     i: c_int,
     table_metadata: schema_manager.TableMetadata,
 ) ?ColumnContext {
-    const col_name_c = sqlite.c.sqlite3_column_name(stmt.stmt, i) orelse {
+    _ = db;
+    const col_name_c = sqlite.c.sqlite3_column_name(stmt, i) orelse {
         std.log.err("sqlite3_column_name returned NULL: OOM or Statement Corrupted", .{});
         return null;
     };
     const col_name = std.mem.span(col_name_c);
 
-    // If the column name cannot be found in our pre-allocated payloads cache,
-    // skip it and log an error. This handles schema drift gracefully.
     const key = table_metadata.field_payloads.get(col_name) orelse {
         std.log.err("Schema Cache out of sync: Column '{s}' not found in field_payloads", .{col_name});
         return null;
@@ -301,17 +278,18 @@ pub fn resolveColumnContext(
 
 pub fn resolveAllColumnContexts(
     allocator: Allocator,
-    stmt: sqlite.DynamicStatement,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: schema_manager.TableMetadata,
 ) ![]ColumnContext {
-    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt.stmt));
+    const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     var contexts_list: std.ArrayListUnmanaged(ColumnContext) = .empty;
     defer contexts_list.deinit(allocator);
     try contexts_list.ensureTotalCapacity(allocator, col_count);
 
     var i: c_int = 0;
     while (i < @as(c_int, @intCast(col_count))) : (i += 1) {
-        if (resolveColumnContext(stmt, i, table_metadata)) |ctx| {
+        if (resolveColumnContext(db, stmt, i, table_metadata)) |ctx| {
             try contexts_list.append(allocator, ctx);
         }
     }
@@ -441,17 +419,18 @@ pub fn appendConditionSql(
 
 pub fn decodeRow(
     allocator: Allocator,
-    stmt: sqlite.DynamicStatement,
+    db: *sqlite.Db,
+    stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
-    const col_contexts = try resolveAllColumnContexts(allocator, stmt, table_metadata);
+    const col_contexts = try resolveAllColumnContexts(allocator, db, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     var map = msgpack.Payload.mapPayload(allocator);
     errdefer map.free(allocator);
 
     for (col_contexts) |ctx| {
-        const val = try readColumnValue(allocator, stmt, ctx.index, ctx.field);
+        const val = try readColumnValue(allocator, db, stmt, ctx.index, ctx.field);
         try map.mapPut(ctx.name, val);
     }
     return map;
@@ -470,14 +449,14 @@ pub fn execSelectDocument(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
+    if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
-    return try decodeRow(allocator, sqlite.DynamicStatement{ .db = db.db, .stmt = stmt }, table_metadata);
+    return try decodeRow(allocator, db, stmt, table_metadata);
 }
 
 pub fn execSelectScalar(
@@ -493,14 +472,14 @@ pub fn execSelectScalar(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
+    if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
-    return try readColumnValue(allocator, sqlite.DynamicStatement{ .db = db.db, .stmt = stmt }, 0, field_ctx);
+    return try readColumnValue(allocator, db, stmt, 0, field_ctx);
 }
 
 pub fn execSelectCollection(
@@ -513,7 +492,7 @@ pub fn execSelectCollection(
     const ns_z = try allocator.dupeZ(u8, namespace);
     defer allocator.free(ns_z);
 
-    if (sql_utils.bindTextTransient(stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {
@@ -521,20 +500,19 @@ pub fn execSelectCollection(
         arr.deinit(allocator);
     }
 
-    const dyn_stmt = sqlite.DynamicStatement{ .db = db.db, .stmt = stmt };
-    const col_contexts = try resolveAllColumnContexts(allocator, dyn_stmt, table_metadata);
+    const col_contexts = try resolveAllColumnContexts(allocator, db, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
+        if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
         for (col_contexts) |ctx| {
-            const val = try readColumnValue(allocator, dyn_stmt, ctx.index, ctx.field);
+            const val = try readColumnValue(allocator, db, stmt, ctx.index, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         try arr.append(allocator, map);
@@ -577,9 +555,8 @@ pub fn execQuery(
     requested_limit: ?u32,
     sort_field: []const u8,
 ) !ExecQueryResult {
-    const dyn_stmt = sqlite.DynamicStatement{ .db = db.db, .stmt = stmt };
     for (values, 0..) |v, i| {
-        try v.bindSQLite(dyn_stmt, @intCast(i + 1));
+        try v.bindSQLite(db, stmt, @intCast(i + 1));
     }
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
@@ -591,19 +568,19 @@ pub fn execQuery(
     var next_cursor_arr: ?msgpack.Payload = null;
     errdefer if (next_cursor_arr) |*cursor| cursor.free(allocator);
 
-    const col_contexts = try resolveAllColumnContexts(allocator, dyn_stmt, table_metadata);
+    const col_contexts = try resolveAllColumnContexts(allocator, db, stmt, table_metadata);
     defer allocator.free(col_contexts);
 
     while (true) {
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return classifyStepError(db);
+        if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
         var map = msgpack.Payload.mapPayload(allocator);
         errdefer map.free(allocator);
 
         for (col_contexts) |ctx| {
-            const val = try readColumnValue(allocator, dyn_stmt, ctx.index, ctx.field);
+            const val = try readColumnValue(allocator, db, stmt, ctx.index, ctx.field);
             try map.mapPut(ctx.name, val);
         }
         try arr.append(allocator, map);
