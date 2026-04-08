@@ -69,12 +69,15 @@ pub const StatementCache = struct {
         return entry.stmt;
     }
 
-    /// Adds a new statement to the cache. Returns true if it took ownership,
-    /// false if it already exists (caller must finalize stmt).
+    /// Adds a new statement to the cache. Returns existing statement if already cached,
+    /// null if this call took ownership (caller must finalize returned stmt).
     /// Evicts LRU if capacity exceeded.
-    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !bool {
+    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !?*sqlite.c.sqlite3_stmt {
         // Double check existence
-        if (self.map.contains(sql)) return false;
+        if (self.map.get(sql)) |node| {
+            const entry: *Entry = @fieldParentPtr("node", node);
+            return entry.stmt;
+        }
 
         // Evict if at capacity
         if (self.count >= self.cache_limit) {
@@ -104,7 +107,7 @@ pub const StatementCache = struct {
         self.list.prepend(&entry.node);
         try self.map.put(sql_owned, &entry.node);
         self.count += 1;
-        return true;
+        return null;
     }
 
     /// High-level helper to get a statement or prepare one if missing.
@@ -117,10 +120,10 @@ pub const StatementCache = struct {
         var stmt = try db.prepareDynamic(sql);
         errdefer stmt.deinit();
 
-        if (!try self.put(allocator, sql, stmt.stmt)) {
-            // Lost the race or redundancy - clean up and use winner
+        if (try self.put(allocator, sql, stmt.stmt)) |existing| {
+            // Lost the race - use winner's statement instead
             stmt.deinit();
-            return ManagedStmt{ .stmt = self.get(sql).? };
+            return ManagedStmt{ .stmt = existing };
         }
         return ManagedStmt{ .stmt = stmt.stmt };
     }
