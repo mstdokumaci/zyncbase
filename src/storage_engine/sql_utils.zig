@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 
-
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
 const Entry = struct {
@@ -35,7 +34,7 @@ pub const StatementCache = struct {
     }
 
     /// Finalizes all cached statements and clears the cache.
-    pub fn clear(self: *StatementCache, allocator: Allocator) void {
+    fn clear(self: *StatementCache, allocator: Allocator) void {
         var it = self.list.first;
         while (it) |node| {
             const next = node.next;
@@ -52,7 +51,7 @@ pub const StatementCache = struct {
 
     /// Retrieves a prepared statement matched by SQL string.
     /// Returns null if not in cache. Updates LRU on hit.
-    pub fn get(self: *StatementCache, sql: []const u8) ?*sqlite.c.sqlite3_stmt {
+    fn get(self: *StatementCache, sql: []const u8) ?*sqlite.c.sqlite3_stmt {
         const node = self.map.get(sql) orelse return null;
         const entry: *Entry = @fieldParentPtr("node", node);
 
@@ -67,10 +66,12 @@ pub const StatementCache = struct {
         return entry.stmt;
     }
 
-    /// Adds a new statement to the cache. Evicts LRU if capacity exceeded.
-    pub fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !void {
+    /// Adds a new statement to the cache. Returns true if it took ownership,
+    /// false if it already exists (caller must finalize stmt).
+    /// Evicts LRU if capacity exceeded.
+    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !bool {
         // Double check existence
-        if (self.map.contains(sql)) return;
+        if (self.map.contains(sql)) return false;
 
         // Evict if at capacity
         if (self.count >= self.cache_limit) {
@@ -100,6 +101,7 @@ pub const StatementCache = struct {
         self.list.prepend(&entry.node);
         try self.map.put(sql_owned, &entry.node);
         self.count += 1;
+        return true;
     }
 
     /// High-level helper to get a statement or prepare one if missing.
@@ -112,14 +114,12 @@ pub const StatementCache = struct {
         var stmt = try db.prepareDynamic(sql);
         errdefer stmt.deinit();
 
-        try self.put(allocator, sql, stmt.stmt);
+        if (!try self.put(allocator, sql, stmt.stmt)) {
+            // Lost the race or redundancy - clean up and use winner
+            stmt.deinit();
+            return ManagedStmt{ .stmt = self.get(sql).? };
+        }
         return ManagedStmt{ .stmt = stmt.stmt };
-    }
-
-    /// Legacy helper - use acquire() for automatic cleanup.
-    pub fn getOrPrepare(self: *StatementCache, allocator: Allocator, db: *sqlite.Db, sql: []const u8) !*sqlite.c.sqlite3_stmt {
-        const m = try self.acquire(allocator, db, sql);
-        return m.stmt;
     }
 };
 

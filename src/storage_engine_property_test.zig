@@ -813,7 +813,7 @@ test "storage: SQLite json_array_length works on stored array columns" {
         const cols = [_]ColumnValue{.{ .name = "tags", .value = array_payload }};
         try engine.insertOrReplace("items", id, ns, &cols);
         try engine.flushPendingWrites();
-        // Verify the stored array via public API. 
+        // Verify the stored array via public API.
         // This implicitly tests SQLite's json() function which selectField uses for array columns.
         var managed = try engine.selectField(allocator, "items", id, ns, "tags");
         defer managed.deinit();

@@ -106,6 +106,7 @@ pub const NotificationDispatcher = struct {
                 continue;
             }
 
+            const id_payload_value = id_payload.?;
             const is_delete = change.operation == .delete;
 
             const encode_res = blk: {
@@ -139,7 +140,7 @@ pub const NotificationDispatcher = struct {
                 encoder.writeStr(writer, "path") catch break :blk false;
                 writer.writeByte(0x92) catch break :blk false; // array(2)
                 encoder.writeStr(writer, change.collection) catch break :blk false;
-                msgpack.encode(id_payload.?, writer) catch break :blk false;
+                msgpack.encode(id_payload_value, writer) catch break :blk false;
 
                 if (!is_delete) {
                     encoder.writeStr(writer, "value") catch break :blk false;

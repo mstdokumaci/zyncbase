@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const types = @import("types.zig");
-const reader = @import("reader.zig");
 
 const StorageError = types.StorageError;
 const CheckpointMode = types.CheckpointMode;

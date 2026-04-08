@@ -7,7 +7,6 @@ const query_parser = @import("../query_parser.zig");
 const types = @import("types.zig");
 const sql_utils = @import("sql_utils.zig");
 
-const StorageError = types.StorageError;
 const TypedValue = types.TypedValue;
 const ColumnContext = types.ColumnContext;
 
