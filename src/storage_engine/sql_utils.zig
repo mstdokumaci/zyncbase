@@ -108,11 +108,14 @@ pub const StatementCache = struct {
             return ManagedStmt{ .stmt = stmt };
         }
 
-        var stmt = try db.prepareDynamic(sql);
-        errdefer stmt.deinit();
+        const stmt = blk: {
+            const dynamic = try db.prepareDynamic(sql);
+            break :blk dynamic.stmt;
+        };
+        errdefer _ = sqlite.c.sqlite3_finalize(stmt);
 
-        try self.put(allocator, sql, stmt.stmt);
-        return ManagedStmt{ .stmt = stmt.stmt };
+        try self.put(allocator, sql, stmt);
+        return ManagedStmt{ .stmt = stmt };
     }
 };
 
