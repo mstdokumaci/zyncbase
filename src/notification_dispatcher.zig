@@ -18,23 +18,6 @@ const store_delta_header: [23]u8 = .{
     0xa5, 's', 'u', 'b', 'I', 'd', // fixstr(5) "subId"
 };
 
-/// Writes a string to the output using MessagePack fixstr/str8/str16/str32 encoding.
-pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
-    if (s.len <= 31) {
-        try writer.writeByte(0xa0 | @as(u8, @intCast(s.len)));
-    } else if (s.len <= 0xff) {
-        try writer.writeByte(0xd9);
-        try writer.writeByte(@as(u8, @intCast(s.len)));
-    } else if (s.len <= 0xffff) {
-        try writer.writeByte(0xda);
-        try writer.writeInt(u16, @as(u16, @intCast(s.len)), .big);
-    } else {
-        try writer.writeByte(0xdb);
-        try writer.writeInt(u32, @as(u32, @intCast(s.len)), .big);
-    }
-    try writer.writeAll(s);
-}
-
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
@@ -125,6 +108,7 @@ pub const NotificationDispatcher = struct {
 
         // === Phase 4: Per-subscriber send ===
         var out = std.ArrayListUnmanaged(u8).empty;
+        defer out.deinit(alloc);
 
         for (matches) |match| {
             out.clearRetainingCapacity();
@@ -179,7 +163,7 @@ pub fn encodeDeltaSuffix(
     const writer = list.writer(allocator);
 
     // "ops": [{
-    try writeMsgPackStr(writer, "ops");
+    try msgpack.writeMsgPackStr(writer, "ops");
     try writer.writeByte(0x91); // fixarray(1)
 
     // {"op": "set"/"remove", "path": [collection, id], "value": <row>}
@@ -187,18 +171,18 @@ pub fn encodeDeltaSuffix(
     try writer.writeByte(if (is_delete) 0x82 else 0x83);
 
     // "op": "set" or "remove"
-    try writeMsgPackStr(writer, "op");
-    try writeMsgPackStr(writer, if (is_delete) "remove" else "set");
+    try msgpack.writeMsgPackStr(writer, "op");
+    try msgpack.writeMsgPackStr(writer, if (is_delete) "remove" else "set");
 
     // "path": [collection, id]
-    try writeMsgPackStr(writer, "path");
+    try msgpack.writeMsgPackStr(writer, "path");
     try writer.writeByte(0x92); // fixarray(2)
-    try writeMsgPackStr(writer, collection);
+    try msgpack.writeMsgPackStr(writer, collection);
     try msgpack.encode(id_payload, writer);
 
     // "value": <row> (only for set operations)
     if (!is_delete) {
-        try writeMsgPackStr(writer, "value");
+        try msgpack.writeMsgPackStr(writer, "value");
         try msgpack.encode(new_row orelse Payload.nil, writer);
     }
 

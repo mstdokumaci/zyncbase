@@ -99,6 +99,23 @@ pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
     return packer.write(payload);
 }
 
+/// Writes a string to the output using MessagePack fixstr/str8/str16/str32 encoding.
+pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
+    if (s.len <= 31) {
+        try writer.writeByte(0xa0 | @as(u8, @intCast(s.len)));
+    } else if (s.len <= 0xff) {
+        try writer.writeByte(0xd9);
+        try writer.writeByte(@as(u8, @intCast(s.len)));
+    } else if (s.len <= 0xffff) {
+        try writer.writeByte(0xda);
+        try writer.writeInt(u16, @as(u16, @intCast(s.len)), .big);
+    } else {
+        try writer.writeByte(0xdb);
+        try writer.writeInt(u32, @as(u32, @intCast(s.len)), .big);
+    }
+    try writer.writeAll(s);
+}
+
 pub fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     defer list.deinit(allocator);

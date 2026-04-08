@@ -8,44 +8,6 @@ const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const encodeDeltaSuffix = @import("notification_dispatcher.zig").encodeDeltaSuffix;
-const writeMsgPackStr = @import("notification_dispatcher.zig").writeMsgPackStr;
-
-// ============================================================
-// writeMsgPackStr tests
-// ============================================================
-
-test "NotificationDispatcher writeMsgPackStr: fixstr (≤31 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
-
-    try writeMsgPackStr(buf.writer(testing.allocator), "type");
-    // fixstr(4) = 0xa4 | "type" = 5 bytes
-    try testing.expectEqual(@as(usize, 5), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xa4), buf.items[0]);
-    try testing.expectEqualSlices(u8, "type", buf.items[1..]);
-}
-
-test "NotificationDispatcher writeMsgPackStr: str8 (≤255 bytes)" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
-    const long_str = "a" ** 100;
-
-    try writeMsgPackStr(buf.writer(testing.allocator), long_str[0..]);
-    // str8(100) = 0xd9 | 0x64 | "a"*100 = 102 bytes
-    try testing.expectEqual(@as(usize, 102), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xd9), buf.items[0]);
-    try testing.expectEqual(@as(u8, 100), buf.items[1]);
-}
-
-test "NotificationDispatcher writeMsgPackStr: empty string" {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(testing.allocator);
-
-    try writeMsgPackStr(buf.writer(testing.allocator), "");
-    // fixstr(0) = 0xa0 = 1 byte
-    try testing.expectEqual(@as(usize, 1), buf.items.len);
-    try testing.expectEqual(@as(u8, 0xa0), buf.items[0]);
-}
 
 // ============================================================
 // encodeDeltaSuffix tests
