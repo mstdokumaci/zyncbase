@@ -404,10 +404,7 @@ pub const MessageHandler = struct {
                 return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
             }
 
-            // Defensive copy - ColumnValue.name must own its memory
-            const effective_field = try self.allocator.dupe(u8, resolved.name);
-            defer self.allocator.free(effective_field);
-            const col = [_]storage_mod.ColumnValue{.{ .name = effective_field, .value = value }};
+            const col = [_]storage_mod.ColumnValue{.{ .name = resolved.name, .value = value }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         }
 
