@@ -81,16 +81,10 @@ pub const NotificationDispatcher = struct {
             .old_row = change.old_row,
         };
 
-        const id_payload = blk: {
-            const row = if (change.new_row) |new_row|
-                new_row
-            else if (change.old_row) |old_row|
-                old_row
-            else
-                break :blk null;
-
-            break :blk (row.mapGet("id") catch null) orelse null;
-        };
+        const id_payload = if (change.new_row orelse change.old_row) |row|
+            (row.mapGet("id") catch null)
+        else
+            null;
 
         if (id_payload == null) {
             std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });

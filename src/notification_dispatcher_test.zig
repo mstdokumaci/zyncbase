@@ -15,7 +15,7 @@ const writeMsgPackStr = @import("notification_dispatcher.zig").writeMsgPackStr;
 // ============================================================
 
 test "NotificationDispatcher writeMsgPackStr: fixstr (≤31 bytes)" {
-    var buf = std.ArrayList(u8).empty;
+    var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(testing.allocator);
 
     try writeMsgPackStr(buf.writer(testing.allocator), "type");
@@ -26,7 +26,7 @@ test "NotificationDispatcher writeMsgPackStr: fixstr (≤31 bytes)" {
 }
 
 test "NotificationDispatcher writeMsgPackStr: str8 (≤255 bytes)" {
-    var buf = std.ArrayList(u8).empty;
+    var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(testing.allocator);
     const long_str = "a" ** 100;
 
@@ -38,7 +38,7 @@ test "NotificationDispatcher writeMsgPackStr: str8 (≤255 bytes)" {
 }
 
 test "NotificationDispatcher writeMsgPackStr: empty string" {
-    var buf = std.ArrayList(u8).empty;
+    var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(testing.allocator);
 
     try writeMsgPackStr(buf.writer(testing.allocator), "");
