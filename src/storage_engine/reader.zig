@@ -443,13 +443,8 @@ pub fn execSelectDocument(
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !?msgpack.Payload {
-    const id_z = try allocator.dupeZ(u8, id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, namespace);
-    defer allocator.free(ns_z);
-
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -466,13 +461,8 @@ pub fn execSelectScalar(
     namespace: []const u8,
     field_ctx: ?schema_manager.Field,
 ) !?msgpack.Payload {
-    const id_z = try allocator.dupeZ(u8, id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, namespace);
-    defer allocator.free(ns_z);
-
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -488,10 +478,7 @@ pub fn execSelectCollection(
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
-    const ns_z = try allocator.dupeZ(u8, namespace);
-    defer allocator.free(ns_z);
-
-    if (sql_utils.bindTextTransient(stmt, 1, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql_utils.bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {

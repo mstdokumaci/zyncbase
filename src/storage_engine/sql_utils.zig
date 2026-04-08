@@ -96,8 +96,8 @@ pub const StatementCache = struct {
             .node = .{},
         };
 
-        self.list.prepend(&entry.node);
         try self.map.put(sql_owned, &entry.node);
+        self.list.prepend(&entry.node);
         self.count += 1;
     }
 

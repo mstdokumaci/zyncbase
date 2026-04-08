@@ -504,15 +504,10 @@ pub fn executeInsert(
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
-
     var bind_idx: c_int = 1;
-    if (sql_utils.bindTextTransient(stmt, bind_idx, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, bind_idx, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (sql_utils.bindTextTransient(stmt, bind_idx, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
 
     for (op.values) |val| {
@@ -545,13 +540,8 @@ pub fn executeUpdate(
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
-
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     try op.values[0].bindSQLite(conn, stmt, 3);
     if (sqlite.c.sqlite3_bind_int64(stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     if (sqlite.c.sqlite3_bind_int64(stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
@@ -576,13 +566,8 @@ pub fn executeDelete(
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    const id_z = try allocator.dupeZ(u8, op.id);
-    defer allocator.free(id_z);
-    const ns_z = try allocator.dupeZ(u8, op.namespace);
-    defer allocator.free(ns_z);
-
-    if (sql_utils.bindTextTransient(stmt, 1, id_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sql_utils.bindTextTransient(stmt, 2, ns_z) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
