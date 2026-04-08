@@ -69,16 +69,8 @@ pub const StatementCache = struct {
         return entry.stmt;
     }
 
-    /// Adds a new statement to the cache. Returns existing statement if already cached,
-    /// null if this call took ownership (caller must finalize returned stmt).
-    /// Evicts LRU if capacity exceeded.
-    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !?*sqlite.c.sqlite3_stmt {
-        // Double check existence
-        if (self.map.get(sql)) |node| {
-            const entry: *Entry = @fieldParentPtr("node", node);
-            return entry.stmt;
-        }
-
+    /// Adds a new statement to the cache. Evicts LRU if capacity exceeded.
+    fn put(self: *StatementCache, allocator: Allocator, sql: []const u8, stmt: *sqlite.c.sqlite3_stmt) !void {
         // Evict if at capacity
         if (self.count >= self.cache_limit) {
             if (self.list.last) |old_node| {
@@ -107,7 +99,6 @@ pub const StatementCache = struct {
         self.list.prepend(&entry.node);
         try self.map.put(sql_owned, &entry.node);
         self.count += 1;
-        return null;
     }
 
     /// High-level helper to get a statement or prepare one if missing.
@@ -120,11 +111,7 @@ pub const StatementCache = struct {
         var stmt = try db.prepareDynamic(sql);
         errdefer stmt.deinit();
 
-        if (try self.put(allocator, sql, stmt.stmt)) |existing| {
-            // Lost the race - use winner's statement instead
-            stmt.deinit();
-            return ManagedStmt{ .stmt = existing };
-        }
+        try self.put(allocator, sql, stmt.stmt);
         return ManagedStmt{ .stmt = stmt.stmt };
     }
 };
