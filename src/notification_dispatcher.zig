@@ -9,6 +9,32 @@ const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 
+/// The 23-byte constant prefix for all StoreDelta messages.
+/// fixmap(3) + "type" + "StoreDelta" + "subId"
+const store_delta_header: [23]u8 = .{
+    0x83, // fixmap(3)
+    0xa4, 't', 'y', 'p', 'e', // fixstr(4) "type"
+    0xaa, 'S', 't', 'o', 'r', 'e', 'D', 'e', 'l', 't', 'a', // fixstr(10) "StoreDelta"
+    0xa5, 's', 'u', 'b', 'I', 'd', // fixstr(5) "subId"
+};
+
+/// Writes a string to the output using MessagePack fixstr/str8/str16/str32 encoding.
+pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
+    if (s.len <= 31) {
+        try writer.writeByte(0xa0 | @as(u8, @intCast(s.len)));
+    } else if (s.len <= 0xff) {
+        try writer.writeByte(0xd9);
+        try writer.writeByte(@as(u8, @intCast(s.len)));
+    } else if (s.len <= 0xffff) {
+        try writer.writeByte(0xda);
+        try writer.writeInt(u16, @as(u16, @intCast(s.len)), .big);
+    } else {
+        try writer.writeByte(0xdb);
+        try writer.writeInt(u32, @as(u32, @intCast(s.len)), .big);
+    }
+    try writer.writeAll(s);
+}
+
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
@@ -46,6 +72,7 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
+        // === Phase 1: Extract row metadata ===
         const row_change = RowChange{
             .namespace = change.namespace,
             .collection = change.collection,
@@ -54,6 +81,26 @@ pub const NotificationDispatcher = struct {
             .old_row = change.old_row,
         };
 
+        const id_payload = blk: {
+            const row = if (change.new_row) |new_row|
+                new_row
+            else if (change.old_row) |old_row|
+                old_row
+            else
+                break :blk null;
+
+            break :blk (row.mapGet("id") catch null) orelse null;
+        };
+
+        if (id_payload == null) {
+            std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });
+            return;
+        }
+
+        const id_payload_value = id_payload.?;
+        const is_delete = change.operation == .delete;
+
+        // === Phase 2: Match subscriptions ===
         const arena = self.memory_strategy.acquireArena() catch |err| {
             std.log.err("NotificationDispatcher acquireArena failed: {}", .{err});
             return;
@@ -65,95 +112,47 @@ pub const NotificationDispatcher = struct {
             std.log.err("NotificationDispatcher handleRowChange failed: {}", .{err});
             return;
         };
+
         if (matches.len == 0) return;
 
-        const encoder = struct {
-            fn writeStr(w: anytype, s: []const u8) !void {
-                if (s.len <= 31) {
-                    try w.writeByte(0xa0 | @as(u8, @intCast(s.len)));
-                } else if (s.len <= 0xff) {
-                    try w.writeByte(0xd9);
-                    try w.writeByte(@as(u8, @intCast(s.len)));
-                } else if (s.len <= 0xffff) {
-                    try w.writeByte(0xda);
-                    try w.writeInt(u16, @as(u16, @intCast(s.len)), .big);
-                } else {
-                    try w.writeByte(0xdb);
-                    try w.writeInt(u32, @as(u32, @intCast(s.len)), .big);
-                }
-                try w.writeAll(s);
-            }
+        // === Phase 3: Pre-encode suffix template (once per change) ===
+        // This encodes: "ops": [{"op": "set"/"remove", "path": [collection, id], "value": <row>}]
+        // The expensive part (msgpack.encode(new_row)) happens exactly once here.
+        const suffix = encodeDeltaSuffix(
+            alloc,
+            change.collection,
+            id_payload_value,
+            is_delete,
+            change.new_row,
+        ) catch |err| {
+            std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{s}: {}", .{ change.namespace, change.collection, err });
+            return;
         };
 
+        // === Phase 4: Per-subscriber send ===
         var out = std.ArrayListUnmanaged(u8).empty;
+
         for (matches) |match| {
             out.clearRetainingCapacity();
             const writer = out.writer(alloc);
 
-            const id_payload = blk: {
-                const row = if (change.new_row) |new_row|
-                    new_row
-                else if (change.old_row) |old_row|
-                    old_row
-                else
-                    break :blk null;
-
-                break :blk (row.mapGet("id") catch null) orelse null;
+            // Write constant header (23 bytes)
+            out.appendSlice(alloc, &store_delta_header) catch |err| {
+                std.log.err("NotificationDispatcher failed to write header: {}", .{err});
+                continue;
             };
 
-            if (id_payload == null) {
-                std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });
+            // Write subscription_id (variable length: 1-9 bytes)
+            msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch |err| {
+                std.log.err("NotificationDispatcher failed to encode subId {}: {}", .{ match.subscription_id, err });
                 continue;
-            }
-
-            const id_payload_value = id_payload.?;
-            const is_delete = change.operation == .delete;
-
-            const encode_res = blk: {
-                // {
-                //   "type": "StoreDelta",
-                //   "subId": <u64>,
-                //   "ops": [
-                //     {
-                //       "op": "set" | "remove",
-                //       "path": [collection, id],
-                //       "value": <row> // only for set
-                //     }
-                //   ]
-                // }
-                writer.writeByte(0x83) catch break :blk false;
-
-                encoder.writeStr(writer, "type") catch break :blk false;
-                encoder.writeStr(writer, "StoreDelta") catch break :blk false;
-
-                encoder.writeStr(writer, "subId") catch break :blk false;
-                msgpack.encode(Payload.uintToPayload(match.subscription_id), writer) catch break :blk false;
-
-                encoder.writeStr(writer, "ops") catch break :blk false;
-                writer.writeByte(0x91) catch break :blk false; // array(1)
-
-                writer.writeByte(if (is_delete) 0x82 else 0x83) catch break :blk false; // map(2|3)
-
-                encoder.writeStr(writer, "op") catch break :blk false;
-                encoder.writeStr(writer, if (is_delete) "remove" else "set") catch break :blk false;
-
-                encoder.writeStr(writer, "path") catch break :blk false;
-                writer.writeByte(0x92) catch break :blk false; // array(2)
-                encoder.writeStr(writer, change.collection) catch break :blk false;
-                msgpack.encode(id_payload_value, writer) catch break :blk false;
-
-                if (!is_delete) {
-                    encoder.writeStr(writer, "value") catch break :blk false;
-                    msgpack.encode(change.new_row orelse Payload.nil, writer) catch break :blk false;
-                }
-
-                break :blk true;
             };
 
-            if (!encode_res) {
-                std.log.err("NotificationDispatcher delta encoding failed for {s}:{s}", .{ change.namespace, change.collection });
+            // Append pre-encoded suffix
+            out.appendSlice(alloc, suffix) catch |err| {
+                std.log.err("NotificationDispatcher failed to append suffix: {}", .{err});
                 continue;
-            }
+            };
 
             const conn = cm.acquireConnection(match.connection_id) catch |err| {
                 std.log.debug("Failed to acquire connection {} for notification: {}", .{ match.connection_id, err });
@@ -170,3 +169,44 @@ pub const NotificationDispatcher = struct {
         self.drain_buf.deinit(self.allocator);
     }
 };
+
+/// Encodes the suffix of a StoreDelta message (everything after subId).
+/// This includes: "ops", the operation array, path, and optional value.
+/// Caller owns the returned slice (allocated from the arena).
+pub fn encodeDeltaSuffix(
+    allocator: Allocator,
+    collection: []const u8,
+    id_payload: Payload,
+    is_delete: bool,
+    new_row: ?Payload,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    // "ops": [{
+    try writeMsgPackStr(writer, "ops");
+    try writer.writeByte(0x91); // fixarray(1)
+
+    // {"op": "set"/"remove", "path": [collection, id], "value": <row>}
+    // map size is 2 for delete (no "value"), 3 for set
+    try writer.writeByte(if (is_delete) 0x82 else 0x83);
+
+    // "op": "set" or "remove"
+    try writeMsgPackStr(writer, "op");
+    try writeMsgPackStr(writer, if (is_delete) "remove" else "set");
+
+    // "path": [collection, id]
+    try writeMsgPackStr(writer, "path");
+    try writer.writeByte(0x92); // fixarray(2)
+    try writeMsgPackStr(writer, collection);
+    try msgpack.encode(id_payload, writer);
+
+    // "value": <row> (only for set operations)
+    if (!is_delete) {
+        try writeMsgPackStr(writer, "value");
+        try msgpack.encode(new_row orelse Payload.nil, writer);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
