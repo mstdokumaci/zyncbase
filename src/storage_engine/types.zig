@@ -129,9 +129,9 @@ pub const TypedValue = union(enum) {
                 .str => |s| TypedValue{ .text = try allocator.dupe(u8, s.value()) },
                 else => StorageError.TypeMismatch,
             },
-            .integer => TypedValue{ .integer = try msgpack.payloadAsInt(value) },
-            .real => TypedValue{ .real = try msgpack.payloadAsFloat(value) },
-            .boolean => TypedValue{ .boolean = try msgpack.payloadAsBool(value) },
+            .integer => TypedValue{ .integer = try payloadAsInt(value) },
+            .real => TypedValue{ .real = try payloadAsFloat(value) },
+            .boolean => TypedValue{ .boolean = try payloadAsBool(value) },
             .array => TypedValue{ .blob = try msgpack.payloadToJson(value, allocator) },
         };
     }
@@ -375,4 +375,26 @@ pub const WriteQueue = struct {
     }
 };
 
-// SQL assembly helpers moved to sql_utils.zig
+fn payloadAsInt(payload: msgpack.Payload) !i64 {
+    return switch (payload) {
+        .int => |v| v,
+        .uint => |v| @intCast(v),
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn payloadAsFloat(payload: msgpack.Payload) !f64 {
+    return switch (payload) {
+        .float => |v| v,
+        .int => |v| @floatFromInt(v),
+        .uint => |v| @floatFromInt(v),
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn payloadAsBool(payload: msgpack.Payload) !bool {
+    return switch (payload) {
+        .bool => |v| v,
+        else => StorageError.TypeMismatch,
+    };
+}

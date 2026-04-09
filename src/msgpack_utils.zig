@@ -87,18 +87,6 @@ pub fn encode(payload: msgpack.Payload, writer: anytype) !void {
     return packer.write(payload);
 }
 
-/// Generic wrapper for encoding MsgPack payloads without tight wire limits.
-/// Used for internal storage and cloning.
-pub fn encodeTrusted(payload: msgpack.Payload, writer: anytype) !void {
-    const tp = tightPacker(@TypeOf(writer), void, msgpack.DEFAULT_LIMITS);
-    var packer = tp.init(
-        .{ .writer = writer },
-        // SAFETY: writer Context is provided, reader is not used for encoding
-        undefined,
-    );
-    return packer.write(payload);
-}
-
 /// Writes a string to the output using MessagePack fixstr/str8/str16/str32 encoding.
 pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
     if (s.len <= 31) {
@@ -114,13 +102,6 @@ pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
         try writer.writeInt(u32, @as(u32, @intCast(s.len)), .big);
     }
     try writer.writeAll(s);
-}
-
-pub fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    defer list.deinit(allocator);
-    try encode(payload, list.writer(allocator));
-    return list.toOwnedSlice(allocator);
 }
 
 pub const Payload = msgpack.Payload;
@@ -221,33 +202,6 @@ pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8
     }
     try buf.append(allocator, ']');
     return buf.toOwnedSlice(allocator);
-}
-
-/// Helper to extract an i64 from a Payload (supports .int and .uint).
-pub fn payloadAsInt(payload: Payload) !i64 {
-    return switch (payload) {
-        .int => |v| v,
-        .uint => |v| @intCast(v),
-        else => error.NotAnInteger,
-    };
-}
-
-/// Helper to extract an f64 from a Payload (supports .float, .int, and .uint).
-pub fn payloadAsFloat(payload: Payload) !f64 {
-    return switch (payload) {
-        .float => |v| v,
-        .int => |v| @floatFromInt(v),
-        .uint => |v| @floatFromInt(v),
-        else => error.NotAFloat,
-    };
-}
-
-/// Helper to extract a bool from a Payload.
-pub fn payloadAsBool(payload: Payload) !bool {
-    return switch (payload) {
-        .bool => |v| v,
-        else => error.NotABoolean,
-    };
 }
 
 /// Parses a JSON array string and returns a Literal_Array Payload.
