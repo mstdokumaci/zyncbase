@@ -452,7 +452,9 @@ pub const MessageHandler = struct {
             try msgpack.writeMsgPackStr(writer, "id");
             try msgpack.encode(msgpack.Payload.uintToPayload(id), writer);
         }
-        ws.send(list.items, .binary);
+        const error_msg = try list.toOwnedSlice(self.allocator);
+        defer self.allocator.free(error_msg);
+        ws.send(error_msg, .binary);
     }
 
     fn isSecurityError(err: anyerror) bool {
