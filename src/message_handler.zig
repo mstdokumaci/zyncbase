@@ -18,96 +18,76 @@ const SchemaManager = @import("schema_manager.zig").SchemaManager;
 
 // === Pre-encoded MsgPack headers (computed at comptime) ===
 
-const success_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    w.writeByte(0x82) catch @panic("comptime: failed to write map header");
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "ok") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
-    break :blk buf[0..stream.pos].*;
-};
+const ok_id_header = &(struct {
+    const val = blk: {
+        var buf: [16]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const w = stream.writer();
+        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
+        msgpack.writeMsgPackStr(w, "ok") catch @panic("comptime: failed to write type value");
+        msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
+        break :blk buf[0..stream.pos].*;
+    };
+}.val);
 
-const error_id_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
-    break :blk buf[0..stream.pos].*;
-};
+const success_header = &(struct {
+    const val = blk: {
+        var buf: [1 + ok_id_header.len]u8 = undefined;
+        buf[0] = 0x82; // fixmap(2)
+        @memcpy(buf[1..], ok_id_header);
+        break :blk buf[0..].*;
+    };
+}.val);
 
-const error_type_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "code") catch @panic("comptime: failed to write code key");
-    break :blk buf[0..stream.pos].*;
-};
+const error_id_header = &(struct {
+    const val = blk: {
+        var buf: [16]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const w = stream.writer();
+        w.writeByte(0x83) catch @panic("comptime: failed to write map header");
+        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
+        msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
+        msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
+        break :blk buf[0..stream.pos].*;
+    };
+}.val);
 
-const ok_id_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "ok") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
-    break :blk buf[0..stream.pos].*;
-};
+const error_type_header = &(struct {
+    const val = blk: {
+        var buf: [16]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const w = stream.writer();
+        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
+        msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
+        msgpack.writeMsgPackStr(w, "code") catch @panic("comptime: failed to write code key");
+        break :blk buf[0..stream.pos].*;
+    };
+}.val);
 
-const code_key = blk: {
-    var buf: [8]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "code") catch @panic("comptime: failed to write code key");
-    break :blk buf[0..stream.pos].*;
-};
+fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-line: unused-parameter
+    return &(struct {
+        const val = blk: {
+            var buf: [key.len + 5]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            msgpack.writeMsgPackStr(stream.writer(), key) catch @panic("comptime: failed to write key");
+            break :blk buf[0..stream.pos].*;
+        };
+    }.val);
+}
 
-const message_key = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "message") catch @panic("comptime: failed to write message key");
-    break :blk buf[0..stream.pos].*;
-};
+const code_key = comptimeEncodeKey("code");
 
-const id_key = blk: {
-    var buf: [8]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "id") catch @panic("comptime: failed to write id key");
-    break :blk buf[0..stream.pos].*;
-};
+const message_key = comptimeEncodeKey("message");
 
-const sub_id_key = blk: {
-    var buf: [8]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "subId") catch @panic("comptime: failed to write subId key");
-    break :blk buf[0..stream.pos].*;
-};
+const id_key = comptimeEncodeKey("id");
 
-const value_key = blk: {
-    var buf: [8]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "value") catch @panic("comptime: failed to write value key");
-    break :blk buf[0..stream.pos].*;
-};
+const sub_id_key = comptimeEncodeKey("subId");
 
-const has_more_key = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "hasMore") catch @panic("comptime: failed to write hasMore key");
-    break :blk buf[0..stream.pos].*;
-};
+const value_key = comptimeEncodeKey("value");
 
-const next_cursor_key = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    msgpack.writeMsgPackStr(stream.writer(), "nextCursor") catch @panic("comptime: failed to write nextCursor key");
-    break :blk buf[0..stream.pos].*;
-};
+const has_more_key = comptimeEncodeKey("hasMore");
+
+const next_cursor_key = comptimeEncodeKey("nextCursor");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -535,12 +515,12 @@ pub const MessageHandler = struct {
         defer list.deinit(self.allocator);
         const writer = list.writer(self.allocator);
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
-        try list.appendSlice(self.allocator, &error_type_header);
+        try list.appendSlice(self.allocator, error_type_header);
         try msgpack.writeMsgPackStr(writer, code);
-        try list.appendSlice(self.allocator, &message_key);
+        try list.appendSlice(self.allocator, message_key);
         try msgpack.writeMsgPackStr(writer, message);
         if (msg_id) |id| {
-            try list.appendSlice(self.allocator, &id_key);
+            try list.appendSlice(self.allocator, id_key);
             try msgpack.encode(msgpack.Payload.uintToPayload(id), writer);
         }
         const error_msg = try list.toOwnedSlice(self.allocator);
@@ -572,9 +552,9 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
-        try list.appendSlice(msgpack_allocator, &error_id_header);
+        try list.appendSlice(msgpack_allocator, error_id_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
-        try list.appendSlice(msgpack_allocator, &code_key);
+        try list.appendSlice(msgpack_allocator, code_key);
         try msgpack.writeMsgPackStr(writer, code);
         return list.toOwnedSlice(msgpack_allocator);
     }
@@ -584,7 +564,7 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
-        try list.appendSlice(msgpack_allocator, &success_header);
+        try list.appendSlice(msgpack_allocator, success_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
         return list.toOwnedSlice(msgpack_allocator);
     }
@@ -753,15 +733,15 @@ pub const MessageHandler = struct {
         const map_size: u8 = if (sub_id != null) 6 else 4;
         try writer.writeByte(0x80 | map_size);
 
-        try list.appendSlice(arena_allocator, &ok_id_header);
+        try list.appendSlice(arena_allocator, ok_id_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
 
         if (sub_id) |sid| {
-            try list.appendSlice(arena_allocator, &sub_id_key);
+            try list.appendSlice(arena_allocator, sub_id_key);
             try msgpack.encode(msgpack.Payload.uintToPayload(sid), writer);
         }
 
-        try list.appendSlice(arena_allocator, &value_key);
+        try list.appendSlice(arena_allocator, value_key);
         if (results.value) |val| {
             try msgpack.encode(val, writer);
             results.value = null;
@@ -771,11 +751,11 @@ pub const MessageHandler = struct {
 
         if (sub_id != null) {
             const has_more = results.next_cursor_arr != null;
-            try list.appendSlice(arena_allocator, &has_more_key);
+            try list.appendSlice(arena_allocator, has_more_key);
             try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
         }
 
-        try list.appendSlice(arena_allocator, &next_cursor_key);
+        try list.appendSlice(arena_allocator, next_cursor_key);
         if (results.next_cursor_arr) |cursor_tuple| {
             const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
             defer arena_allocator.free(encoded_cursor);
