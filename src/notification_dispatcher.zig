@@ -11,7 +11,7 @@ const Payload = msgpack.Payload;
 
 const store_delta_header = blk: {
     var buf: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
+    var stream = std.Io.fixedBufferStream(&buf);
     const writer = stream.writer();
     writer.writeByte(0x83) catch @panic("comptime: failed to write map header");
     msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
