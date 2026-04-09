@@ -656,15 +656,16 @@ test "message: type extraction" {
 
     // Test 4: Message without type field should fail extraction
     {
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
-        try msgpack.writeString(allocator, &buf, "path");
-        try msgpack.writeString(allocator, &buf, "/key");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "path");
+        try msgpack.writeMsgPackStr(writer, "/key");
 
         const msg_buf = buf.items;
 
@@ -678,17 +679,18 @@ test "message: type extraction" {
 
     // Test 5: Message without id field should fail extraction
     {
-        var buf: std.ArrayList(u8) = .{};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "StoreSet");
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
-        try msgpack.writeString(allocator, &buf, "path");
-        try msgpack.writeString(allocator, &buf, "/key");
-        try msgpack.writeString(allocator, &buf, "value");
-        try msgpack.writeString(allocator, &buf, "val");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "StoreSet");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "path");
+        try msgpack.writeMsgPackStr(writer, "/key");
+        try msgpack.writeMsgPackStr(writer, "value");
+        try msgpack.writeMsgPackStr(writer, "val");
 
         const msg_buf = buf.items;
 
@@ -1069,12 +1071,13 @@ test "message: error responses for invalid types/fields" {
         defer manager.onClose(&ws, 1000, "Normal closure");
 
         // Create map with 2 elements: type and id
-        var buf = std.ArrayList(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x82); // fixmap(2)
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "StoreSet");
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "StoreSet");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
 
         const message = buf.items;
@@ -1104,17 +1107,18 @@ test "message: error responses for invalid types/fields" {
         try manager.onOpen(&ws);
         defer manager.onClose(&ws, 1000, "Normal closure");
 
-        var buf = std.ArrayList(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "InvalidType");
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "InvalidType");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
-        try msgpack.writeString(allocator, &buf, "path");
-        try msgpack.writeString(allocator, &buf, "/key");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "path");
+        try msgpack.writeMsgPackStr(writer, "/key");
 
         const message = buf.items;
 
@@ -1140,15 +1144,16 @@ test "message: error responses for invalid types/fields" {
         try manager.onOpen(&ws);
         defer manager.onClose(&ws, 1000, "Normal closure");
 
-        var buf = std.ArrayList(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
-        try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack.writeString(allocator, &buf, "type");
-        try buf.append(allocator, 0x01); // int instead of string
-        try msgpack.writeString(allocator, &buf, "id");
-        try msgpack.writeString(allocator, &buf, "not_a_number");
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
+        const writer = buf.writer(allocator);
+        try buf.append(allocator, 0x83); // fixmap(3) - type, id, namespace
+        try msgpack.writeMsgPackStr(writer, "type");
+        try buf.append(allocator, 0x90); // empty list for type
+        try msgpack.writeMsgPackStr(writer, "id");
+        try msgpack.writeMsgPackStr(writer, "not_a_number");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
 
         const message = buf.items;
 

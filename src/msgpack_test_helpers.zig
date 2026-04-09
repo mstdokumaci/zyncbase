@@ -5,6 +5,7 @@ const msgpack_utils = @import("msgpack_utils.zig");
 pub const Payload = msgpack_utils.Payload;
 pub const decode = msgpack_utils.decode;
 pub const encode = msgpack_utils.encode;
+pub const writeMsgPackStr = msgpack_utils.writeMsgPackStr;
 
 /// Helper to create a MessagePack map for testing
 /// Creates a simple map with string keys and values
@@ -16,18 +17,19 @@ pub fn createMessage(
     path: []const []const u8,
     value: ?[]const u8,
 ) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
 
+    const writer = buf.writer(allocator);
     const num_elements: u8 = if (value != null) 5 else 4;
     try buf.append(allocator, 0x80 | num_elements); // fixmap with N elements
 
     // "type" key
-    try writeString(allocator, &buf, "type");
-    try writeString(allocator, &buf, msg_type);
+    try writeMsgPackStr(writer, "type");
+    try writeMsgPackStr(writer, msg_type);
 
     // "id" key
-    try writeString(allocator, &buf, "id");
+    try writeMsgPackStr(writer, "id");
     // id value (uint64)
     try buf.append(allocator, 0xcf); // uint 64
     try buf.append(allocator, @intCast((id >> 56) & 0xFF));
@@ -40,29 +42,29 @@ pub fn createMessage(
     try buf.append(allocator, @intCast(id & 0xFF));
 
     // "namespace" key
-    try writeString(allocator, &buf, "namespace");
-    try writeString(allocator, &buf, namespace);
+    try writeMsgPackStr(writer, "namespace");
+    try writeMsgPackStr(writer, namespace);
 
     // "path" key
-    try writeString(allocator, &buf, "path");
+    try writeMsgPackStr(writer, "path");
     // path value (array of strings)
     try buf.append(allocator, @intCast(0x90 | path.len)); // fixarray
     for (path) |p| {
-        try writeString(allocator, &buf, p);
+        try writeMsgPackStr(writer, p);
     }
 
     if (value) |val| {
         // "value" key
-        try writeString(allocator, &buf, "value");
+        try writeMsgPackStr(writer, "value");
         if (path.len == 2) {
             // Document-level update: wrap in a map with a default field "val"
             // to maintain compatibility with existing tests.
             try buf.append(allocator, 0x81); // fixmap with 1 element
-            try writeString(allocator, &buf, "val"); // field name
-            try writeString(allocator, &buf, val); // field value
+            try writeMsgPackStr(writer, "val"); // field name
+            try writeMsgPackStr(writer, val); // field value
         } else {
             // Field-level or other update: send value directly as a string
-            try writeString(allocator, &buf, val);
+            try writeMsgPackStr(writer, val);
         }
     }
 
@@ -90,33 +92,6 @@ pub fn createStoreSetMessage(
     value: []const u8,
 ) ![]u8 {
     return createMessage(allocator, id, "StoreSet", namespace, path, value);
-}
-
-pub fn writeString(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), s: []const u8) !void {
-    if (s.len <= 31) {
-        try buf.append(allocator, @intCast(0xa0 | s.len));
-    } else if (s.len <= 255) {
-        try buf.append(allocator, 0xd9);
-        try buf.append(allocator, @intCast(s.len));
-    } else if (s.len <= 65535) {
-        try buf.append(allocator, 0xda);
-        var b: [2]u8 = undefined;
-        std.mem.writeInt(u16, &b, @intCast(s.len), .big);
-        try buf.appendSlice(allocator, &b);
-    } else {
-        try buf.append(allocator, 0xdb);
-        var b: [4]u8 = undefined;
-        std.mem.writeInt(u32, &b, @intCast(s.len), .big);
-        try buf.appendSlice(allocator, &b);
-    }
-    try buf.appendSlice(allocator, s);
-}
-
-pub fn encodeString(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
-    var buf: std.ArrayList(u8) = .{};
-    errdefer buf.deinit(allocator);
-    try writeString(allocator, &buf, s);
-    return buf.toOwnedSlice(allocator);
 }
 
 pub fn createStoreRemoveMessage(
