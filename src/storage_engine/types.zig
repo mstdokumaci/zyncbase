@@ -39,6 +39,10 @@ pub const StorageError = error{
     MigrationInProgress,
     /// Field value type does not match schema
     TypeMismatch,
+    /// Array field contains non-literal elements (maps, nested arrays)
+    InvalidArrayElement,
+    /// The provided data path is invalid (too short, too long, or malformed)
+    InvalidPath,
     /// Data directory is invalid or empty
     InvalidDataDir,
     /// Path is not a directory

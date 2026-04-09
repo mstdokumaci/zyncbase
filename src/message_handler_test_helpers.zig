@@ -13,6 +13,7 @@ const SchemaManager = schema_manager.SchemaManager;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
+const StoreService = @import("store_service.zig").StoreService;
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -43,6 +44,7 @@ pub const AppTestContext = struct {
     violation_tracker: ViolationTracker,
     storage_engine: StorageEngine,
     subscription_engine: SubscriptionEngine,
+    store_service: StoreService,
     handler: MessageHandler,
     manager: ConnectionManager,
     schema_manager: SchemaManager,
@@ -101,8 +103,11 @@ pub const AppTestContext = struct {
         self.subscription_engine = SubscriptionEngine.init(allocator);
         errdefer self.subscription_engine.deinit();
 
-        // 6. Initialize Handler and Manager
-        try self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.storage_engine, &self.subscription_engine, &self.schema_manager, .{});
+        // 6 Initialize Store Service
+        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager);
+
+        // 7. Initialize Handler and Manager
+        try self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.storage_engine, &self.store_service, &self.subscription_engine, &self.schema_manager, .{});
         errdefer self.handler.deinit();
 
         // 8. Initialize Connection Manager
@@ -120,6 +125,7 @@ pub const AppTestContext = struct {
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
+        self.store_service.deinit();
 
         // 5. Cleanup remaining infrastructure
         self.schema_manager.deinit();

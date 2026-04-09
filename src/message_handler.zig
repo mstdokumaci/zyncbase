@@ -15,6 +15,7 @@ const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
+const StoreService = @import("store_service.zig").StoreService;
 
 // === Pre-encoded MsgPack headers (computed at comptime) ===
 
@@ -35,25 +36,21 @@ const success_header = blk: {
     break :blk buf[0..].*;
 };
 
-const error_id_header = blk: {
-    var buf: [16]u8 = undefined;
+const error_type_header = blk: {
+    var buf: [24]u8 = undefined;
     var stream = std.Io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
+    const writer = stream.writer();
+    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
+    msgpack.writeMsgPackStr(writer, "error") catch @panic("comptime: failed to write type value");
+    msgpack.writeMsgPackStr(writer, "code") catch @panic("comptime: failed to write code key");
     break :blk buf[0..stream.pos].*;
 };
 
-const error_type_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.Io.fixedBufferStream(&buf);
-    const w = stream.writer();
-    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(w, "code") catch @panic("comptime: failed to write code key");
-    break :blk buf[0..stream.pos].*;
+const error_envelope_header = blk: {
+    var buf: [1 + error_type_header.len]u8 = undefined;
+    buf[0] = 0x84; // fixmap(4)
+    @memcpy(buf[1..], &error_type_header);
+    break :blk buf[0..].*;
 };
 
 fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-line: unused-parameter
@@ -67,18 +64,11 @@ fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-l
     }.val);
 }
 
-const code_key = comptimeEncodeKey("code");
-
 const message_key = comptimeEncodeKey("message");
-
 const id_key = comptimeEncodeKey("id");
-
 const sub_id_key = comptimeEncodeKey("subId");
-
 const value_key = comptimeEncodeKey("value");
-
 const has_more_key = comptimeEncodeKey("hasMore");
-
 const next_cursor_key = comptimeEncodeKey("nextCursor");
 
 /// Message handler for WebSocket events
@@ -88,6 +78,7 @@ pub const MessageHandler = struct {
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
     storage_engine: *StorageEngine,
+    store_service: *StoreService,
     subscription_engine: *SubscriptionEngine,
     schema_manager: *const SchemaManager,
     security_config: SecurityConfig,
@@ -99,6 +90,7 @@ pub const MessageHandler = struct {
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
         storage_engine: *StorageEngine,
+        store_service: *StoreService,
         subscription_engine: *SubscriptionEngine,
         schema_manager: *const SchemaManager,
         security_config: SecurityConfig,
@@ -108,6 +100,7 @@ pub const MessageHandler = struct {
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
             .storage_engine = storage_engine,
+            .store_service = store_service,
             .subscription_engine = subscription_engine,
             .schema_manager = schema_manager,
             .security_config = security_config,
@@ -204,9 +197,9 @@ pub const MessageHandler = struct {
         // Note: Currently none of the handlers access Connection state under the lock.
         // If they start doing so, we should acquire the lock specifically inside those handlers.
         const response = self.routeMessage(arena_allocator, conn, msg_info, parsed) catch |err| {
-            std.log.debug("Failed to process message from connection {}: {}", .{ conn_id, err });
             const code = mapErrorToCode(err);
-            try self.sendError(ws, code, "Request failed", msg_info.id);
+            const error_response = try buildErrorResponse(arena_allocator, msg_info.id, code, "Request failed");
+            ws.send(error_response, .binary);
             return;
         };
 
@@ -372,83 +365,17 @@ pub const MessageHandler = struct {
         const fields = try self.extractStoreFields(self.allocator, parsed, true);
         defer self.allocator.free(fields.segments);
 
-        const namespace = fields.namespace;
         const value = fields.value orelse return error.MissingRequiredFields;
         const segments = fields.segments;
-        const table = segments[0];
-        const doc_id = segments[1];
 
-        // Determine table metadata for validation
-        const tbl_md = self.schema_manager.getTable(table) orelse {
-            return try buildErrorResponse(arena_allocator, msg_id, "COLLECTION_NOT_FOUND");
-        };
-
-        const is_full_doc = (segments.len == 2);
-        if (is_full_doc) {
-            if (value != .map) return error.InvalidPayload;
-
-            var it = value.map.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.* != .str) continue;
-                const field_name = entry.key_ptr.*.str.value();
-
-                // Validate field exists and check type-specific constraints (like arrays)
-                if (tbl_md.getField(field_name)) |field| {
-                    if (field.sql_type == .array) {
-                        msgpack.ensureLiteralArray(entry.value_ptr.*) catch {
-                            return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
-                        };
-                    }
-                } else {
-                    // Reject unknown fields to prevent pollution, except for built-ins
-                    if (!std.mem.eql(u8, field_name, "id") and
-                        !std.mem.eql(u8, field_name, "namespace_id") and
-                        !std.mem.eql(u8, field_name, "created_at") and
-                        !std.mem.eql(u8, field_name, "updated_at"))
-                    {
-                        return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
-                    }
-                }
-            }
-
-            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue){};
-            defer {
-                for (columns.items) |col| {
-                    self.allocator.free(col.name);
-                }
-                columns.deinit(self.allocator);
-            }
-
-            var it2 = value.map.iterator();
-            while (it2.next()) |entry| {
-                if (entry.key_ptr.* != .str) continue;
-                try columns.append(self.allocator, .{
-                    .name = try self.allocator.dupe(u8, entry.key_ptr.*.str.value()),
-                    .value = entry.value_ptr.*,
-                });
-            }
-
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
-        } else if (segments.len == 3) {
-            // Partial update / deep path (pre-flattened by SDK)
-            const field_name = segments[2];
-
-            // Validate against schema
-            if (tbl_md.getField(field_name)) |fld| {
-                if (fld.sql_type == .array) {
-                    msgpack.ensureLiteralArray(value) catch {
-                        return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
-                    };
-                }
-            } else {
-                return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
-            }
-
-            const col = [_]storage_mod.ColumnValue{.{ .name = field_name, .value = value }};
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
-        } else {
-            return error.InvalidPath;
-        }
+        try self.store_service.set(
+            segments[0], // table
+            segments[1], // doc_id
+            fields.namespace,
+            segments.len,
+            if (segments.len == 3) segments[2] else null, // field_name
+            value,
+        );
 
         return try buildSuccessResponse(arena_allocator, msg_id);
     }
@@ -462,18 +389,14 @@ pub const MessageHandler = struct {
         const fields = try self.extractStoreFields(self.allocator, parsed, false);
         defer self.allocator.free(fields.segments);
 
-        const namespace = fields.namespace;
         const segments = fields.segments;
-        const table = segments[0];
-        const doc_id = segments[1];
-
-        if (segments.len == 2) {
-            try self.storage_engine.deleteDocument(table, doc_id, namespace);
-        } else if (segments.len == 3) {
-            try self.storage_engine.updateField(table, doc_id, namespace, segments[2], .nil);
-        } else {
-            return error.InvalidPath;
-        }
+        try self.store_service.remove(
+            segments[0],
+            segments[1],
+            fields.namespace,
+            segments.len,
+            if (segments.len == 3) segments[2] else null,
+        );
 
         return try buildSuccessResponse(arena_allocator, msg_id);
     }
@@ -483,15 +406,19 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         defer list.deinit(self.allocator);
         const writer = list.writer(self.allocator);
+
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
         try list.appendSlice(self.allocator, &error_type_header);
         try msgpack.writeMsgPackStr(writer, code);
+
         try list.appendSlice(self.allocator, message_key);
         try msgpack.writeMsgPackStr(writer, message);
+
         if (msg_id) |id| {
             try list.appendSlice(self.allocator, id_key);
             try msgpack.encode(msgpack.Payload.uintToPayload(id), writer);
         }
+
         const error_msg = try list.toOwnedSlice(self.allocator);
         defer self.allocator.free(error_msg);
         ws.send(error_msg, .binary);
@@ -516,15 +443,21 @@ pub const MessageHandler = struct {
         id: u64,
     };
 
-    /// Build an error response with a code string.
-    fn buildErrorResponse(msgpack_allocator: Allocator, msg_id: u64, code: []const u8) ![]const u8 {
+    /// Build a spec-compliant error response: {type: "error", id, code, message}
+    fn buildErrorResponse(msgpack_allocator: Allocator, msg_id: u64, code: []const u8, message: []const u8) ![]const u8 {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
-        try list.appendSlice(msgpack_allocator, &error_id_header);
-        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
-        try list.appendSlice(msgpack_allocator, code_key);
+
+        try list.appendSlice(msgpack_allocator, &error_envelope_header);
         try msgpack.writeMsgPackStr(writer, code);
+
+        try list.appendSlice(msgpack_allocator, id_key);
+        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+
+        try list.appendSlice(msgpack_allocator, message_key);
+        try msgpack.writeMsgPackStr(writer, message);
+
         return list.toOwnedSlice(msgpack_allocator);
     }
 
@@ -533,8 +466,11 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
+
         try list.appendSlice(msgpack_allocator, &success_header);
-        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+        try writer.writeByte(0xcf);
+        try writer.writeInt(u64, msg_id, .big);
+
         return list.toOwnedSlice(msgpack_allocator);
     }
 
@@ -543,6 +479,7 @@ pub const MessageHandler = struct {
             error.UnknownTable => "COLLECTION_NOT_FOUND",
             error.UnknownField => "FIELD_NOT_FOUND",
             error.TypeMismatch, error.ConstraintViolation => "SCHEMA_VALIDATION_FAILED",
+            error.InvalidArrayElement => "INVALID_ARRAY_ELEMENT",
             error.InvalidFieldName => "INVALID_FIELD_NAME",
             error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => "INVALID_MESSAGE",
             error.MissingRequiredFields, error.MissingSubscriptionId => "INVALID_MESSAGE_FORMAT",
@@ -699,6 +636,7 @@ pub const MessageHandler = struct {
         errdefer list.deinit(arena_allocator);
         const writer = list.writer(arena_allocator);
 
+        // Map size is 6 if subId is present, 4 otherwise
         const map_size: u8 = if (sub_id != null) 6 else 4;
         try writer.writeByte(0x80 | map_size);
 

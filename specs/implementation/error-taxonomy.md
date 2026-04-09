@@ -78,12 +78,10 @@ All errors surfaced to developers use a consistent typed object:
 ```typescript
 interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code (e.g., 'RATE_LIMITED')
-  category: string;       // Category for grouping logic
   retryable: boolean;     // Whether the SDK can/will retry this
   retryAfter?: number;    // ms suggested by server to wait
   requestId?: number;     // ID of the failed request
   path?: string[];        // Affected data path (if applicable)
-  details?: Record<string, string[]>; // Field-level validation errors
 }
 ```
 
@@ -97,7 +95,7 @@ interface ZyncBaseError extends Error {
 
 ## 4. Error Propagation Flow
 
-1. **Wire Layer**: Server sends `{ type: "error", code: "...", ... }`.
+1. **Wire Layer**: Server sends `{ type: "error", code: "...", message: "...", ... }`.
 2. **SDK Internal**: Reverts optimistic state if request `id` matches a pending write.
 3. **Core API**:
    - `await` calls (e.g., `connect()`, `query()`) throw the `ZyncBaseError`.
@@ -310,12 +308,10 @@ All errors surfaced to SDK consumers use a consistent typed object. The `ZyncBas
 ```typescript
 interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code from the catalog above
-  category: string;       // Functional category (connection | auth | authorization | validation | rate-limit | server | hook-server)
   retryable: boolean;     // Whether the SDK will automatically retry
   retryAfter?: number;    // ms to wait before retry (server-provided)
   requestId?: number;     // Echoed request id from the failed message
   path?: string[];        // Affected data path, if applicable
-  details?: Record<string, string[]>; // Field-level validation errors
 }
 ```
 

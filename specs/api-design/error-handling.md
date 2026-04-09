@@ -24,12 +24,10 @@ All errors surfaced to SDK consumers use a consistent typed object:
 ```typescript
 interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
-  category: string;                      // Functional category for grouping
   retryable: boolean;                    // Whether the SDK can/will auto-retry
   retryAfter?: number;                   // ms to wait before retry (server-provided)
   requestId?: number;                    // ID of the failed request
   path?: string[];                       // Affected data path, if applicable
-  details?: Record<string, string[]>;    // Field-level validation errors
 }
 ```
 
