@@ -5,6 +5,7 @@ const message_helpers = @import("message_handler_test_helpers.zig");
 const AppTestContext = message_helpers.AppTestContext;
 const createMockWebSocket = message_helpers.createMockWebSocket;
 const routeWithArena = message_helpers.routeWithArena;
+const parseResponse = message_helpers.parseResponse;
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
@@ -107,21 +108,6 @@ fn buildStoreSetWithArrayField(
     try buf.appendSlice(allocator, arr_bytes);
 
     return buf.toOwnedSlice(allocator);
-}
-
-/// Parse a response and extract the "type" and "code" fields.
-fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { resp_type: []const u8, code: ?[]const u8 } {
-    var reader: std.Io.Reader = .fixed(response);
-    const parsed = try msgpack_utils.decode(allocator, &reader);
-    defer parsed.free(allocator);
-
-    const resp_type_val = msgpack_helpers.getMapValue(parsed, "type") orelse return error.MissingType;
-    const resp_code_val = msgpack_helpers.getMapValue(parsed, "code");
-
-    return .{
-        .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),
-        .code = if (resp_code_val) |v| try allocator.dupe(u8, v.str.value()) else null,
-    };
 }
 
 fn setupAppWithSchema(app: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: schema_manager.Schema) !void {

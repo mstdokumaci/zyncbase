@@ -735,7 +735,6 @@ test "message: request routing to handlers" {
 
         const msg_info = try app.handler.extractMessageInfo(parsed);
 
-        // Route the message - should not error for recognized type
         const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
         defer allocator.free(response);
 
@@ -798,8 +797,16 @@ test "message: request routing to handlers" {
 
         const msg_info = try app.handler.extractMessageInfo(parsed);
 
-        const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
-        try testing.expectError(error.UnknownMessageType, result);
+        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        // mapErrorToCode maps else => INTERNAL_ERROR for UnknownMessageType
+        try testing.expectEqualStrings("INTERNAL_ERROR", res_parsed.code.?);
     }
 
     // Test 4: Multiple different message types should route correctly
@@ -826,16 +833,21 @@ test "message: request routing to handlers" {
             var reader: std.Io.Reader = .fixed(m);
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
-
             const msg_info = try app.handler.extractMessageInfo(parsed);
-
             if (should_succeed[i]) {
                 const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
                 defer allocator.free(response);
                 try testing.expect(response.len > 0);
             } else {
-                const result = routeWithArena(handler, allocator, conn, msg_info, parsed);
-                try testing.expectError(error.UnknownMessageType, result);
+                const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+                defer allocator.free(response);
+                const res_parsed = try helpers.parseResponse(allocator, response);
+                defer {
+                    allocator.free(res_parsed.resp_type);
+                    if (res_parsed.code) |c| allocator.free(c);
+                }
+                try testing.expectEqualStrings("error", res_parsed.resp_type);
+                try testing.expectEqualStrings("INTERNAL_ERROR", res_parsed.code.?);
             }
         }
     }

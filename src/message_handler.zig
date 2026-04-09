@@ -193,18 +193,26 @@ pub const MessageHandler = struct {
             return;
         };
 
-        // Route to appropriate handler
-        // Note: Currently none of the handlers access Connection state under the lock.
-        // If they start doing so, we should acquire the lock specifically inside those handlers.
-        const response = self.routeMessage(arena_allocator, conn, msg_info, parsed) catch |err| {
-            const code = mapErrorToCode(err);
-            const error_response = try buildErrorResponse(arena_allocator, msg_info.id, code, "Request failed");
-            ws.send(error_response, .binary);
-            return;
-        };
+        // Route request and handle errors to produce a wire response
+        const response = try self.routeRequest(arena_allocator, conn, msg_info, parsed);
 
         // Send response (Outside lock to avoid blocking on backpressure)
         ws.send(response, .binary);
+    }
+
+    /// Entry point for processing a request.
+    /// Routes the message and maps any domain errors to their wire protocol response.
+    pub fn routeRequest(
+        self: *MessageHandler,
+        allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_info: MessageInfo,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
+            const code = mapErrorToCode(err);
+            return try buildErrorResponse(allocator, msg_info.id, code, "Request failed");
+        };
     }
 
     /// Perform logical teardown of a session (unsubscriptions) and free related memory.
@@ -678,8 +686,6 @@ pub const MessageHandler = struct {
         const sub_id_val = self.getPayloadFromMap(map, "subId") orelse return error.MissingSubscriptionId;
         return if (sub_id_val == .uint)
             sub_id_val.uint
-        else if (sub_id_val == .int and sub_id_val.int >= 0)
-            @intCast(sub_id_val.int)
         else
             error.InvalidSubscriptionId;
     }

@@ -13,6 +13,7 @@ const SchemaManager = schema_manager.SchemaManager;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
+const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 
 /// Shared atomic counter for unique connection IDs in tests
@@ -32,8 +33,27 @@ pub fn createMockWebSocket() WebSocket {
 pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, msg_info: MessageHandler.MessageInfo, parsed: msgpack.Payload) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const result = try handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
+    const arena_allocator = arena.allocator();
+
+    const result = try handler.routeRequest(arena_allocator, conn, msg_info, parsed);
+
     return try allocator.dupe(u8, result);
+}
+
+/// Parse a response and extract the "type" and "code" fields.
+/// Caller is responsible for freeing the fields in the returned struct.
+pub fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { resp_type: []const u8, code: ?[]const u8 } {
+    var reader: std.Io.Reader = .fixed(response);
+    const parsed = try msgpack_utils.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const resp_type_val = msgpack.getMapValue(parsed, "type") orelse return error.MissingType;
+    const resp_code_val = msgpack.getMapValue(parsed, "code");
+
+    return .{
+        .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),
+        .code = if (resp_code_val) |v| try allocator.dupe(u8, v.str.value()) else null,
+    };
 }
 
 /// Unified context for integration and property tests.
