@@ -458,3 +458,31 @@ test "msgpack_utils: writeMsgPackStr empty string" {
     try testing.expectEqual(@as(usize, 1), buf.items.len);
     try testing.expectEqual(@as(u8, 0xa0), buf.items[0]);
 }
+
+test "msgpack_utils: writeMsgPackStr str16 (>255 bytes)" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(testing.allocator);
+    const long_str = "b" ** 300;
+
+    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), long_str[0..]);
+    // str16(300) = 0xda | 0x012c | "b"*300 = 303 bytes
+    try testing.expectEqual(@as(usize, 303), buf.items.len);
+    try testing.expectEqual(@as(u8, 0xda), buf.items[0]);
+    try testing.expectEqual(@as(u16, 300), std.mem.readInt(u16, buf.items[1..3], .big));
+}
+
+test "msgpack_utils: writeMsgPackStr str32 (>65535 bytes)" {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(testing.allocator);
+
+    const len = 70000;
+    const long_str = try testing.allocator.alloc(u8, len);
+    defer testing.allocator.free(long_str);
+    @memset(long_str, 'c');
+
+    try msgpack_utils.writeMsgPackStr(buf.writer(testing.allocator), long_str);
+    // str32(70000) = 0xdb | 0x00011170 | "c"*70000 = 70005 bytes
+    try testing.expectEqual(@as(usize, 70005), buf.items.len);
+    try testing.expectEqual(@as(u8, 0xdb), buf.items[0]);
+    try testing.expectEqual(@as(u32, len), std.mem.readInt(u32, buf.items[1..5], .big));
+}
