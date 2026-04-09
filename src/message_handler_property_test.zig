@@ -1074,7 +1074,7 @@ test "message: error responses for invalid types/fields" {
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
         const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x83); // fixmap(3)
+        try buf.append(allocator, 0x82); // fixmap(2)
         try msgpack.writeMsgPackStr(writer, "type");
         try msgpack.writeMsgPackStr(writer, "StoreSet");
         try msgpack.writeMsgPackStr(writer, "id");
@@ -1110,7 +1110,7 @@ test "message: error responses for invalid types/fields" {
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
         const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x86); // fixmap(6)
+        try buf.append(allocator, 0x84); // fixmap(4)
         try msgpack.writeMsgPackStr(writer, "type");
         try msgpack.writeMsgPackStr(writer, "InvalidType");
         try msgpack.writeMsgPackStr(writer, "id");

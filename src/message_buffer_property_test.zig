@@ -163,7 +163,7 @@ fn createQueryMessage(
 
 fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
     // Message missing required "id" field
-    var buf: std.ArrayList(u8) = .{};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     const writer = buf.writer(allocator);
     try buf.append(allocator, 0x82); // fixmap(2)
     try msgpack.writeMsgPackStr(writer, "type");
