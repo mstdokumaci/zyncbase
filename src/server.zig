@@ -227,8 +227,6 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
 
-        self.message_handler.setConnectionManager(@ptrCast(&self.connection_manager));
-
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
         self.config = config;

@@ -90,7 +90,6 @@ pub const MessageHandler = struct {
     storage_engine: *StorageEngine,
     subscription_engine: *SubscriptionEngine,
     schema_manager: *const SchemaManager,
-    connection_manager: ?*anyopaque = null, // Type-erased back-reference to ConnectionManager
     security_config: SecurityConfig,
 
     /// Initialize message handler with all required components
@@ -112,12 +111,7 @@ pub const MessageHandler = struct {
             .subscription_engine = subscription_engine,
             .schema_manager = schema_manager,
             .security_config = security_config,
-            .connection_manager = null,
         };
-    }
-
-    pub fn setConnectionManager(self: *MessageHandler, manager: *anyopaque) void {
-        self.connection_manager = manager;
     }
 
     /// Clean up message handler resources
