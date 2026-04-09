@@ -86,8 +86,15 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const result = routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_FORMAT", res_parsed.code.?);
     }
     // Test 4: StoreSet missing path should fail
     {
@@ -107,8 +114,15 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const result = routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_FORMAT", res_parsed.code.?);
     }
     // Test 5: StoreSet missing value should fail
     {
@@ -127,8 +141,15 @@ test "store: set field extraction" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
         const msg_info = try app.handler.extractMessageInfo(parsed);
-        const result = routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_FORMAT", res_parsed.code.?);
     }
 }
 test "store: engine set integration" {
