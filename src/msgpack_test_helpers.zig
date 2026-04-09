@@ -18,7 +18,7 @@ pub fn createMessage(
     value: ?[]const u8,
 ) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
+    errdefer buf.deinit(allocator);
 
     const writer = buf.writer(allocator);
     const num_elements: u8 = if (value != null) 5 else 4;

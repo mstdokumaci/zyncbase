@@ -68,7 +68,7 @@ fn buildStoreSetWithArrayField(
     const arr_bytes = arr_buf.items;
 
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
+    errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
 
     // fixmap with 5 elements: type, id, namespace, path, value
@@ -612,7 +612,7 @@ fn buildStoreSetWithFieldPath(
     val: msgpack_utils.Payload,
 ) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
+    errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
 
     // fixmap(5)
@@ -651,7 +651,7 @@ fn buildStoreSetWithFieldPath(
 
 fn buildStoreQuery(allocator: std.mem.Allocator, id: u64, table: []const u8) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
+    errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
     try buf.append(allocator, 0x85); // fixmap(5)
     try msgpack_helpers.writeMsgPackStr(writer, "type");
