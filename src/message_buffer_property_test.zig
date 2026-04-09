@@ -164,11 +164,12 @@ fn createQueryMessage(
 fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
     // Message missing required "id" field
     var buf: std.ArrayList(u8) = .{};
-    try buf.appendSlice(allocator, "\x82"); // fixmap(2)
-    try msgpack.writeString(allocator, &buf, "type");
-    try msgpack.writeString(allocator, &buf, "StoreSet");
-    try msgpack.writeString(allocator, &buf, "namespace");
-    try msgpack.writeString(allocator, &buf, "test");
+    const writer = buf.writer(allocator);
+    try buf.append(allocator, 0x82); // fixmap(2)
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "StoreSet");
+    try msgpack.writeMsgPackStr(writer, "namespace");
+    try msgpack.writeMsgPackStr(writer, "test");
     return buf.toOwnedSlice(allocator);
 }
 

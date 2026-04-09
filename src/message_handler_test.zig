@@ -69,16 +69,17 @@ fn buildStoreSetWithArrayField(
 
     var buf: std.ArrayList(u8) = .{};
     errdefer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
 
     // fixmap with 5 elements: type, id, namespace, path, value
     try buf.append(allocator, 0x85);
 
     // "type": "StoreSet"
-    try msgpack_helpers.writeString(allocator, &buf, "type");
-    try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
+    try msgpack_helpers.writeMsgPackStr(writer, "type");
+    try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
 
     // "id": <uint64>
-    try msgpack_helpers.writeString(allocator, &buf, "id");
+    try msgpack_helpers.writeMsgPackStr(writer, "id");
     try buf.append(allocator, 0xcf);
     try buf.append(allocator, @intCast((id >> 56) & 0xFF));
     try buf.append(allocator, @intCast((id >> 48) & 0xFF));
@@ -90,19 +91,19 @@ fn buildStoreSetWithArrayField(
     try buf.append(allocator, @intCast(id & 0xFF));
 
     // "namespace": <namespace>
-    try msgpack_helpers.writeString(allocator, &buf, "namespace");
-    try msgpack_helpers.writeString(allocator, &buf, namespace);
+    try msgpack_helpers.writeMsgPackStr(writer, "namespace");
+    try msgpack_helpers.writeMsgPackStr(writer, namespace);
 
     // "path": [table, doc_id]
-    try msgpack_helpers.writeString(allocator, &buf, "path");
+    try msgpack_helpers.writeMsgPackStr(writer, "path");
     try buf.append(allocator, 0x92); // fixarray(2)
-    try msgpack_helpers.writeString(allocator, &buf, table);
-    try msgpack_helpers.writeString(allocator, &buf, doc_id);
+    try msgpack_helpers.writeMsgPackStr(writer, table);
+    try msgpack_helpers.writeMsgPackStr(writer, doc_id);
 
     // "value": {field_name: <array_payload>}
-    try msgpack_helpers.writeString(allocator, &buf, "value");
+    try msgpack_helpers.writeMsgPackStr(writer, "value");
     try buf.append(allocator, 0x81); // fixmap(1)
-    try msgpack_helpers.writeString(allocator, &buf, field_name);
+    try msgpack_helpers.writeMsgPackStr(writer, field_name);
     try buf.appendSlice(allocator, arr_bytes);
 
     return buf.toOwnedSlice(allocator);
@@ -612,22 +613,23 @@ fn buildStoreSetWithFieldPath(
 ) ![]u8 {
     var buf: std.ArrayList(u8) = .{};
     errdefer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
 
     // fixmap(5)
     try buf.append(allocator, 0x85);
 
-    try msgpack_helpers.writeString(allocator, &buf, "type");
-    try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
+    try msgpack_helpers.writeMsgPackStr(writer, "type");
+    try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
 
-    try msgpack_helpers.writeString(allocator, &buf, "id");
+    try msgpack_helpers.writeMsgPackStr(writer, "id");
     // encode id as uint64
     try buf.append(allocator, 0xcf);
     for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
 
-    try msgpack_helpers.writeString(allocator, &buf, "namespace");
-    try msgpack_helpers.writeString(allocator, &buf, "default");
+    try msgpack_helpers.writeMsgPackStr(writer, "namespace");
+    try msgpack_helpers.writeMsgPackStr(writer, "default");
 
-    try msgpack_helpers.writeString(allocator, &buf, "path");
+    try msgpack_helpers.writeMsgPackStr(writer, "path");
     // array length is 2 + field_segments.len
     const path_len = 2 + field_segments.len;
     if (path_len < 16) {
@@ -637,11 +639,11 @@ fn buildStoreSetWithFieldPath(
         try buf.append(allocator, @intCast((path_len >> 8) & 0xFF));
         try buf.append(allocator, @intCast(path_len & 0xFF));
     }
-    try msgpack_helpers.writeString(allocator, &buf, table);
-    try msgpack_helpers.writeString(allocator, &buf, doc_id);
-    for (field_segments) |seg| try msgpack_helpers.writeString(allocator, &buf, seg);
+    try msgpack_helpers.writeMsgPackStr(writer, table);
+    try msgpack_helpers.writeMsgPackStr(writer, doc_id);
+    for (field_segments) |seg| try msgpack_helpers.writeMsgPackStr(writer, seg);
 
-    try msgpack_helpers.writeString(allocator, &buf, "value");
+    try msgpack_helpers.writeMsgPackStr(writer, "value");
     try msgpack_utils.encode(val, buf.writer(allocator));
 
     return buf.toOwnedSlice(allocator);
@@ -649,17 +651,18 @@ fn buildStoreSetWithFieldPath(
 
 fn buildStoreQuery(allocator: std.mem.Allocator, id: u64, table: []const u8) ![]u8 {
     var buf: std.ArrayList(u8) = .{};
+    const writer = buf.writer(allocator);
     try buf.append(allocator, 0x85); // fixmap(5)
-    try msgpack_helpers.writeString(allocator, &buf, "type");
-    try msgpack_helpers.writeString(allocator, &buf, "StoreQuery");
-    try msgpack_helpers.writeString(allocator, &buf, "id");
+    try msgpack_helpers.writeMsgPackStr(writer, "type");
+    try msgpack_helpers.writeMsgPackStr(writer, "StoreQuery");
+    try msgpack_helpers.writeMsgPackStr(writer, "id");
     try buf.append(allocator, 0xcf);
     for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
-    try msgpack_helpers.writeString(allocator, &buf, "namespace");
-    try msgpack_helpers.writeString(allocator, &buf, "default");
-    try msgpack_helpers.writeString(allocator, &buf, "collection");
-    try msgpack_helpers.writeString(allocator, &buf, table);
-    try msgpack_helpers.writeString(allocator, &buf, "filter");
+    try msgpack_helpers.writeMsgPackStr(writer, "namespace");
+    try msgpack_helpers.writeMsgPackStr(writer, "default");
+    try msgpack_helpers.writeMsgPackStr(writer, "collection");
+    try msgpack_helpers.writeMsgPackStr(writer, table);
+    try msgpack_helpers.writeMsgPackStr(writer, "filter");
     try buf.append(allocator, 0x80); // empty map {}
     return buf.toOwnedSlice(allocator);
 }

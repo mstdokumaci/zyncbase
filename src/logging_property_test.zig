@@ -255,9 +255,10 @@ test "logging: error details" {
         // Create message with missing fields (id, namespace, path, value)
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x81); // fixmap(1)
-        try msgpack_helpers.writeString(allocator, &buf, "type");
-        try msgpack_helpers.writeString(allocator, &buf, "StoreSet");
+        try msgpack_helpers.writeMsgPackStr(writer, "type");
+        try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
 
         const incomplete_msg = buf.items;
 

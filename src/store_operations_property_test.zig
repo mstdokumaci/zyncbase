@@ -67,19 +67,20 @@ test "store: set field extraction" {
         // Manual msgpack map construction missing a field
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         // fixmap(4) - type, id, path, value (missing namespace)
         try buf.append(allocator, 0x84);
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "StoreSet");
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "StoreSet");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
-        try msgpack.writeString(allocator, &buf, "path");
+        try msgpack.writeMsgPackStr(writer, "path");
         // fixarray(2)
         try buf.append(allocator, 0x92);
-        try msgpack.writeString(allocator, &buf, "test");
-        try msgpack.writeString(allocator, &buf, "id1");
-        try msgpack.writeString(allocator, &buf, "value");
-        try msgpack.writeString(allocator, &buf, "val");
+        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "id1");
+        try msgpack.writeMsgPackStr(writer, "value");
+        try msgpack.writeMsgPackStr(writer, "val");
         const message = buf.items;
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack.decode(allocator, &reader);
@@ -92,13 +93,14 @@ test "store: set field extraction" {
     {
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "StoreSet");
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "StoreSet");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
         // Missing "path" and "value"
         const msg_buf = buf.items;
         var reader: std.Io.Reader = .fixed(msg_buf);
@@ -112,13 +114,14 @@ test "store: set field extraction" {
     {
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
         try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack.writeString(allocator, &buf, "type");
-        try msgpack.writeString(allocator, &buf, "StoreSet");
-        try msgpack.writeString(allocator, &buf, "id");
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "StoreSet");
+        try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
-        try msgpack.writeString(allocator, &buf, "namespace");
-        try msgpack.writeString(allocator, &buf, "test");
+        try msgpack.writeMsgPackStr(writer, "namespace");
+        try msgpack.writeMsgPackStr(writer, "test");
         const msg_buf = buf.items;
         var reader: std.Io.Reader = .fixed(msg_buf);
         const parsed = try msgpack.decode(allocator, &reader);

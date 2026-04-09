@@ -438,24 +438,21 @@ pub const MessageHandler = struct {
 
     /// Send error response to client
     pub fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8, msg_id: ?u64) !void {
-        var list: std.ArrayList(u8) = .{};
+        var list = std.ArrayListUnmanaged(u8).empty;
         defer list.deinit(self.allocator);
-
-        var payload = msgpack.Payload.mapPayload(self.allocator);
-        defer payload.free(self.allocator);
-
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", self.allocator));
-        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, self.allocator));
-        try payload.mapPut("message", try msgpack.Payload.strToPayload(message, self.allocator));
+        const writer = list.writer(self.allocator);
+        try writer.writeByte(if (msg_id != null) 0x84 else 0x83); // fixmap(3 or 4)
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "error");
+        try msgpack.writeMsgPackStr(writer, "code");
+        try msgpack.writeMsgPackStr(writer, code);
+        try msgpack.writeMsgPackStr(writer, "message");
+        try msgpack.writeMsgPackStr(writer, message);
         if (msg_id) |id| {
-            try payload.mapPut("id", msgpack.Payload.uintToPayload(id));
+            try msgpack.writeMsgPackStr(writer, "id");
+            try msgpack.encode(msgpack.Payload.uintToPayload(id), writer);
         }
-
-        try msgpack.encode(payload, list.writer(self.allocator));
-        const error_msg = try list.toOwnedSlice(self.allocator);
-        defer self.allocator.free(error_msg);
-
-        ws.send(error_msg, .binary);
+        ws.send(list.items, .binary);
     }
 
     fn isSecurityError(err: anyerror) bool {
@@ -479,33 +476,30 @@ pub const MessageHandler = struct {
 
     /// Build an error response with a code string.
     fn buildErrorResponse(msgpack_allocator: Allocator, msg_id: u64, code: []const u8) ![]const u8 {
-        var list: std.ArrayList(u8) = .{};
-        defer list.deinit(msgpack_allocator);
-
-        var payload = msgpack.Payload.mapPayload(msgpack_allocator);
-        defer payload.free(msgpack_allocator);
-
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("error", msgpack_allocator));
-        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-        try payload.mapPut("code", try msgpack.Payload.strToPayload(code, msgpack_allocator));
-
-        try msgpack.encode(payload, list.writer(msgpack_allocator));
-        return try list.toOwnedSlice(msgpack_allocator);
+        var list = std.ArrayListUnmanaged(u8).empty;
+        errdefer list.deinit(msgpack_allocator);
+        const writer = list.writer(msgpack_allocator);
+        try writer.writeByte(0x83); // fixmap(3)
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "error");
+        try msgpack.writeMsgPackStr(writer, "id");
+        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+        try msgpack.writeMsgPackStr(writer, "code");
+        try msgpack.writeMsgPackStr(writer, code);
+        return list.toOwnedSlice(msgpack_allocator);
     }
 
     /// Build success response for StoreSet
     fn buildSuccessResponse(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
-        var list: std.ArrayList(u8) = .{};
-        defer list.deinit(msgpack_allocator);
-
-        var payload = msgpack.Payload.mapPayload(msgpack_allocator);
-        defer payload.free(msgpack_allocator);
-
-        try payload.mapPut("type", try msgpack.Payload.strToPayload("ok", msgpack_allocator));
-        try payload.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
-
-        try msgpack.encode(payload, list.writer(msgpack_allocator));
-        return try list.toOwnedSlice(msgpack_allocator);
+        var list = std.ArrayListUnmanaged(u8).empty;
+        errdefer list.deinit(msgpack_allocator);
+        const writer = list.writer(msgpack_allocator);
+        try writer.writeByte(0x82); // fixmap(2)
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "ok");
+        try msgpack.writeMsgPackStr(writer, "id");
+        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+        return list.toOwnedSlice(msgpack_allocator);
     }
 
     fn mapErrorToCode(err: anyerror) []const u8 {
@@ -665,37 +659,49 @@ pub const MessageHandler = struct {
         results: *storage_mod.ManagedPayload,
     ) ![]const u8 {
         _ = self;
-        var response = msgpack.Payload.mapPayload(arena_allocator);
-        defer response.free(arena_allocator);
+        var list = std.ArrayListUnmanaged(u8).empty;
+        errdefer list.deinit(arena_allocator);
+        const writer = list.writer(arena_allocator);
 
-        try response.mapPut("type", try msgpack.Payload.strToPayload("ok", arena_allocator));
-        try response.mapPut("id", msgpack.Payload.uintToPayload(msg_id));
+        // Compute map size: type + id + value + nextCursor = 4, +subId +hasMore if subscription
+        const map_size: u8 = if (sub_id != null) 6 else 4;
+        try writer.writeByte(0x80 | map_size); // fixmap
+
+        try msgpack.writeMsgPackStr(writer, "type");
+        try msgpack.writeMsgPackStr(writer, "ok");
+
+        try msgpack.writeMsgPackStr(writer, "id");
+        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
 
         if (sub_id) |sid| {
-            try response.mapPut("subId", msgpack.Payload.uintToPayload(sid));
+            try msgpack.writeMsgPackStr(writer, "subId");
+            try msgpack.encode(msgpack.Payload.uintToPayload(sid), writer);
         }
 
+        try msgpack.writeMsgPackStr(writer, "value");
         if (results.value) |val| {
-            try response.mapPut("value", val);
-            results.value = null; // Transfer ownership to response
+            try msgpack.encode(val, writer);
+            results.value = null; // Transfer ownership
         } else {
-            try response.mapPut("value", msgpack.Payload{ .arr = &[_]msgpack.Payload{} });
+            try msgpack.encode(msgpack.Payload{ .arr = &[_]msgpack.Payload{} }, writer);
         }
 
-        const has_more = results.next_cursor_arr != null;
         if (sub_id != null) {
-            try response.mapPut("hasMore", msgpack.Payload{ .bool = has_more });
+            const has_more = results.next_cursor_arr != null;
+            try msgpack.writeMsgPackStr(writer, "hasMore");
+            try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
         }
 
+        try msgpack.writeMsgPackStr(writer, "nextCursor");
         if (results.next_cursor_arr) |cursor_tuple| {
             const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
             defer arena_allocator.free(encoded_cursor);
-            try response.mapPut("nextCursor", try msgpack.Payload.strToPayload(encoded_cursor, arena_allocator));
+            try msgpack.writeMsgPackStr(writer, encoded_cursor);
         } else {
-            try response.mapPut("nextCursor", .nil);
+            try msgpack.encode(.nil, writer);
         }
 
-        return try msgpack.encodePayload(arena_allocator, response);
+        return list.toOwnedSlice(arena_allocator);
     }
 
     fn extractSubId(self: *MessageHandler, map: msgpack.Map) !u64 {

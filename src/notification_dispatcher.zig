@@ -9,13 +9,15 @@ const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 
-/// The 23-byte constant prefix for all StoreDelta messages.
-/// fixmap(3) + "type" + "StoreDelta" + "subId"
-const store_delta_header: [23]u8 = .{
-    0x83, // fixmap(3)
-    0xa4, 't', 'y', 'p', 'e', // fixstr(4) "type"
-    0xaa, 'S', 't', 'o', 'r', 'e', 'D', 'e', 'l', 't', 'a', // fixstr(10) "StoreDelta"
-    0xa5, 's', 'u', 'b', 'I', 'd', // fixstr(5) "subId"
+const store_delta_header = blk: {
+    var buf: [64]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+    writer.writeByte(0x83) catch @panic("comptime: failed to write map header");
+    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
+    msgpack.writeMsgPackStr(writer, "StoreDelta") catch @panic("comptime: failed to write type value");
+    msgpack.writeMsgPackStr(writer, "subId") catch @panic("comptime: failed to write subId key");
+    break :blk buf[0..stream.pos].*;
 };
 
 pub const NotificationDispatcher = struct {
