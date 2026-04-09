@@ -18,57 +18,49 @@ const SchemaManager = @import("schema_manager.zig").SchemaManager;
 
 // === Pre-encoded MsgPack headers (computed at comptime) ===
 
-const ok_id_header = &(struct {
-    const val = blk: {
-        var buf: [16]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const w = stream.writer();
-        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-        msgpack.writeMsgPackStr(w, "ok") catch @panic("comptime: failed to write type value");
-        msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
-        break :blk buf[0..stream.pos].*;
-    };
-}.val);
+const ok_id_header = blk: {
+    var buf: [16]u8 = undefined;
+    var stream = std.Io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
+    msgpack.writeMsgPackStr(writer, "ok") catch @panic("comptime: failed to write type value");
+    msgpack.writeMsgPackStr(writer, "id") catch @panic("comptime: failed to write id key");
+    break :blk buf[0..stream.pos].*;
+};
 
-const success_header = &(struct {
-    const val = blk: {
-        var buf: [1 + ok_id_header.len]u8 = undefined;
-        buf[0] = 0x82; // fixmap(2)
-        @memcpy(buf[1..], ok_id_header);
-        break :blk buf[0..].*;
-    };
-}.val);
+const success_header = blk: {
+    var buf: [1 + ok_id_header.len]u8 = undefined;
+    buf[0] = 0x82; // fixmap(2)
+    @memcpy(buf[1..], &ok_id_header);
+    break :blk buf[0..].*;
+};
 
-const error_id_header = &(struct {
-    const val = blk: {
-        var buf: [16]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const w = stream.writer();
-        w.writeByte(0x83) catch @panic("comptime: failed to write map header");
-        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-        msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-        msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
-        break :blk buf[0..stream.pos].*;
-    };
-}.val);
+const error_id_header = blk: {
+    var buf: [16]u8 = undefined;
+    var stream = std.Io.fixedBufferStream(&buf);
+    const w = stream.writer();
+    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
+    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
+    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
+    msgpack.writeMsgPackStr(w, "id") catch @panic("comptime: failed to write id key");
+    break :blk buf[0..stream.pos].*;
+};
 
-const error_type_header = &(struct {
-    const val = blk: {
-        var buf: [16]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const w = stream.writer();
-        msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
-        msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
-        msgpack.writeMsgPackStr(w, "code") catch @panic("comptime: failed to write code key");
-        break :blk buf[0..stream.pos].*;
-    };
-}.val);
+const error_type_header = blk: {
+    var buf: [16]u8 = undefined;
+    var stream = std.Io.fixedBufferStream(&buf);
+    const w = stream.writer();
+    msgpack.writeMsgPackStr(w, "type") catch @panic("comptime: failed to write type key");
+    msgpack.writeMsgPackStr(w, "error") catch @panic("comptime: failed to write type value");
+    msgpack.writeMsgPackStr(w, "code") catch @panic("comptime: failed to write code key");
+    break :blk buf[0..stream.pos].*;
+};
 
 fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-line: unused-parameter
     return &(struct {
         const val = blk: {
             var buf: [key.len + 5]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
+            var stream = std.Io.fixedBufferStream(&buf);
             msgpack.writeMsgPackStr(stream.writer(), key) catch @panic("comptime: failed to write key");
             break :blk buf[0..stream.pos].*;
         };
@@ -515,7 +507,7 @@ pub const MessageHandler = struct {
         defer list.deinit(self.allocator);
         const writer = list.writer(self.allocator);
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
-        try list.appendSlice(self.allocator, error_type_header);
+        try list.appendSlice(self.allocator, &error_type_header);
         try msgpack.writeMsgPackStr(writer, code);
         try list.appendSlice(self.allocator, message_key);
         try msgpack.writeMsgPackStr(writer, message);
@@ -552,7 +544,7 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
-        try list.appendSlice(msgpack_allocator, error_id_header);
+        try list.appendSlice(msgpack_allocator, &error_id_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
         try list.appendSlice(msgpack_allocator, code_key);
         try msgpack.writeMsgPackStr(writer, code);
@@ -564,7 +556,7 @@ pub const MessageHandler = struct {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(msgpack_allocator);
         const writer = list.writer(msgpack_allocator);
-        try list.appendSlice(msgpack_allocator, success_header);
+        try list.appendSlice(msgpack_allocator, &success_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
         return list.toOwnedSlice(msgpack_allocator);
     }
@@ -733,7 +725,7 @@ pub const MessageHandler = struct {
         const map_size: u8 = if (sub_id != null) 6 else 4;
         try writer.writeByte(0x80 | map_size);
 
-        try list.appendSlice(arena_allocator, ok_id_header);
+        try list.appendSlice(arena_allocator, &ok_id_header);
         try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
 
         if (sub_id) |sid| {
