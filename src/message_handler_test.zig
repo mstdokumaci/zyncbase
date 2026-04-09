@@ -415,7 +415,7 @@ test "StoreSet: message handler rejects arrays with non-literal elements" {
 
 // ─── Verification of Schema & Message Parsing Architecture Improvements ──────
 
-test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)" {
+test "MessageHandler - flattened field path via StoreSet" {
     const allocator = testing.allocator;
 
     // Create a schema with a flattened multi-segment field
@@ -482,7 +482,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
             tags[1].free(allocator);
             allocator.free(tags);
         }
-        const msg = try buildStoreSetWithFieldPath(allocator, 2, "items", "doc1", &.{ "metadata", "tags" }, .{ .arr = tags });
+        const msg = try buildStoreSetWithFieldPath(allocator, 2, "items", "doc1", &.{"metadata__tags"}, .{ .arr = tags });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -504,7 +504,7 @@ test "MessageHandler - resolveFieldName via StoreSet (single and multi-segment)"
             inner_arr[0].free(allocator);
             allocator.free(inner_arr);
         }
-        const msg = try buildStoreSetWithFieldPath(allocator, 3, "items", "doc1", &.{ "metadata", "tags" }, .{ .arr = inner_arr });
+        const msg = try buildStoreSetWithFieldPath(allocator, 3, "items", "doc1", &.{"metadata__tags"}, .{ .arr = inner_arr });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -555,7 +555,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     {
         const val_payload = try msgpack_utils.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
-        const msg = try buildStoreSetWithFieldPath(allocator, 1, "deep", "id1", &.{ "a", "b", "c" }, val_payload);
+        const msg = try buildStoreSetWithFieldPath(allocator, 1, "deep", "id1", &.{"a__b__c"}, val_payload);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -575,7 +575,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     // Flush pending writes so the document is persisted before reading
     try app.storage_engine.flushPendingWrites();
 
-    // 2. Get document and verify unflattening: Expect { "a": { "b": { "c": "value" } } }
+    // 2. Get document and verify flat response: Expect { "a__b__c": "value" } (stay flat architecture)
     {
         const msg = try buildStoreQuery(allocator, 2, "deep");
         defer allocator.free(msg);

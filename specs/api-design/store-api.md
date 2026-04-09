@@ -200,15 +200,16 @@ client.store.batch([
 
 All methods accept both dot-notation strings and Arrays of strings. **The Array is the canonical format.**
 
-### Addressing Data
-Paths are variadic and follow a logical progression from collections to documents to specific fields:
+### Logical vs. Wire-Format Paths
 
-| Target | Pattern | Array Example | Dot Example |
+Paths follow a logical progression from collections to documents to specific fields. While the SDK supports variadic segments for developer convenience, the **wire protocol** (socket) enforces a flattened structure for nested fields using the `__` separator. The SDK handles this transformation automatically.
+
+| Target | Logical Path (SDK) | Wire-Format Path (Socket) | Pattern |
 | :--- | :--- | :--- | :--- |
-| **Collection** | `[collection]` | `['users']` | `'users'` |
-| **Document** | `[collection, id]` | `['users', 'u1']` | `'users.u1'` |
-| **Field** | `[collection, id, field]` | `['users', 'u1', 'name']` | `'users.u1.name'` |
-| **Nested Field** | `[collection, id, ...fields]` | `['users', 'u1', 'address', 'city']` | `'users.u1.address.city'` |
+| **Collection** | `['users']` | `['users']` | `[collection]` |
+| **Document** | `['users', 'u1']` | `['users', 'u1']` | `[collection, id]` |
+| **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[collection, id, field]` |
+| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[collection, id, flattened__nested]` |
 
 ### Why use Arrays?
 Arrays are preferred when dealing with variables or IDs that might contain dots:

@@ -301,24 +301,6 @@ pub const MessageHandler = struct {
         }
     }
 
-    const ResolvedField = struct {
-        name: []const u8,
-        allocated: bool,
-    };
-
-    /// Resolves a ParsedPath.field's segments into a single flattened column name.
-    /// For single-segment paths, returns the segment directly (no allocation).
-    /// For multi-segment paths, joins with "__" (caller must free).
-    fn resolveFieldName(allocator: std.mem.Allocator, fields: []const []const u8) !ResolvedField {
-        if (fields.len == 1) {
-            return .{ .name = fields[0], .allocated = false };
-        }
-        return .{
-            .name = try std.mem.join(allocator, "__", fields),
-            .allocated = true,
-        };
-    }
-
     const StoreFields = struct {
         namespace: []const u8,
         segments: []const []const u8,
@@ -453,13 +435,12 @@ pub const MessageHandler = struct {
             }
 
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
-        } else {
-            // Partial update / deep path
-            const resolved = try resolveFieldName(self.allocator, segments[2..]);
-            defer if (resolved.allocated) self.allocator.free(resolved.name);
+        } else if (segments.len == 3) {
+            // Partial update / deep path (pre-flattened by SDK)
+            const field_name = segments[2];
 
             // Validate against schema
-            if (tbl_md.getField(resolved.name)) |fld| {
+            if (tbl_md.getField(field_name)) |fld| {
                 if (fld.sql_type == .array) {
                     msgpack.ensureLiteralArray(value) catch {
                         return try buildErrorResponse(arena_allocator, msg_id, "INVALID_ARRAY_ELEMENT");
@@ -469,8 +450,10 @@ pub const MessageHandler = struct {
                 return try buildErrorResponse(arena_allocator, msg_id, "FIELD_NOT_FOUND");
             }
 
-            const col = [_]storage_mod.ColumnValue{.{ .name = resolved.name, .value = value }};
+            const col = [_]storage_mod.ColumnValue{.{ .name = field_name, .value = value }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
+        } else {
+            return error.InvalidPath;
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
@@ -492,10 +475,10 @@ pub const MessageHandler = struct {
 
         if (segments.len == 2) {
             try self.storage_engine.deleteDocument(table, doc_id, namespace);
+        } else if (segments.len == 3) {
+            try self.storage_engine.updateField(table, doc_id, namespace, segments[2], .nil);
         } else {
-            const resolved = try resolveFieldName(self.allocator, segments[2..]);
-            defer if (resolved.allocated) self.allocator.free(resolved.name);
-            try self.storage_engine.updateField(table, doc_id, namespace, resolved.name, .nil);
+            return error.InvalidPath;
         }
 
         return try buildSuccessResponse(arena_allocator, msg_id);
