@@ -137,6 +137,7 @@ pub fn payloadToCanonicalString(payload: Payload, allocator: std.mem.Allocator) 
             return s;
         },
         .str => |s| try allocator.dupe(u8, s.value()),
+        .arr => try payloadToJson(payload, allocator),
         else => error.UnsupportedCanonicalType,
     };
 }

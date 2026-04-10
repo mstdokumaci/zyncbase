@@ -143,6 +143,34 @@ test "payloadToJson: non-literal-array payload returns error" {
 }
 
 // ============================================================
+// payloadToCanonicalString tests
+// ============================================================
+
+test "payloadToCanonicalString: literal array produces JSON string" {
+    const allocator = testing.allocator;
+    const str1 = try Payload.strToPayload("admin", allocator);
+    const str2 = try Payload.strToPayload("editor", allocator);
+    const elems = try allocator.alloc(Payload, 2);
+    elems[0] = str1;
+    elems[1] = str2;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+    const result = try msgpack_utils.payloadToCanonicalString(p, allocator);
+    defer allocator.free(result);
+    try testing.expectEqualStrings("[\"admin\", \"editor\"]", result);
+}
+
+test "payloadToCanonicalString: non-literal array returns error" {
+    const allocator = testing.allocator;
+    const inner_elems = try allocator.alloc(Payload, 0);
+    const elems = try allocator.alloc(Payload, 1);
+    elems[0] = .{ .arr = inner_elems };
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+    try testing.expectError(error.NonLiteralElement, msgpack_utils.payloadToCanonicalString(p, allocator));
+}
+
+// ============================================================
 // jsonToPayload tests
 // ============================================================
 

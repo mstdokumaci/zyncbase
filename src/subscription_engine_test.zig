@@ -254,3 +254,73 @@ test "SubscriptionEngine: group sharing with different condition order" {
 
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 }
+
+test "SubscriptionEngine: in operator subscribe and match" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
+    in_val.arr[0] = try msgpack.Payload.strToPayload("admin", allocator);
+    in_val.arr[1] = try msgpack.Payload.strToPayload("editor", allocator);
+    defer in_val.free(allocator);
+
+    const filter = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "role", .op = .in, .value = in_val },
+        },
+    };
+
+    _ = try engine.subscribe("default", "users", filter, 1, 100);
+
+    var row = msgpack.Payload.mapPayload(allocator);
+    defer row.free(allocator);
+    try row.map.putString("role", try msgpack.Payload.strToPayload("admin", allocator));
+
+    const change = RowChange{
+        .namespace = "default",
+        .collection = "users",
+        .operation = .insert,
+        .new_row = row,
+        .old_row = null,
+    };
+
+    const matches = try engine.handleRowChange(change, allocator);
+    defer allocator.free(matches);
+    try testing.expectEqual(@as(usize, 1), matches.len);
+}
+
+test "SubscriptionEngine: notIn operator subscribe and match" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var not_in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
+    not_in_val.arr[0] = try msgpack.Payload.strToPayload("guest", allocator);
+    not_in_val.arr[1] = try msgpack.Payload.strToPayload("banned", allocator);
+    defer not_in_val.free(allocator);
+
+    const filter = query_parser.QueryFilter{
+        .conditions = &[_]query_parser.Condition{
+            .{ .field = "role", .op = .notIn, .value = not_in_val },
+        },
+    };
+
+    _ = try engine.subscribe("default", "users", filter, 1, 100);
+
+    var row = msgpack.Payload.mapPayload(allocator);
+    defer row.free(allocator);
+    try row.map.putString("role", try msgpack.Payload.strToPayload("member", allocator));
+
+    const change = RowChange{
+        .namespace = "default",
+        .collection = "users",
+        .operation = .insert,
+        .new_row = row,
+        .old_row = null,
+    };
+
+    const matches = try engine.handleRowChange(change, allocator);
+    defer allocator.free(matches);
+    try testing.expectEqual(@as(usize, 1), matches.len);
+}
