@@ -70,7 +70,8 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
-    "batchTimeout": 10
+    "batchTimeout": 10,
+    "statementCacheSize": 100
   }
 }
 ```Configuration Reference network configuration```json
@@ -137,7 +138,8 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
-    "batchTimeout": 10
+    "batchTimeout": 10,
+    "statementCacheSize": 100
   }
 }
 ```schema.json Define data structure ZyncBase schema format **Naming Restriction** Field names double underscore sequence (`__`). sequence internal flattening nested objects schema `__` rejected `error.InvalidFieldName` Example Collaborative Canvas```json

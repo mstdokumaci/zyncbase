@@ -260,10 +260,8 @@ Origin: https://app.example.com
   "type":       "error",
   "id":         2,                          // Echoed request ID (if responding to a request)
   "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
-  "category":   "validation",               // Functional category (see ERROR_TAXONOMY.md)
   "message":    "Field 'priority' must be an integer, got string.",
-  "retryAfter": 5000,                       // (Optional) ms to wait before retry
-  "details":    { "priority": ["must be integer"] } // (Optional) field-level error context
+  "retryAfter": 5000                        // (Optional) ms to wait before retry
 }
 ```Error codes Code Category Description `AUTH_FAILED` Invalid ticket expired JWT `TOKEN_EXPIRED` auth Session expired re-authenticate `NAMESPACE_UNAUTHORIZED` authorization Not authorized access namespace `COLLECTION_NOT_FOUND` authorization Table/Collection name not schema `FIELD_NOT_FOUND` validation Field name not schema `INVALID_FIELD_NAME` validation Forbidden `__` sequence field name `PERMISSION_DENIED` authorizationHook Server rejected operation `SCHEMA_VALIDATION_FAILED` Data doesn match schema definition `INVALID_MESSAGE` Malformed MessagePack missing `type field `RATE_LIMITED` Too many messages `retryAfter `MESSAGE_TOO_LARGE` Payload exceeds `maxMessageSize` `CONNECTION_FAILED` Transport-level failure (WebSocket closed `TIMEOUT` Server processing exceeded timeout `INTERNAL_ERROR` Unexpected server failure `MAX_CONNECTIONS_REACHED` Server at capacity `INVALID_MESSAGE_FORMAT` Missing fields type id `INVALID_ARRAY_ELEMENT` Non-literal element array `HOOK_SERVER_UNAVAILABLE` Zig reach Hook Server process `HOOK_DENIED` Developer's TypeScript hook returned error `SUBSCRIPTION_NOT_FOUND` `subId not recognized Extensibility Adding new message types message types future versions ignore unknown `type values Adding new fields fields to existing message types ignore unknown fields allows non-breaking evolutionProtocol version `Connected message `protocolVersion field future versions v1 protocol version `1` version negotiation added `Connected response without changing handshake Internal Messages (Zig ↔ Hook Server IPC/WebSocket channel Zig core Hook Server `HookServerOnConnect` ticket requested session refreshed```json
 {
