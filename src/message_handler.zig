@@ -425,7 +425,8 @@ pub const MessageHandler = struct {
 
         if (msg_id) |id| {
             try list.appendSlice(self.allocator, id_key);
-            try msgpack.encode(msgpack.Payload.uintToPayload(id), writer);
+            try writer.writeByte(0xcf); // msgpack uint64
+            try writer.writeInt(u64, id, .big);
         }
 
         const error_msg = try list.toOwnedSlice(self.allocator);
@@ -462,7 +463,8 @@ pub const MessageHandler = struct {
         try msgpack.writeMsgPackStr(writer, code);
 
         try list.appendSlice(msgpack_allocator, id_key);
-        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+        try writer.writeByte(0xcf); // msgpack uint64
+        try writer.writeInt(u64, msg_id, .big);
 
         try list.appendSlice(msgpack_allocator, message_key);
         try msgpack.writeMsgPackStr(writer, message);
