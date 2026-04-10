@@ -40,6 +40,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
 | `COLLECTION_NOT_FOUND` | Authorization | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |
 | `FIELD_NOT_FOUND` | Validation | Field missing in schema | Path/value refers to a field not defined in the schema | 400 | No - Fix schema or data |
+| `IMMUTABLE_FIELD` | Validation | System field is protected | Attempted to modify a protected/immutable system field (e.g., `id`) | 400 | No - Fix data |
 | `INVALID_FIELD_NAME` | Validation | Field name contains forbidden characters | Path/value contains `__` sequence | 400 | No - Fix path or data |
 | `INVALID_ARRAY_ELEMENT` | Validation | Array field contains non-literal value | `store.set` with an array containing nested objects or arrays | 400 | No - Fix data |
 | `INVALID_MESSAGE` | Validation | Malformed frame | Failed to decode MessagePack or missing `type` | 400 | No - Fix message format |

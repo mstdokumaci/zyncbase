@@ -46,7 +46,7 @@ test "StoreService: set - full document replacement" {
         try testing.expectEqual(@as(i64, 30), age_val.int);
     }
 
-    // 2. Success path: Including built-in fields
+    // 2. Negative path: Including built-in fields
     {
         var val = msgpack.Payload.mapPayload(allocator);
         defer val.free(allocator);
@@ -54,12 +54,8 @@ test "StoreService: set - full document replacement" {
         try val.mapPut("id", try msgpack.Payload.strToPayload("user-2", allocator));
         try val.mapPut("created_at", msgpack.Payload.uintToPayload(123456789));
 
-        try service.set("users", "user-2", "public", 2, null, val);
-        try app.storage_engine.flushPendingWrites();
-
-        var managed = try app.storage_engine.selectDocument(allocator, "users", "user-2", "public");
-        defer managed.deinit();
-        try testing.expect(managed.value != null);
+        const result = service.set("users", "user-2", "public", 2, null, val);
+        try testing.expectError(StorageError.ImmutableField, result);
     }
 
     // 3. Negative path: Unknown field
@@ -139,6 +135,15 @@ test "StoreService: set - field level update" {
 
         const result = service.set("items", "item-1", "public", 4, null, val);
         try testing.expectError(StorageError.InvalidPath, result);
+    }
+
+    // 4. Negative path: Immutable field (built-in)
+    {
+        const val = try msgpack.Payload.strToPayload("new-id", allocator);
+        defer val.free(allocator);
+
+        const result = service.set("items", "item-1", "public", 3, "id", val);
+        try testing.expectError(StorageError.ImmutableField, result);
     }
 }
 
@@ -258,6 +263,8 @@ test "StoreService: array validation" {
         var map = msgpack.Payload.mapPayload(allocator);
         defer map.free(allocator);
         try map.mapPut("tags", arr_val);
+        const result = service.set("collections", "id1", "public", 2, null, map);
+        try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 }
 

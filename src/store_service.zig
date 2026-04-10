@@ -6,6 +6,13 @@ const storage_mod = @import("storage_engine/types.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StorageError = storage_mod.StorageError;
 
+fn isBuiltInField(name: []const u8) bool {
+    return std.mem.eql(u8, name, "id") or
+        std.mem.eql(u8, name, "namespace_id") or
+        std.mem.eql(u8, name, "created_at") or
+        std.mem.eql(u8, name, "updated_at");
+}
+
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and ColumnValue construction.
 pub const StoreService = struct {
@@ -42,39 +49,28 @@ pub const StoreService = struct {
 
             // Validate schema and construct columns in a single pass
             var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
-            defer {
-                for (columns.items) |col| {
-                    self.allocator.free(col.name);
-                }
-                columns.deinit(self.allocator);
-            }
+            defer columns.deinit(self.allocator);
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
                 if (entry.key_ptr.* != .str) continue;
                 const fn_inner = entry.key_ptr.*.str.value();
 
-                if (tbl_md.getField(fn_inner)) |field| {
-                    if (field.sql_type == .array) {
-                        msgpack.ensureLiteralArray(entry.value_ptr.*) catch |err| switch (err) {
-                            error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                            else => |e| return e,
-                        };
-                    }
-                    try columns.append(self.allocator, .{
-                        .name = try self.allocator.dupe(u8, fn_inner),
-                        .value = entry.value_ptr.*,
-                    });
-                } else {
-                    // Skip built-ins, reject others
-                    if (!std.mem.eql(u8, fn_inner, "id") and
-                        !std.mem.eql(u8, fn_inner, "namespace_id") and
-                        !std.mem.eql(u8, fn_inner, "created_at") and
-                        !std.mem.eql(u8, fn_inner, "updated_at"))
-                    {
-                        return StorageError.UnknownField;
-                    }
+                const field = tbl_md.getField(fn_inner) orelse {
+                    if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
+                    return StorageError.UnknownField;
+                };
+
+                if (field.sql_type == .array) {
+                    msgpack.ensureLiteralArray(entry.value_ptr.*) catch |err| switch (err) {
+                        error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
+                        else => |e| return e,
+                    };
                 }
+                try columns.append(self.allocator, .{
+                    .name = fn_inner,
+                    .value = entry.value_ptr.*,
+                });
             }
 
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
@@ -82,15 +78,16 @@ pub const StoreService = struct {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
 
-            if (tbl_md.getField(fn_inner)) |fld| {
-                if (fld.sql_type == .array) {
-                    msgpack.ensureLiteralArray(value) catch |err| switch (err) {
-                        error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                        else => |e| return e,
-                    };
-                }
-            } else {
+            const fld = tbl_md.getField(fn_inner) orelse {
+                if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
                 return StorageError.UnknownField;
+            };
+
+            if (fld.sql_type == .array) {
+                msgpack.ensureLiteralArray(value) catch |err| switch (err) {
+                    error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
+                    else => |e| return e,
+                };
             }
 
             const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = value }};

@@ -33,6 +33,8 @@ pub const StorageError = error{
     UnknownTable,
     /// Field not found in table schema
     UnknownField,
+    /// Attempted to modify a protected/immutable system field
+    ImmutableField,
     /// NOT NULL column received null value
     NullNotAllowed,
     /// Write blocked because migration is in progress

@@ -487,6 +487,7 @@ pub const MessageHandler = struct {
         return switch (err) {
             error.UnknownTable => "COLLECTION_NOT_FOUND",
             error.UnknownField => "FIELD_NOT_FOUND",
+            error.ImmutableField => "IMMUTABLE_FIELD",
             error.TypeMismatch, error.ConstraintViolation => "SCHEMA_VALIDATION_FAILED",
             error.InvalidArrayElement => "INVALID_ARRAY_ELEMENT",
             error.InvalidFieldName => "INVALID_FIELD_NAME",
@@ -509,6 +510,7 @@ pub const MessageHandler = struct {
         return switch (err) {
             error.UnknownTable => "Collection missing in schema",
             error.UnknownField => "Field missing in schema",
+            error.ImmutableField => "Attempted to modify a system-protected field",
             error.TypeMismatch => "Field type mismatch",
             error.ConstraintViolation => "Schema constraint violation",
             error.InvalidArrayElement => "Array field contains non-literal value",
