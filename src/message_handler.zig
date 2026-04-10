@@ -71,6 +71,58 @@ const value_key = comptimeEncodeKey("value");
 const has_more_key = comptimeEncodeKey("hasMore");
 const next_cursor_key = comptimeEncodeKey("nextCursor");
 
+// === Pre-encoded Error Codes ===
+const err_code_collection_not_found = comptimeEncodeKey("COLLECTION_NOT_FOUND");
+const err_code_field_not_found = comptimeEncodeKey("FIELD_NOT_FOUND");
+const err_code_immutable_field = comptimeEncodeKey("IMMUTABLE_FIELD");
+const err_code_schema_validation_failed = comptimeEncodeKey("SCHEMA_VALIDATION_FAILED");
+const err_code_invalid_array_element = comptimeEncodeKey("INVALID_ARRAY_ELEMENT");
+const err_code_invalid_field_name = comptimeEncodeKey("INVALID_FIELD_NAME");
+const err_code_invalid_message = comptimeEncodeKey("INVALID_MESSAGE");
+const err_code_invalid_message_format = comptimeEncodeKey("INVALID_MESSAGE_FORMAT");
+const err_code_subscription_not_found = comptimeEncodeKey("SUBSCRIPTION_NOT_FOUND");
+const err_code_auth_failed = comptimeEncodeKey("AUTH_FAILED");
+const err_code_token_expired = comptimeEncodeKey("TOKEN_EXPIRED");
+const err_code_permission_denied = comptimeEncodeKey("PERMISSION_DENIED");
+const err_code_namespace_unauthorized = comptimeEncodeKey("NAMESPACE_UNAUTHORIZED");
+const err_code_message_too_large = comptimeEncodeKey("MESSAGE_TOO_LARGE");
+const err_code_rate_limited = comptimeEncodeKey("RATE_LIMITED");
+const err_code_hook_server_unavailable = comptimeEncodeKey("HOOK_SERVER_UNAVAILABLE");
+const err_code_hook_denied = comptimeEncodeKey("HOOK_DENIED");
+const err_code_internal_error = comptimeEncodeKey("INTERNAL_ERROR");
+
+// === Pre-encoded Error Messages ===
+const err_msg_collection_not_found = comptimeEncodeKey("Collection missing in schema");
+const err_msg_field_not_found = comptimeEncodeKey("Field missing in schema");
+const err_msg_immutable_field = comptimeEncodeKey("Attempted to modify a system-protected field");
+const err_msg_field_type_mismatch = comptimeEncodeKey("Field type mismatch");
+const err_msg_schema_constraint_violation = comptimeEncodeKey("Schema constraint violation");
+const err_msg_invalid_array_element = comptimeEncodeKey("Array field contains non-literal value");
+const err_msg_invalid_field_name = comptimeEncodeKey("Field name contains forbidden characters");
+const err_msg_malformed_frame = comptimeEncodeKey("Malformed MessagePack frame");
+const err_msg_invalid_payload = comptimeEncodeKey("Invalid payload structure");
+const err_msg_invalid_query_filter = comptimeEncodeKey("Invalid query filter format");
+const err_msg_unknown_operator = comptimeEncodeKey("Unknown query operator");
+const err_msg_malformed_sort = comptimeEncodeKey("Malformed sort parameters");
+const err_msg_invalid_sub_id_format = comptimeEncodeKey("Invalid subscription ID format");
+const err_msg_missing_required_fields = comptimeEncodeKey("Request missing required fields");
+const err_msg_missing_sub_id = comptimeEncodeKey("Request missing subscription ID");
+const err_msg_subscription_not_found = comptimeEncodeKey("Subscription not found");
+const err_msg_auth_failed = comptimeEncodeKey("Identity verification failed");
+const err_msg_token_expired = comptimeEncodeKey("Session has expired");
+const err_msg_permission_denied = comptimeEncodeKey("Rule blocked operation");
+const err_msg_namespace_unauthorized = comptimeEncodeKey("No access to namespace");
+const err_msg_payload_too_big = comptimeEncodeKey("Payload too big");
+const err_msg_threshold_exceeded = comptimeEncodeKey("Threshold exceeded");
+const err_msg_logic_runtime_down = comptimeEncodeKey("Logic runtime down");
+const err_msg_logic_rejected_write = comptimeEncodeKey("Logic rejected write");
+const err_msg_zig_core_failure = comptimeEncodeKey("Zig core failure");
+
+// Context-specific error messages
+const err_msg_too_many_requests = comptimeEncodeKey("Too many requests");
+const err_msg_failed_to_parse = comptimeEncodeKey("Failed to parse MessagePack");
+const err_msg_missing_type_or_id = comptimeEncodeKey("Missing required fields: type or id");
+
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
 pub const MessageHandler = struct {
@@ -157,7 +209,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(ws, "RATE_LIMITED", "Too many requests", null);
+                try self.sendError(ws, err_code_rate_limited, err_msg_too_many_requests, null);
                 return;
             }
         }
@@ -182,14 +234,14 @@ pub const MessageHandler = struct {
                 }
             }
 
-            try self.sendError(ws, "INVALID_MESSAGE", "Failed to parse MessagePack", null);
+            try self.sendError(ws, err_code_invalid_message, err_msg_failed_to_parse, null);
             return;
         };
 
         // Extract message type and correlation ID
         const msg_info = self.extractMessageInfo(parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
-            try self.sendError(ws, "INVALID_MESSAGE_FORMAT", "Missing required fields: type or id", null);
+            try self.sendError(ws, err_code_invalid_message_format, err_msg_missing_type_or_id, null);
             return;
         };
 
@@ -418,10 +470,10 @@ pub const MessageHandler = struct {
 
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
         try list.appendSlice(self.allocator, &error_type_header);
-        try msgpack.writeMsgPackStr(writer, code);
+        try list.appendSlice(self.allocator, code);
 
         try list.appendSlice(self.allocator, message_key);
-        try msgpack.writeMsgPackStr(writer, message);
+        try list.appendSlice(self.allocator, message);
 
         if (msg_id) |id| {
             try list.appendSlice(self.allocator, id_key);
@@ -460,14 +512,14 @@ pub const MessageHandler = struct {
         const writer = list.writer(msgpack_allocator);
 
         try list.appendSlice(msgpack_allocator, &error_envelope_header);
-        try msgpack.writeMsgPackStr(writer, code);
+        try list.appendSlice(msgpack_allocator, code);
 
         try list.appendSlice(msgpack_allocator, id_key);
         try writer.writeByte(0xcf); // msgpack uint64
         try writer.writeInt(u64, msg_id, .big);
 
         try list.appendSlice(msgpack_allocator, message_key);
-        try msgpack.writeMsgPackStr(writer, message);
+        try list.appendSlice(msgpack_allocator, message);
 
         return list.toOwnedSlice(msgpack_allocator);
     }
@@ -487,54 +539,54 @@ pub const MessageHandler = struct {
 
     fn mapErrorToCode(err: anyerror) []const u8 {
         return switch (err) {
-            error.UnknownTable => "COLLECTION_NOT_FOUND",
-            error.UnknownField => "FIELD_NOT_FOUND",
-            error.ImmutableField => "IMMUTABLE_FIELD",
-            error.TypeMismatch, error.ConstraintViolation => "SCHEMA_VALIDATION_FAILED",
-            error.InvalidArrayElement => "INVALID_ARRAY_ELEMENT",
-            error.InvalidFieldName => "INVALID_FIELD_NAME",
-            error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => "INVALID_MESSAGE",
-            error.MissingRequiredFields, error.MissingSubscriptionId => "INVALID_MESSAGE_FORMAT",
-            error.SubscriptionNotFound => "SUBSCRIPTION_NOT_FOUND",
-            error.AuthFailed => "AUTH_FAILED",
-            error.TokenExpired => "TOKEN_EXPIRED",
-            error.PermissionDenied => "PERMISSION_DENIED",
-            error.NamespaceUnauthorized => "NAMESPACE_UNAUTHORIZED",
-            error.MaxDepthExceeded => "MESSAGE_TOO_LARGE",
-            error.RateLimited => "RATE_LIMITED",
-            error.HookServerUnavailable => "HOOK_SERVER_UNAVAILABLE",
-            error.HookDenied => "HOOK_DENIED",
-            else => "INTERNAL_ERROR",
+            error.UnknownTable => err_code_collection_not_found,
+            error.UnknownField => err_code_field_not_found,
+            error.ImmutableField => err_code_immutable_field,
+            error.TypeMismatch, error.ConstraintViolation => err_code_schema_validation_failed,
+            error.InvalidArrayElement => err_code_invalid_array_element,
+            error.InvalidFieldName => err_code_invalid_field_name,
+            error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => err_code_invalid_message,
+            error.MissingRequiredFields, error.MissingSubscriptionId => err_code_invalid_message_format,
+            error.SubscriptionNotFound => err_code_subscription_not_found,
+            error.AuthFailed => err_code_auth_failed,
+            error.TokenExpired => err_code_token_expired,
+            error.PermissionDenied => err_code_permission_denied,
+            error.NamespaceUnauthorized => err_code_namespace_unauthorized,
+            error.MaxDepthExceeded => err_code_message_too_large,
+            error.RateLimited => err_code_rate_limited,
+            error.HookServerUnavailable => err_code_hook_server_unavailable,
+            error.HookDenied => err_code_hook_denied,
+            else => err_code_internal_error,
         };
     }
 
     fn mapErrorToMessage(err: anyerror) []const u8 {
         return switch (err) {
-            error.UnknownTable => "Collection missing in schema",
-            error.UnknownField => "Field missing in schema",
-            error.ImmutableField => "Attempted to modify a system-protected field",
-            error.TypeMismatch => "Field type mismatch",
-            error.ConstraintViolation => "Schema constraint violation",
-            error.InvalidArrayElement => "Array field contains non-literal value",
-            error.InvalidFieldName => "Field name contains forbidden characters",
-            error.InvalidMessageFormat => "Malformed MessagePack frame",
-            error.InvalidPayload => "Invalid payload structure",
-            error.InvalidConditionFormat => "Invalid query filter format",
-            error.InvalidOperatorCode => "Unknown query operator",
-            error.InvalidSortFormat => "Malformed sort parameters",
-            error.InvalidSubscriptionId => "Invalid subscription ID format",
-            error.MissingRequiredFields => "Request missing required fields",
-            error.MissingSubscriptionId => "Request missing subscription ID",
-            error.SubscriptionNotFound => "Subscription not found",
-            error.AuthFailed => "Identity verification failed",
-            error.TokenExpired => "Session has expired",
-            error.PermissionDenied => "Rule blocked operation",
-            error.NamespaceUnauthorized => "No access to namespace",
-            error.MaxDepthExceeded => "Payload too big",
-            error.RateLimited => "Threshold exceeded",
-            error.HookServerUnavailable => "Logic runtime down",
-            error.HookDenied => "Logic rejected write",
-            else => "Zig core failure",
+            error.UnknownTable => err_msg_collection_not_found,
+            error.UnknownField => err_msg_field_not_found,
+            error.ImmutableField => err_msg_immutable_field,
+            error.TypeMismatch => err_msg_field_type_mismatch,
+            error.ConstraintViolation => err_msg_schema_constraint_violation,
+            error.InvalidArrayElement => err_msg_invalid_array_element,
+            error.InvalidFieldName => err_msg_invalid_field_name,
+            error.InvalidMessageFormat => err_msg_malformed_frame,
+            error.InvalidPayload => err_msg_invalid_payload,
+            error.InvalidConditionFormat => err_msg_invalid_query_filter,
+            error.InvalidOperatorCode => err_msg_unknown_operator,
+            error.InvalidSortFormat => err_msg_malformed_sort,
+            error.InvalidSubscriptionId => err_msg_invalid_sub_id_format,
+            error.MissingRequiredFields => err_msg_missing_required_fields,
+            error.MissingSubscriptionId => err_msg_missing_sub_id,
+            error.SubscriptionNotFound => err_msg_subscription_not_found,
+            error.AuthFailed => err_msg_auth_failed,
+            error.TokenExpired => err_msg_token_expired,
+            error.PermissionDenied => err_msg_permission_denied,
+            error.NamespaceUnauthorized => err_msg_namespace_unauthorized,
+            error.MaxDepthExceeded => err_msg_payload_too_big,
+            error.RateLimited => err_msg_threshold_exceeded,
+            error.HookServerUnavailable => err_msg_logic_runtime_down,
+            error.HookDenied => err_msg_logic_rejected_write,
+            else => err_msg_zig_core_failure,
         };
     }
 
