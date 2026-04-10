@@ -211,7 +211,8 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
             const code = mapErrorToCode(err);
-            return try buildErrorResponse(allocator, msg_info.id, code, "Request failed");
+            const message = mapErrorToMessage(err);
+            return try buildErrorResponse(allocator, msg_info.id, code, message);
         };
     }
 
@@ -501,6 +502,35 @@ pub const MessageHandler = struct {
             error.HookServerUnavailable => "HOOK_SERVER_UNAVAILABLE",
             error.HookDenied => "HOOK_DENIED",
             else => "INTERNAL_ERROR",
+        };
+    }
+
+    fn mapErrorToMessage(err: anyerror) []const u8 {
+        return switch (err) {
+            error.UnknownTable => "Collection missing in schema",
+            error.UnknownField => "Field missing in schema",
+            error.TypeMismatch => "Field type mismatch",
+            error.ConstraintViolation => "Schema constraint violation",
+            error.InvalidArrayElement => "Array field contains non-literal value",
+            error.InvalidFieldName => "Field name contains forbidden characters",
+            error.InvalidMessageFormat => "Malformed MessagePack frame",
+            error.InvalidPayload => "Invalid payload structure",
+            error.InvalidConditionFormat => "Invalid query filter format",
+            error.InvalidOperatorCode => "Unknown query operator",
+            error.InvalidSortFormat => "Malformed sort parameters",
+            error.InvalidSubscriptionId => "Invalid subscription ID format",
+            error.MissingRequiredFields => "Request missing required fields",
+            error.MissingSubscriptionId => "Request missing subscription ID",
+            error.SubscriptionNotFound => "Subscription not found",
+            error.AuthFailed => "Identity verification failed",
+            error.TokenExpired => "Session has expired",
+            error.PermissionDenied => "Rule blocked operation",
+            error.NamespaceUnauthorized => "No access to namespace",
+            error.MaxDepthExceeded => "Payload too big",
+            error.RateLimited => "Threshold exceeded",
+            error.HookServerUnavailable => "Logic runtime down",
+            error.HookDenied => "Logic rejected write",
+            else => "Zig core failure",
         };
     }
 

@@ -98,6 +98,13 @@ pub const AppTestContext = struct {
         try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
+    pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
+        // SAFETY: sm is immediately initialized by sm.init() before use.
+        var sm: SchemaManager = undefined;
+        try sm.init(allocator, json);
+        try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
+    }
+
     pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: SchemaManager, options: StorageEngine.Options) !void {
         self.allocator = allocator;
         self.schema_manager = sm;

@@ -40,7 +40,15 @@ pub const StoreService = struct {
             // Full document replacement
             if (value != .map) return error.InvalidPayload;
 
-            // Validate schema and constraints
+            // Validate schema and construct columns in a single pass
+            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+            defer {
+                for (columns.items) |col| {
+                    self.allocator.free(col.name);
+                }
+                columns.deinit(self.allocator);
+            }
+
             var it = value.map.iterator();
             while (it.next()) |entry| {
                 if (entry.key_ptr.* != .str) continue;
@@ -53,6 +61,10 @@ pub const StoreService = struct {
                             else => |e| return e,
                         };
                     }
+                    try columns.append(self.allocator, .{
+                        .name = try self.allocator.dupe(u8, fn_inner),
+                        .value = entry.value_ptr.*,
+                    });
                 } else {
                     // Skip built-ins, reject others
                     if (!std.mem.eql(u8, fn_inner, "id") and
@@ -63,24 +75,6 @@ pub const StoreService = struct {
                         return StorageError.UnknownField;
                     }
                 }
-            }
-
-            // Construct ColumnValues
-            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
-            defer {
-                for (columns.items) |col| {
-                    self.allocator.free(col.name);
-                }
-                columns.deinit(self.allocator);
-            }
-
-            var it2 = value.map.iterator();
-            while (it2.next()) |entry| {
-                if (entry.key_ptr.* != .str) continue;
-                try columns.append(self.allocator, .{
-                    .name = try self.allocator.dupe(u8, entry.key_ptr.*.str.value()),
-                    .value = entry.value_ptr.*,
-                });
             }
 
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);

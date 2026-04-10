@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const storage_mod = @import("storage_engine.zig");
-const helpers = @import("message_handler_test_helpers.zig");
+const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
