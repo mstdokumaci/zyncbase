@@ -101,7 +101,7 @@ pub const StoreService = struct {
     }
 
     /// Remove a value at a path.
-    /// Handles document deletion (path len 2) and setting a field to nil (path len 3).
+    /// Handles document deletion (path len 2). Field-level removal is not supported (use set to null).
     pub fn remove(
         self: *StoreService,
         table: []const u8,
@@ -110,14 +110,11 @@ pub const StoreService = struct {
         segments_len: usize,
         field_name: ?[]const u8,
     ) !void {
-        // Validation check for table existence
+        _ = field_name;
         _ = self.schema_manager.getTable(table) orelse return StorageError.UnknownTable;
 
         if (segments_len == 2) {
             try self.storage_engine.deleteDocument(table, doc_id, namespace);
-        } else if (segments_len == 3) {
-            const fn_inner = field_name orelse return StorageError.InvalidPath;
-            try self.storage_engine.updateField(table, doc_id, namespace, fn_inner, .nil);
         } else {
             return StorageError.InvalidPath;
         }

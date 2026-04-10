@@ -94,15 +94,6 @@ pub fn createStoreSetMessage(
     return createMessage(allocator, id, "StoreSet", namespace, path, value);
 }
 
-pub fn createStoreRemoveMessage(
-    allocator: std.mem.Allocator,
-    id: u64,
-    namespace: []const u8,
-    path: []const []const u8,
-) ![]u8 {
-    return createMessage(allocator, id, "StoreRemove", namespace, path, null);
-}
-
 pub fn createStoreQueryMessage(
     allocator: std.mem.Allocator,
     id: u64,
