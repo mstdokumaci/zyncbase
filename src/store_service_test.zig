@@ -344,3 +344,114 @@ test "StoreService: persistence and namespace isolation" {
         try testing.expectEqualStrings("updated", stored_val.str.value());
     }
 }
+
+test "StoreService: query - basic search" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-basic", &.{
+        .{ .name = "users", .fields = &.{"name"} },
+    });
+    defer app.deinit();
+
+    // Seed data
+    const val_1 = try msgpack.Payload.strToPayload("Alice", allocator);
+    defer val_1.free(allocator);
+    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_1 }};
+    try app.storage_engine.insertOrReplace("users", "user-1", "ns", &cols_1);
+
+    const val_2 = try msgpack.Payload.strToPayload("Bob", allocator);
+    defer val_2.free(allocator);
+    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_2 }};
+    try app.storage_engine.insertOrReplace("users", "user-2", "ns", &cols_2);
+    try app.storage_engine.flushPendingWrites();
+
+    // Build filter: { "conditions": [ ["id", 0, "user-1"] ] }
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+    cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+    cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
+    cond_arr[2] = try msgpack.Payload.strToPayload("user-1", allocator);
+    conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+    var results = try app.store_service.query(allocator, "users", "ns", filter_map);
+    defer results.deinit();
+
+    const results_p = results.value orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), results_p.arr.len);
+    const doc = results_p.arr[0];
+    const name_val = (try doc.mapGet("name")) orelse return error.TestExpectedValue;
+    try testing.expectEqualStrings("Alice", name_val.str.value());
+}
+
+test "StoreService: query - orderBy and limit" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-sort", &.{
+        .{ .name = "tasks", .fields = &.{"title"} },
+    });
+    defer app.deinit();
+
+    const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
+    for (tasks, 0..) |t, i| {
+        const title = try msgpack.Payload.strToPayload(t, allocator);
+        defer title.free(allocator);
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = title }};
+        const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
+        defer allocator.free(id);
+        try app.storage_engine.insertOrReplace("tasks", id, "ns", &cols);
+    }
+    try app.storage_engine.flushPendingWrites();
+
+    // Filter: orderBy created_at DESC, limit 2
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var order_tuple = try allocator.alloc(msgpack.Payload, 2);
+    order_tuple[0] = try msgpack.Payload.strToPayload("created_at", allocator);
+    order_tuple[1] = msgpack.Payload.uintToPayload(1); // DESC
+    try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
+    try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(2));
+
+    var results = try app.store_service.query(allocator, "tasks", "ns", filter_map);
+    defer results.deinit();
+
+    const results_p = results.value orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), results_p.arr.len);
+    try testing.expect(results.next_cursor_arr != null);
+}
+
+test "StoreService: query - negative cases" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-neg", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    // 1. Unknown collection
+    {
+        const err = app.store_service.query(allocator, "nonexistent", "ns", filter_map);
+        try testing.expectError(StorageError.UnknownTable, err);
+    }
+
+    // 2. Unknown field
+    {
+        var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+        var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+        cond_arr[0] = try msgpack.Payload.strToPayload("ghost_field", allocator);
+        cond_arr[1] = msgpack.Payload.uintToPayload(0);
+        cond_arr[2] = try msgpack.Payload.strToPayload("val", allocator);
+        conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+        try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+        const err = app.store_service.query(allocator, "data", "ns", filter_map);
+        try testing.expectError(StorageError.UnknownField, err);
+    }
+}

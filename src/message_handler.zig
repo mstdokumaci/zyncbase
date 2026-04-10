@@ -624,10 +624,7 @@ pub const MessageHandler = struct {
         const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
         const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, collection, payload);
-        defer filter.deinit(arena_allocator);
-
-        var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
+        var results = try self.store_service.query(arena_allocator, collection, namespace, payload);
         defer results.deinit();
 
         return self.buildQueryResponse(arena_allocator, msg_id, null, &results);

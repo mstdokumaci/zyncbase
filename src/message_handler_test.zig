@@ -10,7 +10,6 @@ const parseResponse = helpers.parseResponse;
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
-const storage_mod = @import("storage_engine.zig");
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
@@ -463,58 +462,6 @@ test "MessageHandler: StoreQuery field extraction" {
     const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     try testing.expect(response.len > 0);
-}
-
-test "MessageHandler: StoreQuery engine integration" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "mh-query-integration", &.{
-        .{ .name = "test", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "normal");
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-
-    const val_payload = try msgpack_utils.Payload.strToPayload("value1", allocator);
-    defer val_payload.free(allocator);
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
-    try app.storage_engine.insertOrReplace("test", "key1", "test", &cols);
-    try app.storage_engine.flushPendingWrites();
-
-    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
-    defer filter_map.free(allocator);
-    var conds_arr = try allocator.alloc(msgpack_utils.Payload, 1);
-    var cond_arr = try allocator.alloc(msgpack_utils.Payload, 3);
-    cond_arr[0] = try msgpack_utils.Payload.strToPayload("id", allocator);
-    cond_arr[1] = msgpack_utils.Payload.uintToPayload(0); // eq
-    cond_arr[2] = try msgpack_utils.Payload.strToPayload("key1", allocator);
-    conds_arr[0] = msgpack_utils.Payload{ .arr = cond_arr };
-    try filter_map.mapPut("conditions", msgpack_utils.Payload{ .arr = conds_arr });
-
-    const message = try msgpack_helpers.createStoreQueryMessage(allocator, 1, "test", "test", filter_map);
-    defer allocator.free(message);
-    var reader: std.Io.Reader = .fixed(message);
-    const parsed = try msgpack_utils.decode(allocator, &reader);
-    defer parsed.free(allocator);
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
-    defer allocator.free(response);
-
-    var reader_resp: std.Io.Reader = .fixed(response);
-    const resp_parsed = try msgpack_utils.decode(allocator, &reader_resp);
-    defer resp_parsed.free(allocator);
-    try testing.expect(resp_parsed == .map);
-
-    const results = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
-    try testing.expect(results == .arr);
-    try testing.expectEqual(@as(usize, 1), results.arr.len);
-    const doc = results.arr[0];
-    const v = msgpack_helpers.getMapValue(doc, "val") orelse return error.TestExpectedError;
-    try testing.expectEqualStrings("value1", v.str.value());
 }
 
 fn buildStoreSetWithFieldPath(
