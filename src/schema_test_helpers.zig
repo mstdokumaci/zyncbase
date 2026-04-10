@@ -8,6 +8,7 @@ const schema_parser = @import("schema_parser.zig");
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
+    types: ?[]const schema_manager.FieldType = null,
 };
 
 pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !schema_manager.Schema {
@@ -23,7 +24,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         for (td.fields, 0..) |fn_name, j| {
             fields[j] = .{
                 .name = try allocator.dupe(u8, fn_name),
-                .sql_type = .text,
+                .sql_type = if (td.types) |ts| ts[j] else .text,
                 .required = false,
                 .indexed = false,
                 .references = null,

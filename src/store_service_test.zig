@@ -8,21 +8,13 @@ const StorageError = storage_mod.StorageError;
 test "StoreService: set - full document replacement" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
-    const schema_json =
-        \\{
-        \\  "version": "1.0.0",
-        \\  "store": {
-        \\    "users": {
-        \\      "fields": {
-        \\        "name": { "type": "string" },
-        \\        "age": { "type": "integer" },
-        \\        "tags": { "type": "array" }
-        \\      }
-        \\    }
-        \\  }
-        \\}
-    ;
-    try app.initWithSchemaJSON(allocator, "store-service-test", schema_json);
+    try app.init(allocator, "store-service-test", &.{
+        .{
+            .name = "users",
+            .fields = &.{ "name", "age", "tags" },
+            .types = &.{ .text, .integer, .array },
+        },
+    });
     defer app.deinit();
 
     const service = &app.store_service;
@@ -102,20 +94,13 @@ test "StoreService: set - full document replacement" {
 test "StoreService: set - field level update" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
-    const schema_json =
-        \\{
-        \\  "version": "1.0.0",
-        \\  "store": {
-        \\    "items": {
-        \\      "fields": {
-        \\        "status": { "type": "string" },
-        \\        "meta": { "type": "boolean" }
-        \\      }
-        \\    }
-        \\  }
-        \\}
-    ;
-    try app.initWithSchemaJSON(allocator, "store-service-test-field", schema_json);
+    try app.init(allocator, "store-service-test-field", &.{
+        .{
+            .name = "items",
+            .fields = &.{ "status", "meta" },
+            .types = &.{ .text, .boolean },
+        },
+    });
     defer app.deinit();
 
     const service = &app.store_service;
@@ -160,20 +145,13 @@ test "StoreService: set - field level update" {
 test "StoreService: remove" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
-    const schema_json =
-        \\{
-        \\  "version": "1.0.0",
-        \\  "store": {
-        \\    "users": {
-        \\      "fields": {
-        \\        "name": { "type": "string" },
-        \\        "age": { "type": "integer" }
-        \\      }
-        \\    }
-        \\  }
-        \\}
-    ;
-    try app.initWithSchemaJSON(allocator, "store-service-test-remove", schema_json);
+    try app.init(allocator, "store-service-test-remove", &.{
+        .{
+            .name = "users",
+            .fields = &.{ "name", "age" },
+            .types = &.{ .text, .integer },
+        },
+    });
     defer app.deinit();
 
     const service = &app.store_service;
@@ -224,19 +202,13 @@ test "StoreService: array validation" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
 
-    const schema_json =
-        \\{
-        \\  "version": "1.0.0",
-        \\  "store": {
-        \\    "collections": {
-        \\      "fields": {
-        \\        "tags": { "type": "array" }
-        \\      }
-        \\    }
-        \\  }
-        \\}
-    ;
-    try app.initWithSchemaJSON(allocator, "store-service-array", schema_json);
+    try app.init(allocator, "store-service-array", &.{
+        .{
+            .name = "collections",
+            .fields = &.{"tags"},
+            .types = &.{.array},
+        },
+    });
     defer app.deinit();
 
     const service = &app.store_service;
