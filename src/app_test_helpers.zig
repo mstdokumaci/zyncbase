@@ -13,6 +13,8 @@ const SchemaManager = schema_manager.SchemaManager;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
+const msgpack_utils = @import("msgpack_utils.zig");
+const StoreService = @import("store_service.zig").StoreService;
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -31,8 +33,27 @@ pub fn createMockWebSocket() WebSocket {
 pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, msg_info: MessageHandler.MessageInfo, parsed: msgpack.Payload) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const result = try handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
+    const arena_allocator = arena.allocator();
+
+    const result = try handler.routeRequest(arena_allocator, conn, msg_info, parsed);
+
     return try allocator.dupe(u8, result);
+}
+
+/// Parse a response and extract the "type" and "code" fields.
+/// Caller is responsible for freeing the fields in the returned struct.
+pub fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct { resp_type: []const u8, code: ?[]const u8 } {
+    var reader: std.Io.Reader = .fixed(response);
+    const parsed = try msgpack_utils.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const resp_type_val = msgpack.getMapValue(parsed, "type") orelse return error.MissingType;
+    const resp_code_val = msgpack.getMapValue(parsed, "code");
+
+    return .{
+        .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),
+        .code = if (resp_code_val) |v| try allocator.dupe(u8, v.str.value()) else null,
+    };
 }
 
 /// Unified context for integration and property tests.
@@ -43,6 +64,7 @@ pub const AppTestContext = struct {
     violation_tracker: ViolationTracker,
     storage_engine: StorageEngine,
     subscription_engine: SubscriptionEngine,
+    store_service: StoreService,
     handler: MessageHandler,
     manager: ConnectionManager,
     schema_manager: SchemaManager,
@@ -76,6 +98,13 @@ pub const AppTestContext = struct {
         try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
+    pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
+        // SAFETY: sm is immediately initialized by sm.init() before use.
+        var sm: SchemaManager = undefined;
+        try sm.init(allocator, json);
+        try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
+    }
+
     pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: SchemaManager, options: StorageEngine.Options) !void {
         self.allocator = allocator;
         self.schema_manager = sm;
@@ -101,8 +130,11 @@ pub const AppTestContext = struct {
         self.subscription_engine = SubscriptionEngine.init(allocator);
         errdefer self.subscription_engine.deinit();
 
-        // 6. Initialize Handler and Manager
-        try self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.storage_engine, &self.subscription_engine, &self.schema_manager, .{});
+        // 6 Initialize Store Service
+        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager);
+
+        // 7. Initialize Handler and Manager
+        try self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.storage_engine, &self.store_service, &self.subscription_engine, &self.schema_manager, .{});
         errdefer self.handler.deinit();
 
         // 8. Initialize Connection Manager
@@ -120,6 +152,7 @@ pub const AppTestContext = struct {
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
+        self.store_service.deinit();
 
         // 5. Cleanup remaining infrastructure
         self.schema_manager.deinit();

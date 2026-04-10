@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const storage_mod = @import("storage_engine.zig");
-const helpers = @import("message_handler_test_helpers.zig");
+const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
@@ -397,8 +397,15 @@ test "Verification: Error handling for invalid messages" {
         const conn = try app.manager.acquireConnection(ws.getConnId());
         defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
 
-        const result = routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
-        try testing.expectError(error.UnknownMessageType, result);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        try testing.expectEqualStrings("INTERNAL_ERROR", res_parsed.code.?);
     }
 }
 

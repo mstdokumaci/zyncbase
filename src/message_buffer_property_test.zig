@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const message_helpers = @import("message_handler_test_helpers.zig");
-const AppTestContext = message_helpers.AppTestContext;
-const createMockWebSocket = message_helpers.createMockWebSocket;
-const routeWithArena = message_helpers.routeWithArena;
+const helpers = @import("app_test_helpers.zig");
+const AppTestContext = helpers.AppTestContext;
+const createMockWebSocket = helpers.createMockWebSocket;
+const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 
 test "buffer: message deallocation after processing" {

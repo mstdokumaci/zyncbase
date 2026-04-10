@@ -33,12 +33,18 @@ pub const StorageError = error{
     UnknownTable,
     /// Field not found in table schema
     UnknownField,
+    /// Attempted to modify a protected/immutable system field
+    ImmutableField,
     /// NOT NULL column received null value
     NullNotAllowed,
     /// Write blocked because migration is in progress
     MigrationInProgress,
     /// Field value type does not match schema
     TypeMismatch,
+    /// Array field contains non-literal elements (maps, nested arrays)
+    InvalidArrayElement,
+    /// The provided data path is invalid (too short, too long, or malformed)
+    InvalidPath,
     /// Data directory is invalid or empty
     InvalidDataDir,
     /// Path is not a directory

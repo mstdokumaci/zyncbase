@@ -9,7 +9,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const helpers = @import("message_handler_test_helpers.zig");
+const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const schema_helpers = @import("schema_test_helpers.zig");
@@ -17,6 +17,7 @@ const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTra
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const StoreService = @import("store_service.zig").StoreService;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -347,12 +348,16 @@ test "logging: level filtering" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
+        var store_service = StoreService.init(allocator, &storage_engine, &sm2);
+        defer store_service.deinit();
+
         var handler: MessageHandler = undefined;
         try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
             &storage_engine,
+            &store_service,
             &subscription_engine,
             &sm2,
             .{},
@@ -428,12 +433,16 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
+        var store_service = StoreService.init(allocator, &storage_engine, &sm3);
+        defer store_service.deinit();
+
         var handler: MessageHandler = undefined;
         try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
             &storage_engine,
+            &store_service,
             &subscription_engine,
             &sm3,
             .{},
@@ -493,12 +502,16 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
+        var store_service = StoreService.init(allocator, &storage_engine, &sm4);
+        defer store_service.deinit();
+
         var handler: MessageHandler = undefined;
         try handler.init(
             allocator,
             &memory_strategy,
             &tracker,
             &storage_engine,
+            &store_service,
             &subscription_engine,
             &sm4,
             .{},

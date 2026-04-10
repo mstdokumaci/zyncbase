@@ -18,6 +18,7 @@ const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
+const StoreService = @import("store_service.zig").StoreService;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Global server reference for signal handlers
@@ -36,6 +37,7 @@ pub const ZyncBaseServer = struct {
     notification_dispatcher: NotificationDispatcher,
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
+    store_service: StoreService,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema_manager: SchemaManager,
@@ -195,11 +197,18 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.websocket_server.deinit();
 
+        self.store_service = StoreService.init(
+            self.memory_strategy.generalAllocator(),
+            &self.storage_engine,
+            &self.schema_manager,
+        );
+
         try self.message_handler.init(
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.violation_tracker,
             &self.storage_engine,
+            &self.store_service,
             &self.subscription_engine,
             &self.schema_manager,
             config.security,
@@ -339,6 +348,9 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Deinitializing message_handler", .{});
         self.message_handler.deinit();
+
+        std.log.debug("Deinitializing store_service", .{});
+        self.store_service.deinit();
 
         std.log.debug("Deinitializing notification_dispatcher", .{});
         self.notification_dispatcher.deinit();

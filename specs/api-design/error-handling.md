@@ -24,12 +24,10 @@ All errors surfaced to SDK consumers use a consistent typed object:
 ```typescript
 interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
-  category: string;                      // Functional category for grouping
   retryable: boolean;                    // Whether the SDK can/will auto-retry
   retryAfter?: number;                   // ms to wait before retry (server-provided)
   requestId?: number;                    // ID of the failed request
   path?: string[];                       // Affected data path, if applicable
-  details?: Record<string, string[]>;    // Field-level validation errors
 }
 ```
 
@@ -103,6 +101,7 @@ Error codes relevant to SDK consumers, grouped by category:
 |------|-------------|-------------|
 | `SCHEMA_VALIDATION_FAILED` | Data does not match schema definition | No — fix data |
 | `FIELD_NOT_FOUND` | Field name not defined in schema | No — fix path or data |
+| `IMMUTABLE_FIELD` | Attempted to modify a protected system field (e.g., `id`) | No |
 | `INVALID_FIELD_NAME` | Field name contains forbidden `__` sequence | No |
 | `INVALID_ARRAY_ELEMENT` | Array contains non-literal value (e.g., nested object) | No — fix data |
 | `INVALID_MESSAGE` | Malformed message or missing `type` field | No |

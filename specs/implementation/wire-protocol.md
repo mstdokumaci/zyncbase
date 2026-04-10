@@ -637,10 +637,8 @@ All errors follow a consistent envelope:
   "type":       "error",
   "id":         2,                          // Echoed request ID (if responding to a request)
   "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
-  "category":   "validation",               // Functional category (see ERROR_TAXONOMY.md)
   "message":    "Field 'priority' must be an integer, got string.",
-  "retryAfter": 5000,                       // (Optional) ms to wait before retry
-  "details":    { "priority": ["must be integer"] } // (Optional) field-level error context
+  "retryAfter": 5000                        // (Optional) ms to wait before retry
 }
 ```
 
