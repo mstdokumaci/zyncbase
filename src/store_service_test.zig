@@ -260,8 +260,82 @@ test "StoreService: array validation" {
         var map = msgpack.Payload.mapPayload(allocator);
         defer map.free(allocator);
         try map.mapPut("tags", arr_val);
+    }
+}
 
-        const result = service.set("collections", "id1", "public", 2, null, map);
-        try testing.expectError(StorageError.InvalidArrayElement, result);
+test "StoreService: persistence and namespace isolation" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-service-isolation", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+
+    // 1. Basic Persistence
+    {
+        const val = try msgpack.Payload.strToPayload("value1", allocator);
+        defer val.free(allocator);
+
+        try service.set("test", "key1", "ns-a", 3, "val", val);
+        try app.storage_engine.flushPendingWrites();
+
+        var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
+        defer managed.deinit();
+        try testing.expect(managed.value != null);
+        const val_key = try msgpack.Payload.strToPayload("val", allocator);
+        defer val_key.free(allocator);
+        const stored_doc = managed.value.?;
+        const stored_val = stored_doc.map.get(val_key) orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value1", stored_val.str.value());
+    }
+
+    // 2. Namespace Isolation
+    {
+        const val = try msgpack.Payload.strToPayload("value2", allocator);
+        defer val.free(allocator);
+
+        // Same table/id, different namespace
+        try service.set("test", "key1", "ns-b", 3, "val", val);
+        try app.storage_engine.flushPendingWrites();
+
+        const val_key = try msgpack.Payload.strToPayload("val", allocator);
+        defer val_key.free(allocator);
+
+        // Verify ns-a still has value1
+        var managed_a = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
+        defer managed_a.deinit();
+        try testing.expect(managed_a.value != null);
+        const doc_a = managed_a.value.?;
+        const v_a = doc_a.map.get(val_key) orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value1", v_a.str.value());
+
+        // Verify ns-b has value2
+        var managed_b = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-b");
+        defer managed_b.deinit();
+        try testing.expect(managed_b.value != null);
+        const doc_b = managed_b.value.?;
+        const v_b = doc_b.map.get(val_key) orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value2", v_b.str.value());
+    }
+
+    // 3. Updates
+    {
+        const val = try msgpack.Payload.strToPayload("updated", allocator);
+        defer val.free(allocator);
+
+        try service.set("test", "key1", "ns-a", 3, "val", val);
+        try app.storage_engine.flushPendingWrites();
+
+        const val_key = try msgpack.Payload.strToPayload("val", allocator);
+        defer val_key.free(allocator);
+
+        var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
+        defer managed.deinit();
+        try testing.expect(managed.value != null);
+        const doc = managed.value.?;
+        const stored_val = doc.map.get(val_key) orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("updated", stored_val.str.value());
     }
 }

@@ -10,6 +10,7 @@ const parseResponse = helpers.parseResponse;
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
+const storage_mod = @import("storage_engine.zig");
 
 test "Connection - init and deinit" {
     const allocator = testing.allocator;
@@ -310,6 +311,210 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const abc = msgpack_helpers.getMapValue(doc, "a__b__c") orelse return error.ValueMismatch;
         try testing.expectEqualStrings("value", abc.str.value());
     }
+}
+
+test "MessageHandler: StoreSet field extraction" {
+    const allocator = testing.allocator;
+
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-set-extraction", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "normal");
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    // Test 1: Basic StoreSet message field extraction
+    {
+        const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "id1" }, "test_value");
+        defer allocator.free(message);
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        try testing.expect(response.len > 0);
+    }
+    // Test 2: StoreSet with various field values
+    {
+        const test_cases = [_]struct {
+            namespace: []const u8,
+            path: []const []const u8,
+            value: []const u8,
+        }{
+            .{ .namespace = "ns1", .path = &.{ "test", "p1" }, .value = "v1" },
+            .{ .namespace = "namespace_with_underscores", .path = &.{ "test", "long" }, .value = "complex value" },
+            .{ .namespace = "a", .path = &.{ "test", "id2" }, .value = "" },
+            .{ .namespace = "test", .path = &.{ "test", "key" }, .value = "value with spaces" },
+        };
+        for (test_cases, 0..) |tc, i| {
+            const message = try msgpack_helpers.createStoreSetMessage(allocator, @intCast(i), tc.namespace, tc.path, tc.value);
+            defer allocator.free(message);
+            var reader: std.Io.Reader = .fixed(message);
+            const parsed = try msgpack_utils.decode(allocator, &reader);
+            defer parsed.free(allocator);
+            const msg_info = try app.handler.extractMessageInfo(parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            defer allocator.free(response);
+            try testing.expect(response.len > 0);
+        }
+    }
+    // Test 3: StoreSet missing namespace should fail
+    {
+        var buf = std.ArrayListUnmanaged(u8).empty;
+        defer buf.deinit(allocator);
+        const writer = buf.writer(allocator);
+        try buf.append(allocator, 0x84);
+        try msgpack_helpers.writeMsgPackStr(writer, "type");
+        try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
+        try msgpack_helpers.writeMsgPackStr(writer, "id");
+        try buf.append(allocator, 0x01);
+        try msgpack_helpers.writeMsgPackStr(writer, "path");
+        try buf.append(allocator, 0x92);
+        try msgpack_helpers.writeMsgPackStr(writer, "test");
+        try msgpack_helpers.writeMsgPackStr(writer, "id1");
+        try msgpack_helpers.writeMsgPackStr(writer, "value");
+        try msgpack_helpers.writeMsgPackStr(writer, "val");
+        const message = buf.items;
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = try msgpack_utils.decode(allocator, &reader);
+        defer parsed.free(allocator);
+        const msg_info = try app.handler.extractMessageInfo(parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        defer allocator.free(response);
+        const res_parsed = try helpers.parseResponse(allocator, response);
+        defer {
+            allocator.free(res_parsed.resp_type);
+            if (res_parsed.code) |c| allocator.free(c);
+        }
+        try testing.expectEqualStrings("error", res_parsed.resp_type);
+        try testing.expectEqualStrings("INVALID_MESSAGE_FORMAT", res_parsed.code.?);
+    }
+}
+
+test "MessageHandler: StoreSet success response format" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-set-success", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "normal");
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", &.{ "test", "key" }, "val");
+    defer allocator.free(message);
+    var reader_msg: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack_utils.decode(allocator, &reader_msg);
+    defer parsed.free(allocator);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
+    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    defer allocator.free(response);
+
+    var reader_resp: std.Io.Reader = .fixed(response);
+    const resp_parsed = try msgpack_utils.decode(allocator, &reader_resp);
+    defer resp_parsed.free(allocator);
+    const msg_type = msgpack_helpers.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+    const msg_id = msgpack_helpers.getMapValue(resp_parsed, "id") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("ok", msg_type.str.value());
+    try testing.expectEqual(@as(u64, 1), msg_id.uint);
+}
+
+test "MessageHandler: StoreQuery field extraction" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-query-extraction", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "normal");
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var conds_arr = try allocator.alloc(msgpack_utils.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack_utils.Payload, 3);
+    cond_arr[0] = try msgpack_utils.Payload.strToPayload("id", allocator);
+    cond_arr[1] = msgpack_utils.Payload.uintToPayload(0); // eq
+    cond_arr[2] = try msgpack_utils.Payload.strToPayload("id1", allocator);
+    conds_arr[0] = msgpack_utils.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack_utils.Payload{ .arr = conds_arr });
+
+    const message = try msgpack_helpers.createStoreQueryMessage(allocator, 1, "test_ns", "test", filter_map);
+    defer allocator.free(message);
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack_utils.decode(allocator, &reader);
+    defer parsed.free(allocator);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
+    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    defer allocator.free(response);
+    try testing.expect(response.len > 0);
+}
+
+test "MessageHandler: StoreQuery engine integration" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-query-integration", &.{
+        .{ .name = "test", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    var ws = createMockWebSocket();
+    try app.manager.onOpen(&ws);
+    defer app.manager.onClose(&ws, 1000, "normal");
+    const conn = try app.manager.acquireConnection(ws.getConnId());
+    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+
+    const val_payload = try msgpack_utils.Payload.strToPayload("value1", allocator);
+    defer val_payload.free(allocator);
+    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+    try app.storage_engine.insertOrReplace("test", "key1", "test", &cols);
+    try app.storage_engine.flushPendingWrites();
+
+    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+    var conds_arr = try allocator.alloc(msgpack_utils.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack_utils.Payload, 3);
+    cond_arr[0] = try msgpack_utils.Payload.strToPayload("id", allocator);
+    cond_arr[1] = msgpack_utils.Payload.uintToPayload(0); // eq
+    cond_arr[2] = try msgpack_utils.Payload.strToPayload("key1", allocator);
+    conds_arr[0] = msgpack_utils.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack_utils.Payload{ .arr = conds_arr });
+
+    const message = try msgpack_helpers.createStoreQueryMessage(allocator, 1, "test", "test", filter_map);
+    defer allocator.free(message);
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack_utils.decode(allocator, &reader);
+    defer parsed.free(allocator);
+    const msg_info = try app.handler.extractMessageInfo(parsed);
+    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    defer allocator.free(response);
+
+    var reader_resp: std.Io.Reader = .fixed(response);
+    const resp_parsed = try msgpack_utils.decode(allocator, &reader_resp);
+    defer resp_parsed.free(allocator);
+    try testing.expect(resp_parsed == .map);
+
+    const results = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+    try testing.expect(results == .arr);
+    try testing.expectEqual(@as(usize, 1), results.arr.len);
+    const doc = results.arr[0];
+    const v = msgpack_helpers.getMapValue(doc, "val") orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("value1", v.str.value());
 }
 
 fn buildStoreSetWithFieldPath(

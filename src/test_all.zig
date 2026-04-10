@@ -37,7 +37,6 @@ test {
     _ = @import("connection_state_property_test.zig");
     _ = @import("storage_engine_property_test.zig");
     _ = @import("server_init_property_test.zig");
-    _ = @import("store_operations_property_test.zig");
     _ = @import("uwebsockets_wrapper_property_test.zig");
     _ = @import("storage_engine_error_property_test.zig");
     _ = @import("logging_property_test.zig");
