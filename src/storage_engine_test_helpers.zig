@@ -17,6 +17,13 @@ pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
 
+fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
+    if (options.in_memory) {
+        return TestContext.initInMemory(allocator);
+    }
+    return TestContext.init(allocator, prefix);
+}
+
 /// EngineTestContext owns all resources for a storage engine test.
 pub const EngineTestContext = struct {
     allocator: Allocator,
@@ -30,8 +37,9 @@ pub const EngineTestContext = struct {
     }
 
     pub fn initWithOptions(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
+        const effective_options = schema_helpers.normalizeTestStorageOptions(options);
         self.allocator = allocator;
-        self.test_context = try TestContext.init(allocator, prefix);
+        self.test_context = try createTestContext(allocator, prefix, effective_options);
         errdefer self.test_context.deinit();
 
         try self.memory_strategy.init(allocator);
@@ -40,7 +48,7 @@ pub const EngineTestContext = struct {
         self.sm = try createSchemaManager(allocator, tables);
         errdefer self.sm.deinit();
 
-        try self.engine.init(allocator, &self.memory_strategy, self.test_context.test_dir, &self.sm, .{}, options, null, null);
+        try self.engine.init(allocator, &self.memory_strategy, self.test_context.test_dir, &self.sm, .{}, effective_options, null, null);
         errdefer self.engine.deinit();
 
         // Synchronously execute DDL for all tables
@@ -189,6 +197,7 @@ pub fn setupEngineMultiTableWithDir(ctx: *EngineTestContext, allocator: Allocato
 }
 
 fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allocator, tc: TestContext, tables: []const Table, options: StorageEngine.Options) !void {
+    const effective_options = schema_helpers.normalizeTestStorageOptions(options);
     ctx.allocator = allocator;
     ctx.test_context = tc;
     errdefer ctx.test_context.deinit();
@@ -199,7 +208,7 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     ctx.sm = try createSchemaManager(allocator, tables);
     errdefer ctx.sm.deinit();
 
-    try ctx.engine.init(allocator, &ctx.memory_strategy, ctx.test_context.test_dir, &ctx.sm, .{}, options, null, null);
+    try ctx.engine.init(allocator, &ctx.memory_strategy, ctx.test_context.test_dir, &ctx.sm, .{}, effective_options, null, null);
     errdefer ctx.engine.deinit();
 
     // Synchronously execute DDL for all tables

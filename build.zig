@@ -67,9 +67,14 @@ pub fn build(b: *std.Build) void {
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
 
     // 1. All Tests (Unified)
-    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
+    const all_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
+
+    const test_slowest_step = b.step("test-slowest", "Run all tests and report the slowest ones");
+    const slow_tests = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, true);
+    const run_slow_tests = b.addRunArtifact(slow_tests);
+    test_slowest_step.dependOn(&run_slow_tests.step);
 
     // 2. Check Step (for ZLS)
     const check_step = b.step("check", "Check if the code compiles");
@@ -87,7 +92,7 @@ pub fn build(b: *std.Build) void {
     linkUWS(b, exe_check, sysroot, sanitize);
     check_step.dependOn(&exe_check.step);
 
-    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot);
+    const test_check = setupTest(b, target, optimize, sqlite_module, msgpack_module, "src/test_all.zig", sanitize, test_filter, sysroot, false);
     check_step.dependOn(&test_check.step);
 }
 
@@ -101,6 +106,7 @@ fn setupTest(
     sanitize: ?[]const u8,
     test_filter: ?[]const u8,
     sysroot: ?[]const u8,
+    use_timed_runner: bool,
 ) *std.Build.Step.Compile {
     const t = b.addTest(.{
         .root_module = b.createModule(.{
@@ -108,6 +114,10 @@ fn setupTest(
             .target = target,
             .optimize = optimize,
         }),
+        .test_runner = if (use_timed_runner)
+            .{ .path = b.path("src/timed_test_runner.zig"), .mode = .simple }
+        else
+            null,
         .filters = if (test_filter) |filter|
             b.allocator.dupe([]const u8, &.{filter}) catch |err| @panic(b.fmt("Failed to dupe test filter: {s}", .{@errorName(err)}))
         else

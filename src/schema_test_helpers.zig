@@ -103,17 +103,35 @@ pub const TestContext = struct {
         };
     }
 
-    pub fn deinit(self: *TestContext) void {
-        std.fs.cwd().deleteTree(self.test_dir) catch |err| {
-            // Log failure to delete test artifacts directory
-            std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
+    pub fn initInMemory(allocator: std.mem.Allocator) !TestContext {
+        return .{
+            .allocator = allocator,
+            .test_dir = try allocator.dupe(u8, ""),
         };
+    }
+
+    pub fn deinit(self: *TestContext) void {
+        if (self.test_dir.len > 0) {
+            std.fs.cwd().deleteTree(self.test_dir) catch |err| {
+                // Log failure to delete test artifacts directory
+                std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
+            };
+        }
         self.allocator.free(self.test_dir);
     }
 };
 
+pub fn normalizeTestStorageOptions(options: StorageEngine.Options) StorageEngine.Options {
+    var effective = options;
+    if (effective.in_memory and effective.reader_pool_size == 0) {
+        effective.reader_pool_size = 1;
+    }
+    return effective;
+}
+
 pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const @import("memory_strategy.zig").MemoryStrategy, context: *const TestContext, sm: *const SchemaManager, options: StorageEngine.Options) !void {
-    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, sm, .{}, options, null, null);
+    const effective_options = normalizeTestStorageOptions(options);
+    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, sm, .{}, effective_options, null, null);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);

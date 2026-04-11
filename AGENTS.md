@@ -47,9 +47,6 @@ High-performance, multi-threaded real-time database built with Zig.
 
 ## Testing
 - **Run All Tests:** `zig build test`
-- **Unit Tests:** `zig build test-unit`
-- **Property-based Tests:** `zig build test-property`
-- **Integration Tests:** `zig build test-integration`
 - **Filter Tests:** `zig build test -Doptimize=Debug -Dtest-filter="test_name"`
 - **E2E Tests:** `bun run test:e2e` (Run after every set of zig code changes to ensure that the server-client communication is not broken)
 - **Thread Safety:** `bun run test:tsan` (Run after every set of zig code changes to ensure thread safety is still ensured)

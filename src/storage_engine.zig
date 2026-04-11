@@ -35,6 +35,7 @@ var unique_id_counter = std.atomic.Value(usize).init(0);
 pub const StorageEngine = struct {
     pub const Options = struct {
         in_memory: bool = false,
+        reader_pool_size: usize = 0,
     };
 
     pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
@@ -130,7 +131,11 @@ pub const StorageEngine = struct {
         try connection.configureDatabase(&writer_conn, true);
 
         // Create reader pool (one per CPU core)
-        const num_readers = try std.Thread.getCpuCount();
+        const configured_reader_pool_size = if (options.reader_pool_size == 0)
+            try std.Thread.getCpuCount()
+        else
+            options.reader_pool_size;
+        const num_readers = @max(configured_reader_pool_size, 1);
         const reader_pool = try allocator.alloc(ReaderNode, num_readers);
         errdefer allocator.free(reader_pool);
 

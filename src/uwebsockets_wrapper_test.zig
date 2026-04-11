@@ -5,7 +5,25 @@ const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
-const schema_helpers = @import("schema_test_helpers.zig");
+
+const TestSslPaths = struct {
+    allocator: Allocator,
+    cert_path: []u8,
+    key_path: []u8,
+
+    fn init(allocator: Allocator) !TestSslPaths {
+        return .{
+            .allocator = allocator,
+            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.pem"),
+            .key_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.key"),
+        };
+    }
+
+    fn deinit(self: *TestSslPaths) void {
+        self.allocator.free(self.cert_path);
+        self.allocator.free(self.key_path);
+    }
+};
 
 test "WebSocketServer: init with valid config" {
     const allocator = testing.allocator;
@@ -27,29 +45,15 @@ test "WebSocketServer: init with valid config" {
 
 test "WebSocketServer: init with SSL config" {
     const allocator = testing.allocator;
-
-    // Create a temporary directory for certs
-    var context = try schema_helpers.TestContext.init(allocator, "ssl-init");
-    defer context.deinit();
-    const tmp_dir = context.test_dir;
-
-    const cert_path = try std.fs.path.join(allocator, &.{ tmp_dir, "cert.pem" });
-    defer allocator.free(cert_path);
-    const key_path = try std.fs.path.join(allocator, &.{ tmp_dir, "key.pem" });
-    defer allocator.free(key_path);
-
-    // Generate self-signed cert on the fly
-    const openssl_cmd = [_][]const u8{ "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost" };
-    var child = std.process.Child.init(&openssl_cmd, allocator);
-    const term = try child.spawnAndWait();
-    try testing.expectEqual(@as(std.process.Child.Term, .{ .Exited = 0 }), term);
+    var ssl_paths = try TestSslPaths.init(allocator);
+    defer ssl_paths.deinit();
 
     const config = WebSocketServer.Config{
         .port = 8443,
         .host = "127.0.0.1",
         .ssl = true,
-        .ssl_cert_path = cert_path,
-        .ssl_key_path = key_path,
+        .ssl_cert_path = ssl_paths.cert_path,
+        .ssl_key_path = ssl_paths.key_path,
     };
 
     // SAFETY: Initialized by the following init call
@@ -135,28 +139,14 @@ test "WebSocketServer: full server lifecycle" {
 
 test "WebSocketServer: full server lifecycle with SSL" {
     const allocator = testing.allocator;
-
-    // Create a temporary directory for certs
-    var context = try schema_helpers.TestContext.init(allocator, "ssl-e2e");
-    defer context.deinit();
-    const tmp_dir = context.test_dir;
-
-    const cert_path = try std.fs.path.join(allocator, &.{ tmp_dir, "cert.pem" });
-    defer allocator.free(cert_path);
-    const key_path = try std.fs.path.join(allocator, &.{ tmp_dir, "key.pem" });
-    defer allocator.free(key_path);
-
-    // Generate self-signed cert on the fly
-    const openssl_cmd = [_][]const u8{ "openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", key_path, "-out", cert_path, "-days", "1", "-nodes", "-subj", "/CN=localhost" };
-    var child = std.process.Child.init(&openssl_cmd, allocator);
-    const term = try child.spawnAndWait();
-    try testing.expectEqual(@as(std.process.Child.Term, .{ .Exited = 0 }), term);
+    var ssl_paths = try TestSslPaths.init(allocator);
+    defer ssl_paths.deinit();
 
     const config = WebSocketServer.Config{
         .port = 9006,
         .ssl = true,
-        .ssl_cert_path = cert_path,
-        .ssl_key_path = key_path,
+        .ssl_cert_path = ssl_paths.cert_path,
+        .ssl_key_path = ssl_paths.key_path,
     };
 
     try runFullLifecycleTest(allocator, config, "wss://127.0.0.1:9006/", true);
