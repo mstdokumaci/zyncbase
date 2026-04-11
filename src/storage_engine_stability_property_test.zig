@@ -45,23 +45,18 @@ test "storage: stability no crashes on concurrent errors" {
             const ops = 50;
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
-                // zwanzig-disable-next-line: swallowed-error
                 const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
                 defer t_ctx.allocator.free(key);
                 // Try to set a value
-                // zwanzig-disable-next-line: swallowed-error
                 const val_payload = msgpack.Payload.strToPayload(key, t_ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
                 defer val_payload.free(t_ctx.allocator);
                 const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-                // zwanzig-disable-next-line: swallowed-error
                 t_ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
-                // zwanzig-disable-next-line: swallowed-error
                 var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
                 _ = managed.value;
                 // Try to delete the value
-                // zwanzig-disable-next-line: swallowed-error
                 t_ctx.storage.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
@@ -310,11 +305,9 @@ test "storage: stability concurrent reads during write errors" {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                // zwanzig-disable-next-line: swallowed-error
                 var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed1.deinit();
                 _ = managed1.value;
-                // zwanzig-disable-next-line: swallowed-error
                 var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed2.deinit();
                 _ = managed2.value;
