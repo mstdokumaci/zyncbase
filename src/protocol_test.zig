@@ -262,3 +262,31 @@ test "store_delta_header: decodes to StoreDelta type" {
     const sub_id_val = (try p.mapGet("subId")) orelse return error.MissingSubId;
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
 }
+
+test "encodeDeltaSuffix: with string id" {
+    const allocator = testing.allocator;
+
+    const id_payload = try Payload.strToPayload("doc-abc-123", allocator);
+    defer id_payload.free(allocator);
+
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_payload, false, null);
+    defer allocator.free(suffix);
+
+    // Decode and verify
+    const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
+    defer allocator.free(full_msg);
+    var reader: std.Io.Reader = .fixed(full_msg);
+    const p = try msgpack.decodeTrusted(allocator, &reader);
+    defer p.free(allocator);
+
+    const ops_opt = try p.mapGet("ops");
+    try testing.expect(ops_opt != null);
+    const ops = ops_opt.?;
+    const op_obj = ops.arr[0];
+
+    const path_opt = try op_obj.mapGet("path");
+    try testing.expect(path_opt != null);
+    const path = path_opt.?;
+    try testing.expectEqualStrings("posts", path.arr[0].str.value());
+    try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
+}
