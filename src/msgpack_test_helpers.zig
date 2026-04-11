@@ -111,7 +111,7 @@ pub fn createStoreSetMessageWithPayload(
 
     try writeMsgPackStr(writer, "id");
     try buf.append(allocator, 0xcf); // uint64
-    for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
+    try writer.writeInt(u64, id, .big);
 
     try writeMsgPackStr(writer, "namespace");
     try writeMsgPackStr(writer, namespace);
@@ -186,13 +186,29 @@ pub fn createStoreQueryMessageWithFilterKey(
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
-    try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreQuery", allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload("StoreQuery", allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("type", k_val);
+    }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
-    try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
-    try p.mapPut("filter", try filter.deepClone(allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("namespace", k_val);
+    }
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(collection, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("collection", k_val);
+    }
+    {
+        const k_val = try filter.deepClone(allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("filter", k_val);
+    }
 
-    var list: std.ArrayList(u8) = .{};
+    var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
     try msgpack_utils.encode(p, list.writer(allocator));
     return try list.toOwnedSlice(allocator);
@@ -221,17 +237,31 @@ pub fn createStoreSubscribeMessage(
     defer p.free(allocator);
 
     _ = _subscription_id;
-    try p.mapPut("type", try msgpack_utils.Payload.strToPayload("StoreSubscribe", allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload("StoreSubscribe", allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("type", k_val);
+    }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    try p.mapPut("namespace", try msgpack_utils.Payload.strToPayload(namespace, allocator));
-    try p.mapPut("collection", try msgpack_utils.Payload.strToPayload(collection, allocator));
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("namespace", k_val);
+    }
+    {
+        const k_val = try msgpack_utils.Payload.strToPayload(collection, allocator);
+        errdefer k_val.free(allocator);
+        try p.mapPut("collection", k_val);
+    }
 
     // Flat filter fields
     if (filter == .map) {
         var it = filter.map.iterator();
         while (it.next()) |entry| {
             if (entry.key_ptr.* == .str) {
-                try p.mapPut(entry.key_ptr.*.str.value(), try entry.value_ptr.*.deepClone(allocator));
+                const k_val = try entry.value_ptr.*.deepClone(allocator);
+                errdefer k_val.free(allocator);
+                try p.mapPut(entry.key_ptr.*.str.value(), k_val);
             }
         }
     }
