@@ -231,20 +231,37 @@ test "schema_parser: forbidden double underscore" {
 // For any valid schema JSON, print() SHALL produce a JSON string
 // where no keys or values contain the internal flattening separator "__".
 // The round-trip (parse → print → parse) must also be structurally equivalent.
+
+// Flat fields only
+const case_flat_fields =
+    \\{"version":"1.0.0","store":{"t":{"fields":{"name":{"type":"string"},"age":{"type":"integer"}}}}}
+;
+// Single-level nesting
+const case_single_nesting =
+    \\{"version":"1.0.0","store":{"t":{"fields":{"addr":{"type":"object","fields":{"city":{"type":"string"},"zip":{"type":"string"}}}}}}}
+;
+// Two-level nesting
+const case_two_level_nesting =
+    \\{"version":"1.0.0","store":{"t":{"fields":{"nested":{"type":"object","fields":{"a":{"type":"string"},"b":{"type":"object","fields":{"c":{"type":"integer"}}}}}}}}}
+;
+// Multiple branches at same depth
+const case_multiple_branches =
+    \\{"version":"1.0.0","store":{"t":{"fields":{"x":{"type":"object","fields":{"a":{"type":"string"}}},"y":{"type":"object","fields":{"b":{"type":"integer"}}}}}}}
+;
+// Mixed leaf and nested at same level
+const case_mixed_leaf_nested =
+    \\{"version":"1.0.0","store":{"t":{"fields":{"title":{"type":"string"},"meta":{"type":"object","fields":{"created":{"type":"integer"},"tags":{"type":"array"}}}}}}}
+;
+
 test "schema_parser: print() output is clean of double underscores" {
     const allocator = std.testing.allocator;
 
     const cases = [_][]const u8{
-        // Flat fields only
-        "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}}}}}",
-        // Single-level nesting
-        "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"addr\":{\"type\":\"object\",\"fields\":{\"city\":{\"type\":\"string\"},\"zip\":{\"type\":\"string\"}}}}}}}",
-        // Two-level nesting
-        "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"nested\":{\"type\":\"object\",\"fields\":{\"a\":{\"type\":\"string\"},\"b\":{\"type\":\"object\",\"fields\":{\"c\":{\"type\":\"integer\"}}}}}}}}}",
-        // Multiple branches at same depth
-        "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"x\":{\"type\":\"object\",\"fields\":{\"a\":{\"type\":\"string\"}}},\"y\":{\"type\":\"object\",\"fields\":{\"b\":{\"type\":\"integer\"}}}}}}}",
-        // Mixed leaf and nested at same level
-        "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"title\":{\"type\":\"string\"},\"meta\":{\"type\":\"object\",\"fields\":{\"created\":{\"type\":\"integer\"},\"tags\":{\"type\":\"array\"}}}}}}}",
+        case_flat_fields,
+        case_single_nesting,
+        case_two_level_nesting,
+        case_multiple_branches,
+        case_mixed_leaf_nested,
     };
 
     for (cases) |json| {

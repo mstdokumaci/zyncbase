@@ -35,7 +35,9 @@ test "server: initialization is idempotent" {
 
     try std.fs.cwd().writeFile(.{
         .sub_path = schema_file_path,
-        .data = "{\"version\":\"1.0.0\",\"store\":{\"test\":{\"fields\":{\"val\":{\"type\":\"string\"}}}}}",
+        .data =
+        \\{"version":"1.0.0","store":{"test":{"fields":{"val":{"type":"string"}}}}}
+        ,
     });
 
     // Property: Multiple init/deinit cycles should not leak memory
