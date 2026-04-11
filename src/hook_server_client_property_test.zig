@@ -89,7 +89,7 @@ test "circuit-breaker: transitions to half-open after timeout" {
     try testing.expectEqual(ConnectionState.circuit_open, client.getState());
 
     // Backdate the open timestamp instead of waiting on wall clock time.
-    client.circuit_breaker.opened_at.store(std.time.timestamp() - 2, .release);
+    client.circuit_breaker.opened_at.store(std.time.timestamp() - 3, .release);
 
     // Next request should attempt to connect (half-open state)
     // It will fail because we're not actually connected, but state should change
