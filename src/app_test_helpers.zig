@@ -118,8 +118,11 @@ pub const AppTestContext = struct {
         self.violation_tracker.init(allocator, 10);
         errdefer self.violation_tracker.deinit();
 
-        // 3. Initialize Schema Helpers TestContext (handles directory storage)
-        self.test_context = try schema_helpers.TestContext.init(allocator, prefix);
+        // 3. Initialize Schema Helpers TestContext
+        self.test_context = if (options.in_memory)
+            try schema_helpers.TestContext.initInMemory(allocator)
+        else
+            try schema_helpers.TestContext.init(allocator, prefix);
         errdefer self.test_context.deinit();
 
         // 4. Initialize Storage Engine

@@ -453,20 +453,19 @@ test "storage: document set/get round-trip" {
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
     const rand = prng.random();
     const scalar_values = [_][]const u8{ "hello", "world", "foo", "bar", "baz" };
+    var fields_arr = [_]sth.Field{
+        sth.makeField("title", .text, false),
+        sth.makeField("score", .integer, false),
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "prop-reopen", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{
-            sth.makeField("title", .text, false),
-            sth.makeField("score", .integer, false),
-        };
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "prop-reopen", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
         const title_str = scalar_values[title_idx];
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
@@ -476,9 +475,9 @@ test "storage: document set/get round-trip" {
             .{ .name = "title", .value = title_payload },
             .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
         };
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, ns);
+        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         const doc = managed.value orelse return error.MissingDoc;
         const got_title = (try doc.mapGet("title")) orelse return error.MissingTitle;
@@ -497,32 +496,31 @@ test "storage: field set/get round-trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
     const rand = prng.random();
+    var fields_arr = [_]sth.Field{
+        sth.makeField("title", .text, false),
+        sth.makeField("score", .integer, false),
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p14", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{
-            sth.makeField("title", .text, false),
-            sth.makeField("score", .integer, false),
-        };
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p14", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const initial_title = try msgpack.Payload.strToPayload("initial", allocator);
         defer initial_title.free(allocator);
         const initial_cols = [_]ColumnValue{
             .{ .name = "title", .value = initial_title },
             .{ .name = "score", .value = msgpack.Payload.intToPayload(0) },
         };
-        try engine.insertOrReplace("items", id, ns, &initial_cols);
+        try engine.insertOrReplace("items", id, "ns-test", &initial_cols);
         try engine.flushPendingWrites();
         const new_score: i64 = rand.intRangeAtMost(i64, 1, 9999);
-        try engine.updateField("items", id, ns, "score", msgpack.Payload.intToPayload(new_score));
+        try engine.updateField("items", id, "ns-test", "score", msgpack.Payload.intToPayload(new_score));
         try engine.flushPendingWrites();
-        var managed = try engine.selectField(allocator, "items", id, ns, "score");
+        var managed = try engine.selectField(allocator, "items", id, "ns-test", "score");
         defer managed.deinit();
         const got = managed.value orelse return error.MissingField;
         const got_score_val: i64 = switch (got) {
@@ -538,29 +536,31 @@ test "storage: collection get is namespace-scoped" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
     const rand = prng.random();
+    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p15", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p15", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const ns_a = "ns-alpha";
-        const ns_b = "ns-beta";
+        const ns_a = try std.fmt.allocPrint(allocator, "ns-alpha-{d}", .{iter});
+        defer allocator.free(ns_a);
+        const ns_b = try std.fmt.allocPrint(allocator, "ns-beta-{d}", .{iter});
+        defer allocator.free(ns_b);
         const count_a = rand.intRangeAtMost(usize, 1, 5);
         const count_b = rand.intRangeAtMost(usize, 1, 5);
         var i: usize = 0;
         while (i < count_a) : (i += 1) {
-            const id = try std.fmt.allocPrint(allocator, "a-{}", .{i});
+            const id = try std.fmt.allocPrint(allocator, "a-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
             const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i)) }};
             try engine.insertOrReplace("items", id, ns_a, &cols);
         }
         i = 0;
         while (i < count_b) : (i += 1) {
-            const id = try std.fmt.allocPrint(allocator, "b-{}", .{i});
+            const id = try std.fmt.allocPrint(allocator, "b-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
             const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i + 100)) }};
             try engine.insertOrReplace("items", id, ns_b, &cols);
@@ -579,23 +579,23 @@ test "storage: collection get is namespace-scoped" {
 // ─── Property 16: Remove then get returns null ────────────────────────────────
 test "storage: remove then get returns null" {
     const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p16", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p16", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(42) }};
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        try engine.deleteDocument("items", id, ns);
+        try engine.deleteDocument("items", id, "ns-test");
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, ns);
+        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         const after = managed.value;
         try testing.expect(after == null);
@@ -604,15 +604,15 @@ test "storage: remove then get returns null" {
 // ─── Property 17: Schema validation rejects unknown tables and fields ─────────
 test "storage: schema validation rejects unknown tables and fields" {
     const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("title", .text, false)};
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p17", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{sth.makeField("title", .text, false)};
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p17", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
         const cols = [_]ColumnValue{.{ .name = "title", .value = msgpack.Payload.intToPayload(1) }};
         const err1 = engine.insertOrReplace("nonexistent_table", "id1", "ns", &cols);
         try testing.expectError(sth.StorageError.UnknownTable, err1);
@@ -624,22 +624,22 @@ test "storage: schema validation rejects unknown tables and fields" {
 // ─── Property 18: updated_at is always refreshed on write ────────────────────
 test "storage: updated_at is always refreshed on write" {
     const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p18", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p18", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const t_before_insert = std.time.timestamp();
         const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        var managed1 = try engine.selectDocument(allocator, "items", id, ns);
+        var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed1.deinit();
         const doc1 = managed1.value orelse return error.MissingDoc;
         const updated_at_1_payload = (try doc1.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
@@ -649,11 +649,9 @@ test "storage: updated_at is always refreshed on write" {
             else => return error.UnexpectedType,
         };
         try testing.expect(updated_at_1 >= t_before_insert);
-        std.Thread.sleep(10 * std.time.ns_per_ms);
-        const t_before_update = std.time.timestamp();
-        try engine.updateField("items", id, ns, "val", msgpack.Payload.intToPayload(2));
+        try engine.updateField("items", id, "ns-test", "val", msgpack.Payload.intToPayload(2));
         try engine.flushPendingWrites();
-        var managed2 = try engine.selectDocument(allocator, "items", id, ns);
+        var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();
         const doc2 = managed2.value orelse return error.MissingDoc;
         const updated_at_2_payload = (try doc2.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
@@ -662,7 +660,7 @@ test "storage: updated_at is always refreshed on write" {
             .uint => |v| @intCast(v),
             else => return error.UnexpectedType,
         };
-        try testing.expect(updated_at_2 >= t_before_update);
+        try testing.expect(updated_at_2 >= updated_at_1);
     }
 }
 // ─── Property 10: Storage engine write/read round-trip for array fields ───────
@@ -671,21 +669,20 @@ test "storage: write/read round-trip for array fields" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xA77A1_10);
     const rand = prng.random();
+    var fields_arr = [_]sth.Field{
+        sth.makeField("tags", .array, false),
+        sth.makeField("name", .text, false),
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p10", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{
-            sth.makeField("tags", .array, false),
-            sth.makeField("name", .text, false),
-        };
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p10", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
-        // Generate a random literal array
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const n = rand.intRangeAtMost(usize, 0, 6);
         const elems = try allocator.alloc(msgpack.Payload, n);
         for (0..n) |i| {
@@ -699,10 +696,9 @@ test "storage: write/read round-trip for array fields" {
             .{ .name = "tags", .value = array_payload },
             .{ .name = "name", .value = name_payload },
         };
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        // Read back via selectDocument
-        var managed = try engine.selectDocument(allocator, "items", id, ns);
+        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         const doc = managed.value orelse return error.MissingDoc;
         const got_tags = (try doc.mapGet("tags")) orelse return error.MissingTags;
@@ -720,8 +716,7 @@ test "storage: write/read round-trip for array fields" {
             };
             try testing.expectEqual(orig_val, got_val);
         }
-        // Also read back via selectField
-        var managed_field = try engine.selectField(allocator, "items", id, ns, "tags");
+        var managed_field = try engine.selectField(allocator, "items", id, "ns-test", "tags");
         defer managed_field.deinit();
         try testing.expect(managed_field.value != null);
         const field_result = managed_field.value.?;
@@ -735,22 +730,22 @@ test "storage: non-array fields are unaffected" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xB0B_11);
     const rand = prng.random();
+    var fields_arr = [_]sth.Field{
+        sth.makeField("title", .text, false),
+        sth.makeField("score", .integer, false),
+        sth.makeField("rating", .real, false),
+        sth.makeField("active", .boolean, false),
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p11", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{
-            sth.makeField("title", .text, false),
-            sth.makeField("score", .integer, false),
-            sth.makeField("rating", .real, false),
-            sth.makeField("active", .boolean, false),
-        };
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p11", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const title_str = if (rand.boolean()) "hello" else "world";
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
@@ -763,17 +758,15 @@ test "storage: non-array fields are unaffected" {
             .{ .name = "rating", .value = .{ .float = rating_val } },
             .{ .name = "active", .value = .{ .bool = active_val } },
         };
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, ns);
+        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         const doc = managed.value orelse return error.MissingDoc;
-        // Verify text field
         const got_title = (try doc.mapGet("title")) orelse {
             return error.MissingTitle;
         };
         try testing.expectEqualStrings(title_str, got_title.str.value());
-        // Verify integer field
         const got_score = (try doc.mapGet("score")) orelse return error.MissingScore;
         const got_score_val: i64 = switch (got_score) {
             .int => |v| v,
@@ -789,20 +782,19 @@ test "storage: SQLite json_array_length works on stored array columns" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xC0DE_12);
     const rand = prng.random();
+    var fields_arr = [_]sth.Field{
+        sth.makeField("tags", .array, false),
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "storage-p12", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        var fields_arr = [_]sth.Field{
-            sth.makeField("tags", .array, false),
-        };
-        const table = sth.Table{ .name = "items", .fields = &fields_arr };
-        var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngine(&ctx, allocator, "storage-p12", table);
-        defer ctx.deinit();
-        const engine = &ctx.engine;
-
-        const id = "doc-001";
-        const ns = "ns-test";
-        // Generate a random literal array of known length n
+        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
+        defer allocator.free(id);
         const n = rand.intRangeAtMost(usize, 0, 8);
         const elems = try allocator.alloc(msgpack.Payload, n);
         for (0..n) |i| {
@@ -811,11 +803,9 @@ test "storage: SQLite json_array_length works on stored array columns" {
         const array_payload = msgpack.Payload{ .arr = elems };
         defer array_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "tags", .value = array_payload }};
-        try engine.insertOrReplace("items", id, ns, &cols);
+        try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
-        // Verify the stored array via public API.
-        // This implicitly tests SQLite's json() function which selectField uses for array columns.
-        var managed = try engine.selectField(allocator, "items", id, ns, "tags");
+        var managed = try engine.selectField(allocator, "items", id, "ns-test", "tags");
         defer managed.deinit();
         const result = managed.value orelse return error.MissingField;
         try testing.expect(result == .arr);

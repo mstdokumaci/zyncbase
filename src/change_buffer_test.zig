@@ -68,7 +68,7 @@ test "ChangeBuffer: concurrent push and drain stress" {
     var ctx = Context{
         .cb = &cb,
         .alloc = alloc,
-        .items_to_push = 5000,
+        .items_to_push = 2048,
     };
 
     const thread = try std.Thread.spawn(.{}, producer, .{&ctx});

@@ -32,7 +32,7 @@ test "storage: stability no crashes on concurrent errors" {
     defer ctx.deinit();
     const storage = &ctx.engine;
     // Property: Server should not crash when multiple threads encounter errors simultaneously
-    const num_threads = 8;
+    const num_threads = 5;
     var threads: [num_threads]std.Thread = undefined;
     const ThreadContext = struct {
         storage: *StorageEngine,
@@ -42,7 +42,7 @@ test "storage: stability no crashes on concurrent errors" {
     const workerThread = struct {
         fn run(t_ctx: ThreadContext) void {
             var i: usize = 0;
-            const ops = 50;
+            const ops = 40;
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
                 const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error

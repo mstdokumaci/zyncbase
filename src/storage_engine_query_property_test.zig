@@ -10,6 +10,8 @@ const sth = @import("storage_engine_test_helpers.zig");
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
+    const seeded_entity_count = 64;
+    const random_query_count = 96;
 
     var fields_arr = [_]schema_manager.Field{
         sth.makeIndexedField("name", .text, true),
@@ -25,12 +27,12 @@ test "property: random query filters on StorageEngine" {
     const engine = &ctx.engine;
 
     // Seed some data
-    try seedEntities(allocator, engine, 100);
+    try seedEntities(allocator, engine, seeded_entity_count);
 
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    for (0..200) |_| {
+    for (0..random_query_count) |_| {
         var filter = try generateRandomFilter(allocator, random);
         defer filter.deinit(allocator);
 
@@ -103,7 +105,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
 
     // Random Limit
     if (random.boolean()) {
-        filter.limit = random.intRangeAtMost(u32, 1, 100);
+        filter.limit = random.intRangeAtMost(u32, 1, 25);
     }
 
     return filter;

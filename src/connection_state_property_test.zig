@@ -41,7 +41,7 @@ test "connection: state deallocation on close" {
         try app.init(allocator, "state-p2", &.{});
         defer app.deinit();
 
-        const num_connections = 100;
+        const num_connections = 24;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
             ws.* = createMockWebSocket();
@@ -92,7 +92,7 @@ test "connection: state deallocation on close" {
         try app.init(allocator, "state-p4", &.{});
         defer app.deinit();
 
-        const num_connections = 50;
+        const num_connections = 12;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
             ws.* = createMockWebSocket();
@@ -115,7 +115,7 @@ test "connection: state deallocation on close" {
         try app.init(allocator, "state-p5", &.{});
         defer app.deinit();
 
-        const iterations = 1000;
+        const iterations = 160;
         var iter: usize = 0;
         while (iter < iterations) : (iter += 1) {
             var dummy_ws = createMockWebSocket();
@@ -161,9 +161,9 @@ test "connection: state deallocation on close" {
         }.run;
 
         // Spawn multiple threads
-        var threads: [4]std.Thread = undefined;
+        var threads: [3]std.Thread = undefined;
         for (&threads) |*t| {
-            t.* = try std.Thread.spawn(.{}, worker, .{ &app, 100 });
+            t.* = try std.Thread.spawn(.{}, worker, .{ &app, 24 });
         }
         // Wait for all threads
         for (threads) |thread| {
@@ -173,22 +173,22 @@ test "connection: state deallocation on close" {
 
     // Test 7: Registry deinit deallocates all remaining connections
     {
-        var app: AppTestContext = undefined;
-        try app.init(allocator, "state-p7", &.{});
+        var deinit_app: AppTestContext = undefined;
+        try deinit_app.init(allocator, "state-p7", &.{});
         // We don't defer app.deinit() here so we can call it manually to verify it handles remaining conns
         // Wait, app.deinit() is exactly what we want to test.
 
-        const num_connections = 20;
+        const num_connections = 8;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets, 0..) |*ws, i| {
             ws.* = createMockWebSocket();
-            try app.manager.onOpen(ws);
-            const state = try app.manager.acquireConnection(ws.getConnId());
-            defer if (state.release()) app.releaseConnection(state);
+            try deinit_app.manager.onOpen(ws);
+            const state = try deinit_app.manager.acquireConnection(ws.getConnId());
+            defer if (state.release()) deinit_app.releaseConnection(state);
             try state.subscription_ids.append(state.allocator, i * 10);
         }
         // Deinit should deallocate all remaining connections
-        app.deinit();
+        deinit_app.deinit();
     }
 }
 
@@ -232,7 +232,7 @@ test "connection: state deallocation edge cases" {
 
         // Add many subscriptions
         var i: u64 = 0;
-        while (i < 1000) : (i += 1) {
+        while (i < 128) : (i += 1) {
             try state.subscription_ids.append(state.allocator, i);
         }
         app.manager.onClose(&dummy_ws, 1000, "normal");

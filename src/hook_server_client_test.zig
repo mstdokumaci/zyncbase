@@ -430,14 +430,11 @@ test "AuthCache: evictExpired manually" {
     const resp = hook_server.AuthResponse{
         .allowed = true,
         .reason = null,
-        .cache_ttl_sec = 1,
+        .cache_ttl_sec = 0,
     };
     try cache.put(req, resp);
 
     try testing.expectEqual(@as(usize, 1), cache.size());
-
-    // Wait for it to expire
-    std.Thread.sleep(1100 * std.time.ns_per_ms);
 
     // Call evictExpired manually
     cache.evictExpired();

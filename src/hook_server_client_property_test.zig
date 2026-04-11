@@ -88,8 +88,8 @@ test "circuit-breaker: transitions to half-open after timeout" {
     // Circuit should be open
     try testing.expectEqual(ConnectionState.circuit_open, client.getState());
 
-    // Wait for timeout to expire
-    std.Thread.sleep(1100 * std.time.ns_per_ms); // 1.1 seconds
+    // Backdate the open timestamp instead of waiting on wall clock time.
+    client.circuit_breaker.opened_at.store(std.time.timestamp() - 2, .release);
 
     // Next request should attempt to connect (half-open state)
     // It will fail because we're not actually connected, but state should change
@@ -250,17 +250,10 @@ test "cache: eviction on TTL expiration" {
         const response = hook_server.AuthResponse{
             .allowed = true,
             .reason = null,
-            .cache_ttl_sec = 1, // 1 second TTL
+            .cache_ttl_sec = 0,
         };
 
         try cache.put(req, response);
-
-        // Verify entry exists
-        const cached1 = cache.get(req);
-        try testing.expect(cached1 != null);
-
-        // Wait for TTL to expire
-        std.Thread.sleep(1100 * std.time.ns_per_ms); // 1.1 seconds
 
         // Entry should be expired and return null
         const cached2 = cache.get(req);

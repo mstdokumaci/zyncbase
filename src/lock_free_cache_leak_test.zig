@@ -44,7 +44,7 @@ test "LockFreeCache: pool exhaustion behavior" {
     const u32_cache = lockFreeCache(u32);
     const config = u32_cache.Config{
         .max_deferred_nodes = 10,
-        .reclamation_interval_ms = 1000,
+        .reclamation_interval_ms = 10,
     };
 
     var cache: u32_cache = undefined;
@@ -59,8 +59,9 @@ test "LockFreeCache: pool exhaustion behavior" {
     defer handle.release();
 
     // Perform updates until pool is exhausted
+    const updates_until_exhaustion = config.max_deferred_nodes + 2;
     var i: usize = 0;
-    while (i < 20) : (i += 1) {
+    while (i < updates_until_exhaustion) : (i += 1) {
         try cache.update(namespace, @intCast(i));
     }
 

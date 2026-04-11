@@ -159,9 +159,7 @@ fn insertSlowest(slowest: []TimedResult, slowest_len: *usize, candidate: TimedRe
     }
 
     while (insert_at > 0 and candidate.elapsed_ns > slowest[insert_at - 1].elapsed_ns) {
-        if (insert_at < slowest.len) {
-            slowest[insert_at] = slowest[insert_at - 1];
-        }
+        slowest[insert_at] = slowest[insert_at - 1];
         insert_at -= 1;
     }
     slowest[insert_at] = candidate;
