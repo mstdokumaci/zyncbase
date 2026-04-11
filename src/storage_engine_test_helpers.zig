@@ -12,7 +12,6 @@ pub const Table = schema_manager.Table;
 pub const Field = schema_manager.Field;
 pub const FieldType = schema_manager.FieldType;
 pub const TableMetadata = schema_manager.TableMetadata;
-pub const ddl_generator = @import("ddl_generator.zig");
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
@@ -48,19 +47,8 @@ pub const EngineTestContext = struct {
         self.sm = try createSchemaManager(allocator, tables);
         errdefer self.sm.deinit();
 
-        try self.engine.init(allocator, &self.memory_strategy, self.test_context.test_dir, &self.sm, .{}, effective_options, null, null);
+        try schema_helpers.setupTestEngine(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.sm, effective_options);
         errdefer self.engine.deinit();
-
-        // Synchronously execute DDL for all tables
-        var gen = ddl_generator.DDLGenerator.init(allocator);
-        for (self.sm.schema.tables) |t| {
-            const ddl = try gen.generateDDL(t);
-            defer allocator.free(ddl);
-            const ddl_z = try allocator.dupeZ(u8, ddl);
-            defer allocator.free(ddl_z);
-            try self.engine.execSetupSQL(ddl_z);
-        }
-        try self.engine.start();
     }
 
     pub fn deinit(self: *EngineTestContext) void {
@@ -99,14 +87,6 @@ pub fn makeField(name: []const u8, sql_type: FieldType, required: bool) Field {
 pub fn makeIndexedField(name: []const u8, sql_type: FieldType, required: bool) Field {
     var f = makeField(name, sql_type, required);
     f.indexed = true;
-    return f;
-}
-
-/// Helper to create a reference Field.
-pub fn makeRefField(name: []const u8, references: []const u8, on_delete: schema_manager.OnDelete) Field {
-    var f = makeField(name, .text, false);
-    f.references = references;
-    f.on_delete = on_delete;
     return f;
 }
 
@@ -171,20 +151,10 @@ pub fn setupEngineWithOptions(ctx: *EngineTestContext, allocator: Allocator, pre
     try ctx.initWithOptions(allocator, prefix, &[_]Table{table}, options);
 }
 
-/// Setup a storage engine with multiple tables.
-pub fn setupEngineMultiTable(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table) !void {
-    try setupEngineMultiTableWithOptions(ctx, allocator, prefix, tables, .{ .in_memory = true });
-}
-
 /// Setup a storage engine with a single table in an existing directory.
 pub fn setupEngineWithDir(ctx: *EngineTestContext, allocator: Allocator, test_dir: []const u8, table: Table, options: StorageEngine.Options) !void {
     var tables = [_]Table{table};
     try setupEngineMultiTableWithDir(ctx, allocator, test_dir, &tables, options);
-}
-
-/// Setup a storage engine with multiple tables and specific options.
-pub fn setupEngineMultiTableWithOptions(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
-    try ctx.initWithOptions(allocator, prefix, tables, options);
 }
 
 /// Setup a storage engine with multiple tables in an existing directory.
@@ -208,19 +178,8 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     ctx.sm = try createSchemaManager(allocator, tables);
     errdefer ctx.sm.deinit();
 
-    try ctx.engine.init(allocator, &ctx.memory_strategy, ctx.test_context.test_dir, &ctx.sm, .{}, effective_options, null, null);
+    try schema_helpers.setupTestEngine(&ctx.engine, allocator, &ctx.memory_strategy, &ctx.test_context, &ctx.sm, effective_options);
     errdefer ctx.engine.deinit();
-
-    // Synchronously execute DDL for all tables
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (ctx.sm.schema.tables) |t| {
-        const ddl = try gen.generateDDL(t);
-        defer allocator.free(ddl);
-        const ddl_z = try allocator.dupeZ(u8, ddl);
-        defer allocator.free(ddl_z);
-        try ctx.engine.execSetupSQL(ddl_z);
-    }
-    try ctx.engine.start();
 }
 
 pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payload {

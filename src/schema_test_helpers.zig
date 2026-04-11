@@ -144,8 +144,3 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
     }
     try engine.start();
 }
-
-pub fn cleanupTestEngine(engine: *StorageEngine, context: *TestContext) void {
-    engine.deinit();
-    context.deinit();
-}

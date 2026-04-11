@@ -80,7 +80,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
         const val = msgpack_utils.Payload{ .arr = tags };
         defer val.free(allocator);
 
-        const msg = try buildStoreSetWithFieldPath(allocator, 1, "items", "doc1", &.{"tags"}, val);
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", &.{ "items", "doc1", "tags" }, val);
         defer allocator.free(msg);
 
         var reader: std.Io.Reader = .fixed(msg);
@@ -103,7 +103,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
         const val = msgpack_utils.Payload{ .arr = arr_payload };
         defer val.free(allocator);
 
-        const msg = try buildStoreSetWithFieldPath(allocator, 2, "items", "doc1", &.{"tags"}, val);
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 2, "default", &.{ "items", "doc1", "tags" }, val);
         defer allocator.free(msg);
 
         var reader: std.Io.Reader = .fixed(msg);
@@ -168,7 +168,7 @@ test "MessageHandler - flattened field path via StoreSet" {
     {
         const val_payload = try msgpack_utils.Payload.strToPayload("test", allocator);
         defer val_payload.free(allocator);
-        const msg = try buildStoreSetWithFieldPath(allocator, 1, "items", "doc1", &.{"name"}, val_payload);
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", &.{ "items", "doc1", "name" }, val_payload);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -191,7 +191,7 @@ test "MessageHandler - flattened field path via StoreSet" {
             tags[1].free(allocator);
             allocator.free(tags);
         }
-        const msg = try buildStoreSetWithFieldPath(allocator, 2, "items", "doc1", &.{"metadata__tags"}, .{ .arr = tags });
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 2, "default", &.{ "items", "doc1", "metadata__tags" }, .{ .arr = tags });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -213,7 +213,7 @@ test "MessageHandler - flattened field path via StoreSet" {
             inner_arr[0].free(allocator);
             allocator.free(inner_arr);
         }
-        const msg = try buildStoreSetWithFieldPath(allocator, 3, "items", "doc1", &.{"metadata__tags"}, .{ .arr = inner_arr });
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 3, "default", &.{ "items", "doc1", "metadata__tags" }, .{ .arr = inner_arr });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -264,7 +264,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     {
         const val_payload = try msgpack_utils.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
-        const msg = try buildStoreSetWithFieldPath(allocator, 1, "deep", "id1", &.{"a__b__c"}, val_payload);
+        const msg = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", &.{ "deep", "id1", "a__b__c" }, val_payload);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -286,7 +286,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
 
     // 2. Get document and verify flat response: Expect { "a__b__c": "value" } (stay flat architecture)
     {
-        const msg = try buildStoreQuery(allocator, 2, "deep");
+        const msg = try msgpack_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, "default", "deep");
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -462,69 +462,4 @@ test "MessageHandler: StoreQuery field extraction" {
     const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
     defer allocator.free(response);
     try testing.expect(response.len > 0);
-}
-
-fn buildStoreSetWithFieldPath(
-    allocator: std.mem.Allocator,
-    id: u64,
-    table: []const u8,
-    doc_id: []const u8,
-    field_segments: []const []const u8,
-    val: msgpack_utils.Payload,
-) ![]u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-
-    // fixmap(5)
-    try buf.append(allocator, 0x85);
-
-    try msgpack_helpers.writeMsgPackStr(writer, "type");
-    try msgpack_helpers.writeMsgPackStr(writer, "StoreSet");
-
-    try msgpack_helpers.writeMsgPackStr(writer, "id");
-    // encode id as uint64
-    try buf.append(allocator, 0xcf);
-    for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
-
-    try msgpack_helpers.writeMsgPackStr(writer, "namespace");
-    try msgpack_helpers.writeMsgPackStr(writer, "default");
-
-    try msgpack_helpers.writeMsgPackStr(writer, "path");
-    // array length is 2 + field_segments.len
-    const path_len = 2 + field_segments.len;
-    if (path_len < 16) {
-        try buf.append(allocator, @intCast(0x90 | path_len));
-    } else {
-        try buf.append(allocator, 0xdc);
-        try buf.append(allocator, @intCast((path_len >> 8) & 0xFF));
-        try buf.append(allocator, @intCast(path_len & 0xFF));
-    }
-    try msgpack_helpers.writeMsgPackStr(writer, table);
-    try msgpack_helpers.writeMsgPackStr(writer, doc_id);
-    for (field_segments) |seg| try msgpack_helpers.writeMsgPackStr(writer, seg);
-
-    try msgpack_helpers.writeMsgPackStr(writer, "value");
-    try msgpack_utils.encode(val, buf.writer(allocator));
-
-    return buf.toOwnedSlice(allocator);
-}
-
-fn buildStoreQuery(allocator: std.mem.Allocator, id: u64, table: []const u8) ![]u8 {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-    try buf.append(allocator, 0x85); // fixmap(5)
-    try msgpack_helpers.writeMsgPackStr(writer, "type");
-    try msgpack_helpers.writeMsgPackStr(writer, "StoreQuery");
-    try msgpack_helpers.writeMsgPackStr(writer, "id");
-    try buf.append(allocator, 0xcf);
-    for (0..8) |i| try buf.append(allocator, @intCast((id >> @intCast((7 - i) * 8)) & 0xFF));
-    try msgpack_helpers.writeMsgPackStr(writer, "namespace");
-    try msgpack_helpers.writeMsgPackStr(writer, "default");
-    try msgpack_helpers.writeMsgPackStr(writer, "collection");
-    try msgpack_helpers.writeMsgPackStr(writer, table);
-    try msgpack_helpers.writeMsgPackStr(writer, "filter");
-    try buf.append(allocator, 0x80); // empty map {}
-    return buf.toOwnedSlice(allocator);
 }
