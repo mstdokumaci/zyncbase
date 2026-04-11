@@ -7,7 +7,7 @@ const NotificationDispatcher = @import("notification_dispatcher.zig").Notificati
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const encodeDeltaSuffix = @import("notification_dispatcher.zig").encodeDeltaSuffix;
+const encodeDeltaSuffix = @import("protocol.zig").encodeDeltaSuffix;
 
 // ============================================================
 // encodeDeltaSuffix tests
