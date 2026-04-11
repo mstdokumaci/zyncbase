@@ -38,7 +38,7 @@ test "buffer: message deallocation after processing" {
         const conn = sc.conn;
 
         // Create a simple MessagePack message
-        const message = try createTestMessage(allocator, 1, "test_ns", "p1", "value");
+        const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "p1", "val" }, "value");
         defer allocator.free(message);
 
         // Parse the message
@@ -61,7 +61,7 @@ test "buffer: message deallocation after processing" {
     // Test 2: Error cases also deallocate buffers
     {
         // Create invalid message (missing required fields)
-        const invalid_message = try createInvalidMessage(allocator);
+        const invalid_message = try msgpack.createInvalidStoreSetMessageMissingId(allocator, "test");
         defer allocator.free(invalid_message);
 
         var reader: std.Io.Reader = .fixed(invalid_message);
@@ -83,11 +83,11 @@ test "buffer: message deallocation after processing" {
         const iterations = 1000;
         var iter: usize = 0;
         while (iter < iterations) : (iter += 1) {
-            const message = try createTestMessage(
+            const message = try msgpack.createStoreSetMessage(
                 allocator,
                 @as(u64, iter),
                 "test_ns",
-                "p1",
+                &.{ "test", "p1", "val" },
                 "value",
             );
             defer allocator.free(message);
@@ -111,7 +111,7 @@ test "buffer: message deallocation after processing" {
 
         // StoreSet
         {
-            const message = try createTestMessage(allocator, 1, "test_ns", "p2", "value1");
+            const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "p2", "val" }, "value1");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -125,7 +125,7 @@ test "buffer: message deallocation after processing" {
 
         // StoreQuery
         {
-            const message = try createQueryMessage(allocator, 2, "test_ns", "test");
+            const message = try msgpack.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", "test");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -137,40 +137,6 @@ test "buffer: message deallocation after processing" {
             defer allocator.free(response);
         }
     }
-}
-
-// Helper function to create a test MessagePack message
-fn createTestMessage(
-    allocator: std.mem.Allocator,
-    msg_id: u64,
-    namespace: []const u8,
-    path: []const u8,
-    value: []const u8,
-) ![]const u8 {
-    return try msgpack.createStoreSetMessage(allocator, msg_id, namespace, &.{ "test", path, "val" }, value);
-}
-
-fn createQueryMessage(
-    allocator: std.mem.Allocator,
-    msg_id: u64,
-    namespace: []const u8,
-    table: []const u8,
-) ![]const u8 {
-    var filter = msgpack.Payload.mapPayload(allocator);
-    defer filter.free(allocator);
-    return try msgpack.createStoreQueryMessage(allocator, msg_id, namespace, table, filter);
-}
-
-fn createInvalidMessage(allocator: std.mem.Allocator) ![]const u8 {
-    // Message missing required "id" field
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    const writer = buf.writer(allocator);
-    try buf.append(allocator, 0x82); // fixmap(2)
-    try msgpack.writeMsgPackStr(writer, "type");
-    try msgpack.writeMsgPackStr(writer, "StoreSet");
-    try msgpack.writeMsgPackStr(writer, "namespace");
-    try msgpack.writeMsgPackStr(writer, "test");
-    return buf.toOwnedSlice(allocator);
 }
 
 test "buffer: concurrent message deallocation" {
@@ -214,11 +180,11 @@ test "buffer: concurrent message deallocation" {
 
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                const message = try createTestMessage(
+                const message = try msgpack.createStoreSetMessage(
                     ctx.app.allocator,
                     @as(u64, i),
                     "test_ns",
-                    "p1",
+                    &.{ "test", "p1", "val" },
                     "value",
                 );
                 defer ctx.app.allocator.free(message);
