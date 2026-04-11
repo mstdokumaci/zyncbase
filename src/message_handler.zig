@@ -16,112 +16,7 @@ const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const query_parser = @import("query_parser.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
-
-// === Pre-encoded MsgPack headers (computed at comptime) ===
-
-const ok_id_header = blk: {
-    var buf: [16]u8 = undefined;
-    var stream = std.Io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(writer, "ok") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(writer, "id") catch @panic("comptime: failed to write id key");
-    break :blk buf[0..stream.pos].*;
-};
-
-const success_header = blk: {
-    var buf: [1 + ok_id_header.len]u8 = undefined;
-    buf[0] = 0x82; // fixmap(2)
-    @memcpy(buf[1..], &ok_id_header);
-    break :blk buf[0..].*;
-};
-
-const error_type_header = blk: {
-    var buf: [24]u8 = undefined;
-    var stream = std.Io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(writer, "error") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(writer, "code") catch @panic("comptime: failed to write code key");
-    break :blk buf[0..stream.pos].*;
-};
-
-const error_envelope_header = blk: {
-    var buf: [1 + error_type_header.len]u8 = undefined;
-    buf[0] = 0x84; // fixmap(4)
-    @memcpy(buf[1..], &error_type_header);
-    break :blk buf[0..].*;
-};
-
-fn comptimeEncodeKey(comptime key: []const u8) []const u8 { // zwanzig-disable-line: unused-parameter
-    return &(struct {
-        const val = blk: {
-            var buf: [key.len + 5]u8 = undefined;
-            var stream = std.Io.fixedBufferStream(&buf);
-            msgpack.writeMsgPackStr(stream.writer(), key) catch @panic("comptime: failed to write key");
-            break :blk buf[0..stream.pos].*;
-        };
-    }.val);
-}
-
-const message_key = comptimeEncodeKey("message");
-const id_key = comptimeEncodeKey("id");
-const sub_id_key = comptimeEncodeKey("subId");
-const value_key = comptimeEncodeKey("value");
-const has_more_key = comptimeEncodeKey("hasMore");
-const next_cursor_key = comptimeEncodeKey("nextCursor");
-
-// === Pre-encoded Error Codes ===
-const err_code_collection_not_found = comptimeEncodeKey("COLLECTION_NOT_FOUND");
-const err_code_field_not_found = comptimeEncodeKey("FIELD_NOT_FOUND");
-const err_code_immutable_field = comptimeEncodeKey("IMMUTABLE_FIELD");
-const err_code_schema_validation_failed = comptimeEncodeKey("SCHEMA_VALIDATION_FAILED");
-const err_code_invalid_array_element = comptimeEncodeKey("INVALID_ARRAY_ELEMENT");
-const err_code_invalid_field_name = comptimeEncodeKey("INVALID_FIELD_NAME");
-const err_code_invalid_message = comptimeEncodeKey("INVALID_MESSAGE");
-const err_code_invalid_message_format = comptimeEncodeKey("INVALID_MESSAGE_FORMAT");
-const err_code_subscription_not_found = comptimeEncodeKey("SUBSCRIPTION_NOT_FOUND");
-const err_code_auth_failed = comptimeEncodeKey("AUTH_FAILED");
-const err_code_token_expired = comptimeEncodeKey("TOKEN_EXPIRED");
-const err_code_permission_denied = comptimeEncodeKey("PERMISSION_DENIED");
-const err_code_namespace_unauthorized = comptimeEncodeKey("NAMESPACE_UNAUTHORIZED");
-const err_code_message_too_large = comptimeEncodeKey("MESSAGE_TOO_LARGE");
-const err_code_rate_limited = comptimeEncodeKey("RATE_LIMITED");
-const err_code_hook_server_unavailable = comptimeEncodeKey("HOOK_SERVER_UNAVAILABLE");
-const err_code_hook_denied = comptimeEncodeKey("HOOK_DENIED");
-const err_code_internal_error = comptimeEncodeKey("INTERNAL_ERROR");
-
-// === Pre-encoded Error Messages ===
-const err_msg_collection_not_found = comptimeEncodeKey("Collection missing in schema");
-const err_msg_field_not_found = comptimeEncodeKey("Field missing in schema");
-const err_msg_immutable_field = comptimeEncodeKey("Attempted to modify a system-protected field");
-const err_msg_field_type_mismatch = comptimeEncodeKey("Field type mismatch");
-const err_msg_schema_constraint_violation = comptimeEncodeKey("Schema constraint violation");
-const err_msg_invalid_array_element = comptimeEncodeKey("Array field contains non-literal value");
-const err_msg_invalid_field_name = comptimeEncodeKey("Field name contains forbidden characters");
-const err_msg_malformed_frame = comptimeEncodeKey("Malformed MessagePack frame");
-const err_msg_invalid_payload = comptimeEncodeKey("Invalid payload structure");
-const err_msg_invalid_query_filter = comptimeEncodeKey("Invalid query filter format");
-const err_msg_unknown_operator = comptimeEncodeKey("Unknown query operator");
-const err_msg_malformed_sort = comptimeEncodeKey("Malformed sort parameters");
-const err_msg_invalid_sub_id_format = comptimeEncodeKey("Invalid subscription ID format");
-const err_msg_missing_required_fields = comptimeEncodeKey("Request missing required fields");
-const err_msg_missing_sub_id = comptimeEncodeKey("Request missing subscription ID");
-const err_msg_subscription_not_found = comptimeEncodeKey("Subscription not found");
-const err_msg_auth_failed = comptimeEncodeKey("Identity verification failed");
-const err_msg_token_expired = comptimeEncodeKey("Session has expired");
-const err_msg_permission_denied = comptimeEncodeKey("Rule blocked operation");
-const err_msg_namespace_unauthorized = comptimeEncodeKey("No access to namespace");
-const err_msg_payload_too_big = comptimeEncodeKey("Payload too big");
-const err_msg_threshold_exceeded = comptimeEncodeKey("Threshold exceeded");
-const err_msg_logic_runtime_down = comptimeEncodeKey("Logic runtime down");
-const err_msg_logic_rejected_write = comptimeEncodeKey("Logic rejected write");
-const err_msg_zig_core_failure = comptimeEncodeKey("Zig core failure");
-
-// Context-specific error messages
-const err_msg_too_many_requests = comptimeEncodeKey("Too many requests");
-const err_msg_failed_to_parse = comptimeEncodeKey("Failed to parse MessagePack");
-const err_msg_missing_type_or_id = comptimeEncodeKey("Missing required fields: type or id");
+const protocol = @import("protocol.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -135,7 +30,8 @@ pub const MessageHandler = struct {
     schema_manager: *const SchemaManager,
     security_config: SecurityConfig,
 
-    /// Initialize message handler with all required components
+    pub const MessageInfo = protocol.Envelope;
+
     pub fn init(
         self: *MessageHandler,
         allocator: Allocator,
@@ -159,13 +55,10 @@ pub const MessageHandler = struct {
         };
     }
 
-    /// Clean up message handler resources
     pub fn deinit(self: *MessageHandler) void {
         _ = self;
     }
 
-    /// Handle WebSocket message event
-    /// Parses MessagePack, extracts message info, routes to handler, and sends response
     pub fn handleMessage(
         self: *MessageHandler,
         conn: *Connection,
@@ -174,7 +67,6 @@ pub const MessageHandler = struct {
         const ws = &conn.ws;
         const conn_id = conn.id;
 
-        // 1. Enforce rate limiting under isolated lock
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
                 conn.mutex.lock();
@@ -184,12 +76,10 @@ pub const MessageHandler = struct {
                 const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
 
                 if (conn.last_request_time == null) {
-                    // First request for this connection: grant full burst
                     conn.request_tokens = burst_capacity;
                     conn.last_request_time = now_us;
                 } else {
                     const elapsed_us = now_us - conn.last_request_time.?;
-                    // Basic token bucket / leak rate
                     const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
                     const tokens_to_add: f64 = @as(f64, @floatFromInt(@max(@as(i64, 0), elapsed_us))) * (rate_limit / 1_000_000.0);
 
@@ -209,23 +99,19 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(ws, err_code_rate_limited, err_msg_too_many_requests, null);
+                try self.sendError(ws, protocol.err_code_rate_limited, protocol.err_msg_too_many_requests, null);
                 return;
             }
         }
 
-        // 2. Message processing (Independent of connection state currently)
-        // Acquire dynamic parsing arena from the pool
         const arena = try self.memory_strategy.acquireArena();
         defer self.memory_strategy.releaseArena(arena);
         const arena_allocator = arena.allocator();
 
-        // Parse MessagePack message
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
 
-            // Record violation if it was a security/limit error
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
                     std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
@@ -234,26 +120,20 @@ pub const MessageHandler = struct {
                 }
             }
 
-            try self.sendError(ws, err_code_invalid_message, err_msg_failed_to_parse, null);
+            try self.sendError(ws, protocol.err_code_invalid_message, protocol.err_msg_failed_to_parse, null);
             return;
         };
 
-        // Extract message type and correlation ID
-        const msg_info = self.extractMessageInfo(parsed) catch |err| {
+        const msg_info = protocol.extractAs(protocol.Envelope, arena_allocator, parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
-            try self.sendError(ws, err_code_invalid_message_format, err_msg_missing_type_or_id, null);
+            try self.sendError(ws, protocol.err_code_invalid_message_format, protocol.err_msg_missing_type_or_id, null);
             return;
         };
 
-        // Route request and handle errors to produce a wire response
         const response = try self.routeRequest(arena_allocator, conn, msg_info, parsed);
-
-        // Send response (Outside lock to avoid blocking on backpressure)
         ws.send(response, .binary);
     }
 
-    /// Entry point for processing a request.
-    /// Routes the message and maps any domain errors to their wire protocol response.
     pub fn routeRequest(
         self: *MessageHandler,
         allocator: std.mem.Allocator,
@@ -262,66 +142,27 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
-            const code = mapErrorToCode(err);
-            const message = mapErrorToMessage(err);
-            return try buildErrorResponse(allocator, msg_info.id, code, message);
+            const code = protocol.mapErrorToCode(err);
+            const message = protocol.mapErrorToMessage(err);
+            return try protocol.buildErrorResponse(allocator, msg_info.id, code, message);
         };
     }
 
-    /// Perform logical teardown of a session (unsubscriptions) and free related memory.
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
         defer conn.mutex.unlock();
 
-        // 1. Unsubscribe from all topics using the connection's current list
         for (conn.subscription_ids.items) |sub_id| {
             self.subscription_engine.unsubscribe(conn.id, sub_id) catch |err| {
                 std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn.id, err });
             };
         }
 
-        // 2. Clear session-specific memory (user_id, namespace, and list pointers)
         conn.resetSession();
     }
 
-    /// Extract message type and correlation ID from parsed MessagePack
-    pub fn extractMessageInfo(_: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
-
-        // Extract type and id from MessagePack map
-        if (parsed != .map) {
-            std.log.debug("parsed is not map, it is {}", .{parsed});
-            return error.InvalidMessageFormat;
-        }
-
-        var msg_type: ?[]const u8 = null;
-        var msg_id: ?u64 = null;
-
-        var it = parsed.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const value = entry.value_ptr.*;
-            if (key == .str) {
-                const key_str = key.str.value();
-                if (std.mem.eql(u8, key_str, "type")) {
-                    if (value == .str) {
-                        msg_type = value.str.value();
-                    }
-                } else if (std.mem.eql(u8, key_str, "id")) {
-                    if (value == .uint) {
-                        msg_id = value.uint;
-                    }
-                }
-            }
-        }
-
-        if (msg_type == null or msg_id == null) {
-            return error.MissingRequiredFields;
-        }
-
-        return MessageInfo{
-            .type = msg_type orelse unreachable,
-            .id = msg_id orelse unreachable,
-        };
+    pub fn extractMessageInfo(self: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
+        return protocol.extractAs(protocol.Envelope, self.allocator, parsed);
     }
 
     pub fn routeMessage(
@@ -331,7 +172,6 @@ pub const MessageHandler = struct {
         msg_info: MessageInfo,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        // Route based on message type
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
             return try self.handleStoreSet(arena_allocator, conn.id, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
@@ -349,135 +189,21 @@ pub const MessageHandler = struct {
         }
     }
 
-    const StoreFields = struct {
-        namespace: []const u8,
-        segments: []const []const u8,
-        value: ?msgpack.Payload,
-    };
-
-    /// Extracts common store operation fields from a parsed MsgPack message.
-    fn extractStoreFields(
-        self: *MessageHandler,
-        allocator: std.mem.Allocator,
-        parsed: msgpack.Payload,
-        require_value: bool,
-    ) !StoreFields {
-        _ = self;
-        var namespace: ?[]const u8 = null;
-        var segments: ?[]const []const u8 = null;
-        var value: ?msgpack.Payload = null;
-
-        var it = parsed.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            if (key == .str) {
-                const key_str = key.str.value();
-                if (std.mem.eql(u8, key_str, "namespace")) {
-                    if (val == .str) namespace = val.str.value();
-                } else if (std.mem.eql(u8, key_str, "path")) {
-                    if (val == .arr) {
-                        if (segments) |s| {
-                            allocator.free(s);
-                            segments = null;
-                        }
-                        const elems = val.arr;
-                        if (elems.len < 2) return error.InvalidPath;
-                        const s = try allocator.alloc([]const u8, elems.len);
-                        for (elems, 0..) |elem, i| {
-                            if (elem != .str) {
-                                allocator.free(s);
-                                return error.InvalidPath;
-                            }
-                            s[i] = elem.str.value();
-                        }
-                        segments = s;
-                    }
-                } else if (std.mem.eql(u8, key_str, "value")) {
-                    value = val;
-                }
-            }
-        }
-
-        if (namespace == null or segments == null) {
-            if (segments) |s| allocator.free(s);
-            return error.MissingRequiredFields;
-        }
-        if (require_value and value == null) {
-            allocator.free(segments.?);
-            return error.MissingRequiredFields;
-        }
-
-        return .{
-            .namespace = namespace.?,
-            .segments = segments.?,
-            .value = value,
-        };
-    }
-
-    fn handleStoreSet(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn_id: u64,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        _ = conn_id;
-        const fields = try self.extractStoreFields(self.allocator, parsed, true);
-        defer self.allocator.free(fields.segments);
-
-        const value = fields.value orelse return error.MissingRequiredFields;
-        const segments = fields.segments;
-
-        try self.store_service.set(
-            segments[0], // table
-            segments[1], // doc_id
-            fields.namespace,
-            segments.len,
-            if (segments.len == 3) segments[2] else null, // field_name
-            value,
-        );
-
-        return try buildSuccessResponse(arena_allocator, msg_id);
-    }
-
-    fn handleStoreRemove(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        const fields = try self.extractStoreFields(self.allocator, parsed, false);
-        defer self.allocator.free(fields.segments);
-
-        const segments = fields.segments;
-        try self.store_service.remove(
-            segments[0],
-            segments[1],
-            fields.namespace,
-            segments.len,
-            if (segments.len == 3) segments[2] else null,
-        );
-
-        return try buildSuccessResponse(arena_allocator, msg_id);
-    }
-
-    /// Send error response to client
     pub fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8, msg_id: ?u64) !void {
         var list = std.ArrayListUnmanaged(u8).empty;
         defer list.deinit(self.allocator);
         const writer = list.writer(self.allocator);
 
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
-        try list.appendSlice(self.allocator, &error_type_header);
+        try list.appendSlice(self.allocator, &protocol.error_type_header);
         try list.appendSlice(self.allocator, code);
 
-        try list.appendSlice(self.allocator, message_key);
+        try list.appendSlice(self.allocator, protocol.message_key);
         try list.appendSlice(self.allocator, message);
 
         if (msg_id) |id| {
-            try list.appendSlice(self.allocator, id_key);
-            try writer.writeByte(0xcf); // msgpack uint64
+            try list.appendSlice(self.allocator, protocol.id_key);
+            try writer.writeByte(0xcf);
             try writer.writeInt(u64, id, .big);
         }
 
@@ -499,126 +225,48 @@ pub const MessageHandler = struct {
         };
     }
 
-    /// Message information extracted from parsed MessagePack
-    pub const MessageInfo = struct {
-        type: []const u8,
-        id: u64,
-    };
+    fn handleStoreSet(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn_id: u64,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        _ = conn_id;
+        const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
+        if (req.path.len < 2) return error.InvalidPath;
+        const value = req.value orelse return error.MissingRequiredFields;
 
-    /// Build a spec-compliant error response: {type: "error", id, code, message}
-    fn buildErrorResponse(msgpack_allocator: Allocator, msg_id: u64, code: []const u8, message: []const u8) ![]const u8 {
-        var list = std.ArrayListUnmanaged(u8).empty;
-        errdefer list.deinit(msgpack_allocator);
-        const writer = list.writer(msgpack_allocator);
+        try self.store_service.set(
+            req.path[0],
+            req.path[1],
+            req.namespace,
+            req.path.len,
+            if (req.path.len == 3) req.path[2] else null,
+            value,
+        );
 
-        try list.appendSlice(msgpack_allocator, &error_envelope_header);
-        try list.appendSlice(msgpack_allocator, code);
-
-        try list.appendSlice(msgpack_allocator, id_key);
-        try writer.writeByte(0xcf); // msgpack uint64
-        try writer.writeInt(u64, msg_id, .big);
-
-        try list.appendSlice(msgpack_allocator, message_key);
-        try list.appendSlice(msgpack_allocator, message);
-
-        return list.toOwnedSlice(msgpack_allocator);
+        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
     }
 
-    /// Build success response for StoreSet
-    fn buildSuccessResponse(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
-        var list = std.ArrayListUnmanaged(u8).empty;
-        errdefer list.deinit(msgpack_allocator);
-        const writer = list.writer(msgpack_allocator);
+    fn handleStoreRemove(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
+        if (req.path.len < 2) return error.InvalidPath;
 
-        try list.appendSlice(msgpack_allocator, &success_header);
-        try writer.writeByte(0xcf);
-        try writer.writeInt(u64, msg_id, .big);
+        try self.store_service.remove(
+            req.path[0],
+            req.path[1],
+            req.namespace,
+            req.path.len,
+            if (req.path.len == 3) req.path[2] else null,
+        );
 
-        return list.toOwnedSlice(msgpack_allocator);
-    }
-
-    fn mapErrorToCode(err: anyerror) []const u8 {
-        return switch (err) {
-            error.UnknownTable => err_code_collection_not_found,
-            error.UnknownField => err_code_field_not_found,
-            error.ImmutableField => err_code_immutable_field,
-            error.TypeMismatch, error.ConstraintViolation => err_code_schema_validation_failed,
-            error.InvalidArrayElement => err_code_invalid_array_element,
-            error.InvalidFieldName => err_code_invalid_field_name,
-            error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => err_code_invalid_message,
-            error.MissingRequiredFields, error.MissingSubscriptionId => err_code_invalid_message_format,
-            error.SubscriptionNotFound => err_code_subscription_not_found,
-            error.AuthFailed => err_code_auth_failed,
-            error.TokenExpired => err_code_token_expired,
-            error.PermissionDenied => err_code_permission_denied,
-            error.NamespaceUnauthorized => err_code_namespace_unauthorized,
-            error.MaxDepthExceeded => err_code_message_too_large,
-            error.RateLimited => err_code_rate_limited,
-            error.HookServerUnavailable => err_code_hook_server_unavailable,
-            error.HookDenied => err_code_hook_denied,
-            else => err_code_internal_error,
-        };
-    }
-
-    fn mapErrorToMessage(err: anyerror) []const u8 {
-        return switch (err) {
-            error.UnknownTable => err_msg_collection_not_found,
-            error.UnknownField => err_msg_field_not_found,
-            error.ImmutableField => err_msg_immutable_field,
-            error.TypeMismatch => err_msg_field_type_mismatch,
-            error.ConstraintViolation => err_msg_schema_constraint_violation,
-            error.InvalidArrayElement => err_msg_invalid_array_element,
-            error.InvalidFieldName => err_msg_invalid_field_name,
-            error.InvalidMessageFormat => err_msg_malformed_frame,
-            error.InvalidPayload => err_msg_invalid_payload,
-            error.InvalidConditionFormat => err_msg_invalid_query_filter,
-            error.InvalidOperatorCode => err_msg_unknown_operator,
-            error.InvalidSortFormat => err_msg_malformed_sort,
-            error.InvalidSubscriptionId => err_msg_invalid_sub_id_format,
-            error.MissingRequiredFields => err_msg_missing_required_fields,
-            error.MissingSubscriptionId => err_msg_missing_sub_id,
-            error.SubscriptionNotFound => err_msg_subscription_not_found,
-            error.AuthFailed => err_msg_auth_failed,
-            error.TokenExpired => err_msg_token_expired,
-            error.PermissionDenied => err_msg_permission_denied,
-            error.NamespaceUnauthorized => err_msg_namespace_unauthorized,
-            error.MaxDepthExceeded => err_msg_payload_too_big,
-            error.RateLimited => err_msg_threshold_exceeded,
-            error.HookServerUnavailable => err_msg_logic_runtime_down,
-            error.HookDenied => err_msg_logic_rejected_write,
-            else => err_msg_zig_core_failure,
-        };
-    }
-
-    fn getPayloadFromMap(self: *MessageHandler, map: msgpack.Map, key: []const u8) ?msgpack.Payload {
-        _ = self;
-        var it = map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), key)) {
-                return entry.value_ptr.*;
-            }
-        }
-        return null;
-    }
-
-    fn getStringFromMap(self: *MessageHandler, map: msgpack.Map, key: []const u8) ?[]const u8 {
-        const val = self.getPayloadFromMap(map, key) orelse return null;
-        if (val == .str) return val.str.value();
-        return null;
-    }
-
-    fn encodeCursor(allocator: Allocator, cursor: msgpack.Payload) ![]const u8 {
-        const json_cursor = try msgpack.payloadToJson(cursor, allocator);
-        defer allocator.free(json_cursor);
-
-        const encoded_len = std.base64.standard.Encoder.calcSize(json_cursor.len);
-        const encoded = try allocator.alloc(u8, encoded_len);
-        _ = std.base64.standard.Encoder.encode(encoded, json_cursor);
-        return encoded;
-    }
-
-    fn generateSubscriptionId(conn: *Connection) !u64 {
-        return conn.allocateSubscriptionId();
+        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreSubscribe(
@@ -628,22 +276,19 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        if (payload != .map) return error.InvalidPayload;
-        const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
-        const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
+        const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
         const sub_id = try generateSubscriptionId(conn);
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, collection, payload);
+        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, req.collection, payload);
         defer filter.deinit(arena_allocator);
 
-        _ = try self.subscription_engine.subscribe(namespace, collection, filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(req.namespace, req.collection, filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        // Snapshot
-        var results = try self.storage_engine.selectQuery(arena_allocator, collection, namespace, filter);
+        var results = try self.storage_engine.selectQuery(arena_allocator, req.collection, req.namespace, filter);
         defer results.deinit();
 
-        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
     }
 
     fn handleStoreUnsubscribe(
@@ -653,15 +298,12 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        if (payload != .map) return error.InvalidPayload;
-        const sub_id = try self.extractSubId(payload.map);
+        const req = try protocol.extractAs(protocol.StoreUnsubscribeRequest, arena_allocator, payload);
 
-        try self.subscription_engine.unsubscribe(conn.id, sub_id);
+        try self.subscription_engine.unsubscribe(conn.id, req.subId);
+        conn.removeSubscription(req.subId);
 
-        // Remove from connection tracking
-        conn.removeSubscription(sub_id);
-
-        return try buildSuccessResponse(arena_allocator, msg_id);
+        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreQuery(
@@ -672,14 +314,12 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         _ = conn;
-        if (payload != .map) return error.InvalidPayload;
-        const namespace = self.getStringFromMap(payload.map, "namespace") orelse return error.MissingNamespace;
-        const collection = self.getStringFromMap(payload.map, "collection") orelse return error.MissingCollection;
+        const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
 
-        var results = try self.store_service.query(arena_allocator, collection, namespace, payload);
+        var results = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
         defer results.deinit();
 
-        return self.buildQueryResponse(arena_allocator, msg_id, null, &results);
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &results);
     }
 
     fn handleStoreLoadMore(
@@ -689,87 +329,29 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        if (payload != .map) return error.InvalidPayload;
+        const req = try protocol.extractAs(protocol.StoreLoadMoreRequest, arena_allocator, payload);
 
-        const sub_id = try self.extractSubId(payload.map);
-        const next_cursor_token = self.getStringFromMap(payload.map, "nextCursor") orelse return error.MissingRequiredFields;
-
-        const requested_cursor = try query_parser.parseCursorToken(arena_allocator, next_cursor_token);
+        const requested_cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor);
         defer requested_cursor.deinit(arena_allocator);
 
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
             .connection_id = conn.id,
-            .id = sub_id,
+            .id = req.subId,
         };
 
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        // Inject the requested cursor into the base query for this one-time execution.
         if (sub_query.filter.after) |old| old.deinit(arena_allocator);
         sub_query.filter.after = try requested_cursor.clone(arena_allocator);
 
         var results = try self.storage_engine.selectQuery(arena_allocator, sub_query.collection, sub_query.namespace, sub_query.filter);
         defer results.deinit();
 
-        return self.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results);
     }
 
-    fn buildQueryResponse(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        msg_id: u64,
-        sub_id: ?u64,
-        results: *storage_mod.ManagedPayload,
-    ) ![]const u8 {
-        _ = self;
-        var list = std.ArrayListUnmanaged(u8).empty;
-        errdefer list.deinit(arena_allocator);
-        const writer = list.writer(arena_allocator);
-
-        // Map size is 6 if subId is present, 4 otherwise
-        const map_size: u8 = if (sub_id != null) 6 else 4;
-        try writer.writeByte(0x80 | map_size);
-
-        try list.appendSlice(arena_allocator, &ok_id_header);
-        try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
-
-        if (sub_id) |sid| {
-            try list.appendSlice(arena_allocator, sub_id_key);
-            try msgpack.encode(msgpack.Payload.uintToPayload(sid), writer);
-        }
-
-        try list.appendSlice(arena_allocator, value_key);
-        if (results.value) |val| {
-            try msgpack.encode(val, writer);
-            results.value = null;
-        } else {
-            try msgpack.encode(msgpack.Payload{ .arr = &[_]msgpack.Payload{} }, writer);
-        }
-
-        if (sub_id != null) {
-            const has_more = results.next_cursor_arr != null;
-            try list.appendSlice(arena_allocator, has_more_key);
-            try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
-        }
-
-        try list.appendSlice(arena_allocator, next_cursor_key);
-        if (results.next_cursor_arr) |cursor_tuple| {
-            const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
-            defer arena_allocator.free(encoded_cursor);
-            try msgpack.writeMsgPackStr(writer, encoded_cursor);
-        } else {
-            try msgpack.encode(.nil, writer);
-        }
-
-        return list.toOwnedSlice(arena_allocator);
-    }
-
-    fn extractSubId(self: *MessageHandler, map: msgpack.Map) !u64 {
-        const sub_id_val = self.getPayloadFromMap(map, "subId") orelse return error.MissingSubscriptionId;
-        return if (sub_id_val == .uint)
-            sub_id_val.uint
-        else
-            error.InvalidSubscriptionId;
+    fn generateSubscriptionId(conn: *Connection) !u64 {
+        return conn.allocateSubscriptionId();
     }
 };
