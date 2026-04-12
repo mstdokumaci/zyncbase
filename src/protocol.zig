@@ -29,6 +29,10 @@ pub const StoreLoadMoreRequest = struct {
     nextCursor: []const u8,
 };
 
+/// Extracts a struct of type T from a MessagePack map.
+/// Note: This function allocates memory for dynamic fields (like slices) but does not
+/// perform manual cleanup on partial failures. It is designed to be used with an
+/// ArenaAllocator or a similar batch-deallocation strategy.
 pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
     if (payload != .map) return error.InvalidMessageFormat;
     var result: T = comptime blk: {
@@ -43,15 +47,10 @@ pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
         }
         break :blk base;
     };
-    var found = comptime blk: {
-        var bytes: [std.meta.fields(T).len]u8 = undefined;
-        @setEvalBranchQuota(2000);
-        for (&bytes) |*b| b.* = 0;
-        break :blk bytes;
-    };
+    var found = [_]u8{0} ** std.meta.fields(T).len;
 
     var it = payload.map.iterator();
-    while (it.next()) |entry| {
+    outer: while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;
         if (key != .str) continue;
@@ -61,6 +60,7 @@ pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
             if (std.mem.eql(u8, key_str, field.name)) {
                 found[i] = 1;
                 @field(result, field.name) = try extractValue(field.type, allocator, val);
+                continue :outer;
             }
         }
     }
@@ -99,11 +99,11 @@ fn extractValue(comptime T: type, allocator: Allocator, val: Payload) anyerror!T
                     const slice = try allocator.alloc([]const u8, arr.len);
                     var valid = true;
                     for (arr, 0..) |elem, j| {
-                        if (elem == .str) {
-                            slice[j] = elem.str.value();
-                        } else {
+                        if (elem != .str) {
                             valid = false;
+                            break;
                         }
+                        slice[j] = elem.str.value();
                     }
                     if (!valid) {
                         allocator.free(slice);
@@ -118,8 +118,8 @@ fn extractValue(comptime T: type, allocator: Allocator, val: Payload) anyerror!T
             }
         },
         .int => {
-            if (val == .uint) return @intCast(val.uint);
-            if (val == .int) return @intCast(val.int);
+            if (val == .uint) return std.math.cast(T, val.uint) orelse error.InvalidMessageFormat;
+            if (val == .int) return std.math.cast(T, val.int) orelse error.InvalidMessageFormat;
             return error.InvalidMessageFormat;
         },
         .optional => |opt| {
