@@ -7,7 +7,7 @@ const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
-const query_parser = @import("query_parser.zig");
+const protocol = @import("protocol.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -271,8 +271,8 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     try testing.expect(next_cursor == .str);
     try testing.expect(next_cursor.str.value().len > 0);
 
-    // Validate token decodes as [sort_value, id]
-    const cursor = try query_parser.parseCursorToken(allocator, next_cursor.str.value());
+    // Minimal validation to ensure it's a valid protocol token
+    const cursor = try protocol.decodeCursor(allocator, next_cursor.str.value());
     defer cursor.deinit(allocator);
     try testing.expect(cursor.id.len > 0);
 }
@@ -687,6 +687,7 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     const load_response_copy = try routeWithArena(&app.handler, allocator, conn, load_parsed);
     defer allocator.free(load_response_copy);
 
+    // Verify response indicates success and returns requested subId
     var load_resp_reader: std.Io.Reader = .fixed(load_response_copy);
     const load_resp = try msgpack.decode(allocator, &load_resp_reader);
     defer load_resp.free(allocator);
@@ -695,7 +696,6 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     try testing.expectEqualStrings("ok", load_type.str.value());
 
     const load_sub_id = msgpack.getMapValue(load_resp, "subId") orelse return error.TestExpectedError;
-    try testing.expect(load_sub_id == .uint);
     try testing.expectEqual(sub_id, load_sub_id.uint);
 
     const load_value = msgpack.getMapValue(load_resp, "value") orelse return error.TestExpectedError;

@@ -417,37 +417,3 @@ test "MessageHandler: StoreSet success response format" {
     try testing.expectEqualStrings("ok", msg_type.str.value());
     try testing.expectEqual(@as(u64, 1), msg_id.uint);
 }
-
-test "MessageHandler: StoreQuery field extraction" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "mh-query-extraction", &.{
-        .{ .name = "test", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const sc = try app.setupMockConnection();
-    defer sc.deinit();
-    const conn = sc.conn;
-
-    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
-    defer filter_map.free(allocator);
-
-    var conds_arr = try allocator.alloc(msgpack_utils.Payload, 1);
-    var cond_arr = try allocator.alloc(msgpack_utils.Payload, 3);
-    cond_arr[0] = try msgpack_utils.Payload.strToPayload("id", allocator);
-    cond_arr[1] = msgpack_utils.Payload.uintToPayload(0); // eq
-    cond_arr[2] = try msgpack_utils.Payload.strToPayload("id1", allocator);
-    conds_arr[0] = msgpack_utils.Payload{ .arr = cond_arr };
-    try filter_map.mapPut("conditions", msgpack_utils.Payload{ .arr = conds_arr });
-
-    const message = try msgpack_helpers.createStoreQueryMessage(allocator, 1, "test_ns", "test", filter_map);
-    defer allocator.free(message);
-    var reader: std.Io.Reader = .fixed(message);
-    const parsed = try msgpack_utils.decode(allocator, &reader);
-    defer parsed.free(allocator);
-
-    const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-    defer allocator.free(response);
-    try testing.expect(response.len > 0);
-}

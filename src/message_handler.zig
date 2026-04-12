@@ -13,7 +13,6 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
-const query_parser = @import("query_parser.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
@@ -288,16 +287,13 @@ pub const MessageHandler = struct {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
         const sub_id = try generateSubscriptionId(conn);
 
-        const filter = try query_parser.parseQueryFilter(arena_allocator, self.schema_manager, req.collection, payload);
-        defer filter.deinit(arena_allocator);
+        var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
+        defer qr.deinit(arena_allocator);
 
-        _ = try self.subscription_engine.subscribe(req.namespace, req.collection, filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(req.namespace, req.collection, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        var results = try self.storage_engine.selectQuery(arena_allocator, req.collection, req.namespace, filter);
-        defer results.deinit();
-
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &results);
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results);
     }
 
     fn handleStoreUnsubscribe(
@@ -325,10 +321,10 @@ pub const MessageHandler = struct {
         _ = conn;
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
 
-        var results = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
-        defer results.deinit();
+        var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
+        defer qr.deinit(arena_allocator);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &results);
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results);
     }
 
     fn handleStoreLoadMore(
@@ -340,9 +336,6 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreLoadMoreRequest, arena_allocator, payload);
 
-        const requested_cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor);
-        defer requested_cursor.deinit(arena_allocator);
-
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
             .connection_id = conn.id,
             .id = req.subId,
@@ -351,10 +344,9 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        if (sub_query.filter.after) |old| old.deinit(arena_allocator);
-        sub_query.filter.after = try requested_cursor.clone(arena_allocator);
+        const cursor = try protocol.decodeCursor(arena_allocator, req.nextCursor);
 
-        var results = try self.storage_engine.selectQuery(arena_allocator, sub_query.collection, sub_query.namespace, sub_query.filter);
+        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();
 
         return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results);
