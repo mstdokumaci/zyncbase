@@ -582,126 +582,6 @@ test "message: all valid frames are parsed" {
 //
 // For any successfully parsed message, the message type field should be extractable
 // from the MessagePack map.
-test "message: type extraction" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p8", &.{
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const handler = &app.handler;
-
-    // Test 1: StoreSet type should be extractable
-    {
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "data_table", "key", "val" }, "val");
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        try testing.expectEqualStrings("StoreSet", msg_info.type);
-        try testing.expectEqual(@as(u64, 1), msg_info.id);
-    }
-
-    // Test 2: StoreQuery type should be extractable
-    {
-        var filter = msgpack.Payload.mapPayload(allocator);
-        defer filter.free(allocator);
-        const message = try msgpack.createStoreQueryMessage(allocator, 42, "test", "data_table", filter);
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        try testing.expectEqualStrings("StoreQuery", msg_info.type);
-        try testing.expectEqual(@as(u64, 42), msg_info.id);
-    }
-
-    // Test 3: Various message types should be extractable
-    {
-        // StoreSet
-        {
-            const msg = try msgpack.createStoreSetMessage(allocator, 1, "a", &.{"b"}, "c");
-            defer allocator.free(msg);
-
-            var reader: std.Io.Reader = .fixed(msg);
-            const parsed = try msgpack.decode(allocator, &reader);
-            defer parsed.free(allocator);
-
-            const info = try app.handler.extractMessageInfo(parsed);
-            try testing.expectEqualStrings("StoreSet", info.type);
-            try testing.expectEqual(@as(u64, 1), info.id);
-        }
-        // StoreQuery
-        {
-            var filter = msgpack.Payload.mapPayload(allocator);
-            defer filter.free(allocator);
-            const msg = try msgpack.createStoreQueryMessage(allocator, 999, "x", "y", filter);
-            defer allocator.free(msg);
-
-            var reader: std.Io.Reader = .fixed(msg);
-            const parsed = try msgpack.decode(allocator, &reader);
-            defer parsed.free(allocator);
-
-            const info = try app.handler.extractMessageInfo(parsed);
-            try testing.expectEqualStrings("StoreQuery", info.type);
-            try testing.expectEqual(@as(u64, 999), info.id);
-        }
-    }
-
-    // Test 4: Message without type field should fail extraction
-    {
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x83); // fixmap(3)
-        try msgpack.writeMsgPackStr(writer, "id");
-        try buf.append(allocator, 0x01);
-        try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "test");
-        try msgpack.writeMsgPackStr(writer, "path");
-        try msgpack.writeMsgPackStr(writer, "/key");
-
-        const msg_buf = buf.items;
-
-        var reader: std.Io.Reader = .fixed(msg_buf);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const result = handler.extractMessageInfo(parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
-    }
-
-    // Test 5: Message without id field should fail extraction
-    {
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack.writeMsgPackStr(writer, "type");
-        try msgpack.writeMsgPackStr(writer, "StoreSet");
-        try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "test");
-        try msgpack.writeMsgPackStr(writer, "path");
-        try msgpack.writeMsgPackStr(writer, "/key");
-        try msgpack.writeMsgPackStr(writer, "value");
-        try msgpack.writeMsgPackStr(writer, "val");
-
-        const msg_buf = buf.items;
-
-        var reader: std.Io.Reader = .fixed(msg_buf);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const result = handler.extractMessageInfo(parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
-    }
-}
 
 // **Property: Request routing**
 // Message routing properties
@@ -720,9 +600,7 @@ test "message: request routing to handlers" {
 
     // Test 1: StoreSet message should route to handleStoreSet
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -733,9 +611,7 @@ test "message: request routing to handlers" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -744,9 +620,7 @@ test "message: request routing to handlers" {
 
     // Test 2: StoreQuery message should route to handleStoreQuery
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -758,8 +632,7 @@ test "message: request routing to handlers" {
         const set_parsed = try msgpack.decode(allocator, &set_reader);
         defer set_parsed.free(allocator);
 
-        const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try routeWithArena(handler, allocator, conn, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, conn, set_parsed);
         defer allocator.free(set_response);
 
         // Now query the value
@@ -772,9 +645,7 @@ test "message: request routing to handlers" {
         const get_parsed = try msgpack.decode(allocator, &get_reader);
         defer get_parsed.free(allocator);
 
-        const get_info = try handler.extractMessageInfo(get_parsed);
-
-        const response = try routeWithArena(handler, allocator, conn, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, conn, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the value
@@ -783,8 +654,7 @@ test "message: request routing to handlers" {
 
     // Test 3: Unknown message type should return error
     {
-        var ws = createMockWebSocket();
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -795,9 +665,7 @@ test "message: request routing to handlers" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-
-        const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res_parsed = try helpers.parseResponse(allocator, response);
         defer {
@@ -811,9 +679,7 @@ test "message: request routing to handlers" {
 
     // Test 4: Multiple different message types should route correctly
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -833,13 +699,13 @@ test "message: request routing to handlers" {
             var reader: std.Io.Reader = .fixed(m);
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
-            const msg_info = try app.handler.extractMessageInfo(parsed);
+
             if (should_succeed[i]) {
-                const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+                const response = try routeWithArena(&app.handler, allocator, conn, parsed);
                 defer allocator.free(response);
                 try testing.expect(response.len > 0);
             } else {
-                const response = try routeWithArena(handler, allocator, conn, msg_info, parsed);
+                const response = try routeWithArena(handler, allocator, conn, parsed);
                 defer allocator.free(response);
                 const res_parsed = try helpers.parseResponse(allocator, response);
                 defer {
@@ -870,9 +736,7 @@ test "message: response correlation by ID" {
 
     // Test 1: StoreSet response should include correlation ID
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -884,10 +748,7 @@ test "message: response correlation by ID" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        try testing.expectEqual(correlation_id, msg_info.id);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -909,9 +770,7 @@ test "message: response correlation by ID" {
 
     // Test 2: StoreQuery response should include correlation ID
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -923,8 +782,7 @@ test "message: response correlation by ID" {
         const set_parsed = try msgpack.decode(allocator, &set_reader);
         defer set_parsed.free(allocator);
 
-        const set_info = try handler.extractMessageInfo(set_parsed);
-        const set_response = try routeWithArena(handler, allocator, conn, set_info, set_parsed);
+        const set_response = try routeWithArena(handler, allocator, conn, set_parsed);
         defer allocator.free(set_response);
 
         // Now query with specific correlation ID
@@ -938,10 +796,7 @@ test "message: response correlation by ID" {
         const get_parsed = try msgpack.decode(allocator, &get_reader);
         defer get_parsed.free(allocator);
 
-        const get_info = try handler.extractMessageInfo(get_parsed);
-        try testing.expectEqual(correlation_id, get_info.id);
-
-        const response = try routeWithArena(handler, allocator, conn, get_info, get_parsed);
+        const response = try routeWithArena(handler, allocator, conn, get_parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID
@@ -963,9 +818,7 @@ test "message: response correlation by ID" {
 
     // Test 3: Multiple requests with different correlation IDs
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -979,10 +832,7 @@ test "message: response correlation by ID" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            try testing.expectEqual(corr_id, msg_info.id);
-
-            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response);
 
             // Each response should contain its specific correlation ID
@@ -1005,9 +855,7 @@ test "message: response correlation by ID" {
 
     // Test 4: Correlation ID should be preserved even for query responses
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -1021,10 +869,7 @@ test "message: response correlation by ID" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        try testing.expectEqual(correlation_id, msg_info.id);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
 
         // Response should contain the correlation ID

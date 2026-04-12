@@ -74,19 +74,11 @@ test "Verification: StoreSet message processing" {
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    // Extract message info
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-    try testing.expectEqualStrings("StoreSet", msg_info.type);
-    try testing.expectEqual(@as(u64, 1), msg_info.id);
-
     // Route and process the message
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
-
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response_copy);
 
     // Verify response indicates success
@@ -174,18 +166,13 @@ test "Verification: StoreQuery message processing" {
     defer parsed.free(allocator);
 
     // Extract message info
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-    try testing.expectEqualStrings("StoreQuery", msg_info.type);
-    try testing.expectEqual(@as(u64, 2), msg_info.id);
 
     // Route and process the message
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response_copy);
 
     // Verify response contains the value
@@ -262,16 +249,11 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const msg_info = try app.handler.extractMessageInfo(parsed);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
-
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-
-    const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+    const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response_copy);
 
     var resp_reader: std.Io.Reader = .fixed(response_copy);
@@ -314,6 +296,10 @@ test "Verification: Error handling for invalid messages" {
 
     // Test 2: Message missing required fields should fail
     {
+        const sc = try app.setupMockConnection();
+        defer sc.deinit();
+        const conn = sc.conn;
+
         // Create a MessagePack map without required fields
         var buf: std.ArrayList(u8) = .{};
         defer buf.deinit(allocator);
@@ -335,7 +321,7 @@ test "Verification: Error handling for invalid messages" {
         defer parsed.free(allocator);
 
         // Should fail to extract message info (missing id)
-        const result = app.handler.extractMessageInfo(parsed);
+        const result = routeWithArena(&app.handler, allocator, conn, parsed);
         try testing.expectError(error.MissingRequiredFields, result);
     }
 
@@ -389,15 +375,11 @@ test "Verification: Error handling for invalid messages" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const msg_info = try app.handler.extractMessageInfo(parsed);
+        const sc = try app.setupMockConnection();
+        defer sc.deinit();
+        const conn = sc.conn;
 
-        var ws = createMockWebSocket();
-        try app.manager.onOpen(&ws);
-        defer app.manager.onClose(&ws, 1000, "Normal closure");
-        const conn = try app.manager.acquireConnection(ws.getConnId());
-        defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res_parsed = try helpers.parseResponse(allocator, response);
         defer {
@@ -420,12 +402,9 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     defer app.deinit();
 
     // Open a connection
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
-
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
     // Store multiple values
     const test_data = [_]struct {
@@ -453,8 +432,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const parsed = try msgpack.decode(allocator, &reader_set);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response_copy);
 
             // Verify success response
@@ -498,8 +476,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response_copy = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response_copy);
 
             // Verify response contains the value
@@ -580,21 +557,12 @@ test "Verification: StoreSubscribe message processing" {
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-
     // 4. Route and process the message
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-
-    // Use an arena for routing to avoid leaks of the response map and its contents
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const result_raw = try app.handler.routeMessage(arena.allocator(), conn, msg_info, parsed);
-    const response = try allocator.dupe(u8, result_raw);
+    const response = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response);
 
     // 5. Verify response payload
@@ -671,16 +639,12 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     var subscribe_reader: std.Io.Reader = .fixed(subscribe_message);
     const subscribe_parsed = try msgpack.decode(allocator, &subscribe_reader);
     defer subscribe_parsed.free(allocator);
-    const subscribe_info = try app.handler.extractMessageInfo(subscribe_parsed);
 
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "Normal closure");
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
-
-    const subscribe_response_copy = try routeWithArena(&app.handler, allocator, conn, subscribe_info, subscribe_parsed);
+    const subscribe_response_copy = try routeWithArena(&app.handler, allocator, conn, subscribe_parsed);
     defer allocator.free(subscribe_response_copy);
 
     var subscribe_resp_reader: std.Io.Reader = .fixed(subscribe_response_copy);
@@ -719,9 +683,8 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     var load_reader: std.Io.Reader = .fixed(load_more_message);
     const load_parsed = try msgpack.decode(allocator, &load_reader);
     defer load_parsed.free(allocator);
-    const load_info = try app.handler.extractMessageInfo(load_parsed);
 
-    const load_response_copy = try routeWithArena(&app.handler, allocator, conn, load_info, load_parsed);
+    const load_response_copy = try routeWithArena(&app.handler, allocator, conn, load_parsed);
     defer allocator.free(load_response_copy);
 
     var load_resp_reader: std.Io.Reader = .fixed(load_response_copy);

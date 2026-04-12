@@ -8,17 +8,7 @@ const OwnedRowChange = @import("change_buffer.zig").OwnedRowChange;
 const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-
-const store_delta_header = blk: {
-    var buf: [64]u8 = undefined;
-    var stream = std.Io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-    writer.writeByte(0x83) catch @panic("comptime: failed to write map header");
-    msgpack.writeMsgPackStr(writer, "type") catch @panic("comptime: failed to write type key");
-    msgpack.writeMsgPackStr(writer, "StoreDelta") catch @panic("comptime: failed to write type value");
-    msgpack.writeMsgPackStr(writer, "subId") catch @panic("comptime: failed to write subId key");
-    break :blk buf[0..stream.pos].*;
-};
+const protocol = @import("protocol.zig");
 
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
@@ -97,7 +87,7 @@ pub const NotificationDispatcher = struct {
         // === Phase 3: Pre-encode suffix template (once per change) ===
         // This encodes: "ops": [{"op": "set"/"remove", "path": [collection, id], "value": <row>}]
         // The expensive part (msgpack.encode(new_row)) happens exactly once here.
-        const suffix = encodeDeltaSuffix(
+        const suffix = protocol.encodeDeltaSuffix(
             alloc,
             change.collection,
             id_payload_value,
@@ -117,7 +107,7 @@ pub const NotificationDispatcher = struct {
             const writer = out.writer(alloc);
 
             // Write constant header (23 bytes)
-            out.appendSlice(alloc, &store_delta_header) catch |err| {
+            out.appendSlice(alloc, &protocol.store_delta_header) catch |err| {
                 std.log.err("NotificationDispatcher failed to write header: {}", .{err});
                 continue;
             };
@@ -149,44 +139,3 @@ pub const NotificationDispatcher = struct {
         self.drain_buf.deinit(self.allocator);
     }
 };
-
-/// Encodes the suffix of a StoreDelta message (everything after subId).
-/// This includes: "ops", the operation array, path, and optional value.
-/// Caller owns the returned slice (allocated from the arena).
-pub fn encodeDeltaSuffix(
-    allocator: Allocator,
-    collection: []const u8,
-    id_payload: Payload,
-    is_delete: bool,
-    new_row: ?Payload,
-) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    errdefer list.deinit(allocator);
-    const writer = list.writer(allocator);
-
-    // "ops": [{
-    try msgpack.writeMsgPackStr(writer, "ops");
-    try writer.writeByte(0x91); // fixarray(1)
-
-    // {"op": "set"/"remove", "path": [collection, id], "value": <row>}
-    // map size is 2 for delete (no "value"), 3 for set
-    try writer.writeByte(if (is_delete) 0x82 else 0x83);
-
-    // "op": "set" or "remove"
-    try msgpack.writeMsgPackStr(writer, "op");
-    try msgpack.writeMsgPackStr(writer, if (is_delete) "remove" else "set");
-
-    // "path": [collection, id]
-    try msgpack.writeMsgPackStr(writer, "path");
-    try writer.writeByte(0x92); // fixarray(2)
-    try msgpack.writeMsgPackStr(writer, collection);
-    try msgpack.encode(id_payload, writer);
-
-    // "value": <row> (only for set operations)
-    if (!is_delete) {
-        try msgpack.writeMsgPackStr(writer, "value");
-        try msgpack.encode(new_row orelse Payload.nil, writer);
-    }
-
-    return list.toOwnedSlice(allocator);
-}
