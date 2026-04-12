@@ -4,10 +4,6 @@ const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
 const write_command = @import("storage_engine/write_command.zig");
 pub const StorageEngine = storage_engine.StorageEngine;
-pub const ColumnValue = struct {
-    name: []const u8,
-    value: msgpack.Payload,
-};
 pub const StorageError = storage_engine.StorageError;
 pub const schema_manager = @import("schema_manager.zig");
 pub const SchemaManager = schema_manager.SchemaManager;
@@ -264,52 +260,5 @@ pub fn enqueueFieldWrite(
     };
     errdefer write.deinit(engine.allocator);
 
-    try engine.takeFieldWrite(&write);
-}
-
-pub fn queueInsertFromPayload(
-    engine: *StorageEngine,
-    table: []const u8,
-    id: []const u8,
-    namespace: []const u8,
-    columns: []const ColumnValue,
-) !void {
-    var payload_map = msgpack.Payload.mapPayload(engine.allocator);
-    defer payload_map.free(engine.allocator);
-    for (columns) |col| {
-        try payload_map.mapPut(col.name, try col.value.deepClone(engine.allocator));
-    }
-
-    var write = try write_command.buildDocumentWriteFromPayload(
-        engine.allocator,
-        engine.schema_manager,
-        table,
-        id,
-        namespace,
-        payload_map,
-    );
-    errdefer write.deinit(engine.allocator);
-
-    try engine.takeDocumentWrite(&write);
-}
-
-pub fn queueFieldWriteFromPayload(
-    engine: *StorageEngine,
-    table: []const u8,
-    id: []const u8,
-    namespace: []const u8,
-    field_name: []const u8,
-    value: msgpack.Payload,
-) !void {
-    var write = try write_command.buildFieldWriteFromPayload(
-        engine.allocator,
-        engine.schema_manager,
-        table,
-        id,
-        namespace,
-        field_name,
-        value,
-    );
-    errdefer write.deinit(engine.allocator);
     try engine.takeFieldWrite(&write);
 }

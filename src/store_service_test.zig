@@ -358,13 +358,15 @@ test "StoreService: query - basic search" {
     // Seed data
     const val_1 = try msgpack.Payload.strToPayload("Alice", allocator);
     defer val_1.free(allocator);
-    const cols_1 = [_]sth.ColumnValue{.{ .name = "name", .value = val_1 }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "users", "user-1", "ns", &cols_1);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "users", "user-1", "ns", &.{
+        .{ .name = "name", .field_type = .text, .value = .{ .text = val_1.str.value() } },
+    });
 
     const val_2 = try msgpack.Payload.strToPayload("Bob", allocator);
     defer val_2.free(allocator);
-    const cols_2 = [_]sth.ColumnValue{.{ .name = "name", .value = val_2 }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "users", "user-2", "ns", &cols_2);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "users", "user-2", "ns", &.{
+        .{ .name = "name", .field_type = .text, .value = .{ .text = val_2.str.value() } },
+    });
     try app.storage_engine.flushPendingWrites();
 
     // Build filter: { "conditions": [ ["id", 0, "user-1"] ] }
@@ -401,10 +403,11 @@ test "StoreService: query - orderBy and limit" {
     for (tasks, 0..) |t, i| {
         const title = try msgpack.Payload.strToPayload(t, allocator);
         defer title.free(allocator);
-        const cols = [_]sth.ColumnValue{.{ .name = "title", .value = title }};
         const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
         defer allocator.free(id);
-        try sth.queueInsertFromPayload(&app.storage_engine, "tasks", id, "ns", &cols);
+        try sth.enqueueDocumentWrite(&app.storage_engine, "tasks", id, "ns", &.{
+            .{ .name = "title", .field_type = .text, .value = .{ .text = title.str.value() } },
+        });
     }
     try app.storage_engine.flushPendingWrites();
 
@@ -473,10 +476,11 @@ test "StoreService: queryWithCursor - pagination" {
         defer allocator.free(str);
         const val = try msgpack.Payload.strToPayload(str, allocator);
         defer val.free(allocator);
-        const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val }};
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
-        try sth.queueInsertFromPayload(&app.storage_engine, "data", id, "ns", &cols);
+        try sth.enqueueDocumentWrite(&app.storage_engine, "data", id, "ns", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = val.str.value() } },
+        });
     }
     try app.storage_engine.flushPendingWrites();
 

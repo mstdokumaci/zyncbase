@@ -134,8 +134,9 @@ test "Verification: StoreQuery message processing" {
     // First, store a value (typed storage)
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
     defer val_payload.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_payload }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "key", "test_namespace", &cols);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "key", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_payload.str.value() } },
+    });
     try app.storage_engine.flushPendingWrites();
 
     // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
@@ -216,13 +217,15 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     // Insert two rows so a limited query must return nextCursor
     const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
     defer val_a.free(allocator);
-    const cols_a = [_]sth.ColumnValue{.{ .name = "val", .value = val_a }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "doc-a", "test_namespace", &cols_a);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "doc-a", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_a.str.value() } },
+    });
 
     const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
     defer val_b.free(allocator);
-    const cols_b = [_]sth.ColumnValue{.{ .name = "val", .value = val_b }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "doc-b", "test_namespace", &cols_b);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "doc-b", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_b.str.value() } },
+    });
 
     try app.storage_engine.flushPendingWrites();
 
@@ -527,8 +530,9 @@ test "Verification: StoreSubscribe message processing" {
     // 1. Store a value
     const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
     defer val_payload.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_payload }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "key", "test_namespace", &cols);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "key", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_payload.str.value() } },
+    });
     try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
@@ -605,13 +609,15 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
     const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
     defer val_a.free(allocator);
-    const cols_a = [_]sth.ColumnValue{.{ .name = "val", .value = val_a }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "doc-a", "test_namespace", &cols_a);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "doc-a", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_a.str.value() } },
+    });
 
     const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
     defer val_b.free(allocator);
-    const cols_b = [_]sth.ColumnValue{.{ .name = "val", .value = val_b }};
-    try sth.queueInsertFromPayload(&app.storage_engine, "data_table", "doc-b", "test_namespace", &cols_b);
+    try sth.enqueueDocumentWrite(&app.storage_engine, "data_table", "doc-b", "test_namespace", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_b.str.value() } },
+    });
 
     try app.storage_engine.flushPendingWrites();
 
