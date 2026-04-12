@@ -46,10 +46,6 @@ pub fn buildInsertFromCommandOp(
 
     const values = try allocator.alloc(TypedValue, write.columns.len);
     var initialized_count: usize = 0;
-    errdefer {
-        for (values[0..initialized_count]) |v| v.deinit(allocator);
-        allocator.free(values);
-    }
     for (write.columns, 0..) |*col, i| {
         values[i] = typedValueFromWriteValue(col.value);
         col.value = .nil;
@@ -108,10 +104,6 @@ pub fn buildUpdateFromCommandOp(
     const values = try allocator.alloc(TypedValue, 1);
     values[0] = typedValueFromWriteValue(write.value);
     write.value = .nil;
-    errdefer {
-        values[0].deinit(allocator);
-        allocator.free(values);
-    }
 
     const op = WriteOp{
         .update = .{
