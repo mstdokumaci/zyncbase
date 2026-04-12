@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const storage_mod = @import("storage_engine/types.zig");
+const write_command = @import("storage_engine/write_command.zig");
 const query_parser = @import("query_parser.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StorageError = storage_mod.StorageError;
@@ -15,7 +16,7 @@ fn isBuiltInField(name: []const u8) bool {
 }
 
 /// StoreService provides a domain-level facade for storage operations.
-/// It encapsulates schema validation, path resolution, and typed write-value construction.
+/// It encapsulates schema validation, path resolution, and validated write-command construction.
 pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
@@ -43,18 +44,25 @@ pub const StoreService = struct {
         value: msgpack.Payload,
     ) !void {
         const tbl_md = self.schema_manager.getTable(table) orelse return StorageError.UnknownTable;
+        const command_allocator = self.storage_engine.allocator;
 
         if (segments_len == 2) {
             // Full document replacement
             if (value != .map) return error.InvalidPayload;
 
-            // Validate schema and construct columns in a single pass
-            var columns = std.ArrayListUnmanaged(storage_mod.TypedColumnValue).empty;
-            defer columns.deinit(self.allocator);
-            var ownership_transferred = false;
-            errdefer if (!ownership_transferred) {
-                storage_mod.deinitTypedColumns(columns.items, self.storage_engine.allocator);
-            };
+            var write_cmd = write_command.DocumentWrite.empty;
+            errdefer write_cmd.deinit(command_allocator);
+
+            write_cmd.table = try command_allocator.dupe(u8, table);
+            write_cmd.id = try command_allocator.dupe(u8, doc_id);
+            write_cmd.namespace = try command_allocator.dupe(u8, namespace);
+
+            // Validate schema and construct command columns in a single pass.
+            var columns = std.ArrayListUnmanaged(write_command.WriteColumn).empty;
+            defer columns.deinit(command_allocator);
+            errdefer {
+                for (columns.items) |col| col.deinit(command_allocator);
+            }
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
@@ -65,6 +73,7 @@ pub const StoreService = struct {
                     if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
                     return StorageError.UnknownField;
                 };
+                if (field.required and entry.value_ptr.* == .nil) return StorageError.NullNotAllowed;
 
                 if (field.sql_type == .array) {
                     msgpack.ensureLiteralArray(entry.value_ptr.*) catch |err| switch (err) {
@@ -72,19 +81,20 @@ pub const StoreService = struct {
                         else => |e| return e,
                     };
                 }
-                const typed_value = try storage_mod.TypedValue.fromPayload(
-                    self.storage_engine.allocator,
+                const write_value = try write_command.WriteValue.fromPayload(
+                    command_allocator,
                     field.sql_type,
                     entry.value_ptr.*,
                 );
-                try columns.append(self.allocator, .{
-                    .name = fn_inner,
-                    .value = typed_value,
+                try columns.append(command_allocator, .{
+                    .name = try command_allocator.dupe(u8, fn_inner),
+                    .field_type = field.sql_type,
+                    .value = write_value,
                 });
             }
 
-            ownership_transferred = true;
-            try self.storage_engine.insertOrReplaceTyped(table, doc_id, namespace, columns.items);
+            write_cmd.columns = try columns.toOwnedSlice(command_allocator);
+            try self.storage_engine.takeDocumentWrite(&write_cmd);
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
@@ -93,6 +103,7 @@ pub const StoreService = struct {
                 if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
                 return StorageError.UnknownField;
             };
+            if (fld.required and value == .nil) return StorageError.NullNotAllowed;
 
             if (fld.sql_type == .array) {
                 msgpack.ensureLiteralArray(value) catch |err| switch (err) {
@@ -101,13 +112,21 @@ pub const StoreService = struct {
                 };
             }
 
-            const typed_value = try storage_mod.TypedValue.fromPayload(
-                self.storage_engine.allocator,
+            var write_cmd = write_command.FieldWrite.empty;
+            errdefer write_cmd.deinit(command_allocator);
+
+            write_cmd.table = try command_allocator.dupe(u8, table);
+            write_cmd.id = try command_allocator.dupe(u8, doc_id);
+            write_cmd.namespace = try command_allocator.dupe(u8, namespace);
+            write_cmd.field = try command_allocator.dupe(u8, fn_inner);
+            write_cmd.field_type = fld.sql_type;
+            write_cmd.value = try write_command.WriteValue.fromPayload(
+                command_allocator,
                 fld.sql_type,
                 value,
             );
-            const col = [_]storage_mod.TypedColumnValue{.{ .name = fn_inner, .value = typed_value }};
-            try self.storage_engine.insertOrReplaceTyped(table, doc_id, namespace, &col);
+
+            try self.storage_engine.takeFieldWrite(&write_cmd);
         } else {
             return StorageError.InvalidPath;
         }

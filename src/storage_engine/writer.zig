@@ -3,11 +3,11 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
+const write_command = @import("write_command.zig");
 const sql_utils = @import("sql_utils.zig");
 const TypedValue = types.TypedValue;
 const WriteOp = types.WriteOp;
 const ColumnValue = types.ColumnValue;
-const TypedColumnValue = types.TypedColumnValue;
 
 pub fn buildInsertOrReplaceOp(
     allocator: Allocator,
@@ -184,148 +184,138 @@ pub fn buildUpdateFieldOp(
     };
 }
 
-pub fn buildInsertOrReplaceTypedOp(
+pub fn buildInsertFromCommandOp(
     allocator: Allocator,
     sm: *const schema_manager.SchemaManager,
-    table: []const u8,
-    id: []const u8,
-    namespace: []const u8,
-    columns: []const TypedColumnValue,
+    write: *write_command.DocumentWrite,
 ) !WriteOp {
-    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
-    for (columns) |col| {
-        const f = table_metadata.getField(col.name) orelse return error.UnknownField;
-        if (f.required and col.value == .nil) return error.NullNotAllowed;
-        try types.TypedValue.validateTyped(f.sql_type, col.value);
-    }
-
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "INSERT INTO ");
-    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, write.table);
     try sql_buf.appendSlice(allocator, " (id, namespace_id");
-    for (columns) |col| {
+    for (write.columns) |col| {
         try sql_buf.append(allocator, ',');
         try sql_buf.appendSlice(allocator, col.name);
     }
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
-    for (columns) |col| {
-        var is_array = false;
-        for (table_metadata.table.fields) |f| {
-            if (std.mem.eql(u8, f.name, col.name)) {
-                is_array = f.sql_type == .array;
-                break;
-            }
-        }
-        if (is_array) {
+    for (write.columns) |col| {
+        if (col.field_type == .array) {
             try sql_buf.appendSlice(allocator, ", jsonb(?)");
         } else {
             try sql_buf.appendSlice(allocator, ", ?");
         }
     }
     try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
-
-    for (columns, 0..) |col, i| {
+    for (write.columns, 0..) |col, i| {
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
         try sql_buf.appendSlice(allocator, col.name);
         try sql_buf.appendSlice(allocator, " = excluded.");
         try sql_buf.appendSlice(allocator, col.name);
     }
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
+    const table_metadata = sm.getTable(write.table) orelse return error.UnknownTable;
     try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
 
-    const id_owned = try allocator.dupe(u8, id);
-    errdefer allocator.free(id_owned);
-    const ns_owned = try allocator.dupe(u8, namespace);
-    errdefer allocator.free(ns_owned);
-    const table_owned = try allocator.dupe(u8, table);
-    errdefer allocator.free(table_owned);
-
-    const values = try allocator.alloc(TypedValue, columns.len);
-    for (columns, 0..) |col, i| {
-        values[i] = col.value;
+    const values = try allocator.alloc(TypedValue, write.columns.len);
+    var initialized_count: usize = 0;
+    errdefer {
+        for (values[0..initialized_count]) |v| v.deinit(allocator);
+        allocator.free(values);
+    }
+    for (write.columns, 0..) |*col, i| {
+        values[i] = typedValueFromWriteValue(col.value);
+        col.value = .nil;
+        initialized_count += 1;
     }
 
-    return WriteOp{
+    const op = WriteOp{
         .insert = .{
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
+            .table = write.table,
+            .id = write.id,
+            .namespace = write.namespace,
             .sql = sql,
             .values = values,
             .timestamp = std.time.timestamp(),
             .completion_signal = null,
         },
     };
+
+    for (write.columns) |col| allocator.free(col.name);
+    if (write.columns.ptr != write_command.DocumentWrite.empty.columns.ptr) {
+        allocator.free(write.columns);
+    }
+    write.* = .empty;
+
+    return op;
 }
 
-pub fn buildUpdateFieldTypedOp(
+pub fn buildUpdateFromCommandOp(
     allocator: Allocator,
     sm: *const schema_manager.SchemaManager,
-    table: []const u8,
-    id: []const u8,
-    namespace: []const u8,
-    field: []const u8,
-    value: TypedValue,
+    write: *write_command.FieldWrite,
 ) !WriteOp {
-    try sm.validateField(table, field);
-
-    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
-    var field_sql_type: schema_manager.FieldType = .text;
-    for (table_metadata.table.fields) |f| {
-        if (std.mem.eql(u8, f.name, field)) {
-            field_sql_type = f.sql_type;
-            try types.TypedValue.validateTyped(field_sql_type, value);
-            break;
-        }
-    }
-
-    const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
+    const field_placeholder = if (write.field_type == .array) "jsonb(?)" else "?";
 
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer sql_buf.deinit(allocator);
+    defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "INSERT INTO ");
-    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, write.table);
     try sql_buf.appendSlice(allocator, " (id, namespace_id, ");
-    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, write.field);
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?, ");
     try sql_buf.appendSlice(allocator, field_placeholder);
     try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
-    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, write.field);
     try sql_buf.appendSlice(allocator, " = excluded.");
-    try sql_buf.appendSlice(allocator, field);
+    try sql_buf.appendSlice(allocator, write.field);
     try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
 
+    const table_metadata = sm.getTable(write.table) orelse return error.UnknownTable;
     try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     const sql = try sql_buf.toOwnedSlice(allocator);
     errdefer allocator.free(sql);
 
-    const id_owned = try allocator.dupe(u8, id);
-    errdefer allocator.free(id_owned);
-    const ns_owned = try allocator.dupe(u8, namespace);
-    errdefer allocator.free(ns_owned);
-    const table_owned = try allocator.dupe(u8, table);
-    errdefer allocator.free(table_owned);
-
     const values = try allocator.alloc(TypedValue, 1);
-    values[0] = value;
+    values[0] = typedValueFromWriteValue(write.value);
+    write.value = .nil;
+    errdefer {
+        values[0].deinit(allocator);
+        allocator.free(values);
+    }
 
-    return WriteOp{
+    const op = WriteOp{
         .update = .{
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
+            .table = write.table,
+            .id = write.id,
+            .namespace = write.namespace,
             .sql = sql,
             .values = values,
             .timestamp = std.time.timestamp(),
             .completion_signal = null,
         },
+    };
+
+    if (write.field.ptr != "".ptr) allocator.free(write.field);
+    write.* = .empty;
+
+    return op;
+}
+
+fn typedValueFromWriteValue(value: write_command.WriteValue) TypedValue {
+    return switch (value) {
+        .integer => |v| .{ .integer = v },
+        .real => |v| .{ .real = v },
+        .text => |v| .{ .text = v },
+        .boolean => |v| .{ .boolean = v },
+        .array_json => |v| .{ .blob = v },
+        .nil => .nil,
     };
 }
 

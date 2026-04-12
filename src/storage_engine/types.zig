@@ -61,19 +61,6 @@ pub const ColumnValue = struct {
     value: msgpack.Payload,
 };
 
-/// A column name + typed value pair for typed storage inserts/updates.
-/// `value` is owned and must be released with `deinitTypedColumns` when not transferred.
-pub const TypedColumnValue = struct {
-    name: []const u8,
-    value: TypedValue,
-};
-
-pub fn deinitTypedColumns(columns: []const TypedColumnValue, allocator: Allocator) void {
-    for (columns) |col| {
-        col.value.deinit(allocator);
-    }
-}
-
 /// A managed payload that might be backed by a cache handle.
 /// Caller MUST call deinit() to release any potential cache handles.
 pub const ManagedPayload = struct {
@@ -135,19 +122,6 @@ pub const TypedValue = union(enum) {
             .real => value == .float or value == .uint or value == .int,
             .boolean => value == .bool,
             .array => value == .arr,
-        };
-        if (!match) return StorageError.TypeMismatch;
-    }
-
-    /// Validates if a TypedValue is compatible with a schema field type.
-    pub fn validateTyped(ft: schema_manager.FieldType, value: TypedValue) !void {
-        if (value == .nil) return;
-        const match = switch (ft) {
-            .text => value == .text,
-            .integer => value == .integer,
-            .real => value == .real,
-            .boolean => value == .boolean,
-            .array => value == .blob,
         };
         if (!match) return StorageError.TypeMismatch;
     }
