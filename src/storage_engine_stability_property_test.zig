@@ -3,9 +3,7 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const msgpack = @import("msgpack_utils.zig");
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -48,10 +46,9 @@ test "storage: stability no crashes on concurrent errors" {
                 const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
                 defer t_ctx.allocator.free(key);
                 // Try to set a value
-                const val_payload = msgpack.Payload.strToPayload(key, t_ctx.allocator) catch continue; // zwanzig-disable-line: swallowed-error
-                defer val_payload.free(t_ctx.allocator);
-                const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-                sth.queueInsertFromPayload(t_ctx.storage, "test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
+                sth.enqueueDocumentWrite(t_ctx.storage, "test", key, "test", &.{
+                    .{ .name = "val", .field_type = .text, .value = .{ .text = key } },
+                }) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
@@ -92,10 +89,9 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational - try normal operations
-    const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
-    defer val_payload.free(allocator);
-    const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-    try sth.queueInsertFromPayload(storage, "test", "key1", "test", &cols);
+    try sth.enqueueDocumentWrite(storage, "test", "key1", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+    });
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
@@ -106,10 +102,9 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational
-    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
-    defer val_payload2.free(allocator);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try sth.queueInsertFromPayload(storage, "test", "key2", "test", &cols2);
+    try sth.enqueueDocumentWrite(storage, "test", "key2", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value2" } },
+    });
     try storage.flushPendingWrites();
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
@@ -135,10 +130,9 @@ test "storage: stability handles rapid error conditions" {
         };
     }
     // Server should still be operational
-    const val_payload = try msgpack.Payload.strToPayload("value", allocator);
-    defer val_payload.free(allocator);
-    const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-    try sth.queueInsertFromPayload(storage, "test", "key", "test", &cols);
+    try sth.enqueueDocumentWrite(storage, "test", "key", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value" } },
+    });
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key", "test");
     defer managed.deinit();
@@ -162,10 +156,9 @@ test "storage: stability error recovery with valid operations" {
         // Valid operation
         const key = try std.fmt.allocPrint(allocator, "key{}", .{i});
         defer allocator.free(key);
-        const val_payload = try msgpack.Payload.strToPayload("value", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(storage, "test", key, "test", &cols);
+        try sth.enqueueDocumentWrite(storage, "test", key, "test", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value" } },
+        });
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
             try testing.expectEqual(error.NoActiveTransaction, err);
@@ -197,24 +190,21 @@ test "storage: stability resource cleanup after errors" {
     // Begin a transaction
     try storage.beginTransaction();
     // Add some operations
-    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
-    defer val_payload1.free(allocator);
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try sth.queueInsertFromPayload(storage, "test", "key1", "test", &cols1);
-    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
-    defer val_payload2.free(allocator);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try sth.queueInsertFromPayload(storage, "test", "key2", "test", &cols2);
+    try sth.enqueueDocumentWrite(storage, "test", "key1", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+    });
+    try sth.enqueueDocumentWrite(storage, "test", "key2", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value2" } },
+    });
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
     // Verify transaction state is cleaned up
     try testing.expect(!storage.isTransactionActive());
     // Verify we can start a new transaction
     try storage.beginTransaction();
-    const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
-    defer val_payload3.free(allocator);
-    const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
-    try sth.queueInsertFromPayload(storage, "test", "key3", "test", &cols3);
+    try sth.enqueueDocumentWrite(storage, "test", "key3", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value3" } },
+    });
     try storage.commitTransaction();
     // Verify the committed data is there
     var managed = try storage.selectDocument(allocator, "test", "key3", "test");
@@ -235,27 +225,24 @@ test "storage: stability mixed error and success scenarios" {
     // Property: Server should handle mixed scenarios of errors and successes
     // Successful transaction
     try storage.beginTransaction();
-    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
-    defer val_payload1.free(allocator);
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try sth.queueInsertFromPayload(storage, "test", "key1", "test", &cols1);
+    try sth.enqueueDocumentWrite(storage, "test", "key1", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+    });
     try storage.commitTransaction();
     // Failed transaction (rollback)
     try storage.beginTransaction();
-    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
-    defer val_payload2.free(allocator);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try sth.queueInsertFromPayload(storage, "test", "key2", "test", &cols2);
+    try sth.enqueueDocumentWrite(storage, "test", "key2", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value2" } },
+    });
     try storage.rollbackTransaction();
     // Error (no active transaction)
     _ = storage.commitTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Successful operation without transaction
-    const val_payload3 = try msgpack.Payload.strToPayload("value3", allocator);
-    defer val_payload3.free(allocator);
-    const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
-    try sth.queueInsertFromPayload(storage, "test", "key3", "test", &cols3);
+    try sth.enqueueDocumentWrite(storage, "test", "key3", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value3" } },
+    });
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
     var managed1 = try storage.selectDocument(allocator, "test", "key1", "test");
@@ -285,14 +272,12 @@ test "storage: stability concurrent reads during write errors" {
     const storage = &ctx.engine;
     // Property: Reads should continue working even when writes encounter errors
     // Set up some initial data
-    const val_payload1 = try msgpack.Payload.strToPayload("value1", allocator);
-    defer val_payload1.free(allocator);
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-    try sth.queueInsertFromPayload(storage, "test", "key1", "test", &cols1);
-    const val_payload2 = try msgpack.Payload.strToPayload("value2", allocator);
-    defer val_payload2.free(allocator);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-    try sth.queueInsertFromPayload(storage, "test", "key2", "test", &cols2);
+    try sth.enqueueDocumentWrite(storage, "test", "key1", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+    });
+    try sth.enqueueDocumentWrite(storage, "test", "key2", "test", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = "value2" } },
+    });
     try storage.flushPendingWrites();
     const num_reader_threads = 4;
     var reader_threads: [num_reader_threads]std.Thread = undefined;

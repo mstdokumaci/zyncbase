@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
@@ -27,7 +26,7 @@ test "StorageEngine: random query filters" {
     const engine = &ctx.engine;
 
     // Seed some data
-    try seedEntities(allocator, engine, seeded_entity_count);
+    try seedEntities(engine, seeded_entity_count);
 
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -45,7 +44,7 @@ test "StorageEngine: random query filters" {
     }
 }
 
-fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usize) !void {
+fn seedEntities(engine: *StorageEngine, count: usize) !void {
     var prng = std.Random.DefaultPrng.init(42);
     const random = prng.random();
     var i: usize = 0;
@@ -55,18 +54,15 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
 
         var name_buf: [16]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "name_{}", .{random.intRangeAtMost(u8, 0, 10)});
-        const name_p = try msgpack.Payload.strToPayload(name, allocator);
-        defer name_p.free(allocator);
 
         const age = random.intRangeAtMost(i64, 0, 100);
         const score = random.float(f64) * 1000.0;
 
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = name_p },
-            .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
-            .{ .name = "score", .value = msgpack.Payload.floatToPayload(score) },
-        };
-        try sth.queueInsertFromPayload(engine, "entities", id, "ns1", &cols);
+        try sth.enqueueDocumentWrite(engine, "entities", id, "ns1", &.{
+            .{ .name = "name", .field_type = .text, .value = .{ .text = name } },
+            .{ .name = "age", .field_type = .integer, .value = .{ .integer = age } },
+            .{ .name = "score", .field_type = .real, .value = .{ .real = score } },
+        });
     }
     try engine.flushPendingWrites();
 }

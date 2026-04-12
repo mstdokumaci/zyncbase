@@ -3,8 +3,6 @@ const testing = std.testing;
 const storage_engine_mod = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = storage_engine_mod.StorageEngine;
-const ColumnValue = sth.ColumnValue;
-const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack_test = @import("msgpack_test_helpers.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -58,10 +56,9 @@ test "storage: error handling read-only filesystem" {
     defer storage.deinit();
     // Try to set a value
     {
-        const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "key1", "data_table", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+        });
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
@@ -89,18 +86,16 @@ test "storage: error handling constraint violations" {
     defer storage.deinit();
     // Set a value
     {
-        const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "key1", "data_table", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+        });
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        const val_payload = try msgpack.Payload.strToPayload("value2", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "key1", "data_table", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value2" } },
+        });
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
@@ -133,10 +128,9 @@ test "storage: error handling transaction rollback on error" {
     defer storage.deinit();
     try storage.beginTransaction();
     {
-        const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "key1", "data_table", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+        });
     }
     try storage.rollbackTransaction();
     {
@@ -162,10 +156,9 @@ test "storage: error handling concurrent access safety" {
     try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
-        const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "key1", "data_table", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value1" } },
+        });
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -204,10 +197,9 @@ test "storage: error handling empty paths" {
     try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
-        const val_payload = try msgpack.Payload.strToPayload("value", allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "data_table", "empty", "", &cols);
+        try sth.enqueueDocumentWrite(&storage, "data_table", "empty", "", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = "value" } },
+        });
     }
     try storage.flushPendingWrites();
     {
@@ -236,10 +228,9 @@ test "storage: error handling large values" {
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        const val_payload = try msgpack.Payload.strToPayload(large_value, allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try sth.queueInsertFromPayload(&storage, "test", "large_key", "test", &cols);
+        try sth.enqueueDocumentWrite(&storage, "test", "large_key", "test", &.{
+            .{ .name = "val", .field_type = .text, .value = .{ .text = large_value } },
+        });
     }
     try storage.flushPendingWrites();
     {

@@ -30,15 +30,9 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     const val_written = try msgpack.Payload.strToPayload("task 1", allocator);
     defer val_written.free(allocator);
 
-    try sth.queueInsertFromPayload(
-        engine,
-        "items",
-        "id1",
-        "ns",
-        &[_]sth.ColumnValue{
-            .{ .name = "val", .value = val_written },
-        },
-    );
+    try sth.enqueueDocumentWrite(engine, "items", "id1", "ns", &.{
+        .{ .name = "val", .field_type = .text, .value = .{ .text = val_written.str.value() } },
+    });
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.

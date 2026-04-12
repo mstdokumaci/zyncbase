@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
@@ -146,20 +145,17 @@ test "StorageEngine: selectQuery pagination (after)" {
 }
 
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
-    const name_p = try msgpack.Payload.strToPayload(name, allocator);
-    defer name_p.free(allocator);
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = name_p },
-        .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
-    };
-    try sth.queueInsertFromPayload(engine, "users", id, "ns", &cols);
+    _ = allocator;
+    try sth.enqueueDocumentWrite(engine, "users", id, "ns", &.{
+        .{ .name = "name", .field_type = .text, .value = .{ .text = name } },
+        .{ .name = "age", .field_type = .integer, .value = .{ .integer = age } },
+    });
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
-    const cols = [_]ColumnValue{
-        .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
-    };
-    try sth.queueInsertFromPayload(engine, "scores", id, "ns", &cols);
+    try sth.enqueueDocumentWrite(engine, "scores", id, "ns", &.{
+        .{ .name = "score", .field_type = .integer, .value = .{ .integer = score } },
+    });
 }
 
 fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
@@ -211,19 +207,11 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
-    defer tags_payload.free(allocator);
-    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
-    defer labels_payload.free(allocator);
-    const name_payload = try msgpack.Payload.strToPayload("Task 1", allocator);
-    defer name_payload.free(allocator);
-
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = name_payload },
-        .{ .name = "tags", .value = tags_payload },
-        .{ .name = "labels", .value = labels_payload },
-    };
-    try sth.queueInsertFromPayload(engine, "items", "id1", "ns", &cols);
+    try sth.enqueueDocumentWrite(engine, "items", "id1", "ns", &.{
+        .{ .name = "name", .field_type = .text, .value = .{ .text = "Task 1" } },
+        .{ .name = "tags", .field_type = .array, .value = .{ .array_json = "[\"urgent\", \"home\"]" } },
+        .{ .name = "labels", .field_type = .array, .value = .{ .array_json = "[\"work\", \"p1\"]" } },
+    });
     try engine.flushPendingWrites();
 
     var filter = query_parser.QueryFilter{};
@@ -397,10 +385,8 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 }
 
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
-    const data_p = try msgpack.Payload.strToPayload(data, allocator);
-    defer data_p.free(allocator);
-    const cols = [_]sth.ColumnValue{
-        .{ .name = "data", .value = data_p },
-    };
-    try sth.queueInsertFromPayload(engine, "wildcards", id, namespace, &cols);
+    _ = allocator;
+    try sth.enqueueDocumentWrite(engine, "wildcards", id, namespace, &.{
+        .{ .name = "data", .field_type = .text, .value = .{ .text = data } },
+    });
 }

@@ -129,3 +129,121 @@ test "write_command: field payload validation and invalid payload" {
         ),
     );
 }
+
+test "write_command: field payload validation unknown immutable and required" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        .{
+            .name = "required_text",
+            .sql_type = .text,
+            .required = true,
+            .indexed = false,
+            .references = null,
+            .on_delete = null,
+        },
+    };
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{table});
+    defer sm.deinit();
+
+    try testing.expectError(
+        sth.StorageError.UnknownField,
+        write_command.buildFieldWriteFromPayload(
+            allocator,
+            &sm,
+            "items",
+            "id1",
+            "ns",
+            "ghost",
+            msgpack.Payload.intToPayload(1),
+        ),
+    );
+
+    try testing.expectError(
+        sth.StorageError.ImmutableField,
+        write_command.buildFieldWriteFromPayload(
+            allocator,
+            &sm,
+            "items",
+            "id1",
+            "ns",
+            "id",
+            msgpack.Payload.intToPayload(1),
+        ),
+    );
+
+    try testing.expectError(
+        sth.StorageError.NullNotAllowed,
+        write_command.buildFieldWriteFromPayload(
+            allocator,
+            &sm,
+            "items",
+            "id1",
+            "ns",
+            "required_text",
+            .nil,
+        ),
+    );
+}
+
+test "write_command: array payload validation and conversion" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{sth.makeField("tags", .array, false)};
+    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{table});
+    defer sm.deinit();
+
+    // Document-write array validation: reject non-literal array elements.
+    var doc_payload = msgpack.Payload.mapPayload(allocator);
+    defer doc_payload.free(allocator);
+    const doc_arr = try allocator.alloc(msgpack.Payload, 1);
+    doc_arr[0] = msgpack.Payload.mapPayload(allocator);
+    try doc_payload.mapPut("tags", .{ .arr = doc_arr });
+    try testing.expectError(
+        sth.StorageError.InvalidArrayElement,
+        write_command.buildDocumentWriteFromPayload(allocator, &sm, "items", "id1", "ns", doc_payload),
+    );
+
+    // Field-write array validation: reject non-literal array elements.
+    const bad_field_arr = try allocator.alloc(msgpack.Payload, 1);
+    bad_field_arr[0] = msgpack.Payload.mapPayload(allocator);
+    const bad_field_payload = msgpack.Payload{ .arr = bad_field_arr };
+    defer bad_field_payload.free(allocator);
+    try testing.expectError(
+        sth.StorageError.InvalidArrayElement,
+        write_command.buildFieldWriteFromPayload(
+            allocator,
+            &sm,
+            "items",
+            "id1",
+            "ns",
+            "tags",
+            bad_field_payload,
+        ),
+    );
+
+    // Positive case: literal arrays are converted to JSON-backed write values.
+    const ok_payload = try msgpack.jsonToPayload("[1,2,3]", allocator);
+    defer ok_payload.free(allocator);
+    var ok = try write_command.buildFieldWriteFromPayload(
+        allocator,
+        &sm,
+        "items",
+        "id1",
+        "ns",
+        "tags",
+        ok_payload,
+    );
+    defer ok.deinit(allocator);
+
+    try testing.expect(ok.field_type == .array);
+    switch (ok.value) {
+        .array_json => |json| {
+            try testing.expect(std.mem.startsWith(u8, json, "["));
+            try testing.expect(std.mem.endsWith(u8, json, "]"));
+        },
+        else => return error.UnexpectedType,
+    }
+}
