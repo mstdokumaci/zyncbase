@@ -31,12 +31,21 @@ pub const StoreLoadMoreRequest = struct {
 
 pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
     if (payload != .map) return error.InvalidMessageFormat;
-    // SAFETY: All fields will be set by the loop below for non-optional fields,
-    // and optional fields default to null. Missing required fields are caught
-    // by the found-array check after the loop.
-    var result: T = undefined;
+    var result: T = comptime blk: {
+        // SAFETY: Fields are either initialized with their default values here or will be
+        // explicitly set during payload processing or the post-extraction optional check.
+        var base: T = undefined;
+        for (std.meta.fields(T)) |field| {
+            if (field.default_value_ptr) |ptr| {
+                const val = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
+                @field(base, field.name) = val;
+            }
+        }
+        break :blk base;
+    };
     var found = comptime blk: {
         var bytes: [std.meta.fields(T).len]u8 = undefined;
+        @setEvalBranchQuota(2000);
         for (&bytes) |*b| b.* = 0;
         break :blk bytes;
     };
@@ -51,76 +60,76 @@ pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
         inline for (std.meta.fields(T), 0..) |field, i| {
             if (std.mem.eql(u8, key_str, field.name)) {
                 found[i] = 1;
-                switch (@typeInfo(field.type)) {
-                    .bool => {
-                        if (val == .bool) {
-                            @field(result, field.name) = val.bool;
-                        } else {
-                            return error.InvalidMessageFormat;
-                        }
-                    },
-                    .pointer => |ptr| {
-                        if (ptr.child == u8) {
-                            if (val == .str) {
-                                @field(result, field.name) = val.str.value();
-                            } else {
-                                return error.InvalidMessageFormat;
-                            }
-                        } else if (ptr.child == []const u8) {
-                            if (val == .arr) {
-                                const arr = val.arr;
-                                const slice = try allocator.alloc([]const u8, arr.len);
-                                var valid = true;
-                                for (arr, 0..) |elem, j| {
-                                    if (elem == .str) {
-                                        slice[j] = elem.str.value();
-                                    } else {
-                                        valid = false;
-                                    }
-                                }
-                                if (!valid) {
-                                    allocator.free(slice);
-                                    return error.InvalidMessageFormat;
-                                }
-                                @field(result, field.name) = slice;
-                            } else {
-                                return error.InvalidMessageFormat;
-                            }
-                        } else {
-                            @compileError("Unsupported pointer field type: " ++ field.name);
-                        }
-                    },
-                    .int => {
-                        if (val == .uint) {
-                            @field(result, field.name) = @intCast(val.uint);
-                        } else if (val == .int) {
-                            @field(result, field.name) = @intCast(val.int);
-                        } else {
-                            return error.InvalidMessageFormat;
-                        }
-                    },
-                    .optional => {
-                        @field(result, field.name) = val;
-                    },
-                    else => {
-                        @compileError("Unsupported field type for field: " ++ field.name ++ " of type: " ++ @typeName(field.type));
-                    },
-                }
+                @field(result, field.name) = try extractValue(field.type, allocator, val);
             }
         }
     }
 
     inline for (std.meta.fields(T), 0..) |field, i| {
-        const is_optional = @typeInfo(field.type) == .optional;
-        if (!is_optional and found[i] == 0) {
-            return error.MissingRequiredFields;
-        }
-        if (is_optional and found[i] == 0) {
-            @field(result, field.name) = null;
+        if (found[i] == 0) {
+            if (field.default_value_ptr != null) {
+                // Default value already applied during initialization
+            } else if (@typeInfo(field.type) == .optional) {
+                @field(result, field.name) = null;
+            } else {
+                return error.MissingRequiredFields;
+            }
         }
     }
 
     return result;
+}
+
+fn extractValue(comptime T: type, allocator: Allocator, val: Payload) anyerror!T {
+    if (T == Payload) return val;
+    if (T == ?Payload) return val;
+
+    switch (@typeInfo(T)) {
+        .bool => {
+            if (val == .bool) return val.bool;
+            return error.InvalidMessageFormat;
+        },
+        .pointer => |ptr| {
+            if (ptr.child == u8) {
+                if (val == .str) return val.str.value();
+                return error.InvalidMessageFormat;
+            } else if (ptr.child == []const u8) {
+                if (val == .arr) {
+                    const arr = val.arr;
+                    const slice = try allocator.alloc([]const u8, arr.len);
+                    var valid = true;
+                    for (arr, 0..) |elem, j| {
+                        if (elem == .str) {
+                            slice[j] = elem.str.value();
+                        } else {
+                            valid = false;
+                        }
+                    }
+                    if (!valid) {
+                        allocator.free(slice);
+                        return error.InvalidMessageFormat;
+                    }
+                    return slice;
+                } else {
+                    return error.InvalidMessageFormat;
+                }
+            } else {
+                @compileError("Unsupported pointer field type: " ++ @typeName(T));
+            }
+        },
+        .int => {
+            if (val == .uint) return @intCast(val.uint);
+            if (val == .int) return @intCast(val.int);
+            return error.InvalidMessageFormat;
+        },
+        .optional => |opt| {
+            if (val == .nil) return null;
+            return try extractValue(opt.child, allocator, val);
+        },
+        else => {
+            @compileError("Unsupported type: " ++ @typeName(T));
+        },
+    }
 }
 
 // === Pre-encoded MsgPack headers (computed at comptime) ===

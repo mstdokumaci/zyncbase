@@ -290,3 +290,45 @@ test "encodeDeltaSuffix: with string id" {
     try testing.expectEqualStrings("posts", path.arr[0].str.value());
     try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
 }
+
+test "extractAs: respects default values" {
+    const allocator = testing.allocator;
+
+    const TestStruct = struct {
+        required: u64,
+        with_default: u64 = 42,
+        optional_with_default: ?u64 = 100,
+        optional_no_default: ?u64,
+    };
+
+    // Case 1: Only required field provided
+    {
+        var map = Payload.mapPayload(allocator);
+        defer map.free(allocator);
+        try map.mapPut("required", Payload.uintToPayload(10));
+
+        const result = try protocol.extractAs(TestStruct, undefined, map);
+
+        try testing.expectEqual(@as(u64, 10), result.required);
+        try testing.expectEqual(@as(u64, 42), result.with_default);
+        try testing.expectEqual(@as(?u64, 100), result.optional_with_default);
+        try testing.expectEqual(@as(?u64, null), result.optional_no_default);
+    }
+
+    // Case 2: Overriding defaults
+    {
+        var map = Payload.mapPayload(allocator);
+        defer map.free(allocator);
+        try map.mapPut("required", Payload.uintToPayload(10));
+        try map.mapPut("with_default", Payload.uintToPayload(50));
+        try map.mapPut("optional_with_default", Payload.uintToPayload(200));
+        try map.mapPut("optional_no_default", Payload.uintToPayload(300));
+
+        const result = try protocol.extractAs(TestStruct, undefined, map);
+
+        try testing.expectEqual(@as(u64, 10), result.required);
+        try testing.expectEqual(@as(u64, 50), result.with_default);
+        try testing.expectEqual(@as(?u64, 200), result.optional_with_default);
+        try testing.expectEqual(@as(?u64, 300), result.optional_no_default);
+    }
+}
