@@ -30,8 +30,6 @@ pub const MessageHandler = struct {
     schema_manager: *const SchemaManager,
     security_config: SecurityConfig,
 
-    pub const MessageInfo = protocol.Envelope;
-
     pub fn init(
         self: *MessageHandler,
         allocator: Allocator,
@@ -138,7 +136,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         allocator: std.mem.Allocator,
         conn: *Connection,
-        msg_info: MessageInfo,
+        msg_info: protocol.Envelope,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
@@ -161,15 +159,11 @@ pub const MessageHandler = struct {
         conn.resetSession();
     }
 
-    pub fn extractMessageInfo(self: *MessageHandler, parsed: msgpack.Payload) !MessageInfo {
-        return protocol.extractAs(protocol.Envelope, self.allocator, parsed);
-    }
-
     pub fn routeMessage(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
-        msg_info: MessageInfo,
+        msg_info: protocol.Envelope,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {

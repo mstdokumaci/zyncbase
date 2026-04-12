@@ -3,7 +3,6 @@ const testing = std.testing;
 
 const helpers = @import("app_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
-const createMockWebSocket = helpers.createMockWebSocket;
 const routeWithArena = helpers.routeWithArena;
 const parseResponse = helpers.parseResponse;
 
@@ -17,12 +16,11 @@ test "Connection - init and deinit" {
     try app.init(allocator, "conn-init", &.{});
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    const sc = try app.openScopedConnection(&ws);
+    const sc = try app.setupMockConnection();
     defer sc.deinit();
     const state = sc.conn;
 
-    try testing.expectEqual(ws.getConnId(), state.id);
+    try testing.expectEqual(sc.ws.getConnId(), state.id);
     try testing.expectEqual(@as(?[]const u8, null), state.user_id);
     try testing.expectEqualStrings("default", state.namespace);
     try testing.expectEqual(@as(usize, 0), state.subscription_ids.items.len);
@@ -34,8 +32,7 @@ test "Connection - add subscription IDs" {
     try app.init(allocator, "conn-subs", &.{});
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    const sc = try app.openScopedConnection(&ws);
+    const sc = try app.setupMockConnection();
     defer sc.deinit();
     const state = sc.conn;
 
@@ -67,8 +64,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
     try app.initWithSchemaJSON(allocator, "mh-storage-int", schema_json);
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    const sc = try app.openScopedConnection(&ws);
+    const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
 
@@ -87,7 +83,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -110,7 +106,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -159,8 +155,7 @@ test "MessageHandler - flattened field path via StoreSet" {
     try app.initWithSchema(allocator, "mh-resolve-field", schema);
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    const sc = try app.openScopedConnection(&ws);
+    const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
 
@@ -173,7 +168,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try helpers.routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -196,7 +191,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try helpers.routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -218,7 +213,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const response = try helpers.routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response = try helpers.routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res = try parseResponse(allocator, response);
         defer allocator.free(res.resp_type);
@@ -255,8 +250,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     try app.initWithSchema(allocator, "mh-deep-nested", schema);
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    const sc = try app.openScopedConnection(&ws);
+    const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
 
@@ -270,7 +264,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response_copy = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response_copy);
 
         // Verify Set response is "ok"
@@ -292,7 +286,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        const response_copy = try routeWithArena(&app.handler, allocator, conn, try app.handler.extractMessageInfo(parsed), parsed);
+        const response_copy = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response_copy);
 
         // Parse actual value
@@ -321,11 +315,9 @@ test "MessageHandler: StoreSet field extraction" {
     });
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "normal");
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
     // Test 1: Basic StoreSet message field extraction
     {
@@ -334,8 +326,8 @@ test "MessageHandler: StoreSet field extraction" {
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         try testing.expect(response.len > 0);
     }
@@ -357,8 +349,8 @@ test "MessageHandler: StoreSet field extraction" {
             var reader: std.Io.Reader = .fixed(message);
             const parsed = try msgpack_utils.decode(allocator, &reader);
             defer parsed.free(allocator);
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+
+            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response);
             try testing.expect(response.len > 0);
         }
@@ -383,8 +375,8 @@ test "MessageHandler: StoreSet field extraction" {
         var reader: std.Io.Reader = .fixed(message);
         const parsed = try msgpack_utils.decode(allocator, &reader);
         defer parsed.free(allocator);
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
         const res_parsed = try helpers.parseResponse(allocator, response);
         defer {
@@ -404,19 +396,17 @@ test "MessageHandler: StoreSet success response format" {
     });
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "normal");
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
     const message = try msgpack_helpers.createStoreSetMessage(allocator, 1, "test", &.{ "test", "key" }, "val");
     defer allocator.free(message);
     var reader_msg: std.Io.Reader = .fixed(message);
     const parsed = try msgpack_utils.decode(allocator, &reader_msg);
     defer parsed.free(allocator);
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+
+    const response = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response);
 
     var reader_resp: std.Io.Reader = .fixed(response);
@@ -436,11 +426,9 @@ test "MessageHandler: StoreQuery field extraction" {
     });
     defer app.deinit();
 
-    var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
-    defer app.manager.onClose(&ws, 1000, "normal");
-    const conn = try app.manager.acquireConnection(ws.getConnId());
-    defer if (conn.release()) app.memory_strategy.releaseConnection(conn);
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
 
     var filter_map = msgpack_utils.Payload.mapPayload(allocator);
     defer filter_map.free(allocator);
@@ -458,8 +446,8 @@ test "MessageHandler: StoreQuery field extraction" {
     var reader: std.Io.Reader = .fixed(message);
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
-    const msg_info = try app.handler.extractMessageInfo(parsed);
-    const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+
+    const response = try routeWithArena(&app.handler, allocator, conn, parsed);
     defer allocator.free(response);
     try testing.expect(response.len > 0);
 }

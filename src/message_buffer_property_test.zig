@@ -2,10 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const helpers = @import("app_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
-const createMockWebSocket = helpers.createMockWebSocket;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
-
 test "buffer: message deallocation after processing" {
     // This property test verifies that for any processed message,
     // the message buffer is deallocated after processing completes.
@@ -32,8 +30,7 @@ test "buffer: message deallocation after processing" {
 
     // Test 1: Single message processing
     {
-        var ws = createMockWebSocket();
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -46,12 +43,7 @@ test "buffer: message deallocation after processing" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        // Extract message info
-        const msg_info = try app.handler.extractMessageInfo(parsed);
-        try testing.expectEqualStrings("StoreSet", msg_info.type);
-
-        // Route the message
-        const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
         defer allocator.free(response);
 
         // Response should be a success response
@@ -60,6 +52,10 @@ test "buffer: message deallocation after processing" {
 
     // Test 2: Error cases also deallocate buffers
     {
+        const sc = try app.setupMockConnection();
+        defer sc.deinit();
+        const conn = sc.conn;
+
         // Create invalid message (missing required fields)
         const invalid_message = try msgpack.createInvalidStoreSetMessageMissingId(allocator, "test");
         defer allocator.free(invalid_message);
@@ -68,15 +64,13 @@ test "buffer: message deallocation after processing" {
         const parsed = try msgpack.decode(allocator, &reader);
         defer parsed.free(allocator);
 
-        // This should fail but not leak memory (parsed.free is called)
-        const result = app.handler.extractMessageInfo(parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
+        const response = routeWithArena(&app.handler, allocator, conn, parsed);
+        try testing.expectError(error.MissingRequiredFields, response);
     }
 
     // Test 3: Stress test with many messages
     {
-        var ws = createMockWebSocket();
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -96,16 +90,14 @@ test "buffer: message deallocation after processing" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response);
         }
     }
 
     // Test 4: Mixed message types
     {
-        var ws = createMockWebSocket();
-        const sc = try app.openScopedConnection(&ws);
+        const sc = try app.setupMockConnection();
         defer sc.deinit();
         const conn = sc.conn;
 
@@ -118,8 +110,7 @@ test "buffer: message deallocation after processing" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response);
         }
 
@@ -132,8 +123,7 @@ test "buffer: message deallocation after processing" {
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
-            const msg_info = try app.handler.extractMessageInfo(parsed);
-            const response = try routeWithArena(&app.handler, allocator, conn, msg_info, parsed);
+            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
             defer allocator.free(response);
         }
     }
@@ -173,8 +163,7 @@ test "buffer: concurrent message deallocation" {
         }
 
         fn runInternal(ctx: *ThreadContext) !void {
-            var ws = createMockWebSocket();
-            const sc = try ctx.app.openScopedConnection(&ws);
+            const sc = try ctx.app.setupMockConnection();
             defer sc.deinit();
             const conn = sc.conn;
 
@@ -193,8 +182,7 @@ test "buffer: concurrent message deallocation" {
                 const parsed = try msgpack.decode(ctx.app.allocator, &reader);
                 defer parsed.free(ctx.app.allocator);
 
-                const msg_info = try ctx.app.handler.extractMessageInfo(parsed);
-                const response = routeWithArena(&ctx.app.handler, ctx.app.allocator, conn, msg_info, parsed) catch |err| {
+                const response = routeWithArena(&ctx.app.handler, ctx.app.allocator, conn, parsed) catch |err| {
                     if (err == error.InvalidOperation) continue;
                     return err;
                 };

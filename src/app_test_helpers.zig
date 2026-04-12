@@ -15,6 +15,7 @@ pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
+const protocol = @import("protocol.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -30,10 +31,12 @@ pub fn createMockWebSocket() WebSocket {
 
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// The caller is responsible for freeing the returned []u8.
-pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, msg_info: MessageHandler.MessageInfo, parsed: msgpack.Payload) ![]u8 {
+pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, parsed: msgpack.Payload) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
+
+    const msg_info = try protocol.extractAs(protocol.Envelope, arena_allocator, parsed);
 
     const result = try handler.routeRequest(arena_allocator, conn, msg_info, parsed);
 
@@ -187,6 +190,7 @@ pub const AppTestContext = struct {
         app: *AppTestContext,
         ws: *WebSocket,
         conn: *Connection,
+        owns_ws: bool = false,
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
@@ -196,8 +200,27 @@ pub const AppTestContext = struct {
             if (self.conn.release()) {
                 self.app.memory_strategy.releaseConnection(self.conn);
             }
+
+            // 3. Free ws if we own it
+            if (self.owns_ws) {
+                self.app.allocator.destroy(self.ws);
+            }
         }
     };
+
+    /// High-level helper to completely create, open, and manage a mock connection for tests.
+    pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
+        const ws = try self.allocator.create(WebSocket);
+        ws.* = createMockWebSocket();
+        try self.manager.onOpen(ws);
+        const conn = try self.manager.acquireConnection(ws.getConnId());
+        return ScopedConnection{
+            .app = self,
+            .ws = ws,
+            .conn = conn,
+            .owns_ws = true,
+        };
+    }
 
     /// Helper to simulate a graceful shutdown of all connections in a test environment.
     /// This calls ConnectionManager.closeAllConnections() and then manually triggers

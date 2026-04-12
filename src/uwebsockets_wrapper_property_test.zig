@@ -4,6 +4,8 @@ const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
+const helpers = @import("app_test_helpers.zig");
+const createMockWebSocket = helpers.createMockWebSocket;
 
 // This property test verifies that WebSocket callbacks are invoked for all connection events:
 // - on_open callback is invoked when a connection opens
@@ -413,14 +415,4 @@ fn testOnErrorProperty(ws: *WebSocket, user_data: ?*anyopaque) void {
         ctx.error_called += 1;
         ctx.received_user_data = data;
     }
-}
-
-fn createMockWebSocket() WebSocket {
-    // Create a mock WebSocket for testing
-    // In a real scenario, this would be provided by the uWebSockets library
-    // For property testing, we just need a valid struct
-    return WebSocket{
-        .ws = null, // Not used in property tests
-        .ssl = false,
-    };
 }
