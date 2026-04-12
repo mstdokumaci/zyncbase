@@ -3,6 +3,7 @@ const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine/types.zig");
 const helpers = @import("app_test_helpers.zig");
+const protocol = @import("protocol.zig");
 const StorageError = storage_mod.StorageError;
 
 test "StoreService: set - full document replacement" {
@@ -377,10 +378,10 @@ test "StoreService: query - basic search" {
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
     try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
-    var results = try app.store_service.query(allocator, "users", "ns", filter_map);
-    defer results.deinit();
+    var qr = try app.store_service.query(allocator, "users", "ns", filter_map);
+    defer qr.deinit(allocator);
 
-    const results_p = results.value orelse return error.TestExpectedValue;
+    const results_p = qr.results.value orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), results_p.arr.len);
     const doc = results_p.arr[0];
     const name_val = (try doc.mapGet("name")) orelse return error.TestExpectedValue;
@@ -416,12 +417,12 @@ test "StoreService: query - orderBy and limit" {
     try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
     try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(2));
 
-    var results = try app.store_service.query(allocator, "tasks", "ns", filter_map);
-    defer results.deinit();
+    var qr = try app.store_service.query(allocator, "tasks", "ns", filter_map);
+    defer qr.deinit(allocator);
 
-    const results_p = results.value orelse return error.TestExpectedValue;
+    const results_p = qr.results.value orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), results_p.arr.len);
-    try testing.expect(results.next_cursor_arr != null);
+    try testing.expect(qr.results.next_cursor_arr != null);
 }
 
 test "StoreService: query - negative cases" {
@@ -454,4 +455,66 @@ test "StoreService: query - negative cases" {
         const err = app.store_service.query(allocator, "data", "ns", filter_map);
         try testing.expectError(StorageError.UnknownField, err);
     }
+}
+
+test "StoreService: queryWithCursor - pagination" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-cursor", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    // Seed 5 items
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const str = try std.fmt.allocPrint(allocator, "item-{}", .{i});
+        defer allocator.free(str);
+        const val = try msgpack.Payload.strToPayload(str, allocator);
+        defer val.free(allocator);
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val }};
+        const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
+        defer allocator.free(id);
+        try app.storage_engine.insertOrReplace("data", id, "ns", &cols);
+    }
+    try app.storage_engine.flushPendingWrites();
+
+    // 1. Initial query: limit 2
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+    try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(2));
+
+    var qr = try app.store_service.query(allocator, "data", "ns", filter_map);
+    defer qr.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), qr.results.value.?.arr.len);
+    try testing.expect(qr.results.next_cursor_arr != null);
+
+    // Save the cursor token (encoded)
+    const encoded_cursor = try protocol.encodeCursor(allocator, qr.results.next_cursor_arr.?);
+    defer allocator.free(encoded_cursor);
+
+    // Decode it back to a domain object (simulating what MessageHandler does)
+    const cursor = try protocol.decodeCursor(allocator, encoded_cursor);
+    errdefer cursor.deinit(allocator);
+
+    // 2. Query with cursor: fetch next 2
+    var next_results = try app.store_service.queryWithCursor(allocator, "data", "ns", &qr.filter, cursor);
+    defer next_results.deinit();
+
+    const next_results_p = next_results.value orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), next_results_p.arr.len);
+
+    // Verify results are different (pagination worked)
+    const first_results = qr.results.value orelse return error.TestExpectedValue;
+    const first_doc = first_results.arr[0];
+    const first_id_payload = (try first_doc.mapGet("id")) orelse return error.TestExpectedValue;
+    const first_page_id = first_id_payload.str.value();
+
+    const second_results = next_results.value orelse return error.TestExpectedValue;
+    const second_doc = second_results.arr[0];
+    const second_id_payload = (try second_doc.mapGet("id")) orelse return error.TestExpectedValue;
+    const second_page_id = second_id_payload.str.value();
+
+    try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
 }

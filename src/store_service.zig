@@ -119,18 +119,48 @@ pub const StoreService = struct {
     }
 
     /// Execute a filtered query against a collection.
-    /// Parses the query filter from the wire payload and executes against the storage engine.
-    /// The caller owns the returned ManagedPayload and must call deinit().
+    /// Returns both the results and the parsed QueryFilter.
+    /// The caller owns the returned QueryResult and must call deinit().
     pub fn query(
         self: *StoreService,
         allocator: Allocator,
         collection: []const u8,
         namespace: []const u8,
         payload: msgpack.Payload,
-    ) !storage_mod.ManagedPayload {
+    ) !QueryResult {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
-        defer filter.deinit(allocator);
+        errdefer filter.deinit(allocator);
 
-        return try self.storage_engine.selectQuery(allocator, collection, namespace, filter);
+        const results = try self.storage_engine.selectQuery(allocator, collection, namespace, filter);
+        return QueryResult{
+            .results = results,
+            .filter = filter,
+        };
+    }
+
+    /// Execute a query with an existing filter and apply a cursor.
+    /// The caller is responsible for parsing the cursor from the wire format.
+    pub fn queryWithCursor(
+        self: *StoreService,
+        allocator: Allocator,
+        collection: []const u8,
+        namespace: []const u8,
+        filter: *query_parser.QueryFilter,
+        cursor: query_parser.Cursor,
+    ) !storage_mod.ManagedPayload {
+        if (filter.after) |*old| old.deinit(allocator);
+        filter.after = cursor;
+
+        return try self.storage_engine.selectQuery(allocator, collection, namespace, filter.*);
+    }
+};
+
+pub const QueryResult = struct {
+    results: storage_mod.ManagedPayload,
+    filter: query_parser.QueryFilter,
+
+    pub fn deinit(self: *QueryResult, allocator: Allocator) void {
+        self.results.deinit();
+        self.filter.deinit(allocator);
     }
 };
