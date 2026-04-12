@@ -345,7 +345,6 @@ pub const MessageHandler = struct {
         defer sub_query.deinit(arena_allocator);
 
         const cursor = try protocol.decodeCursor(arena_allocator, req.nextCursor);
-        errdefer cursor.deinit(arena_allocator);
 
         var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();

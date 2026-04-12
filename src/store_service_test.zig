@@ -496,7 +496,6 @@ test "StoreService: queryWithCursor - pagination" {
 
     // Decode it back to a domain object (simulating what MessageHandler does)
     const cursor = try protocol.decodeCursor(allocator, encoded_cursor);
-    errdefer cursor.deinit(allocator);
 
     // 2. Query with cursor: fetch next 2
     var next_results = try app.store_service.queryWithCursor(allocator, "data", "ns", &qr.filter, cursor);

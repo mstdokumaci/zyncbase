@@ -274,6 +274,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     // Minimal validation to ensure it's a valid protocol token
     const cursor = try protocol.decodeCursor(allocator, next_cursor.str.value());
     defer cursor.deinit(allocator);
+    try testing.expect(cursor.id.len > 0);
 }
 
 // Task 14 Verification: Error handling for invalid messages
