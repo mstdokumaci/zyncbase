@@ -16,7 +16,7 @@ test {
     _ = @import("connection_manager_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
-    _ = @import("storage_crud_test.zig");
+    _ = @import("storage_engine_writer_test.zig");
     _ = @import("schema_parser_test.zig");
     _ = @import("ddl_generator_test.zig");
     _ = @import("migration_executor_test.zig");

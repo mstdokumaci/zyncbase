@@ -20,6 +20,21 @@ pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
 
+pub const WriteValueInput = union(enum) {
+    integer: i64,
+    real: f64,
+    text: []const u8,
+    boolean: bool,
+    array_json: []const u8,
+    nil: void,
+};
+
+pub const WriteColumnInput = struct {
+    name: []const u8,
+    field_type: FieldType,
+    value: WriteValueInput,
+};
+
 fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
     if (options.in_memory) {
         return TestContext.initInMemory(allocator);
@@ -188,6 +203,68 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
 
 pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payload {
     return try msgpack.Payload.strToPayload(s, allocator);
+}
+
+fn cloneWriteValue(allocator: Allocator, input: WriteValueInput) !write_command.WriteValue {
+    return switch (input) {
+        .integer => |v| .{ .integer = v },
+        .real => |v| .{ .real = v },
+        .text => |v| .{ .text = try allocator.dupe(u8, v) },
+        .boolean => |v| .{ .boolean = v },
+        .array_json => |v| .{ .array_json = try allocator.dupe(u8, v) },
+        .nil => .nil,
+    };
+}
+
+pub fn enqueueDocumentWrite(
+    engine: *StorageEngine,
+    table: []const u8,
+    id: []const u8,
+    namespace: []const u8,
+    columns: []const WriteColumnInput,
+) !void {
+    var write = write_command.DocumentWrite.empty;
+    errdefer write.deinit(engine.allocator);
+
+    write.table = try engine.allocator.dupe(u8, table);
+    write.id = try engine.allocator.dupe(u8, id);
+    write.namespace = try engine.allocator.dupe(u8, namespace);
+    write.columns = try engine.allocator.alloc(write_command.WriteColumn, columns.len);
+
+    for (write.columns) |*col| {
+        col.* = .{ .name = "", .field_type = .text, .value = .nil };
+    }
+    for (columns, 0..) |in_col, i| {
+        write.columns[i] = .{
+            .name = try engine.allocator.dupe(u8, in_col.name),
+            .field_type = in_col.field_type,
+            .value = try cloneWriteValue(engine.allocator, in_col.value),
+        };
+    }
+
+    try engine.takeDocumentWrite(&write);
+}
+
+pub fn enqueueFieldWrite(
+    engine: *StorageEngine,
+    table: []const u8,
+    id: []const u8,
+    namespace: []const u8,
+    field_name: []const u8,
+    field_type: FieldType,
+    value: WriteValueInput,
+) !void {
+    var write = write_command.FieldWrite{
+        .table = try engine.allocator.dupe(u8, table),
+        .id = try engine.allocator.dupe(u8, id),
+        .namespace = try engine.allocator.dupe(u8, namespace),
+        .field = try engine.allocator.dupe(u8, field_name),
+        .field_type = field_type,
+        .value = try cloneWriteValue(engine.allocator, value),
+    };
+    errdefer write.deinit(engine.allocator);
+
+    try engine.takeFieldWrite(&write);
 }
 
 pub fn queueInsertFromPayload(
