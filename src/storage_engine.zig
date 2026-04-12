@@ -19,6 +19,7 @@ const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
 pub const ColumnValue = types.ColumnValue;
+pub const TypedColumnValue = types.TypedColumnValue;
 pub const ManagedPayload = types.ManagedPayload;
 pub const TypedValue = types.TypedValue;
 pub const CheckpointMode = types.CheckpointMode;
@@ -461,6 +462,30 @@ pub const StorageEngine = struct {
         try self.pushWrite(op);
     }
 
+    /// INSERT OR REPLACE using pre-typed values.
+    /// Ownership contract: this function takes ownership of `columns` values.
+    /// Callers must not deinit typed values after calling, regardless of success/failure.
+    pub fn insertOrReplaceTyped(
+        self: *StorageEngine,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        columns: []const TypedColumnValue,
+    ) !void {
+        try self.ensureRunning();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+
+        var moved_to_op = false;
+        errdefer if (!moved_to_op) types.deinitTypedColumns(columns, self.allocator);
+
+        var op = try writer.buildInsertOrReplaceTypedOp(self.allocator, self.schema_manager, table, id, namespace, columns);
+        moved_to_op = true;
+        errdefer op.deinit(self.allocator);
+
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.pushWrite(op);
+    }
+
     /// UPDATE a single field in a table.
     pub fn updateField(
         self: *StorageEngine,
@@ -473,6 +498,31 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.pushWrite(op);
+    }
+
+    /// UPDATE a single field using a pre-typed value.
+    /// Ownership contract: this function takes ownership of `value`.
+    /// Callers must not deinit `value` after calling, regardless of success/failure.
+    pub fn updateFieldTyped(
+        self: *StorageEngine,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: TypedValue,
+    ) !void {
+        try self.ensureRunning();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+
+        var moved_to_op = false;
+        errdefer if (!moved_to_op) value.deinit(self.allocator);
+
+        var op = try writer.buildUpdateFieldTypedOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
+        moved_to_op = true;
+        errdefer op.deinit(self.allocator);
+
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

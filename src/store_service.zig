@@ -15,7 +15,7 @@ fn isBuiltInField(name: []const u8) bool {
 }
 
 /// StoreService provides a domain-level facade for storage operations.
-/// It encapsulates schema validation, path resolution, and ColumnValue construction.
+/// It encapsulates schema validation, path resolution, and typed write-value construction.
 pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
@@ -49,8 +49,12 @@ pub const StoreService = struct {
             if (value != .map) return error.InvalidPayload;
 
             // Validate schema and construct columns in a single pass
-            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+            var columns = std.ArrayListUnmanaged(storage_mod.TypedColumnValue).empty;
             defer columns.deinit(self.allocator);
+            var ownership_transferred = false;
+            errdefer if (!ownership_transferred) {
+                storage_mod.deinitTypedColumns(columns.items, self.storage_engine.allocator);
+            };
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
@@ -68,13 +72,19 @@ pub const StoreService = struct {
                         else => |e| return e,
                     };
                 }
+                const typed_value = try storage_mod.TypedValue.fromPayload(
+                    self.storage_engine.allocator,
+                    field.sql_type,
+                    entry.value_ptr.*,
+                );
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
-                    .value = entry.value_ptr.*,
+                    .value = typed_value,
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
+            ownership_transferred = true;
+            try self.storage_engine.insertOrReplaceTyped(table, doc_id, namespace, columns.items);
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
@@ -91,8 +101,13 @@ pub const StoreService = struct {
                 };
             }
 
-            const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = value }};
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
+            const typed_value = try storage_mod.TypedValue.fromPayload(
+                self.storage_engine.allocator,
+                fld.sql_type,
+                value,
+            );
+            const col = [_]storage_mod.TypedColumnValue{.{ .name = fn_inner, .value = typed_value }};
+            try self.storage_engine.insertOrReplaceTyped(table, doc_id, namespace, &col);
         } else {
             return StorageError.InvalidPath;
         }
