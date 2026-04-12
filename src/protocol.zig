@@ -52,6 +52,13 @@ pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
             if (std.mem.eql(u8, key_str, field.name)) {
                 found[i] = 1;
                 switch (@typeInfo(field.type)) {
+                    .bool => {
+                        if (val == .bool) {
+                            @field(result, field.name) = val.bool;
+                        } else {
+                            return error.InvalidMessageFormat;
+                        }
+                    },
                     .pointer => |ptr| {
                         if (ptr.child == u8) {
                             if (val == .str) {
@@ -86,6 +93,8 @@ pub fn extractAs(comptime T: type, allocator: Allocator, payload: Payload) !T {
                     .int => {
                         if (val == .uint) {
                             @field(result, field.name) = @intCast(val.uint);
+                        } else if (val == .int) {
+                            @field(result, field.name) = @intCast(val.int);
                         } else {
                             return error.InvalidMessageFormat;
                         }
