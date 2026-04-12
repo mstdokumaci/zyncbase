@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
+const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
@@ -152,14 +152,14 @@ fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
     };
-    try engine.insertOrReplace("users", id, "ns", &cols);
+    try sth.queueInsertFromPayload(engine, "users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
         .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
     };
-    try engine.insertOrReplace("scores", id, "ns", &cols);
+    try sth.queueInsertFromPayload(engine, "scores", id, "ns", &cols);
 }
 
 fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
@@ -223,7 +223,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
         .{ .name = "tags", .value = tags_payload },
         .{ .name = "labels", .value = labels_payload },
     };
-    try engine.insertOrReplace("items", "id1", "ns", &cols);
+    try sth.queueInsertFromPayload(engine, "items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
 
     var filter = query_parser.QueryFilter{};
@@ -399,8 +399,8 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     const data_p = try msgpack.Payload.strToPayload(data, allocator);
     defer data_p.free(allocator);
-    const cols = [_]storage_engine.ColumnValue{
+    const cols = [_]sth.ColumnValue{
         .{ .name = "data", .value = data_p },
     };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols);
+    try sth.queueInsertFromPayload(engine, "wildcards", id, namespace, &cols);
 }

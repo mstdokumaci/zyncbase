@@ -2,13 +2,13 @@ const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
+const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
-test "property: random query filters on StorageEngine" {
+test "StorageEngine: random query filters" {
     const allocator = testing.allocator;
     const seeded_entity_count = 64;
     const random_query_count = 96;
@@ -66,7 +66,7 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
             .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
             .{ .name = "score", .value = msgpack.Payload.floatToPayload(score) },
         };
-        try engine.insertOrReplace("entities", id, "ns1", &cols);
+        try sth.queueInsertFromPayload(engine, "entities", id, "ns1", &cols);
     }
     try engine.flushPendingWrites();
 }

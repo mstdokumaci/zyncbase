@@ -1,8 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const storage_engine_mod = @import("storage_engine.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = storage_engine_mod.StorageEngine;
-const ColumnValue = storage_engine_mod.ColumnValue;
+const ColumnValue = sth.ColumnValue;
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack_test = @import("msgpack_test_helpers.zig");
@@ -60,7 +61,7 @@ test "storage: error handling read-only filesystem" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
@@ -91,7 +92,7 @@ test "storage: error handling constraint violations" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
@@ -99,7 +100,7 @@ test "storage: error handling constraint violations" {
         const val_payload = try msgpack.Payload.strToPayload("value2", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
@@ -135,7 +136,7 @@ test "storage: error handling transaction rollback on error" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
     }
     try storage.rollbackTransaction();
     {
@@ -164,7 +165,7 @@ test "storage: error handling concurrent access safety" {
         const val_payload = try msgpack.Payload.strToPayload("value1", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -206,7 +207,7 @@ test "storage: error handling empty paths" {
         const val_payload = try msgpack.Payload.strToPayload("value", allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("data_table", "empty", "", &cols);
+        try sth.queueInsertFromPayload(&storage, "data_table", "empty", "", &cols);
     }
     try storage.flushPendingWrites();
     {
@@ -238,7 +239,7 @@ test "storage: error handling large values" {
         const val_payload = try msgpack.Payload.strToPayload(large_value, allocator);
         defer val_payload.free(allocator);
         const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
-        try storage.insertOrReplace("test", "large_key", "test", &cols);
+        try sth.queueInsertFromPayload(&storage, "test", "large_key", "test", &cols);
     }
     try storage.flushPendingWrites();
     {

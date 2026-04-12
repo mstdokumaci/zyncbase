@@ -19,7 +19,6 @@ const sql_utils = @import("storage_engine/sql_utils.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
-pub const ColumnValue = types.ColumnValue;
 pub const DocumentWrite = write_command.DocumentWrite;
 pub const FieldWrite = write_command.FieldWrite;
 pub const ManagedPayload = types.ManagedPayload;
@@ -444,25 +443,7 @@ pub const StorageEngine = struct {
         return reader.getCacheKey(self.allocator, table, namespace, id);
     }
 
-    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
-
     // ─── Storage methods ──────────────────────────────────────────────────
-
-    /// INSERT OR REPLACE a document into a table.
-    pub fn insertOrReplace(
-        self: *StorageEngine,
-        table: []const u8,
-        id: []const u8,
-        namespace: []const u8,
-        columns: []const ColumnValue,
-    ) !void {
-        try self.ensureRunning();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-    }
 
     /// Takes ownership of an already-validated document write command and enqueues it.
     /// The command is consumed regardless of success/failure.
@@ -476,22 +457,6 @@ pub const StorageEngine = struct {
         var op = try writer.buildInsertFromCommandOp(self.allocator, self.schema_manager, &owned);
         errdefer op.deinit(self.allocator);
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-    }
-
-    /// UPDATE a single field in a table.
-    pub fn updateField(
-        self: *StorageEngine,
-        table: []const u8,
-        id: []const u8,
-        namespace: []const u8,
-        field: []const u8,
-        value: msgpack.Payload,
-    ) !void {
-        try self.ensureRunning();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

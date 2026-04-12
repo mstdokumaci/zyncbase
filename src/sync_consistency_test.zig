@@ -30,7 +30,8 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     const val_written = try msgpack.Payload.strToPayload("task 1", allocator);
     defer val_written.free(allocator);
 
-    try engine.insertOrReplace(
+    try sth.queueInsertFromPayload(
+        engine,
         "items",
         "id1",
         "ns",

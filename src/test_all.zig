@@ -51,6 +51,7 @@ test {
     _ = @import("storage_engine_query_property_test.zig");
     _ = @import("subscription_engine_test.zig");
     _ = @import("subscription_engine_perf_test.zig");
+    _ = @import("write_command_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

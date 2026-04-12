@@ -8,13 +8,6 @@ const query_parser = @import("query_parser.zig");
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const StorageError = storage_mod.StorageError;
 
-fn isBuiltInField(name: []const u8) bool {
-    return std.mem.eql(u8, name, "id") or
-        std.mem.eql(u8, name, "namespace_id") or
-        std.mem.eql(u8, name, "created_at") or
-        std.mem.eql(u8, name, "updated_at");
-}
-
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and validated write-command construction.
 pub const StoreService = struct {
@@ -43,89 +36,31 @@ pub const StoreService = struct {
         field_name: ?[]const u8,
         value: msgpack.Payload,
     ) !void {
-        const tbl_md = self.schema_manager.getTable(table) orelse return StorageError.UnknownTable;
         const command_allocator = self.storage_engine.allocator;
 
         if (segments_len == 2) {
-            // Full document replacement
-            if (value != .map) return error.InvalidPayload;
-
-            var write_cmd = write_command.DocumentWrite.empty;
-            errdefer write_cmd.deinit(command_allocator);
-
-            write_cmd.table = try command_allocator.dupe(u8, table);
-            write_cmd.id = try command_allocator.dupe(u8, doc_id);
-            write_cmd.namespace = try command_allocator.dupe(u8, namespace);
-
-            // Validate schema and construct command columns in a single pass.
-            var columns = std.ArrayListUnmanaged(write_command.WriteColumn).empty;
-            defer columns.deinit(command_allocator);
-            errdefer {
-                for (columns.items) |col| col.deinit(command_allocator);
-            }
-
-            var it = value.map.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.* != .str) continue;
-                const fn_inner = entry.key_ptr.*.str.value();
-
-                const field = tbl_md.getField(fn_inner) orelse {
-                    if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
-                    return StorageError.UnknownField;
-                };
-                if (field.required and entry.value_ptr.* == .nil) return StorageError.NullNotAllowed;
-
-                if (field.sql_type == .array) {
-                    msgpack.ensureLiteralArray(entry.value_ptr.*) catch |err| switch (err) {
-                        error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                        else => |e| return e,
-                    };
-                }
-                const write_value = try write_command.WriteValue.fromPayload(
-                    command_allocator,
-                    field.sql_type,
-                    entry.value_ptr.*,
-                );
-                try columns.append(command_allocator, .{
-                    .name = try command_allocator.dupe(u8, fn_inner),
-                    .field_type = field.sql_type,
-                    .value = write_value,
-                });
-            }
-
-            write_cmd.columns = try columns.toOwnedSlice(command_allocator);
-            try self.storage_engine.takeDocumentWrite(&write_cmd);
-        } else if (segments_len == 3) {
-            // Partial update / field-level update
-            const fn_inner = field_name orelse return StorageError.InvalidPath;
-
-            const fld = tbl_md.getField(fn_inner) orelse {
-                if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
-                return StorageError.UnknownField;
-            };
-            if (fld.required and value == .nil) return StorageError.NullNotAllowed;
-
-            if (fld.sql_type == .array) {
-                msgpack.ensureLiteralArray(value) catch |err| switch (err) {
-                    error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                    else => |e| return e,
-                };
-            }
-
-            var write_cmd = write_command.FieldWrite.empty;
-            errdefer write_cmd.deinit(command_allocator);
-
-            write_cmd.table = try command_allocator.dupe(u8, table);
-            write_cmd.id = try command_allocator.dupe(u8, doc_id);
-            write_cmd.namespace = try command_allocator.dupe(u8, namespace);
-            write_cmd.field = try command_allocator.dupe(u8, fn_inner);
-            write_cmd.field_type = fld.sql_type;
-            write_cmd.value = try write_command.WriteValue.fromPayload(
+            var write_cmd = try write_command.buildDocumentWriteFromPayload(
                 command_allocator,
-                fld.sql_type,
+                self.schema_manager,
+                table,
+                doc_id,
+                namespace,
                 value,
             );
-
+            errdefer write_cmd.deinit(command_allocator);
+            try self.storage_engine.takeDocumentWrite(&write_cmd);
+        } else if (segments_len == 3) {
+            const fn_inner = field_name orelse return StorageError.InvalidPath;
+            var write_cmd = try write_command.buildFieldWriteFromPayload(
+                command_allocator,
+                self.schema_manager,
+                table,
+                doc_id,
+                namespace,
+                fn_inner,
+                value,
+            );
+            errdefer write_cmd.deinit(command_allocator);
             try self.storage_engine.takeFieldWrite(&write_cmd);
         } else {
             return StorageError.InvalidPath;

@@ -55,12 +55,6 @@ pub const StorageError = error{
     SQLiteError,
 };
 
-/// A column name + msgpack value pair for storage inserts/updates.
-pub const ColumnValue = struct {
-    name: []const u8,
-    value: msgpack.Payload,
-};
-
 /// A managed payload that might be backed by a cache handle.
 /// Caller MUST call deinit() to release any potential cache handles.
 pub const ManagedPayload = struct {
@@ -111,19 +105,6 @@ pub const TypedValue = union(enum) {
             .blob => |b| allocator.free(b),
             else => {},
         }
-    }
-
-    /// Validates if a msgpack.Payload is compatible with a schema field type.
-    pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
-        if (value == .nil) return;
-        const match = switch (ft) {
-            .text => value == .str,
-            .integer => value == .int or value == .uint,
-            .real => value == .float or value == .uint or value == .int,
-            .boolean => value == .bool,
-            .array => value == .arr,
-        };
-        if (!match) return StorageError.TypeMismatch;
     }
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.

@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const ColumnValue = storage_engine.ColumnValue;
+const ColumnValue = sth.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
@@ -27,7 +26,7 @@ test "StorageEngine: insert and select basic" {
         .{ .name = "name", .value = name_p },
         .{ .name = "age", .value = msgpack.Payload.intToPayload(30) },
     };
-    try engine.insertOrReplace("users", "id1", "ns", &cols);
+    try sth.queueInsertFromPayload(engine, "users", "id1", "ns", &cols);
     try engine.flushPendingWrites();
 
     // Select
@@ -55,13 +54,13 @@ test "StorageEngine: update document" {
     const val1 = try sth.makePayloadStr("v1", allocator);
     defer val1.free(allocator);
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = val1 }};
-    try engine.insertOrReplace("test", "id1", "ns", &cols1);
+    try sth.queueInsertFromPayload(engine, "test", "id1", "ns", &cols1);
     try engine.flushPendingWrites();
 
     const val2 = try sth.makePayloadStr("v2", allocator);
     defer val2.free(allocator);
     const cols2 = [_]ColumnValue{.{ .name = "val", .value = val2 }};
-    try engine.insertOrReplace("test", "id1", "ns", &cols2);
+    try sth.queueInsertFromPayload(engine, "test", "id1", "ns", &cols2);
     try engine.flushPendingWrites();
 
     var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
@@ -85,7 +84,7 @@ test "StorageEngine: delete document" {
 
     const p = try sth.makePayloadStr("foo", allocator);
     defer p.free(allocator);
-    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = p }});
+    try sth.queueInsertFromPayload(engine, "test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = p }});
     try engine.flushPendingWrites();
 
     try engine.deleteDocument("test", "id1", "ns");

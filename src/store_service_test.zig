@@ -3,6 +3,7 @@ const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine/types.zig");
 const helpers = @import("app_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const protocol = @import("protocol.zig");
 const StorageError = storage_mod.StorageError;
 
@@ -357,13 +358,13 @@ test "StoreService: query - basic search" {
     // Seed data
     const val_1 = try msgpack.Payload.strToPayload("Alice", allocator);
     defer val_1.free(allocator);
-    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_1 }};
-    try app.storage_engine.insertOrReplace("users", "user-1", "ns", &cols_1);
+    const cols_1 = [_]sth.ColumnValue{.{ .name = "name", .value = val_1 }};
+    try sth.queueInsertFromPayload(&app.storage_engine, "users", "user-1", "ns", &cols_1);
 
     const val_2 = try msgpack.Payload.strToPayload("Bob", allocator);
     defer val_2.free(allocator);
-    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_2 }};
-    try app.storage_engine.insertOrReplace("users", "user-2", "ns", &cols_2);
+    const cols_2 = [_]sth.ColumnValue{.{ .name = "name", .value = val_2 }};
+    try sth.queueInsertFromPayload(&app.storage_engine, "users", "user-2", "ns", &cols_2);
     try app.storage_engine.flushPendingWrites();
 
     // Build filter: { "conditions": [ ["id", 0, "user-1"] ] }
@@ -400,10 +401,10 @@ test "StoreService: query - orderBy and limit" {
     for (tasks, 0..) |t, i| {
         const title = try msgpack.Payload.strToPayload(t, allocator);
         defer title.free(allocator);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = title }};
+        const cols = [_]sth.ColumnValue{.{ .name = "title", .value = title }};
         const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
         defer allocator.free(id);
-        try app.storage_engine.insertOrReplace("tasks", id, "ns", &cols);
+        try sth.queueInsertFromPayload(&app.storage_engine, "tasks", id, "ns", &cols);
     }
     try app.storage_engine.flushPendingWrites();
 
@@ -472,10 +473,10 @@ test "StoreService: queryWithCursor - pagination" {
         defer allocator.free(str);
         const val = try msgpack.Payload.strToPayload(str, allocator);
         defer val.free(allocator);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val }};
+        const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val }};
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
-        try app.storage_engine.insertOrReplace("data", id, "ns", &cols);
+        try sth.queueInsertFromPayload(&app.storage_engine, "data", id, "ns", &cols);
     }
     try app.storage_engine.flushPendingWrites();
 
