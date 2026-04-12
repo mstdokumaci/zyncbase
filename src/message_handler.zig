@@ -30,6 +30,7 @@ pub const MessageHandler = struct {
     schema_manager: *const SchemaManager,
     security_config: SecurityConfig,
 
+    /// Initialize message handler with all required components
     pub fn init(
         self: *MessageHandler,
         allocator: Allocator,
@@ -53,10 +54,13 @@ pub const MessageHandler = struct {
         };
     }
 
+    /// Clean up message handler resources
     pub fn deinit(self: *MessageHandler) void {
         _ = self;
     }
 
+    /// Handle WebSocket message event
+    /// Parses MessagePack, extracts message info, routes to handler, and sends response
     pub fn handleMessage(
         self: *MessageHandler,
         conn: *Connection,
@@ -65,6 +69,7 @@ pub const MessageHandler = struct {
         const ws = &conn.ws;
         const conn_id = conn.id;
 
+        // 1. Enforce rate limiting under isolated lock
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
                 conn.mutex.lock();
@@ -74,10 +79,12 @@ pub const MessageHandler = struct {
                 const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
 
                 if (conn.last_request_time == null) {
+                    // First request for this connection: grant full burst
                     conn.request_tokens = burst_capacity;
                     conn.last_request_time = now_us;
                 } else {
                     const elapsed_us = now_us - conn.last_request_time.?;
+                    // Basic token bucket / leak rate
                     const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
                     const tokens_to_add: f64 = @as(f64, @floatFromInt(@max(@as(i64, 0), elapsed_us))) * (rate_limit / 1_000_000.0);
 
@@ -102,14 +109,18 @@ pub const MessageHandler = struct {
             }
         }
 
+        // 2. Message processing (Independent of connection state currently)
+        // Acquire dynamic parsing arena from the pool
         const arena = try self.memory_strategy.acquireArena();
         defer self.memory_strategy.releaseArena(arena);
         const arena_allocator = arena.allocator();
 
+        // Parse MessagePack message
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
 
+            // Record violation if it was a security/limit error
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
                     std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
@@ -122,13 +133,17 @@ pub const MessageHandler = struct {
             return;
         };
 
+        // Extract message type and correlation ID
         const msg_info = protocol.extractAs(protocol.Envelope, arena_allocator, parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
             try self.sendError(ws, protocol.err_code_invalid_message_format, protocol.err_msg_missing_type_or_id, null);
             return;
         };
 
+        // Route request and handle errors to produce a wire response
         const response = try self.routeRequest(arena_allocator, conn, msg_info, parsed);
+
+        // Send response (Outside lock to avoid blocking on backpressure)
         ws.send(response, .binary);
     }
 

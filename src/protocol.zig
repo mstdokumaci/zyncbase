@@ -390,6 +390,9 @@ pub const store_delta_header = blk: {
     break :blk buf[0..stream.pos].*;
 };
 
+/// Encodes the suffix of a StoreDelta message (everything after subId).
+/// This includes: "ops", the operation array, path, and optional value.
+/// Caller owns the returned slice (allocated from the arena).
 pub fn encodeDeltaSuffix(
     allocator: Allocator,
     collection: []const u8,
