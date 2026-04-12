@@ -697,4 +697,15 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
 
     const load_sub_id = msgpack.getMapValue(load_resp, "subId") orelse return error.TestExpectedError;
     try testing.expectEqual(sub_id, load_sub_id.uint);
+
+    const load_value = msgpack.getMapValue(load_resp, "value") orelse return error.TestExpectedError;
+    try testing.expect(load_value == .arr);
+    try testing.expectEqual(@as(usize, 1), load_value.arr.len);
+
+    const load_has_more = msgpack.getMapValue(load_resp, "hasMore") orelse return error.TestExpectedError;
+    try testing.expect(load_has_more == .bool);
+    try testing.expectEqual(false, load_has_more.bool);
+
+    const load_next_cursor = msgpack.getMapValue(load_resp, "nextCursor") orelse return error.TestExpectedError;
+    try testing.expect(load_next_cursor == .nil);
 }
