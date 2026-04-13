@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
+const types = @import("types.zig");
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
@@ -159,4 +160,63 @@ pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
 
 pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
+}
+
+pub fn buildInsertOrReplaceSql(
+    allocator: Allocator,
+    table_metadata: schema_manager.TableMetadata,
+    columns: []const types.ColumnValue,
+) ![]const u8 {
+    const table = table_metadata.table.name;
+
+    // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
+    // VALUES (?, ?, .., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
+    // Array columns use jsonb(?) instead of ? as the placeholder.
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+
+    try sql_buf.appendSlice(allocator, "INSERT INTO ");
+    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, " (id, namespace_id");
+    for (columns) |col| {
+        try sql_buf.append(allocator, ',');
+        try sql_buf.appendSlice(allocator, col.name);
+    }
+    try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
+    for (columns) |col| {
+        if (@as(std.meta.Tag(types.TypedValue), col.value) == .blob) {
+            try sql_buf.appendSlice(allocator, ", jsonb(?)");
+        } else {
+            try sql_buf.appendSlice(allocator, ", ?");
+        }
+    }
+    // created_at and updated_at placeholders
+    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+
+    // Update each column provided
+    for (columns, 0..) |col, i| {
+        if (i > 0) try sql_buf.appendSlice(allocator, ", ");
+        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, " = excluded.");
+        try sql_buf.appendSlice(allocator, col.name);
+    }
+    // Always update updated_at
+    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
+    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+
+    return sql_buf.toOwnedSlice(allocator);
+}
+
+pub fn buildDeleteDocumentSql(
+    allocator: Allocator,
+    table_metadata: schema_manager.TableMetadata,
+) ![]const u8 {
+    const table = table_metadata.table.name;
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+    try sql_buf.appendSlice(allocator, "DELETE FROM ");
+    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=? RETURNING ");
+    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    return sql_buf.toOwnedSlice(allocator);
 }

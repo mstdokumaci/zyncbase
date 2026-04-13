@@ -7,7 +7,6 @@ const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
 const reader = @import("storage_engine/reader.zig");
 const pipeline = @import("storage_engine/pipeline.zig");
-const writer = @import("storage_engine/writer.zig");
 const connection = @import("storage_engine/connection.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
@@ -457,7 +456,41 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, table_metadata, id, namespace, columns);
+
+        const sql = try sql_utils.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
+        errdefer self.allocator.free(sql);
+
+        const values = try self.allocator.alloc(TypedValue, columns.len);
+        var initialized_count: usize = 0;
+        errdefer {
+            for (values[0..initialized_count]) |v| v.deinit(self.allocator);
+            self.allocator.free(values);
+        }
+        for (columns, 0..) |col, i| {
+            values[i] = try col.value.clone(self.allocator);
+            initialized_count += 1;
+        }
+
+        const now = std.time.timestamp();
+        const id_owned = try self.allocator.dupe(u8, id);
+        errdefer self.allocator.free(id_owned);
+        const ns_owned = try self.allocator.dupe(u8, namespace);
+        errdefer self.allocator.free(ns_owned);
+        const table_owned = try self.allocator.dupe(u8, table_metadata.table.name);
+        errdefer self.allocator.free(table_owned);
+
+        const op = WriteOp{
+            .insert = .{
+                .table = table_owned,
+                .id = id_owned,
+                .namespace = ns_owned,
+                .sql = sql,
+                .values = values,
+                .timestamp = now,
+                .completion_signal = null,
+            },
+        };
+
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
@@ -619,7 +652,28 @@ pub const StorageEngine = struct {
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildDeleteDocumentOp(self.allocator, self.schema_manager, table, id, namespace);
+        const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
+
+        const sql = try sql_utils.buildDeleteDocumentSql(self.allocator, table_metadata);
+        errdefer self.allocator.free(sql);
+
+        const id_owned = try self.allocator.dupe(u8, id);
+        errdefer self.allocator.free(id_owned);
+        const ns_owned = try self.allocator.dupe(u8, namespace);
+        errdefer self.allocator.free(ns_owned);
+        const table_owned = try self.allocator.dupe(u8, table_metadata.table.name);
+        errdefer self.allocator.free(table_owned);
+
+        const op = WriteOp{
+            .delete = .{
+                .table = table_owned,
+                .id = id_owned,
+                .namespace = ns_owned,
+                .sql = sql,
+                .completion_signal = null,
+            },
+        };
+
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
