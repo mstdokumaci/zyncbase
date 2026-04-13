@@ -174,22 +174,31 @@ pub const StoreService = struct {
         if (isIdEqualsFilter(filter)) |id| {
             // Fast path: use selectDocument with cache
             var doc = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
+            errdefer doc.deinit();
 
-            // Wrap single doc as 1-element array to match query response contract
-            const arr_payload = if (doc.value) |v| blk: {
-                const items = try allocator.alloc(msgpack.Payload, 1);
-                items[0] = v;
-                break :blk msgpack.Payload{ .arr = items };
-            } else msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+            // ALWAYS dynamically allocate the array to prevent static slice crashes on cache misses
+            const items = try allocator.alloc(msgpack.Payload, if (doc.value != null) 1 else 0);
+            if (doc.value) |v| items[0] = v;
 
-            // Transfer ownership: the ManagedPayload now holds the array wrapper.
-            // On cache hit: doc.handle still tracks the cache ref, inner value is borrowed.
-            // On cache miss: inner value is allocator-owned.
-            doc.value = arr_payload;
+            doc.value = msgpack.Payload{ .arr = items };
+
+            var borrowed_wrapper: ?[]msgpack.Payload = null;
+            if (doc.handle != null) {
+                // CACHE HIT: 'items' contains a borrowed payload.
+                // ManagedPayload will NOT run .free() because handle != null.
+                // We track it here to shallow-free just the wrapper array later.
+                borrowed_wrapper = items;
+            } else {
+                // CACHE MISS: 'items' contains an owned payload we just fetched from db.
+                // ManagedPayload WILL run .free(), which will recursively free 'items'
+                // AND the inner payload. We just need to ensure the allocator is set.
+                doc.allocator = allocator;
+            }
 
             return QueryResult{
                 .results = doc,
                 .filter = filter,
+                .fast_path_wrapper = borrowed_wrapper,
             };
         }
 
@@ -197,6 +206,7 @@ pub const StoreService = struct {
         return QueryResult{
             .results = results,
             .filter = filter,
+            .fast_path_wrapper = null,
         };
     }
 
@@ -220,9 +230,11 @@ pub const StoreService = struct {
 pub const QueryResult = struct {
     results: storage_mod.ManagedPayload,
     filter: query_parser.QueryFilter,
+    fast_path_wrapper: ?[]msgpack.Payload = null,
 
     pub fn deinit(self: *QueryResult, allocator: Allocator) void {
         self.results.deinit();
+        if (self.fast_path_wrapper) |wrapper| allocator.free(wrapper);
         self.filter.deinit(allocator);
     }
 };
