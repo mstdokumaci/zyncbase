@@ -12,42 +12,171 @@ test "payloadToJson: empty array produces []" {
     const elems = try allocator.alloc(Payload, 0);
     const p: Payload = .{ .arr = elems };
     defer p.free(allocator);
-    const json = try msgpack_utils.payloadToJson(p, allocator);
+    const json = try msgpack_utils.payloadToJson(p, allocator, .text);
     defer allocator.free(json);
     try testing.expectEqualStrings("[]", json);
 }
 
-test "payloadToJson: [1, \"hello\", true, null]" {
+test "payloadToJson: strings homogeneous" {
     const allocator = testing.allocator;
-    const str_payload = try Payload.strToPayload("hello", allocator);
-    const elems = try allocator.alloc(Payload, 4);
-    elems[0] = .{ .int = 1 };
-    elems[1] = str_payload;
-    elems[2] = .{ .bool = true };
-    elems[3] = .nil;
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    const json = try msgpack_utils.payloadToJson(p, allocator);
-    defer allocator.free(json);
-    try testing.expectEqualStrings("[1, \"hello\", true, null]", json);
-}
-
-// ============================================================
-// payloadToCanonicalString tests
-// ============================================================
-
-test "payloadToCanonicalString: literal array produces JSON string" {
-    const allocator = testing.allocator;
-    const str1 = try Payload.strToPayload("admin", allocator);
-    const str2 = try Payload.strToPayload("editor", allocator);
+    const str1 = try Payload.strToPayload("hello", allocator);
+    const str2 = try Payload.strToPayload("world", allocator);
     const elems = try allocator.alloc(Payload, 2);
     elems[0] = str1;
     elems[1] = str2;
     const p: Payload = .{ .arr = elems };
     defer p.free(allocator);
-    const result = try msgpack_utils.payloadToCanonicalString(p, allocator);
-    defer allocator.free(result);
-    try testing.expectEqualStrings("[\"admin\", \"editor\"]", result);
+    const json = try msgpack_utils.payloadToJson(p, allocator, .text);
+    defer allocator.free(json);
+    try testing.expectEqualStrings("[\"hello\",\"world\"]", json);
+}
+
+test "payloadToJson: integers homogeneous" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 2);
+    elems[0] = .{ .int = 1 };
+    elems[1] = .{ .int = 2 };
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+    const json = try msgpack_utils.payloadToJson(p, allocator, .integer);
+    defer allocator.free(json);
+    try testing.expectEqualStrings("[1,2]", json);
+}
+
+test "payloadToJson: real (floats) homogeneous with .0" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 2);
+    elems[0] = .{ .float = 50.0 };
+    elems[1] = .{ .float = 3.14 };
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+    const json = try msgpack_utils.payloadToJson(p, allocator, .real);
+    defer allocator.free(json);
+    try testing.expectEqualStrings("[50.0, 3.14]", json);
+}
+
+// ============================================================
+// encodeBase64 / decodeBase64 tests
+// ============================================================
+
+test "encodeBase64 / decodeBase64: round-trip for complex payload" {
+    const allocator = testing.allocator;
+
+    var map = msgpack_utils.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("name", try Payload.strToPayload("test", allocator));
+    try map.mapPut("age", .{ .int = 42 });
+
+    const encoded = try msgpack_utils.encodeBase64(allocator, map);
+    defer allocator.free(encoded);
+
+    const decoded = try msgpack_utils.decodeBase64(allocator, encoded);
+    defer decoded.free(allocator);
+
+    try testing.expect(decoded == .map);
+    const name = (try decoded.mapGet("name")) orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("test", name.str.value());
+    const age = (try decoded.mapGet("age")) orelse return error.KeyNotFound;
+    const age_val = switch (age) {
+        .int => |v| v,
+        .uint => |v| @as(i64, @intCast(v)),
+        else => return error.TestFailed,
+    };
+    try testing.expectEqual(@as(i64, 42), age_val);
+}
+
+// ============================================================
+// payloadToJson / jsonToPayload round-trip tests
+// ============================================================
+
+test "payloadToJson/jsonToPayload: text (strings) round-trip" {
+    const allocator = testing.allocator;
+    const s1 = try Payload.strToPayload("hello", allocator);
+    const s2 = try Payload.strToPayload("world", allocator);
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = s1;
+    elems[1] = s2;
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .text);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .text);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqualStrings("hello", roundtripped_p.arr[0].str.value());
+    try testing.expectEqualStrings("world", roundtripped_p.arr[1].str.value());
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: integer round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .int = -123 };
+    elems[1] = .{ .int = 456 };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .integer);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .integer);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(@as(i64, -123), roundtripped_p.arr[0].int);
+    try testing.expectEqual(@as(i64, 456), roundtripped_p.arr[1].int);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: real (float) round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .float = 50.0 };
+    elems[1] = .{ .float = 3.14 };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .real);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .real);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(@as(f64, 50.0), roundtripped_p.arr[0].float);
+    try testing.expectEqual(@as(f64, 3.14), roundtripped_p.arr[1].float);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: boolean round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .bool = true };
+    elems[1] = .{ .bool = false };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .boolean);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .boolean);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(true, roundtripped_p.arr[0].bool);
+    try testing.expectEqual(false, roundtripped_p.arr[1].bool);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
 }
 
 // ============================================================
@@ -56,179 +185,36 @@ test "payloadToCanonicalString: literal array produces JSON string" {
 
 test "jsonToPayload: empty array []" {
     const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[]", allocator);
+    const p = try msgpack_utils.jsonToPayload("[]", allocator, .text);
     defer p.free(allocator);
     try testing.expectEqual(@as(usize, 0), p.arr.len);
 }
 
-test "jsonToPayload: [null]" {
+test "jsonToPayload: [null] (strings)" {
     const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[null]", allocator);
+    const p = try msgpack_utils.jsonToPayload("[null]", allocator, .text);
     defer p.free(allocator);
     try testing.expectEqual(@as(usize, 1), p.arr.len);
     try testing.expectEqual(Payload.nil, p.arr[0]);
 }
 
-test "jsonToPayload: [1, \"hello\", true, null]" {
+test "jsonToPayload: [1, 2, 3] (integers)" {
     const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[1, \"hello\", true, null]", allocator);
+    const p = try msgpack_utils.jsonToPayload("[1, 2, 3]", allocator, .integer);
     defer p.free(allocator);
-    try testing.expectEqual(@as(usize, 4), p.arr.len);
+    try testing.expectEqual(@as(usize, 3), p.arr.len);
     try testing.expectEqual(@as(i64, 1), p.arr[0].int);
-    try testing.expectEqualStrings("hello", p.arr[1].str.value());
-    try testing.expectEqual(true, p.arr[2].bool);
-    try testing.expectEqual(Payload.nil, p.arr[3]);
+    try testing.expectEqual(@as(i64, 2), p.arr[1].int);
+    try testing.expectEqual(@as(i64, 3), p.arr[2].int);
 }
 
-test "jsonToPayload: non-array JSON returns NotAnArray" {
+test "jsonToPayload: [\"a\", \"b\"] (strings)" {
     const allocator = testing.allocator;
-    try testing.expectError(error.NotAnArray, msgpack_utils.jsonToPayload("\"hello\"", allocator));
-    try testing.expectError(error.NotAnArray, msgpack_utils.jsonToPayload("42", allocator));
-    try testing.expectError(error.NotAnArray, msgpack_utils.jsonToPayload("{\"a\":1}", allocator));
-}
-
-test "jsonToPayload: array with object element returns NonLiteralElement" {
-    const allocator = testing.allocator;
-    try testing.expectError(error.NonLiteralElement, msgpack_utils.jsonToPayload("[{\"a\":1}]", allocator));
-}
-
-test "jsonToPayload: array with nested array element returns NonLiteralElement" {
-    const allocator = testing.allocator;
-    try testing.expectError(error.NonLiteralElement, msgpack_utils.jsonToPayload("[[1,2]]", allocator));
-}
-
-// ============================================================
-// Property-based tests (array-jsonb-storage)
-// ============================================================
-
-/// Generate a random literal Payload (nil, bool, int, uint, float, or str).
-fn genLiteralPayload(rand: std.Random, allocator: std.mem.Allocator) !Payload {
-    const tag = rand.intRangeAtMost(u8, 0, 5);
-    return switch (tag) {
-        0 => .nil,
-        1 => .{ .bool = rand.boolean() },
-        2 => .{ .int = rand.int(i64) },
-        3 => .{ .uint = rand.int(u64) },
-        4 => .{ .float = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, -1000, 1000))) },
-        else => try Payload.strToPayload(if (rand.boolean()) "hello" else "world", allocator),
-    };
-}
-
-/// Generate a random Literal_Array Payload (arr of literal elements).
-fn genLiteralArray(rand: std.Random, allocator: std.mem.Allocator) !Payload {
-    const n = rand.intRangeAtMost(usize, 0, 8);
-    const elems = try allocator.alloc(Payload, n);
-    errdefer allocator.free(elems);
-    var count: usize = 0;
-    errdefer for (elems[0..count]) |p| p.free(allocator);
-    for (0..n) |i| {
-        elems[i] = try genLiteralPayload(rand, allocator);
-        count = i + 1;
-    }
-    return Payload{ .arr = elems };
-}
-
-/// Check structural equivalence of two Payloads (deep comparison).
-fn payloadsEqual(a: Payload, b: Payload) bool {
-    const tag_a = std.meta.activeTag(a);
-    const tag_b = std.meta.activeTag(b);
-    if (tag_a != tag_b) return false;
-    return switch (a) {
-        .nil => true,
-        .bool => |v| v == b.bool,
-        .int => |v| v == b.int,
-        .uint => |v| v == b.uint,
-        .float => |v| v == b.float,
-        .str => |s| std.mem.eql(u8, s.value(), b.str.value()),
-        .bin => |bn| std.mem.eql(u8, bn.value(), b.bin.value()),
-        .ext => |e| e.type == b.ext.type and std.mem.eql(u8, e.data, b.ext.data),
-        .arr => |arr| blk: {
-            if (arr.len != b.arr.len) break :blk false;
-            for (arr, b.arr) |x, y| {
-                if (!payloadsEqual(x, y)) break :blk false;
-            }
-            break :blk true;
-        },
-        .map => false, // maps not used in literal arrays
-        else => false, // timestamp and other types not expected in literal arrays
-    };
-}
-
-/// Compare two Payloads for round-trip equivalence through JSON.
-/// JSON has no unsigned integer type, so .uint and .int are considered
-/// equivalent when their numeric values match.
-fn payloadsEqualRoundTrip(a: Payload, b: Payload) bool {
-    // Normalize: treat uint/int as the same numeric kind for comparison
-    const a_as_i64: ?i64 = switch (a) {
-        .int => |v| v,
-        .uint => |v| if (v <= std.math.maxInt(i64)) @intCast(v) else null,
-        else => null,
-    };
-    const b_as_i64: ?i64 = switch (b) {
-        .int => |v| v,
-        .uint => |v| if (v <= std.math.maxInt(i64)) @intCast(v) else null,
-        else => null,
-    };
-    if (a_as_i64 != null and b_as_i64 != null) {
-        return a_as_i64.? == b_as_i64.?;
-    }
-    return payloadsEqual(a, b);
-}
-
-// Feature: array-jsonb-storage, Property 7: JSON round-trip for Literal_Arrays
-test "msgpack_utils: JSON round-trip for Literal_Arrays" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0x3333_4444);
-    const rand = prng.random();
-
-    var iter: usize = 0;
-    while (iter < 100) : (iter += 1) {
-        const original = try genLiteralArray(rand, allocator);
-        defer original.free(allocator);
-
-        const json = try msgpack_utils.payloadToJson(original, allocator);
-        defer allocator.free(json);
-
-        const roundtripped = try msgpack_utils.jsonToPayload(json, allocator);
-        defer roundtripped.free(allocator);
-
-        // Structural equivalence: same length and same element values.
-        // JSON has no unsigned integer type, so uint values come back as int —
-        // use payloadsEqualRoundTrip which treats int/uint as equivalent.
-        try testing.expectEqual(original.arr.len, roundtripped.arr.len);
-        for (original.arr, roundtripped.arr) |orig_elem, rt_elem| {
-            try testing.expect(payloadsEqualRoundTrip(orig_elem, rt_elem));
-        }
-    }
-}
-
-// Feature: array-jsonb-storage, Property 8: jsonToPayload rejects invalid JSON inputs
-test "msgpack_utils: jsonToPayload rejects invalid JSON inputs" {
-    const allocator = testing.allocator;
-
-    // (a) Non-array JSON strings → error
-    const non_array_jsons = [_][]const u8{
-        "\"hello\"",
-        "42",
-        "true",
-        "null",
-        "{\"a\":1}",
-        "3.14",
-    };
-    for (non_array_jsons) |json| {
-        try testing.expectError(error.NotAnArray, msgpack_utils.jsonToPayload(json, allocator));
-    }
-
-    // (b) JSON arrays with object or nested array elements → NonLiteralElement
-    const invalid_array_jsons = [_][]const u8{
-        "[{\"a\":1}]",
-        "[[1,2]]",
-        "[1, {\"x\":2}]",
-        "[[], 3]",
-    };
-    for (invalid_array_jsons) |json| {
-        try testing.expectError(error.NonLiteralElement, msgpack_utils.jsonToPayload(json, allocator));
-    }
+    const p = try msgpack_utils.jsonToPayload("[\"a\", \"b\"]", allocator, .text);
+    defer p.free(allocator);
+    try testing.expectEqual(@as(usize, 2), p.arr.len);
+    try testing.expectEqualStrings("a", p.arr[0].str.value());
+    try testing.expectEqualStrings("b", p.arr[1].str.value());
 }
 
 // ============================================================

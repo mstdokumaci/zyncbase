@@ -546,61 +546,6 @@ pub const StorageEngine = struct {
         return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
     }
 
-    /// SELECT a single field for a document. Returns null if not found.
-    pub fn selectField(
-        self: *StorageEngine,
-        allocator: Allocator,
-        table: []const u8,
-        id: []const u8,
-        namespace: []const u8,
-        field: []const u8,
-    ) !ManagedPayload {
-        try self.ensureRunning();
-        try self.schema_manager.validateField(table, field);
-
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const node = &self.reader_pool[reader_idx];
-        node.mutex.lock();
-        defer node.mutex.unlock();
-
-        const table_metadata = self.schema_manager.getTable(table).?;
-        const field_ctx = table_metadata.getField(field);
-        const sql = try reader.buildSelectFieldSql(allocator, table, field, field_ctx);
-        defer allocator.free(sql);
-
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
-        defer mstmt.release();
-        const stmt = mstmt.stmt;
-        const payload = try reader.execSelectScalar(allocator, &node.conn, stmt, id, namespace, field_ctx);
-        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
-    }
-
-    /// SELECT * for all documents in a namespace.
-    pub fn selectCollection(
-        self: *StorageEngine,
-        allocator: Allocator,
-        table: []const u8,
-        namespace: []const u8,
-    ) !ManagedPayload {
-        try self.ensureRunning();
-        try self.schema_manager.validateTable(table);
-
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const node = &self.reader_pool[reader_idx];
-        node.mutex.lock();
-        defer node.mutex.unlock();
-
-        const table_metadata = self.schema_manager.getTable(table).?;
-        const sql = try reader.buildSelectCollectionSql(allocator, table_metadata);
-        defer allocator.free(sql);
-
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
-        defer mstmt.release();
-        const stmt = mstmt.stmt;
-        const payload = try reader.execSelectCollection(allocator, &node.conn, stmt, namespace, table_metadata);
-        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
-    }
-
     /// SELECT for a query filter.
     pub fn selectQuery(
         self: *StorageEngine,

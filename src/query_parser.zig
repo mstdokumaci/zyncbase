@@ -142,16 +142,7 @@ pub fn parseCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
 ) ParserError!Cursor {
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(token) catch
-        return error.InvalidMessageFormat;
-    const decoded = try allocator.alloc(u8, decoded_len);
-    defer allocator.free(decoded);
-
-    std.base64.standard.Decoder.decode(decoded, token) catch
-        return error.InvalidMessageFormat;
-    const json_cursor = decoded;
-
-    const cursor_payload = msgpack.jsonToPayload(json_cursor, allocator) catch
+    const cursor_payload = msgpack.decodeBase64(allocator, token) catch
         return error.InvalidMessageFormat;
     defer cursor_payload.free(allocator);
 

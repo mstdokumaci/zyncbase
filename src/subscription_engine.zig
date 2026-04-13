@@ -351,7 +351,7 @@ pub const SubscriptionEngine = struct {
 
         for (conds) |c| {
             const val_str = if (c.value) |v|
-                try msgpack.payloadToCanonicalString(v, allocator)
+                try msgpack.encodeBase64(allocator, v)
             else
                 try allocator.dupe(u8, "null");
             sortable[count] = .{ .cond = c, .val_str = val_str };

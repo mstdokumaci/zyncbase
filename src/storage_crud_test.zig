@@ -21,8 +21,8 @@ test "StorageEngine: insert and select basic" {
 
     // Insert
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .text = "Alice" } },
-        .{ .name = "age", .value = .{ .integer = 30 } },
+        .{ .name = "name", .value = .{ .text = "Alice" }, .field_type = .text },
+        .{ .name = "age", .value = .{ .integer = 30 }, .field_type = .integer },
     };
     try engine.insertOrReplace("users", "id1", "ns", &cols);
     try engine.flushPendingWrites();
@@ -49,11 +49,11 @@ test "StorageEngine: update document" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "v1" } }};
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "v1" }, .field_type = .text }};
     try engine.insertOrReplace("test", "id1", "ns", &cols1);
     try engine.flushPendingWrites();
 
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "v2" } }};
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "v2" }, .field_type = .text }};
     try engine.insertOrReplace("test", "id1", "ns", &cols2);
     try engine.flushPendingWrites();
 
@@ -76,7 +76,7 @@ test "StorageEngine: delete document" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "foo" } }});
+    try engine.insertOrReplace("test", "id1", "ns", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "foo" }, .field_type = .text }});
     try engine.flushPendingWrites();
 
     try engine.deleteDocument("test", "id1", "ns");

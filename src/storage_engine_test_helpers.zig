@@ -76,7 +76,7 @@ pub fn makeField(name: []const u8, sql_type: FieldType, required: bool) Field {
     return .{
         .name = name,
         .sql_type = sql_type,
-        .items_type = null,
+        .items_type = if (sql_type == .array) .text else null,
         .required = required,
         .indexed = false,
         .references = null,

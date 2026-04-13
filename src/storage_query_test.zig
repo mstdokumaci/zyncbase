@@ -148,15 +148,15 @@ test "StorageEngine: selectQuery pagination (after)" {
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .text = name } },
-        .{ .name = "age", .value = .{ .integer = age } },
+        .{ .name = "name", .value = .{ .text = name }, .field_type = .text },
+        .{ .name = "age", .value = .{ .integer = age }, .field_type = .integer },
     };
     try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
-        .{ .name = "score", .value = .{ .integer = score } },
+        .{ .name = "score", .value = .{ .integer = score }, .field_type = .integer },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
@@ -201,8 +201,8 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
 
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("name", .text, false),
-        sth.makeField("tags", .array, false),
-        sth.makeField("labels", .array, false),
+        schema_manager.Field{ .name = "tags", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        schema_manager.Field{ .name = "labels", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
     };
     const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
@@ -210,19 +210,19 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
+    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator, .text);
     defer tags_payload.free(allocator);
-    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
+    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator, .text);
     defer labels_payload.free(allocator);
-    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, tags_payload);
+    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, tags_payload);
     defer tags_tv.deinit(allocator);
-    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, labels_payload);
+    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, labels_payload);
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .text = "Task 1" } },
-        .{ .name = "tags", .value = tags_tv },
-        .{ .name = "labels", .value = labels_tv },
+        .{ .name = "name", .value = .{ .text = "Task 1" }, .field_type = .text },
+        .{ .name = "tags", .value = tags_tv, .field_type = .array },
+        .{ .name = "labels", .value = labels_tv, .field_type = .array },
     };
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
@@ -400,7 +400,7 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
     const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = .{ .text = data } },
+        .{ .name = "data", .value = .{ .text = data }, .field_type = .text },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

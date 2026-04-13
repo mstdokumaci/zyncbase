@@ -185,7 +185,7 @@ pub fn buildInsertOrReplaceSql(
     }
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
     for (columns) |col| {
-        if (@as(std.meta.Tag(types.TypedValue), col.value) == .blob) {
+        if (col.field_type == .array) {
             try sql_buf.appendSlice(allocator, ", jsonb(?)");
         } else {
             try sql_buf.appendSlice(allocator, ", ?");

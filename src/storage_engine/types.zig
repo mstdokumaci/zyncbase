@@ -59,6 +59,7 @@ pub const StorageError = error{
 pub const ColumnValue = struct {
     name: []const u8,
     value: TypedValue,
+    field_type: schema_manager.FieldType,
 };
 
 /// A managed payload that might be backed by a cache handle.
@@ -91,7 +92,6 @@ pub const TypedValue = union(enum) {
     real: f64,
     text: []const u8, // Owned
     boolean: bool,
-    blob: []const u8, // Owned (for arrays/complex)
     nil: void,
 
     pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
@@ -100,7 +100,6 @@ pub const TypedValue = union(enum) {
             .real => |v| .{ .real = v },
             .text => |s| .{ .text = try allocator.dupe(u8, s) },
             .boolean => |b| .{ .boolean = b },
-            .blob => |b| .{ .blob = try allocator.dupe(u8, b) },
             .nil => .nil,
         };
     }
@@ -108,7 +107,6 @@ pub const TypedValue = union(enum) {
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {
             .text => |s| allocator.free(s),
-            .blob => |b| allocator.free(b),
             else => {},
         }
     }
@@ -128,7 +126,7 @@ pub const TypedValue = union(enum) {
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
     /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
-    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
+    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
         if (value == .nil) return .nil;
         return switch (ft) {
             .text => switch (value) {
@@ -138,7 +136,7 @@ pub const TypedValue = union(enum) {
             .integer => TypedValue{ .integer = try payloadAsInt(value) },
             .real => TypedValue{ .real = try payloadAsFloat(value) },
             .boolean => TypedValue{ .boolean = try payloadAsBool(value) },
-            .array => TypedValue{ .blob = try msgpack.payloadToJson(value, allocator) },
+            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator, items_type orelse return StorageError.TypeMismatch) },
         };
     }
 
@@ -149,7 +147,6 @@ pub const TypedValue = union(enum) {
             .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
             .text => |s| sql_utils.bindTextTransient(stmt, index, s),
             .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
-            .blob => |b| sql_utils.bindBlobTransient(stmt, index, b),
             .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         };
         if (rc != sqlite.c.SQLITE_OK) return classifyStepError(db);

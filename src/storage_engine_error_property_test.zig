@@ -56,7 +56,7 @@ test "storage: error handling read-only filesystem" {
     defer storage.deinit();
     // Try to set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -85,13 +85,13 @@ test "storage: error handling constraint violations" {
     defer storage.deinit();
     // Set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -125,7 +125,7 @@ test "storage: error handling transaction rollback on error" {
     defer storage.deinit();
     try storage.beginTransaction();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.rollbackTransaction();
@@ -152,7 +152,7 @@ test "storage: error handling concurrent access safety" {
     try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -192,7 +192,7 @@ test "storage: error handling empty paths" {
     try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
     defer storage.deinit();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "empty", "", &cols);
     }
     try storage.flushPendingWrites();
@@ -222,7 +222,7 @@ test "storage: error handling large values" {
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = large_value } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = large_value }, .field_type = .text }};
         try storage.insertOrReplace("test", "large_key", "test", &cols);
     }
     try storage.flushPendingWrites();

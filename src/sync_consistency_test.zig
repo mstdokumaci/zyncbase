@@ -32,7 +32,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         "id1",
         "ns",
         &[_]sth.ColumnValue{
-            .{ .name = "val", .value = .{ .text = "task 1" } },
+            .{ .name = "val", .value = .{ .text = "task 1" }, .field_type = .text },
         },
     );
 
