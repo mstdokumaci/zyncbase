@@ -14,6 +14,25 @@ fn isBuiltInField(name: []const u8) bool {
         std.mem.eql(u8, name, "updated_at");
 }
 
+/// Returns the id value if the filter is a simple `id = ?` point lookup.
+fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
+    // Must have: exactly 1 AND condition, no OR, no order, no cursor
+    const conds = filter.conditions orelse return null;
+    if (conds.len != 1) return null;
+    if (filter.or_conditions != null) return null;
+    if (filter.order_by != null) return null;
+    if (filter.after != null) return null;
+
+    const cond = conds[0];
+    if (cond.op != .eq) return null;
+    if (!std.mem.eql(u8, cond.field, "id")) return null;
+
+    // Extract string value
+    const val = cond.value orelse return null;
+    if (val != .str) return null;
+    return val.str.value();
+}
+
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
@@ -152,10 +171,42 @@ pub const StoreService = struct {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
         errdefer filter.deinit(allocator);
 
+        if (isIdEqualsFilter(filter)) |id| {
+            // Fast path: use selectDocument with cache
+            var doc = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
+            errdefer doc.deinit();
+
+            // ALWAYS dynamically allocate the array to prevent static slice crashes on cache misses
+            const items = try allocator.alloc(msgpack.Payload, if (doc.value != null) 1 else 0);
+            if (doc.value) |v| items[0] = v;
+
+            doc.value = msgpack.Payload{ .arr = items };
+
+            var borrowed_wrapper: ?[]msgpack.Payload = null;
+            if (doc.handle != null) {
+                // CACHE HIT: 'items' contains a borrowed payload.
+                // ManagedPayload will NOT run .free() because handle != null.
+                // We track it here to shallow-free just the wrapper array later.
+                borrowed_wrapper = items;
+            } else {
+                // CACHE MISS: 'items' contains an owned payload we just fetched from db.
+                // ManagedPayload WILL run .free(), which will recursively free 'items'
+                // AND the inner payload. We just need to ensure the allocator is set.
+                doc.allocator = allocator;
+            }
+
+            return QueryResult{
+                .results = doc,
+                .filter = filter,
+                .fast_path_wrapper = borrowed_wrapper,
+            };
+        }
+
         const results = try self.storage_engine.selectQuery(allocator, collection, namespace, filter);
         return QueryResult{
             .results = results,
             .filter = filter,
+            .fast_path_wrapper = null,
         };
     }
 
@@ -179,9 +230,11 @@ pub const StoreService = struct {
 pub const QueryResult = struct {
     results: storage_mod.ManagedPayload,
     filter: query_parser.QueryFilter,
+    fast_path_wrapper: ?[]msgpack.Payload = null,
 
     pub fn deinit(self: *QueryResult, allocator: Allocator) void {
         self.results.deinit();
+        if (self.fast_path_wrapper) |wrapper| allocator.free(wrapper);
         self.filter.deinit(allocator);
     }
 };
