@@ -447,7 +447,6 @@ test "storage: automatic transaction rollback on failure" {
         try testing.expect(doc != null);
     }
 }
-// ─── Property 13: Document set/get round-trip ────────────────────────────────
 test "storage: document set/get round-trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
@@ -491,7 +490,6 @@ test "storage: document set/get round-trip" {
         try testing.expectEqual(score_val, got_score_val);
     }
 }
-// ─── Property 14: Field set/get round-trip ───────────────────────────────────
 test "storage: field set/get round-trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
@@ -531,7 +529,6 @@ test "storage: field set/get round-trip" {
         try testing.expectEqual(new_score, got_score_val);
     }
 }
-// ─── Property 15: Collection get is namespace-scoped ─────────────────────────
 test "storage: collection get is namespace-scoped" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
@@ -576,7 +573,6 @@ test "storage: collection get is namespace-scoped" {
         try testing.expectEqual(count_b, coll_b.arr.len);
     }
 }
-// ─── Property 16: Remove then get returns null ────────────────────────────────
 test "storage: remove then get returns null" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
@@ -601,27 +597,6 @@ test "storage: remove then get returns null" {
         try testing.expect(after == null);
     }
 }
-// ─── Property 17: Schema validation rejects unknown tables and fields ─────────
-test "storage: schema validation rejects unknown tables and fields" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("title", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "storage-p17", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    var iter: usize = 0;
-    while (iter < 20) : (iter += 1) {
-        const cols = [_]ColumnValue{.{ .name = "title", .value = msgpack.Payload.intToPayload(1) }};
-        const err1 = engine.insertOrReplace("nonexistent_table", "id1", "ns", &cols);
-        try testing.expectError(sth.StorageError.UnknownTable, err1);
-        const bad_cols = [_]ColumnValue{.{ .name = "nonexistent_field", .value = msgpack.Payload.intToPayload(1) }};
-        const err2 = engine.insertOrReplace("items", "id1", "ns", &bad_cols);
-        try testing.expectError(sth.StorageError.UnknownField, err2);
-    }
-}
-// ─── Property 18: updated_at is always refreshed on write ────────────────────
 test "storage: updated_at is always refreshed on write" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
@@ -663,8 +638,6 @@ test "storage: updated_at is always refreshed on write" {
         try testing.expect(updated_at_2 >= updated_at_1);
     }
 }
-// ─── Property 10: Storage engine write/read round-trip for array fields ───────
-// Feature: array-jsonb-storage, Property 10: Storage engine write/read round-trip for array fields
 test "storage: write/read round-trip for array fields" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xA77A1_10);
@@ -724,8 +697,6 @@ test "storage: write/read round-trip for array fields" {
         try testing.expectEqual(n, field_result.arr.len);
     }
 }
-// ─── Property 11: Non-array fields are unaffected by the change ──────────────
-// Feature: array-jsonb-storage, Property 11: Non-array fields are unaffected by the change
 test "storage: non-array fields are unaffected" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xB0B_11);
@@ -776,9 +747,7 @@ test "storage: non-array fields are unaffected" {
         try testing.expectEqual(score_val, got_score_val);
     }
 }
-// ─── Property 12: SQLite JSON functions operate on stored array columns ───────
-// Feature: array-jsonb-storage, Property 12: SQLite JSON functions operate on stored array columns
-test "storage: SQLite json_array_length works on stored array columns" {
+test "storage: array length match after round trip" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0xC0DE_12);
     const rand = prng.random();

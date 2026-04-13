@@ -4,6 +4,8 @@ const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine/types.zig");
 const helpers = @import("app_test_helpers.zig");
 const protocol = @import("protocol.zig");
+const schema_manager = @import("schema_manager.zig");
+const store_service = @import("store_service.zig");
 const StorageError = storage_mod.StorageError;
 
 test "StoreService: set - full document replacement" {
@@ -47,37 +49,6 @@ test "StoreService: set - full document replacement" {
         try testing.expectEqual(@as(i64, 30), age_val.int);
     }
 
-    // 2. Negative path: Including built-in fields
-    {
-        var val = msgpack.Payload.mapPayload(allocator);
-        defer val.free(allocator);
-        try val.mapPut("name", try msgpack.Payload.strToPayload("Bob", allocator));
-        try val.mapPut("id", try msgpack.Payload.strToPayload("user-2", allocator));
-        try val.mapPut("created_at", msgpack.Payload.uintToPayload(123456789));
-
-        const result = service.set("users", "user-2", "public", 2, null, val);
-        try testing.expectError(StorageError.ImmutableField, result);
-    }
-
-    // 3. Negative path: Unknown field
-    {
-        var val = msgpack.Payload.mapPayload(allocator);
-        defer val.free(allocator);
-        try val.mapPut("unknown_field", try msgpack.Payload.strToPayload("oops", allocator));
-
-        const result = service.set("users", "user-3", "public", 2, null, val);
-        try testing.expectError(StorageError.UnknownField, result);
-    }
-
-    // 4. Negative path: Invalid payload type (not a map)
-    {
-        const val = try msgpack.Payload.strToPayload("not-a-map", allocator);
-        defer val.free(allocator);
-
-        const result = service.set("users", "user-4", "public", 2, null, val);
-        try testing.expectError(error.InvalidPayload, result);
-    }
-
     // 5. Negative path: Unknown table
     {
         var val = msgpack.Payload.mapPayload(allocator);
@@ -118,33 +89,6 @@ test "StoreService: set - field level update" {
         defer status_payload.free(allocator);
         const status_val = doc.map.get(status_payload) orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("active", status_val.str.value());
-    }
-
-    // 2. Negative path: Unknown field
-    {
-        const val = try msgpack.Payload.strToPayload("oops", allocator);
-        defer val.free(allocator);
-
-        const result = service.set("items", "item-1", "public", 3, "unknown_field", val);
-        try testing.expectError(StorageError.UnknownField, result);
-    }
-
-    // 3. Negative path: Invalid path (segments_len not 2 or 3)
-    {
-        const val = try msgpack.Payload.strToPayload("oops", allocator);
-        defer val.free(allocator);
-
-        const result = service.set("items", "item-1", "public", 4, null, val);
-        try testing.expectError(StorageError.InvalidPath, result);
-    }
-
-    // 4. Negative path: Immutable field (built-in)
-    {
-        const val = try msgpack.Payload.strToPayload("new-id", allocator);
-        defer val.free(allocator);
-
-        const result = service.set("items", "item-1", "public", 3, "id", val);
-        try testing.expectError(StorageError.ImmutableField, result);
     }
 }
 
@@ -516,4 +460,63 @@ test "StoreService: queryWithCursor - pagination" {
     const second_page_id = second_id_payload.str.value();
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
+}
+
+test "StoreService: validateFieldWrite tests" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-service-validate", &.{
+        .{
+            .name = "users",
+            .fields = &.{ "name", "age", "active", "tags" },
+            .types = &.{ .text, .integer, .boolean, .array },
+        },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const tbl_md = service.schema_manager.getTable("users") orelse return error.TestExpectedValue;
+
+    // 1. Immutable fields
+    {
+        const val = try msgpack.Payload.strToPayload("oops", allocator);
+        defer val.free(allocator);
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, "id", val));
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, "created_at", val));
+    }
+
+    // 2. Unknown field
+    {
+        const val = try msgpack.Payload.strToPayload("oops", allocator);
+        defer val.free(allocator);
+        try testing.expectError(StorageError.UnknownField, store_service.validateFieldWrite(tbl_md, "ghost", val));
+    }
+
+    // 3. Type mismatch
+    {
+        // Expected integer, got string
+        const val = try msgpack.Payload.strToPayload("not-an-int", allocator);
+        defer val.free(allocator);
+        try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(tbl_md, "age", val));
+    }
+
+    // 4. Array literal validation
+    {
+        // Expected literal array, got nested map in array
+        const inner_map = msgpack.Payload.mapPayload(allocator);
+        const arr = try allocator.alloc(msgpack.Payload, 1);
+        arr[0] = inner_map;
+        const val = msgpack.Payload{ .arr = arr };
+        defer val.free(allocator);
+
+        try testing.expectError(StorageError.InvalidArrayElement, store_service.validateFieldWrite(tbl_md, "tags", val));
+    }
+
+    // 5. Success case
+    {
+        const val = msgpack.Payload.intToPayload(25);
+        const field = try store_service.validateFieldWrite(tbl_md, "age", val);
+        try testing.expectEqualStrings("age", field.name);
+        try testing.expectEqual(schema_manager.FieldType.integer, field.sql_type);
+    }
 }

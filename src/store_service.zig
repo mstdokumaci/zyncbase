@@ -14,6 +14,33 @@ fn isBuiltInField(name: []const u8) bool {
         std.mem.eql(u8, name, "updated_at");
 }
 
+/// Validates a single field write operation.
+/// Checks for immutability, existence, nullability, and type constraints.
+pub fn validateFieldWrite(
+    tbl_md: schema_manager.TableMetadata,
+    field_name: []const u8,
+    value: msgpack.Payload,
+) !schema_manager.Field {
+    if (isBuiltInField(field_name)) return StorageError.ImmutableField;
+
+    const field = tbl_md.getField(field_name) orelse return StorageError.UnknownField;
+
+    if (field.required and value == .nil) return StorageError.NullNotAllowed;
+
+    if (value != .nil) {
+        try storage_mod.TypedValue.validateValue(field.sql_type, value);
+
+        if (field.sql_type == .array) {
+            msgpack.ensureLiteralArray(value) catch |err| switch (err) {
+                error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
+                else => |e| return e,
+            };
+        }
+    }
+
+    return field;
+}
+
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and ColumnValue construction.
 pub const StoreService = struct {
@@ -57,17 +84,9 @@ pub const StoreService = struct {
                 if (entry.key_ptr.* != .str) continue;
                 const fn_inner = entry.key_ptr.*.str.value();
 
-                const field = tbl_md.getField(fn_inner) orelse {
-                    if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
-                    return StorageError.UnknownField;
-                };
+                const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
+                _ = field;
 
-                if (field.sql_type == .array) {
-                    msgpack.ensureLiteralArray(entry.value_ptr.*) catch |err| switch (err) {
-                        error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                        else => |e| return e,
-                    };
-                }
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
                     .value = entry.value_ptr.*,
@@ -78,18 +97,7 @@ pub const StoreService = struct {
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
-
-            const fld = tbl_md.getField(fn_inner) orelse {
-                if (isBuiltInField(fn_inner)) return StorageError.ImmutableField;
-                return StorageError.UnknownField;
-            };
-
-            if (fld.sql_type == .array) {
-                msgpack.ensureLiteralArray(value) catch |err| switch (err) {
-                    error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                    else => |e| return e,
-                };
-            }
+            _ = try validateFieldWrite(tbl_md, fn_inner, value);
 
             const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = value }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
@@ -109,7 +117,7 @@ pub const StoreService = struct {
         field_name: ?[]const u8,
     ) !void {
         _ = field_name;
-        _ = self.schema_manager.getTable(table) orelse return StorageError.UnknownTable;
+        try self.schema_manager.validateTable(table);
 
         if (segments_len == 2) {
             try self.storage_engine.deleteDocument(table, doc_id, namespace);

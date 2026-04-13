@@ -16,8 +16,6 @@ pub fn buildInsertOrReplaceOp(
     namespace: []const u8,
     columns: []const ColumnValue,
 ) !WriteOp {
-    try sm.validateColumns(table, columns);
-
     // Look up table schema to determine which columns are array fields
     const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
 
@@ -116,8 +114,6 @@ pub fn buildUpdateFieldOp(
     field: []const u8,
     value: msgpack.Payload,
 ) !WriteOp {
-    try sm.validateField(table, field);
-
     // Look up the field's sql_type to determine if it's an array field and validate type
     const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
     var field_sql_type: schema_manager.FieldType = .text;
@@ -190,8 +186,6 @@ pub fn buildDeleteDocumentOp(
     id: []const u8,
     namespace: []const u8,
 ) !WriteOp {
-    try sm.validateTable(table);
-
     const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
