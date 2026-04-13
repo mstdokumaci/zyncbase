@@ -201,7 +201,8 @@ pub fn buildInsertOrReplaceSql(
         try sql_buf.appendSlice(allocator, col.name);
     }
     // Always update updated_at
-    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
+    if (columns.len > 0) try sql_buf.appendSlice(allocator, ", ");
+    try sql_buf.appendSlice(allocator, "updated_at = excluded.updated_at RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     return sql_buf.toOwnedSlice(allocator);
