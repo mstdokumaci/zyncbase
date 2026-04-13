@@ -86,6 +86,100 @@ test "encodeBase64 / decodeBase64: round-trip for complex payload" {
 }
 
 // ============================================================
+// payloadToJson / jsonToPayload round-trip tests
+// ============================================================
+
+test "payloadToJson/jsonToPayload: text (strings) round-trip" {
+    const allocator = testing.allocator;
+    const s1 = try Payload.strToPayload("hello", allocator);
+    const s2 = try Payload.strToPayload("world", allocator);
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = s1;
+    elems[1] = s2;
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .text);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .text);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqualStrings("hello", roundtripped_p.arr[0].str.value());
+    try testing.expectEqualStrings("world", roundtripped_p.arr[1].str.value());
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: integer round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .int = -123 };
+    elems[1] = .{ .int = 456 };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .integer);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .integer);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(@as(i64, -123), roundtripped_p.arr[0].int);
+    try testing.expectEqual(@as(i64, 456), roundtripped_p.arr[1].int);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: real (float) round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .float = 50.0 };
+    elems[1] = .{ .float = 3.14 };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .real);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .real);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(@as(f64, 50.0), roundtripped_p.arr[0].float);
+    try testing.expectEqual(@as(f64, 3.14), roundtripped_p.arr[1].float);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+test "payloadToJson/jsonToPayload: boolean round-trip" {
+    const allocator = testing.allocator;
+    const elems = try allocator.alloc(Payload, 3);
+    elems[0] = .{ .bool = true };
+    elems[1] = .{ .bool = false };
+    elems[2] = .nil;
+    const p: Payload = .{ .arr = elems };
+    defer p.free(allocator);
+
+    const json = try msgpack_utils.payloadToJson(p, allocator, .boolean);
+    defer allocator.free(json);
+
+    const roundtripped_p = try msgpack_utils.jsonToPayload(json, allocator, .boolean);
+    defer roundtripped_p.free(allocator);
+
+    try testing.expect(roundtripped_p == .arr);
+    try testing.expectEqual(@as(usize, 3), roundtripped_p.arr.len);
+    try testing.expectEqual(true, roundtripped_p.arr[0].bool);
+    try testing.expectEqual(false, roundtripped_p.arr[1].bool);
+    try testing.expect(roundtripped_p.arr[2] == .nil);
+}
+
+// ============================================================
 // jsonToPayload tests
 // ============================================================
 
