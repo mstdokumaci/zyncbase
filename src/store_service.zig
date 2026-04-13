@@ -96,6 +96,7 @@ pub const StoreService = struct {
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
                     .value = typed,
+                    .field_type = field.sql_type,
                 });
             }
 
@@ -107,7 +108,11 @@ pub const StoreService = struct {
             const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, value);
             defer typed.deinit(self.allocator);
 
-            const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = typed }};
+            const col = [_]storage_mod.ColumnValue{.{
+                .name = fn_inner,
+                .value = typed,
+                .field_type = field.sql_type,
+            }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         } else {
             return StorageError.InvalidPath;

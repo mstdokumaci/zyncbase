@@ -47,7 +47,7 @@ test "storage: stability no crashes on concurrent errors" {
                 const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
                 defer t_ctx.allocator.free(key);
                 // Try to set a value
-                const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = key } }};
+                const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = key }, .field_type = .text }};
                 t_ctx.storage.insertOrReplace("test", key, "test", &cols) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
@@ -89,7 +89,7 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational - try normal operations
-    const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+    const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key1", "test", &cols);
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
@@ -101,7 +101,7 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" } }};
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
@@ -128,7 +128,7 @@ test "storage: stability handles rapid error conditions" {
         };
     }
     // Server should still be operational
-    const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" } }};
+    const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key", "test", &cols);
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key", "test");
@@ -153,7 +153,7 @@ test "storage: stability error recovery with valid operations" {
         // Valid operation
         const key = try std.fmt.allocPrint(allocator, "key{}", .{i});
         defer allocator.free(key);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" } }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" }, .field_type = .text }};
         try storage.insertOrReplace("test", key, "test", &cols);
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
@@ -186,9 +186,9 @@ test "storage: stability resource cleanup after errors" {
     // Begin a transaction
     try storage.beginTransaction();
     // Add some operations
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" } }};
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
@@ -196,7 +196,7 @@ test "storage: stability resource cleanup after errors" {
     try testing.expect(!storage.isTransactionActive());
     // Verify we can start a new transaction
     try storage.beginTransaction();
-    const cols3 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value3" } }};
+    const cols3 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value3" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.commitTransaction();
     // Verify the committed data is there
@@ -218,12 +218,12 @@ test "storage: stability mixed error and success scenarios" {
     // Property: Server should handle mixed scenarios of errors and successes
     // Successful transaction
     try storage.beginTransaction();
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
     try storage.commitTransaction();
     // Failed transaction (rollback)
     try storage.beginTransaction();
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" } }};
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.rollbackTransaction();
     // Error (no active transaction)
@@ -231,7 +231,7 @@ test "storage: stability mixed error and success scenarios" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Successful operation without transaction
-    const cols3 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value3" } }};
+    const cols3 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value3" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key3", "test", &cols3);
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
@@ -262,9 +262,9 @@ test "storage: stability concurrent reads during write errors" {
     const storage = &ctx.engine;
     // Property: Reads should continue working even when writes encounter errors
     // Set up some initial data
-    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
+    const cols1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key1", "test", &cols1);
-    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" } }};
+    const cols2 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
     try storage.insertOrReplace("test", "key2", "test", &cols2);
     try storage.flushPendingWrites();
     const num_reader_threads = 4;
