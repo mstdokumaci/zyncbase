@@ -56,22 +56,33 @@ test "payloadToJson: real (floats) homogeneous with .0" {
 }
 
 // ============================================================
-// payloadToCanonicalString tests
+// encodeBase64 / decodeBase64 tests
 // ============================================================
 
-test "payloadToCanonicalString: literal array produces JSON string" {
+test "encodeBase64 / decodeBase64: round-trip for complex payload" {
     const allocator = testing.allocator;
-    const str1 = try Payload.strToPayload("admin", allocator);
-    const str2 = try Payload.strToPayload("editor", allocator);
-    const elems = try allocator.alloc(Payload, 2);
-    elems[0] = str1;
-    elems[1] = str2;
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    const result = try msgpack_utils.payloadToCanonicalString(p, allocator);
-    defer allocator.free(result);
-    // Note: inferred .text results in no spaces from std.json.stringify
-    try testing.expectEqualStrings("[\"admin\",\"editor\"]", result);
+
+    var map = msgpack_utils.Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("name", try Payload.strToPayload("test", allocator));
+    try map.mapPut("age", .{ .int = 42 });
+
+    const encoded = try msgpack_utils.encodeBase64(allocator, map);
+    defer allocator.free(encoded);
+
+    const decoded = try msgpack_utils.decodeBase64(allocator, encoded);
+    defer decoded.free(allocator);
+
+    try testing.expect(decoded == .map);
+    const name = (try decoded.mapGet("name")) orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("test", name.str.value());
+    const age = (try decoded.mapGet("age")) orelse return error.KeyNotFound;
+    const age_val = switch (age) {
+        .int => |v| v,
+        .uint => |v| @as(i64, @intCast(v)),
+        else => return error.TestFailed,
+    };
+    try testing.expectEqual(@as(i64, 42), age_val);
 }
 
 // ============================================================
