@@ -461,22 +461,6 @@ pub const StorageEngine = struct {
         try self.pushWrite(op);
     }
 
-    /// UPDATE a single field in a table.
-    pub fn updateField(
-        self: *StorageEngine,
-        table: []const u8,
-        id: []const u8,
-        namespace: []const u8,
-        field: []const u8,
-        value: msgpack.Payload,
-    ) !void {
-        try self.ensureRunning();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildUpdateFieldOp(self.allocator, self.schema_manager, table, id, namespace, field, value);
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-    }
-
     /// Select a single document by ID.
     pub fn selectDocument(
         self: *StorageEngine,

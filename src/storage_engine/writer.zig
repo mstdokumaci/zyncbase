@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const types = @import("types.zig");
 const sql_utils = @import("sql_utils.zig");
@@ -94,80 +93,6 @@ pub fn buildInsertOrReplaceOp(
 
     return WriteOp{
         .insert = .{
-            .table = table_owned,
-            .id = id_owned,
-            .namespace = ns_owned,
-            .sql = sql,
-            .values = values,
-            .timestamp = now,
-            .completion_signal = null,
-        },
-    };
-}
-
-pub fn buildUpdateFieldOp(
-    allocator: Allocator,
-    sm: *const schema_manager.SchemaManager,
-    table: []const u8,
-    id: []const u8,
-    namespace: []const u8,
-    field: []const u8,
-    value: msgpack.Payload,
-) !WriteOp {
-    // Look up the field's sql_type to determine if it's an array field and validate type
-    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
-    var field_sql_type: schema_manager.FieldType = .text;
-    for (table_metadata.table.fields) |f| {
-        if (std.mem.eql(u8, f.name, field)) {
-            field_sql_type = f.sql_type;
-            if (value != .nil) {
-                try types.TypedValue.validateValue(field_sql_type, value);
-            }
-            break;
-        }
-    }
-
-    const values = try allocator.alloc(TypedValue, 1);
-    values[0] = .nil;
-    errdefer {
-        values[0].deinit(allocator);
-        allocator.free(values);
-    }
-    values[0] = try types.TypedValue.fromPayload(allocator, field_sql_type, value);
-
-    // Use jsonb(?) placeholder for array fields, ? for others
-    const field_placeholder = if (field_sql_type == .array) "jsonb(?)" else "?";
-
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer sql_buf.deinit(allocator);
-
-    try sql_buf.appendSlice(allocator, "INSERT INTO ");
-    try sql_buf.appendSlice(allocator, table);
-    try sql_buf.appendSlice(allocator, " (id, namespace_id, ");
-    try sql_buf.appendSlice(allocator, field);
-    try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?, ");
-    try sql_buf.appendSlice(allocator, field_placeholder);
-    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
-    try sql_buf.appendSlice(allocator, field);
-    try sql_buf.appendSlice(allocator, " = excluded.");
-    try sql_buf.appendSlice(allocator, field);
-    try sql_buf.appendSlice(allocator, ", updated_at = excluded.updated_at RETURNING ");
-
-    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
-
-    const sql = try sql_buf.toOwnedSlice(allocator);
-    errdefer allocator.free(sql);
-
-    const id_owned = try allocator.dupe(u8, id);
-    errdefer allocator.free(id_owned);
-    const ns_owned = try allocator.dupe(u8, namespace);
-    errdefer allocator.free(ns_owned);
-    const table_owned = try allocator.dupe(u8, table);
-    errdefer allocator.free(table_owned);
-
-    const now = std.time.timestamp();
-    return WriteOp{
-        .update = .{
             .table = table_owned,
             .id = id_owned,
             .namespace = ns_owned,

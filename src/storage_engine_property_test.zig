@@ -516,7 +516,7 @@ test "storage: field set/get round-trip" {
         try engine.insertOrReplace("items", id, "ns-test", &initial_cols);
         try engine.flushPendingWrites();
         const new_score: i64 = rand.intRangeAtMost(i64, 1, 9999);
-        try engine.updateField("items", id, "ns-test", "score", msgpack.Payload.intToPayload(new_score));
+        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "score", .value = msgpack.Payload.intToPayload(new_score) }});
         try engine.flushPendingWrites();
         var managed = try engine.selectField(allocator, "items", id, "ns-test", "score");
         defer managed.deinit();
@@ -624,7 +624,7 @@ test "storage: updated_at is always refreshed on write" {
             else => return error.UnexpectedType,
         };
         try testing.expect(updated_at_1 >= t_before_insert);
-        try engine.updateField("items", id, "ns-test", "val", msgpack.Payload.intToPayload(2));
+        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(2) }});
         try engine.flushPendingWrites();
         var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();

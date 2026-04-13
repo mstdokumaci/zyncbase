@@ -320,9 +320,6 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         try testing.expect(result != null);
     }
 }
-// Unit test 8.7: client writes blocked during migration
-// Simulate an active migration transaction and assert that insertOrReplace / updateField
-// return an error.
 test "StorageEngine: client writes blocked during migration" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
@@ -340,9 +337,6 @@ test "StorageEngine: client writes blocked during migration" {
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
     const err1 = engine.insertOrReplace("items", "id1", "ns", &cols);
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
-    // updateField should be blocked
-    const err2 = engine.updateField("items", "id1", "ns", "val", val_p);
-    try testing.expectError(sth.StorageError.MigrationInProgress, err2);
     // deleteDocument should be blocked
     const err3 = engine.deleteDocument("items", "id1", "ns");
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
