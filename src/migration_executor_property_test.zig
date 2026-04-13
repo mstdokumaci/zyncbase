@@ -29,6 +29,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.
     return .{
         .name = name,
         .sql_type = sql_type,
+        .items_type = null,
         .required = false,
         .indexed = false,
         .references = null,
@@ -97,6 +98,7 @@ test "migration_executor: additive migration preserves existing data" {
             .field = schema_parser.Field{
                 .name = owned_field_name,
                 .sql_type = .integer,
+                .items_type = null,
                 .required = false,
                 .indexed = false,
                 .references = null,
@@ -208,6 +210,7 @@ test "migration_executor: destructive migration refused when not allowed" {
             .field = schema_parser.Field{
                 .name = owned_fname,
                 .sql_type = .integer,
+                .items_type = null,
                 .required = false,
                 .indexed = false,
                 .references = null,
@@ -375,6 +378,7 @@ test "migration_executor: major version bump is refused" {
             .field = schema_parser.Field{
                 .name = owned_fname,
                 .sql_type = .text,
+                .items_type = null,
                 .required = false,
                 .indexed = false,
                 .references = null,

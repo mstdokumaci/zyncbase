@@ -25,6 +25,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
             fields[j] = .{
                 .name = try allocator.dupe(u8, fn_name),
                 .sql_type = if (td.types) |ts| ts[j] else .text,
+                .items_type = if (td.types) |ts| if (ts[j] == .array) schema_manager.FieldType.text else null else null,
                 .required = false,
                 .indexed = false,
                 .references = null,

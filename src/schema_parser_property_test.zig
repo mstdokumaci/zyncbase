@@ -157,10 +157,16 @@ test "schema_parser: parse/print round-trip" {
             try buf.print(allocator, "\"{s}\":{{\"fields\":{{", .{table_names[ti % table_names.len]});
             for (0..n_fields) |fi| {
                 if (fi > 0) try buf.append(allocator, ',');
-                try buf.print(allocator, "\"{s}\":{{\"type\":\"{s}\"}}", .{
-                    field_names[fi % field_names.len],
-                    field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)],
-                });
+                const type_idx = rand.intRangeAtMost(usize, 0, field_types.len - 1);
+                const ft = field_types[type_idx];
+                if (std.mem.eql(u8, ft, "array")) {
+                    try buf.print(allocator, "\"{s}\":{{\"type\":\"array\",\"items\":\"string\"}}", .{field_names[fi % field_names.len]});
+                } else {
+                    try buf.print(allocator, "\"{s}\":{{\"type\":\"{s}\"}}", .{
+                        field_names[fi % field_names.len],
+                        ft,
+                    });
+                }
             }
             try buf.appendSlice(allocator, "},\"required\":[]}");
         }
@@ -248,9 +254,8 @@ const case_two_level_nesting =
 const case_multiple_branches =
     \\{"version":"1.0.0","store":{"t":{"fields":{"x":{"type":"object","fields":{"a":{"type":"string"}}},"y":{"type":"object","fields":{"b":{"type":"integer"}}}}}}}
 ;
-// Mixed leaf and nested at same level
 const case_mixed_leaf_nested =
-    \\{"version":"1.0.0","store":{"t":{"fields":{"title":{"type":"string"},"meta":{"type":"object","fields":{"created":{"type":"integer"},"tags":{"type":"array"}}}}}}}
+    \\{"version":"1.0.0","store":{"t":{"fields":{"title":{"type":"string"},"meta":{"type":"object","fields":{"created":{"type":"integer"},"tags":{"type":"array","items":"string"}}}}}}}
 ;
 
 test "schema_parser: print() output is clean of double underscores" {

@@ -107,15 +107,6 @@ pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
 pub const Payload = msgpack.Payload;
 pub const Map = msgpack.Map;
 
-/// Returns true if the payload is a literal (primitive) value: nil, bool, int, uint, float, or str.
-/// Returns false for arr, map, bin, ext, and timestamp.
-pub fn isLiteral(payload: Payload) bool {
-    return switch (payload) {
-        .nil, .bool, .int, .uint, .float, .str => true,
-        .arr, .map, .bin, .ext, .timestamp => false,
-    };
-}
-
 /// Converts a literal payload to a deterministic string for canonical keys.
 /// Rejects complex types (arr, map, bin, ext, timestamp).
 /// The caller owns the returned slice.
@@ -142,25 +133,10 @@ pub fn payloadToCanonicalString(payload: Payload, allocator: std.mem.Allocator) 
     };
 }
 
-/// Validates that payload is an array containing only literal elements.
-/// Returns error.NotAnArray if payload is not .arr.
-/// Returns error.NonLiteralElement if any element fails isLiteral.
-/// Returns without error for valid literal arrays, including empty arrays.
-pub fn ensureLiteralArray(payload: Payload) error{ NotAnArray, NonLiteralElement }!void {
-    const arr = switch (payload) {
-        .arr => |a| a,
-        else => return error.NotAnArray,
-    };
-    for (arr) |elem| {
-        if (!isLiteral(elem)) return error.NonLiteralElement;
-    }
-}
-
 /// Converts a Literal_Array Payload to a JSON array string.
 /// Calls ensureLiteralArray first; propagates any error.
 /// The caller owns the returned slice.
 pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8 {
-    try ensureLiteralArray(payload);
     const arr = payload.arr;
     var buf: std.ArrayList(u8) = .{};
     errdefer buf.deinit(allocator);
@@ -198,7 +174,7 @@ pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8
             },
             .int => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
             .uint => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
-            else => unreachable, // ensureLiteralArray already validated
+            else => return error.NonLiteralElement,
         }
     }
     try buf.append(allocator, ']');

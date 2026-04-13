@@ -17,7 +17,7 @@ test "schema_parser: parse known fixture" {
         \\        "age":     { "type": "integer" },
         \\        "score":   { "type": "number" },
         \\        "active":  { "type": "boolean" },
-        \\        "tags":    { "type": "array" },
+        \\        "tags":    { "type": "array", "items": "string" },
         \\        "address": {
         \\          "type": "object",
         \\          "fields": {

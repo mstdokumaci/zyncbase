@@ -31,10 +31,13 @@ pub fn validateFieldWrite(
         try storage_mod.TypedValue.validateValue(field.sql_type, value);
 
         if (field.sql_type == .array) {
-            msgpack.ensureLiteralArray(value) catch |err| switch (err) {
-                error.NotAnArray, error.NonLiteralElement => return StorageError.InvalidArrayElement,
-                else => |e| return e,
-            };
+            if (field.items_type) |items_type| {
+                for (value.arr) |item| {
+                    storage_mod.TypedValue.validateValue(items_type, item) catch {
+                        return StorageError.InvalidArrayElement;
+                    };
+                }
+            }
         }
     }
 

@@ -29,6 +29,7 @@ fn makeField(name: []const u8, sql_type: schema_manager.FieldType) schema_manage
     return .{
         .name = name,
         .sql_type = sql_type,
+        .items_type = null,
         .required = false,
         .indexed = false,
         .references = null,
@@ -67,6 +68,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         .field = schema_manager.Field{
             .name = "status",
             .sql_type = .integer,
+            .items_type = null,
             .required = false,
             .indexed = false,
             .references = null,
@@ -270,6 +272,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         .field = schema_manager.Field{
             .name = "extra",
             .sql_type = .text,
+            .items_type = null,
             .required = false,
             .indexed = false,
             .references = null,

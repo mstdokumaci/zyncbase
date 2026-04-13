@@ -50,6 +50,14 @@ A field definition MUST contain a `type` property.
 | `references` | `string` | `null` | Target table name for a foreign key relationship. |
 | `onDelete` | `string` | `"restrict"` | `set_null`, `cascade`, `restrict`. Note: `set_null` requires the field to be optional (not in `required`). |
 
+### Array Properties
+
+A field with `type: "array"` MUST contain an `items` property.
+
+| Key | Type | Default | Description |
+|:---|:---:|:---|:---|
+| `items` | `string` | - | Type of items within the array (must be a primitive type). |
+
 ---
 
 ## Nested Objects & Flattening
@@ -86,7 +94,6 @@ The following properties are part of the north star spec but are currently **ign
 | `maxLength` | `string` | Maximum character length. |
 | `minimum` | `integer`, `number` | Minimum numeric value. |
 | `maximum` | `integer`, `number` | Maximum numeric value. |
-| `items` | `string` | `[PLANNED]` / `[UNENFORCED]` Type of items within the array (currently stored as opaque BLOB). |
 
 ---
 
@@ -108,3 +115,6 @@ The following errors are returned by `SchemaParser`:
 | `InvalidFieldName` | Field name is empty or contains `__`. |
 | `UnknownFieldType` | `type` string is not recognized. |
 | `InvalidOnDelete` | `onDelete` value is not one of `cascade`, `restrict`, `set_null`; or `set_null` is used on a `required` field. |
+| `MissingArrayItems` | `items` property is missing for an `array` field. |
+| `InvalidArrayItems` | `items` value is not a string. |
+| `UnsupportedArrayItemsType` | `items` type is not one of the allowed primitive types. |

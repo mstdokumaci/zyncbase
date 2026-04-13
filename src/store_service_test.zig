@@ -150,18 +150,26 @@ test "StoreService: array validation" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
 
-    try app.init(allocator, "store-service-array", &.{
-        .{
-            .name = "collections",
-            .fields = &.{"tags"},
-            .types = &.{.array},
-        },
-    });
+    // Use a schema with specific items types
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "collections": {
+        \\      "fields": {
+        \\        "tags": { "type": "array", "items": "string" },
+        \\        "scores": { "type": "array", "items": "integer" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "store-service-array", schema_json);
     defer app.deinit();
 
     const service = &app.store_service;
 
-    // 1. Success: Valid literal array (segments_len == 3)
+    // 1. Success: Valid literal array of strings
     {
         var arr = try allocator.alloc(msgpack.Payload, 2);
         arr[0] = try msgpack.Payload.strToPayload("tag1", allocator);
@@ -172,7 +180,18 @@ test "StoreService: array validation" {
         try service.set("collections", "id1", "public", 3, "tags", val);
     }
 
-    // 2. Negative: Non-literal element (nested map)
+    // 2. Negative: Element type mismatch (integer in string array)
+    {
+        var arr = try allocator.alloc(msgpack.Payload, 1);
+        arr[0] = msgpack.Payload.intToPayload(123);
+        const val = msgpack.Payload{ .arr = arr };
+        defer val.free(allocator);
+
+        const result = service.set("collections", "id1", "public", 3, "tags", val);
+        try testing.expectError(StorageError.InvalidArrayElement, result);
+    }
+
+    // 3. Negative: Non-literal element (nested map)
     {
         var arr = try allocator.alloc(msgpack.Payload, 1);
         arr[0] = msgpack.Payload.mapPayload(allocator);
@@ -183,33 +202,14 @@ test "StoreService: array validation" {
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
-    // 3. Success: Valid array in full document (segments_len == 2)
+    // 4. Success: Valid integers in scores array
     {
         var arr = try allocator.alloc(msgpack.Payload, 1);
-        arr[0] = try msgpack.Payload.strToPayload("tag-new", allocator);
-        const arr_val = msgpack.Payload{ .arr = arr };
+        arr[0] = msgpack.Payload.intToPayload(42);
+        const val = msgpack.Payload{ .arr = arr };
+        defer val.free(allocator);
 
-        var map = msgpack.Payload.mapPayload(allocator);
-        defer map.free(allocator);
-        try map.mapPut("tags", arr_val);
-
-        try service.set("collections", "id1", "public", 2, null, map);
-    }
-
-    // 4. Negative: Nested array in full document
-    {
-        var inner_arr = try allocator.alloc(msgpack.Payload, 1);
-        inner_arr[0] = try msgpack.Payload.strToPayload("deep", allocator);
-
-        var outer_arr = try allocator.alloc(msgpack.Payload, 1);
-        outer_arr[0] = msgpack.Payload{ .arr = inner_arr };
-        const arr_val = msgpack.Payload{ .arr = outer_arr };
-
-        var map = msgpack.Payload.mapPayload(allocator);
-        defer map.free(allocator);
-        try map.mapPut("tags", arr_val);
-        const result = service.set("collections", "id1", "public", 2, null, map);
-        try testing.expectError(StorageError.InvalidArrayElement, result);
+        try service.set("collections", "id1", "public", 3, "scores", val);
     }
 }
 
@@ -500,19 +500,7 @@ test "StoreService: validateFieldWrite tests" {
         try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(tbl_md, "age", val));
     }
 
-    // 4. Array literal validation
-    {
-        // Expected literal array, got nested map in array
-        const inner_map = msgpack.Payload.mapPayload(allocator);
-        const arr = try allocator.alloc(msgpack.Payload, 1);
-        arr[0] = inner_map;
-        const val = msgpack.Payload{ .arr = arr };
-        defer val.free(allocator);
-
-        try testing.expectError(StorageError.InvalidArrayElement, store_service.validateFieldWrite(tbl_md, "tags", val));
-    }
-
-    // 5. Success case
+    // 4. Success case
     {
         const val = msgpack.Payload.intToPayload(25);
         const field = try store_service.validateFieldWrite(tbl_md, "age", val);

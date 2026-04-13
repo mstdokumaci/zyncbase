@@ -13,6 +13,7 @@ test "ddl_generator: generate DDL for a known table" {
         .{
             .name = "title",
             .sql_type = .text,
+            .items_type = null,
             .required = true,
             .indexed = false,
             .references = null,
@@ -21,6 +22,7 @@ test "ddl_generator: generate DDL for a known table" {
         .{
             .name = "status",
             .sql_type = .text,
+            .items_type = null,
             .required = false,
             .indexed = true,
             .references = null,
@@ -29,6 +31,7 @@ test "ddl_generator: generate DDL for a known table" {
         .{
             .name = "priority",
             .sql_type = .integer,
+            .items_type = null,
             .required = false,
             .indexed = false,
             .references = null,
@@ -70,6 +73,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
         .{
             .name = "user_id",
             .sql_type = .text,
+            .items_type = null,
             .required = true,
             .indexed = false,
             .references = "users",
@@ -101,6 +105,7 @@ test "ddl_generator: array field uses BLOB column type" {
         .{
             .name = "tags",
             .sql_type = .array,
+            .items_type = .text,
             .required = false,
             .indexed = false,
             .references = null,
@@ -109,6 +114,7 @@ test "ddl_generator: array field uses BLOB column type" {
         .{
             .name = "name",
             .sql_type = .text,
+            .items_type = null,
             .required = true,
             .indexed = false,
             .references = null,

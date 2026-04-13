@@ -36,9 +36,11 @@ test "ddl_generator: DDL contains required columns and constraints" {
         for (0..n_fields) |fi| {
             const has_ref = rand.boolean();
             const ref_idx = rand.intRangeAtMost(usize, 0, ref_tables.len - 1);
+            const st = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
             fields[fi] = .{
                 .name = field_names[fi % field_names.len],
-                .sql_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)],
+                .sql_type = st,
+                .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
                 .indexed = rand.boolean(),
                 .references = if (has_ref) ref_tables[ref_idx] else null,
@@ -136,9 +138,11 @@ test "ddl_generator: generated DDL is executable" {
             _ = ref_tables;
             _ = on_deletes;
 
+            const st = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
             fields[actual_n] = .{
                 .name = field_names[name_idx],
-                .sql_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)],
+                .sql_type = st,
+                .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
                 .indexed = rand.boolean(),
                 .references = null,
@@ -203,9 +207,11 @@ test "ddl_generator: DDL emits BLOB for array fields" {
         defer allocator.free(fields);
 
         for (0..n_fields) |fi| {
+            const st = if (fi == array_idx) .array else non_array_types[rand.intRangeAtMost(usize, 0, non_array_types.len - 1)];
             fields[fi] = .{
                 .name = field_names[fi % field_names.len],
-                .sql_type = if (fi == array_idx) .array else non_array_types[rand.intRangeAtMost(usize, 0, non_array_types.len - 1)],
+                .sql_type = st,
+                .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
                 .indexed = false,
                 .references = null,

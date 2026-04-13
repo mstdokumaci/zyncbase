@@ -23,6 +23,7 @@ fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.
     return .{
         .name = name,
         .sql_type = sql_type,
+        .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
         .required = false,
         .indexed = false,
         .references = null,
