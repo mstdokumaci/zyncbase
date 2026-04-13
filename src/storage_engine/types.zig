@@ -126,7 +126,7 @@ pub const TypedValue = union(enum) {
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
     /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
-    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
+    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
         if (value == .nil) return .nil;
         return switch (ft) {
             .text => switch (value) {
@@ -136,7 +136,7 @@ pub const TypedValue = union(enum) {
             .integer => TypedValue{ .integer = try payloadAsInt(value) },
             .real => TypedValue{ .real = try payloadAsFloat(value) },
             .boolean => TypedValue{ .boolean = try payloadAsBool(value) },
-            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator) },
+            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator, items_type.?) },
         };
     }
 

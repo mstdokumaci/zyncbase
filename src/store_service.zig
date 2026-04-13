@@ -91,7 +91,7 @@ pub const StoreService = struct {
                 const fn_inner = entry.key_ptr.*.str.value();
 
                 const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
-                const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, entry.value_ptr.*);
+                const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
@@ -105,7 +105,7 @@ pub const StoreService = struct {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(tbl_md, fn_inner, value);
-            const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, value);
+            const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
 
             const col = [_]storage_mod.ColumnValue{.{

@@ -603,7 +603,7 @@ test "storage: write/read round-trip for array fields" {
     var prng = std.Random.DefaultPrng.init(0xA77A1_10);
     const rand = prng.random();
     var fields_arr = [_]sth.Field{
-        sth.makeField("tags", .array, false),
+        sth.Field{ .name = "tags", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
         sth.makeField("name", .text, false),
     };
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
@@ -623,7 +623,7 @@ test "storage: write/read round-trip for array fields" {
         }
         const array_payload = msgpack.Payload{ .arr = elems };
         defer array_payload.free(allocator);
-        const tags_json = try msgpack.payloadToJson(array_payload, allocator);
+        const tags_json = try msgpack.payloadToJson(array_payload, allocator, .integer);
         defer allocator.free(tags_json);
         const cols = [_]ColumnValue{
             .{ .name = "tags", .value = .{ .text = tags_json }, .field_type = .array },

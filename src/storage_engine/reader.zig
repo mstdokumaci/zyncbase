@@ -149,9 +149,11 @@ pub fn buildSelectQuery(
 
             // Find sort field type for correct binding
             var sort_ft: schema_manager.FieldType = .text;
+            var sort_it: ?schema_manager.FieldType = null;
             for (table_metadata.table.fields) |f| {
                 if (std.mem.eql(u8, f.name, sql_field)) {
                     sort_ft = f.sql_type;
+                    sort_it = f.items_type;
                     break;
                 }
             }
@@ -165,7 +167,7 @@ pub fn buildSelectQuery(
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv = try TypedValue.fromPayload(allocator, sort_ft, cursor.sort_value);
+                const sv = try TypedValue.fromPayload(allocator, sort_ft, sort_it, cursor.sort_value);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
 
@@ -228,7 +230,7 @@ pub fn readColumnValue(allocator: Allocator, db: *sqlite.Db, stmt: *sqlite.c.sql
         const ptr = sqlite.c.sqlite3_column_text(stmt, i);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
         const s = if (ptr != null) ptr[0..len] else "[]";
-        return msgpack.jsonToPayload(s, allocator);
+        return msgpack.jsonToPayload(s, allocator, field.?.items_type.?);
     }
     return switch (col_type) {
         sqlite.c.SQLITE_INTEGER => {
@@ -306,6 +308,7 @@ pub fn appendConditionSql(
 
     const field = table_metadata.getField(sql_field);
     var ft: schema_manager.FieldType = if (field) |f| f.sql_type else .text;
+    const it: ?schema_manager.FieldType = if (field) |f| f.items_type else null;
 
     if (std.mem.eql(u8, cond.field, "id")) ft = .text;
     if (std.mem.eql(u8, cond.field, "namespace_id")) ft = .text;
@@ -318,42 +321,42 @@ pub fn appendConditionSql(
         .eq => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " = ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .ne => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " != ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " > ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " < ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " >= ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " <= ?");
-            const tv = try TypedValue.fromPayload(allocator, ft, val);
+            const tv = try TypedValue.fromPayload(allocator, ft, it, val);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
@@ -400,13 +403,13 @@ pub fn appendConditionSql(
                     for (val.arr, 0..) |v, i| {
                         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                         try sql_buf.appendSlice(allocator, "?");
-                        const tv = try TypedValue.fromPayload(allocator, ft, v);
+                        const tv = try TypedValue.fromPayload(allocator, ft, it, v);
                         errdefer tv.deinit(allocator);
                         try values.append(allocator, tv);
                     }
                 } else {
                     try sql_buf.appendSlice(allocator, "?");
-                    const tv = try TypedValue.fromPayload(allocator, ft, val);
+                    const tv = try TypedValue.fromPayload(allocator, ft, it, val);
                     errdefer tv.deinit(allocator);
                     try values.append(allocator, tv);
                 }

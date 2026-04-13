@@ -99,8 +99,8 @@ test "query with orderBy and after" {
     order_inner[1] = msgpack.Payload.uintToPayload(1); // desc
     try root.mapPut("orderBy", .{ .arr = order_inner });
 
-    // after: Base64(JSON(["val", "cursor_token"]))
-    const after_token = "WyJ2YWwiLCAiY3Vyc29yX3Rva2VuIl0=";
+    // after: Base64(MsgPack(["val", "cursor_token"]))
+    const after_token = "kqN2YWysY3Vyc29yX3Rva2Vu";
     try root.mapPut("after", try msgpack.Payload.strToPayload(after_token, allocator));
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{

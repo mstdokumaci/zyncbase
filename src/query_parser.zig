@@ -151,7 +151,8 @@ pub fn parseCursorToken(
         return error.InvalidMessageFormat;
     const json_cursor = decoded;
 
-    const cursor_payload = msgpack.jsonToPayload(json_cursor, allocator) catch
+    var reader: std.Io.Reader = .fixed(json_cursor);
+    const cursor_payload = msgpack.decodeTrusted(allocator, &reader) catch
         return error.InvalidMessageFormat;
     defer cursor_payload.free(allocator);
 

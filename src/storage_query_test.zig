@@ -201,8 +201,8 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
 
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("name", .text, false),
-        sth.makeField("tags", .array, false),
-        sth.makeField("labels", .array, false),
+        schema_manager.Field{ .name = "tags", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        schema_manager.Field{ .name = "labels", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
     };
     const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
@@ -210,13 +210,13 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator);
+    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator, .text);
     defer tags_payload.free(allocator);
-    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
+    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator, .text);
     defer labels_payload.free(allocator);
-    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, tags_payload);
+    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, tags_payload);
     defer tags_tv.deinit(allocator);
-    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, labels_payload);
+    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, labels_payload);
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{

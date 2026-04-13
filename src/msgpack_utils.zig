@@ -1,5 +1,6 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
+const FieldType = @import("schema_parser.zig").FieldType;
 
 /// Security-appropriate parse limits for WebSocket message handling.
 /// These align with the ZyncBase Wire Protocol Specification.
@@ -108,7 +109,7 @@ pub const Payload = msgpack.Payload;
 pub const Map = msgpack.Map;
 
 /// Converts a literal payload to a deterministic string for canonical keys.
-/// Rejects complex types (arr, map, bin, ext, timestamp).
+/// Rejects complex types (map, bin, ext, timestamp).
 /// The caller owns the returned slice.
 pub fn payloadToCanonicalString(payload: Payload, allocator: std.mem.Allocator) ![]const u8 {
     return switch (payload) {
@@ -128,102 +129,134 @@ pub fn payloadToCanonicalString(payload: Payload, allocator: std.mem.Allocator) 
             return s;
         },
         .str => |s| try allocator.dupe(u8, s.value()),
-        .arr => try payloadToJson(payload, allocator),
+        .arr => blk: {
+            if (payload.arr.len == 0) break :blk try allocator.dupe(u8, "[]");
+            // Infer items_type from the first non-nil element, or default to .text
+            var items_type: FieldType = .text;
+            for (payload.arr) |item| {
+                if (item != .nil) {
+                    items_type = switch (item) {
+                        .bool => .boolean,
+                        .int, .uint => .integer,
+                        .float => .real,
+                        .str => .text,
+                        else => return error.UnsupportedCanonicalType,
+                    };
+                    break;
+                }
+            }
+            break :blk try payloadToJson(payload, allocator, items_type);
+        },
         else => error.UnsupportedCanonicalType,
     };
 }
 
 /// Converts a Literal_Array Payload to a JSON array string.
-/// Calls ensureLiteralArray first; propagates any error.
+/// The elements are assumed to be of items_type (or nil).
 /// The caller owns the returned slice.
-pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator) ![]const u8 {
+pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator, items_type: FieldType) ![]const u8 {
     const arr = payload.arr;
-    var buf: std.ArrayList(u8) = .{};
-    errdefer buf.deinit(allocator);
-    try buf.append(allocator, '[');
-    for (arr, 0..) |elem, i| {
-        if (i > 0) try buf.appendSlice(allocator, ", ");
-        switch (elem) {
-            .nil => try buf.appendSlice(allocator, "null"),
-            .bool => |b| try buf.appendSlice(allocator, if (b) "true" else "false"),
-            .float => |v| {
-                // Always emit a decimal point so JSON parsers treat this as a float,
-                // not an integer. e.g. 50.0 → "50.0" not "50".
-                const s = try std.fmt.allocPrint(allocator, "{d}", .{v});
-                defer allocator.free(s);
-                try buf.appendSlice(allocator, s);
-                // If no decimal point or exponent, append ".0" to preserve float type.
-                const has_dot = std.mem.indexOfScalar(u8, s, '.') != null;
-                const has_exp = std.mem.indexOfScalar(u8, s, 'e') != null or std.mem.indexOfScalar(u8, s, 'E') != null;
-                if (!has_dot and !has_exp) try buf.appendSlice(allocator, ".0");
-            },
-            .str => |s| {
-                try buf.append(allocator, '"');
-                for (s.value()) |c| {
-                    switch (c) {
-                        '"' => try buf.appendSlice(allocator, "\\\""),
-                        '\\' => try buf.appendSlice(allocator, "\\\\"),
-                        '\n' => try buf.appendSlice(allocator, "\\n"),
-                        '\r' => try buf.appendSlice(allocator, "\\r"),
-                        '\t' => try buf.appendSlice(allocator, "\\t"),
-                        0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f => try std.fmt.format(buf.writer(allocator), "\\u{x:0>4}", .{c}),
-                        else => try buf.append(allocator, c),
+    if (arr.len == 0) return try allocator.dupe(u8, "[]");
+
+    return switch (items_type) {
+        .text => payloadArrayToJson([]const u8, allocator, arr, extractStr),
+        .integer => payloadArrayToJson(i64, allocator, arr, extractInt),
+        .real => blk: {
+            // Manual loop for real to preserve .0 suffix for whole numbers as required by storage
+            var buf = std.ArrayListUnmanaged(u8).empty;
+            errdefer buf.deinit(allocator);
+            try buf.append(allocator, '[');
+            for (arr, 0..) |item, i| {
+                if (i > 0) try buf.appendSlice(allocator, ", ");
+                if (item == .nil) {
+                    try buf.appendSlice(allocator, "null");
+                } else if (item == .float) {
+                    const v = item.float;
+                    const s = try std.fmt.allocPrint(allocator, "{d}", .{v});
+                    defer allocator.free(s);
+                    try buf.appendSlice(allocator, s);
+                    if (std.mem.indexOfScalar(u8, s, '.') == null and std.mem.indexOfScalar(u8, s, 'e') == null and std.mem.indexOfScalar(u8, s, 'E') == null) {
+                        try buf.appendSlice(allocator, ".0");
                     }
+                } else {
+                    return error.NonLiteralElement;
                 }
-                try buf.append(allocator, '"');
-            },
-            .int => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
-            .uint => |v| try std.fmt.format(buf.writer(allocator), "{d}", .{v}),
-            else => return error.NonLiteralElement,
-        }
-    }
-    try buf.append(allocator, ']');
-    return buf.toOwnedSlice(allocator);
+            }
+            try buf.append(allocator, ']');
+            break :blk try buf.toOwnedSlice(allocator);
+        },
+        .boolean => payloadArrayToJson(bool, allocator, arr, extractBool),
+        .array => error.UnsupportedArrayItemsType,
+    };
 }
 
-/// Parses a JSON array string and returns a Literal_Array Payload.
-/// Returns error.NotAnArray if the top-level JSON value is not an array.
-/// Returns error.NonLiteralElement if any element is an object or nested array.
+/// Parses a JSON array string and returns a Literal_Array Payload of items_type.
 /// The caller owns the returned Payload and must call payload.free(allocator).
-pub fn jsonToPayload(json: []const u8, allocator: std.mem.Allocator) !Payload {
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
-    defer parsed.deinit();
-
-    const json_arr = switch (parsed.value) {
-        .array => |a| a,
-        else => return error.NotAnArray,
+pub fn jsonToPayload(json: []const u8, allocator: std.mem.Allocator, items_type: FieldType) !Payload {
+    return switch (items_type) {
+        .text => jsonArrayToPayload([]const u8, allocator, json, mapStr),
+        .integer => jsonArrayToPayload(i64, allocator, json, mapInt),
+        .real => jsonArrayToPayload(f64, allocator, json, mapFloat),
+        .boolean => jsonArrayToPayload(bool, allocator, json, mapBool),
+        .array => error.UnsupportedArrayItemsType,
     };
+}
 
-    const payloads = try allocator.alloc(Payload, json_arr.items.len);
-    errdefer allocator.free(payloads);
-    var count: usize = 0;
-    errdefer for (payloads[0..count]) |p| p.free(allocator);
+// ─── Internal JSON Helpers ───────────────────────────────────────────────────
 
-    for (json_arr.items) |item| {
-        payloads[count] = switch (item) {
-            .null => .nil,
-            .bool => |b| .{ .bool = b },
-            .integer => |v| .{ .int = v },
-            .float => |v| .{ .float = v },
-            .number_string => |s| blk: {
-                // Large integers that exceed i64 range are returned as number_string.
-                // Try parsing as u64 first, then i64.
-                if (std.fmt.parseInt(u64, s, 10)) |v| {
-                    break :blk .{ .uint = v };
-                } else |_| {}
-                if (std.fmt.parseInt(i64, s, 10)) |v| {
-                    break :blk .{ .int = v };
-                } else |_| {}
-                if (std.fmt.parseFloat(f64, s)) |v| {
-                    break :blk .{ .float = v };
-                } else |_| {}
-                return error.NonLiteralElement;
-            },
-            .string => |s| try Payload.strToPayload(s, allocator),
-            .object, .array => return error.NonLiteralElement,
-        };
-        count += 1;
+fn mapStr(v: []const u8, alloc: std.mem.Allocator) !Payload {
+    return try Payload.strToPayload(v, alloc);
+}
+fn mapInt(v: i64, _: std.mem.Allocator) !Payload {
+    return .{ .int = v };
+}
+fn mapFloat(v: f64, _: std.mem.Allocator) !Payload {
+    return .{ .float = v };
+}
+fn mapBool(v: bool, _: std.mem.Allocator) !Payload {
+    return .{ .bool = v };
+}
+
+fn extractStr(item: Payload) ?[]const u8 {
+    return if (item == .str) item.str.value() else null;
+}
+fn extractInt(item: Payload) ?i64 {
+    return switch (item) {
+        .int => |v| v,
+        .uint => |v| @intCast(v),
+        else => null,
+    };
+}
+fn extractBool(item: Payload) ?bool {
+    return if (item == .bool) item.bool else null;
+}
+
+fn jsonArrayToPayload(
+    comptime T: type, // zwanzig-disable-line: unused-parameter
+    allocator: std.mem.Allocator,
+    json: []const u8,
+    mapper: anytype,
+) !Payload {
+    const parsed = try std.json.parseFromSlice([]const ?T, allocator, json, .{});
+    defer parsed.deinit();
+    const arr = try allocator.alloc(Payload, parsed.value.len);
+    errdefer allocator.free(arr);
+    for (parsed.value, 0..) |v, i| {
+        arr[i] = if (v) |val| try mapper(val, allocator) else .nil;
     }
+    return .{ .arr = arr };
+}
 
-    return Payload{ .arr = payloads };
+fn payloadArrayToJson(
+    comptime T: type, // zwanzig-disable-line: unused-parameter
+    allocator: std.mem.Allocator,
+    arr: []const Payload,
+    extractor: anytype,
+) ![]const u8 {
+    const slice = try allocator.alloc(?T, arr.len);
+    defer allocator.free(slice);
+    for (arr, 0..) |item, i| {
+        slice[i] = extractor(item);
+    }
+    return try std.json.Stringify.valueAlloc(allocator, slice, .{});
 }

@@ -369,12 +369,14 @@ pub fn mapErrorToMessage(err: anyerror) []const u8 {
 }
 
 pub fn encodeCursor(allocator: Allocator, cursor: msgpack.Payload) ![]const u8 {
-    const json_cursor = try msgpack.payloadToJson(cursor, allocator);
-    defer allocator.free(json_cursor);
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
 
-    const encoded_len = std.base64.standard.Encoder.calcSize(json_cursor.len);
+    try msgpack.encode(cursor, buf.writer(allocator));
+
+    const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
     const encoded = try allocator.alloc(u8, encoded_len);
-    _ = std.base64.standard.Encoder.encode(encoded, json_cursor);
+    _ = std.base64.standard.Encoder.encode(encoded, buf.items);
     return encoded;
 }
 
