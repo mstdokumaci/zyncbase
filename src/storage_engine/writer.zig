@@ -9,14 +9,12 @@ const ColumnValue = types.ColumnValue;
 
 pub fn buildInsertOrReplaceOp(
     allocator: Allocator,
-    sm: *const schema_manager.SchemaManager,
-    table: []const u8,
+    table_metadata: schema_manager.TableMetadata,
     id: []const u8,
     namespace: []const u8,
     columns: []const ColumnValue,
 ) !WriteOp {
-    // Look up table schema to determine which columns are array fields
-    const table_metadata = sm.getTable(table) orelse return error.UnknownTable;
+    const table = table_metadata.table.name;
 
     // Build SQL: INSERT OR REPLACE INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
     // VALUES (?, ?, .., COALESCE((SELECT created_at FROM <table> WHERE id=? AND namespace_id=?), ?), ?)
@@ -33,15 +31,7 @@ pub fn buildInsertOrReplaceOp(
     }
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
     for (columns) |col| {
-        // Find the field schema to check if it's an array type
-        var is_array = false;
-        for (table_metadata.table.fields) |f| {
-            if (std.mem.eql(u8, f.name, col.name)) {
-                is_array = f.sql_type == .array;
-                break;
-            }
-        }
-        if (is_array) {
+        if (@as(std.meta.Tag(TypedValue), col.value) == .blob) {
             try sql_buf.appendSlice(allocator, ", jsonb(?)");
         } else {
             try sql_buf.appendSlice(allocator, ", ?");
@@ -71,15 +61,7 @@ pub fn buildInsertOrReplaceOp(
         allocator.free(values);
     }
     for (columns, 0..) |col, i| {
-        // Find the field schema to check its type
-        var field_type: schema_manager.FieldType = .text;
-        for (table_metadata.table.fields) |f| {
-            if (std.mem.eql(u8, f.name, col.name)) {
-                field_type = f.sql_type;
-                break;
-            }
-        }
-        values[i] = try types.TypedValue.fromPayload(allocator, field_type, col.value);
+        values[i] = try col.value.clone(allocator);
         initialized_count += 1;
     }
 

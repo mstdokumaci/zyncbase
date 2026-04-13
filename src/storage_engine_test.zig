@@ -28,9 +28,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     const engine = &ctx.engine;
 
     // Set a value
-    const val_p = try msgpack.Payload.strToPayload("test", allocator);
-    defer val_p.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "test" } }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
     // Flush writes
     try engine.flushPendingWrites();
@@ -67,15 +65,11 @@ test "StorageEngine: update existing document" {
     const engine = &ctx.engine;
 
     // Set initial value
-    const val_p1 = try msgpack.Payload.strToPayload("initial", allocator);
-    defer val_p1.free(allocator);
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p1 }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "initial" } }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
     try engine.flushPendingWrites();
     // Update value
-    const val_p2 = try msgpack.Payload.strToPayload("updated", allocator);
-    defer val_p2.free(allocator);
-    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p2 }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "updated" } }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Get the value
@@ -97,9 +91,7 @@ test "StorageEngine: delete document" {
     const engine = &ctx.engine;
 
     // Set a value
-    const val_p = try msgpack.Payload.strToPayload("test", allocator);
-    defer val_p.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "test" } }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
     try engine.flushPendingWrites();
     // Verify it exists
@@ -126,13 +118,9 @@ test "StorageEngine: query collection" {
     const engine = &ctx.engine;
 
     // Set multiple documents
-    const val_p1 = try msgpack.Payload.strToPayload("Alice", allocator);
-    defer val_p1.free(allocator);
-    const cols1 = [_]sth.ColumnValue{.{ .name = "name", .value = val_p1 }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "name", .value = .{ .text = "Alice" } }};
     try engine.insertOrReplace("users", "1", "test_namespace", &cols1);
-    const val_p2 = try msgpack.Payload.strToPayload("Bob", allocator);
-    defer val_p2.free(allocator);
-    const cols2 = [_]sth.ColumnValue{.{ .name = "name", .value = val_p2 }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "name", .value = .{ .text = "Bob" } }};
     try engine.insertOrReplace("users", "2", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Query for collection
@@ -150,13 +138,9 @@ test "StorageEngine: multiple namespaces" {
     const engine = &ctx.engine;
 
     // Set values in different namespaces
-    const val_p1 = try msgpack.Payload.strToPayload("ns1", allocator);
-    defer val_p1.free(allocator);
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p1 }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "ns1" } }};
     try engine.insertOrReplace("items", "id1", "namespace1", &cols1);
-    const val_p2 = try msgpack.Payload.strToPayload("ns2", allocator);
-    defer val_p2.free(allocator);
-    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = val_p2 }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "ns2" } }};
     try engine.insertOrReplace("items", "id1", "namespace2", &cols2);
     try engine.flushPendingWrites();
     // Get values from different namespaces
@@ -213,9 +197,7 @@ test "StorageEngine: automatic rollback in batch operations" {
     const engine = &ctx.engine;
 
     // Queue some operations
-    const val_p = try msgpack.Payload.strToPayload("value1", allocator);
-    defer val_p.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "value1" } }};
     try engine.insertOrReplace("items", "id1", "test_ns", &cols);
     try engine.insertOrReplace("items", "id2", "test_ns", &cols);
     // Wait for operations to be processed
@@ -243,7 +225,7 @@ test "StorageEngine: concurrent reads" {
     const engine = &ctx.engine;
 
     // Set some values
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .integer = 1 } }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
     try engine.insertOrReplace("items", "id2", "test_namespace", &cols1);
     try engine.flushPendingWrites();
@@ -291,9 +273,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         for (0..num_keys) |i| {
             var id_buf: [32]u8 = undefined;
             const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
-            const key_val = try msgpack.Payload.strToPayload("val", allocator);
-            defer key_val.free(allocator);
-            const cols = [_]sth.ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i)) }};
+            const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .integer = @intCast(i) } }};
             try engine.insertOrReplace("items", id, "ns", &cols);
         }
         // deinitNoCleanup will stop the engine but NOT delete the files.
@@ -333,8 +313,7 @@ test "StorageEngine: client writes blocked during migration" {
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
     // insertOrReplace should be blocked
-    const val_p = msgpack.Payload.intToPayload(1);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .integer = 1 } }};
     const err1 = engine.insertOrReplace("items", "id1", "ns", &cols);
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
@@ -357,9 +336,7 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     // 2. Begin transaction
     try engine.beginTransaction();
     // 3. Write something
-    const val_p = try msgpack.Payload.strToPayload("updated", allocator);
-    defer val_p.free(allocator);
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_p }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "updated" } }};
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     // 4. Flush batch. This should increment write_seq to 2.
     try engine.flushPendingWrites();

@@ -132,9 +132,7 @@ test "Verification: StoreQuery message processing" {
     defer app.deinit();
 
     // First, store a value (typed storage)
-    const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
-    defer val_payload.free(allocator);
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "stored_value" } }};
     try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
     try app.storage_engine.flushPendingWrites();
 
@@ -214,14 +212,10 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer app.deinit();
 
     // Insert two rows so a limited query must return nextCursor
-    const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
-    defer val_a.free(allocator);
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_a }};
+    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "value_a" } }};
     try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
 
-    const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
-    defer val_b.free(allocator);
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_b }};
+    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "value_b" } }};
     try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
 
     try app.storage_engine.flushPendingWrites();
@@ -525,9 +519,7 @@ test "Verification: StoreSubscribe message processing" {
     defer app.deinit();
 
     // 1. Store a value
-    const val_payload = try msgpack.Payload.strToPayload("stored_value", allocator);
-    defer val_payload.free(allocator);
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_payload }};
+    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "stored_value" } }};
     try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
     try app.storage_engine.flushPendingWrites();
 
@@ -603,14 +595,10 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer app.deinit();
 
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
-    const val_a = try msgpack.Payload.strToPayload("value_a", allocator);
-    defer val_a.free(allocator);
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_a }};
+    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "value_a" } }};
     try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
 
-    const val_b = try msgpack.Payload.strToPayload("value_b", allocator);
-    defer val_b.free(allocator);
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val_b }};
+    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = "value_b" } }};
     try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
 
     try app.storage_engine.flushPendingWrites();

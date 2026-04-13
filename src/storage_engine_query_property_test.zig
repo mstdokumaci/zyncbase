@@ -46,6 +46,7 @@ test "property: random query filters on StorageEngine" {
 }
 
 fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usize) !void {
+    _ = allocator;
     var prng = std.Random.DefaultPrng.init(42);
     const random = prng.random();
     var i: usize = 0;
@@ -55,16 +56,14 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
 
         var name_buf: [16]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "name_{}", .{random.intRangeAtMost(u8, 0, 10)});
-        const name_p = try msgpack.Payload.strToPayload(name, allocator);
-        defer name_p.free(allocator);
 
         const age = random.intRangeAtMost(i64, 0, 100);
         const score = random.float(f64) * 1000.0;
 
         const cols = [_]ColumnValue{
-            .{ .name = "name", .value = name_p },
-            .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
-            .{ .name = "score", .value = msgpack.Payload.floatToPayload(score) },
+            .{ .name = "name", .value = .{ .text = name } },
+            .{ .name = "age", .value = .{ .integer = age } },
+            .{ .name = "score", .value = .{ .real = score } },
         };
         try engine.insertOrReplace("entities", id, "ns1", &cols);
     }

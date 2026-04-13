@@ -80,7 +80,10 @@ pub const StoreService = struct {
 
             // Validate schema and construct columns in a single pass
             var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
-            defer columns.deinit(self.allocator);
+            defer {
+                for (columns.items) |col| col.value.deinit(self.allocator);
+                columns.deinit(self.allocator);
+            }
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
@@ -88,11 +91,11 @@ pub const StoreService = struct {
                 const fn_inner = entry.key_ptr.*.str.value();
 
                 const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
-                _ = field;
+                const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
-                    .value = entry.value_ptr.*,
+                    .value = typed,
                 });
             }
 
@@ -100,9 +103,11 @@ pub const StoreService = struct {
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const fn_inner = field_name orelse return StorageError.InvalidPath;
-            _ = try validateFieldWrite(tbl_md, fn_inner, value);
+            const field = try validateFieldWrite(tbl_md, fn_inner, value);
+            const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, value);
+            defer typed.deinit(self.allocator);
 
-            const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = value }};
+            const col = [_]storage_mod.ColumnValue{.{ .name = fn_inner, .value = typed }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         } else {
             return StorageError.InvalidPath;

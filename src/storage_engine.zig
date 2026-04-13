@@ -456,7 +456,8 @@ pub const StorageEngine = struct {
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const op = try writer.buildInsertOrReplaceOp(self.allocator, self.schema_manager, table, id, namespace, columns);
+        const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
+        const op = try writer.buildInsertOrReplaceOp(self.allocator, table_metadata, id, namespace, columns);
         _ = self.pending_writes_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }

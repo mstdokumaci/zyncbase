@@ -82,9 +82,7 @@ test "storage: thread-safe engine access" {
                     .{ thread_id, i },
                 );
                 defer testing.allocator.free(value);
-                const val_payload = try msgpack.Payload.strToPayload(value, testing.allocator);
-                defer val_payload.free(testing.allocator);
-                const cols = [_]sth.ColumnValue{.{ .name = "val", .value = val_payload }};
+                const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = value } }};
                 try eng.insertOrReplace("test", key, "test", &cols);
             }
         }
@@ -141,14 +139,8 @@ test "storage: connection pool reuse and release" {
 
     // Set some initial data
     {
-        const val_payload1 = try msgpack.Payload.strToPayload("test1", allocator);
-        defer val_payload1.free(allocator);
-        const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-        try engine.insertOrReplace("test", "key1", "test", &cols1);
-        const val_payload2 = try msgpack.Payload.strToPayload("test2", allocator);
-        defer val_payload2.free(allocator);
-        const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-        try engine.insertOrReplace("test", "key2", "test", &cols2);
+        try engine.insertOrReplace("test", "key1", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "test1" } }});
+        try engine.insertOrReplace("test", "key2", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "test2" } }});
     }
     try engine.flushPendingWrites();
     // Perform many read operations to ensure connections are being reused
@@ -188,9 +180,7 @@ test "storage: persistence round-trip (various types)" {
     };
     // Insert all test cases
     for (test_cases) |tc| {
-        const val_payload = try msgpack.Payload.strToPayload(tc.value, allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = tc.value } }};
         try engine.insertOrReplace("test", tc.path, "test", &cols);
     }
     // Flush writes
@@ -223,9 +213,7 @@ test "storage: insert/delete inverse consistency" {
     };
     for (test_cases) |tc| {
         // Insert
-        const val_payload = try msgpack.Payload.strToPayload(tc.value, allocator);
-        defer val_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_payload }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = tc.value } }};
         try engine.insertOrReplace("test", tc.path, "test", &cols);
         try engine.flushPendingWrites();
         // Verify it exists
@@ -256,14 +244,8 @@ test "storage: transaction isolation and consistency" {
     // The write thread uses transactions internally to ensure atomicity
     // Set up initial state
     {
-        const val_payload1 = try msgpack.Payload.strToPayload("initial1", allocator);
-        defer val_payload1.free(allocator);
-        const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-        try engine.insertOrReplace("test", "/key1", "test", &cols1);
-        const val_payload2 = try msgpack.Payload.strToPayload("initial2", allocator);
-        defer val_payload2.free(allocator);
-        const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-        try engine.insertOrReplace("test", "/key2", "test", &cols2);
+        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "initial1" } }});
+        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "initial2" } }});
     }
     try engine.flushPendingWrites();
     // Verify initial state
@@ -277,18 +259,9 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(doc2 != null);
     // Queue multiple operations that should execute atomically in a batch
     {
-        const val_payload1 = try msgpack.Payload.strToPayload("updated1", allocator);
-        defer val_payload1.free(allocator);
-        const cols1 = [_]ColumnValue{.{ .name = "val", .value = val_payload1 }};
-        try engine.insertOrReplace("test", "/key1", "test", &cols1);
-        const val_payload2 = try msgpack.Payload.strToPayload("updated2", allocator);
-        defer val_payload2.free(allocator);
-        const cols2 = [_]ColumnValue{.{ .name = "val", .value = val_payload2 }};
-        try engine.insertOrReplace("test", "/key2", "test", &cols2);
-        const val_payload3 = try msgpack.Payload.strToPayload("new3", allocator);
-        defer val_payload3.free(allocator);
-        const cols3 = [_]ColumnValue{.{ .name = "val", .value = val_payload3 }};
-        try engine.insertOrReplace("test", "/key3", "test", &cols3);
+        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "updated1" } }});
+        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "updated2" } }});
+        try engine.insertOrReplace("test", "/key3", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "new3" } }});
     }
     // Flush to ensure operations are processed
     try engine.flushPendingWrites();
@@ -309,9 +282,7 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(n3 != null);
     // Test concurrent reads during batch processing see consistent state
     // This tests that the write thread's transaction provides isolation
-    const val_payload_c = try msgpack.Payload.strToPayload("before", allocator);
-    defer val_payload_c.free(allocator);
-    const cols_c = [_]ColumnValue{.{ .name = "val", .value = val_payload_c }};
+    const cols_c = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "before" } }};
     try engine.insertOrReplace("test", "/concurrent_key", "test", &cols_c);
     try engine.flushPendingWrites();
     // Start a batch by queuing many operations
@@ -322,9 +293,7 @@ test "storage: transaction isolation and consistency" {
         defer allocator.free(key);
         const value = try std.fmt.allocPrint(allocator, "{{\"batch\":{d}}}", .{i});
         defer allocator.free(value);
-        const val_p = try msgpack.Payload.strToPayload(value, allocator);
-        defer val_p.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = val_p }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = value } }};
         try engine.insertOrReplace("test", key, "test", &cols);
     }
     // While the batch is being processed, concurrent reads should work
@@ -356,9 +325,7 @@ test "storage: automatic transaction rollback on failure" {
 
     // Set up initial state
     {
-        const v1 = try msgpack.Payload.strToPayload("initial", allocator);
-        defer v1.free(allocator);
-        const c1 = [_]ColumnValue{.{ .name = "val", .value = v1 }};
+        const c1 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "initial" } }};
         try engine.insertOrReplace("test", "/key1", "test", &c1);
     }
     try engine.flushPendingWrites();
@@ -372,14 +339,8 @@ test "storage: automatic transaction rollback on failure" {
     try testing.expect(engine.isTransactionActive());
     // Make changes within transaction
     {
-        const v1 = try msgpack.Payload.strToPayload("modified", allocator);
-        defer v1.free(allocator);
-        const c1 = [_]ColumnValue{.{ .name = "val", .value = v1 }};
-        try engine.insertOrReplace("test", "/key1", "test", &c1);
-        const v2 = try msgpack.Payload.strToPayload("new", allocator);
-        defer v2.free(allocator);
-        const c2 = [_]ColumnValue{.{ .name = "val", .value = v2 }};
-        try engine.insertOrReplace("test", "/key2", "test", &c2);
+        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "modified" } }});
+        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = .{ .text = "new" } }});
     }
     // Rollback the transaction
     try engine.rollbackTransaction();
@@ -401,9 +362,7 @@ test "storage: automatic transaction rollback on failure" {
     // First, set up a successful transaction
     try engine.beginTransaction();
     {
-        const v3 = try msgpack.Payload.strToPayload("test3", allocator);
-        defer v3.free(allocator);
-        const c3 = [_]ColumnValue{.{ .name = "val", .value = v3 }};
+        const c3 = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "test3" } }};
         try engine.insertOrReplace("test", "/key3", "test", &c3);
     }
     try engine.commitTransaction();
@@ -430,10 +389,8 @@ test "storage: automatic transaction rollback on failure" {
         defer allocator.free(key);
         const value = try std.fmt.allocPrint(allocator, "{{\"index\":{d}}}", .{j});
         defer allocator.free(value);
-        const v_p = try msgpack.Payload.strToPayload(value, allocator);
-        defer v_p.free(allocator);
-        const c = [_]ColumnValue{.{ .name = "val", .value = v_p }};
-        try engine.insertOrReplace("test", key, "test", &c);
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = value } }};
+        try engine.insertOrReplace("test", key, "test", &cols);
     }
     // Flush and verify all operations succeeded atomically
     try engine.flushPendingWrites();
@@ -468,11 +425,9 @@ test "storage: document set/get round-trip" {
         const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
         const title_str = scalar_values[title_idx];
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
-        const title_payload = try msgpack.Payload.strToPayload(title_str, allocator);
-        defer title_payload.free(allocator);
         const cols = [_]ColumnValue{
-            .{ .name = "title", .value = title_payload },
-            .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
+            .{ .name = "title", .value = .{ .text = title_str } },
+            .{ .name = "score", .value = .{ .integer = score_val } },
         };
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
@@ -507,16 +462,14 @@ test "storage: field set/get round-trip" {
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
-        const initial_title = try msgpack.Payload.strToPayload("initial", allocator);
-        defer initial_title.free(allocator);
         const initial_cols = [_]ColumnValue{
-            .{ .name = "title", .value = initial_title },
-            .{ .name = "score", .value = msgpack.Payload.intToPayload(0) },
+            .{ .name = "title", .value = .{ .text = "initial" } },
+            .{ .name = "score", .value = .{ .integer = 0 } },
         };
         try engine.insertOrReplace("items", id, "ns-test", &initial_cols);
         try engine.flushPendingWrites();
         const new_score: i64 = rand.intRangeAtMost(i64, 1, 9999);
-        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "score", .value = msgpack.Payload.intToPayload(new_score) }});
+        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "score", .value = .{ .integer = new_score } }});
         try engine.flushPendingWrites();
         var managed = try engine.selectField(allocator, "items", id, "ns-test", "score");
         defer managed.deinit();
@@ -552,14 +505,14 @@ test "storage: collection get is namespace-scoped" {
         while (i < count_a) : (i += 1) {
             const id = try std.fmt.allocPrint(allocator, "a-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
-            const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i)) }};
+            const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .integer = @intCast(i) } }};
             try engine.insertOrReplace("items", id, ns_a, &cols);
         }
         i = 0;
         while (i < count_b) : (i += 1) {
             const id = try std.fmt.allocPrint(allocator, "b-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
-            const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(@intCast(i + 100)) }};
+            const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .integer = @intCast(i + 100) } }};
             try engine.insertOrReplace("items", id, ns_b, &cols);
         }
         try engine.flushPendingWrites();
@@ -586,7 +539,7 @@ test "storage: remove then get returns null" {
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(42) }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .integer = 42 } }};
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
         try engine.deleteDocument("items", id, "ns-test");
@@ -611,7 +564,7 @@ test "storage: updated_at is always refreshed on write" {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
         const t_before_insert = std.time.timestamp();
-        const cols = [_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(1) }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .integer = 1 } }};
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
         var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
@@ -624,7 +577,7 @@ test "storage: updated_at is always refreshed on write" {
             else => return error.UnexpectedType,
         };
         try testing.expect(updated_at_1 >= t_before_insert);
-        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = msgpack.Payload.intToPayload(2) }});
+        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = .{ .integer = 2 } }});
         try engine.flushPendingWrites();
         var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();
@@ -663,11 +616,11 @@ test "storage: write/read round-trip for array fields" {
         }
         const array_payload = msgpack.Payload{ .arr = elems };
         defer array_payload.free(allocator);
-        const name_payload = try msgpack.Payload.strToPayload("test-item", allocator);
-        defer name_payload.free(allocator);
+        const tags_json = try msgpack.payloadToJson(array_payload, allocator);
+        defer allocator.free(tags_json);
         const cols = [_]ColumnValue{
-            .{ .name = "tags", .value = array_payload },
-            .{ .name = "name", .value = name_payload },
+            .{ .name = "tags", .value = .{ .blob = tags_json } },
+            .{ .name = "name", .value = .{ .text = "test-item" } },
         };
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
@@ -721,13 +674,11 @@ test "storage: non-array fields are unaffected" {
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
         const active_val = rand.boolean();
-        const title_payload = try msgpack.Payload.strToPayload(title_str, allocator);
-        defer title_payload.free(allocator);
         const cols = [_]ColumnValue{
-            .{ .name = "title", .value = title_payload },
-            .{ .name = "score", .value = msgpack.Payload.intToPayload(score_val) },
-            .{ .name = "rating", .value = .{ .float = rating_val } },
-            .{ .name = "active", .value = .{ .bool = active_val } },
+            .{ .name = "title", .value = .{ .text = title_str } },
+            .{ .name = "score", .value = .{ .integer = score_val } },
+            .{ .name = "rating", .value = .{ .real = rating_val } },
+            .{ .name = "active", .value = .{ .boolean = active_val } },
         };
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
@@ -771,7 +722,9 @@ test "storage: array length match after round trip" {
         }
         const array_payload = msgpack.Payload{ .arr = elems };
         defer array_payload.free(allocator);
-        const cols = [_]ColumnValue{.{ .name = "tags", .value = array_payload }};
+        const tags_json = try msgpack.payloadToJson(array_payload, allocator);
+        defer allocator.free(tags_json);
+        const cols = [_]ColumnValue{.{ .name = "tags", .value = .{ .blob = tags_json } }};
         try engine.insertOrReplace("items", id, "ns-test", &cols);
         try engine.flushPendingWrites();
         var managed = try engine.selectField(allocator, "items", id, "ns-test", "tags");

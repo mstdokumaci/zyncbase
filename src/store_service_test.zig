@@ -299,14 +299,10 @@ test "StoreService: query - basic search" {
     defer app.deinit();
 
     // Seed data
-    const val_1 = try msgpack.Payload.strToPayload("Alice", allocator);
-    defer val_1.free(allocator);
-    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_1 }};
+    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .text = "Alice" } }};
     try app.storage_engine.insertOrReplace("users", "user-1", "ns", &cols_1);
 
-    const val_2 = try msgpack.Payload.strToPayload("Bob", allocator);
-    defer val_2.free(allocator);
-    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = val_2 }};
+    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .text = "Bob" } }};
     try app.storage_engine.insertOrReplace("users", "user-2", "ns", &cols_2);
     try app.storage_engine.flushPendingWrites();
 
@@ -342,9 +338,7 @@ test "StoreService: query - orderBy and limit" {
 
     const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
     for (tasks, 0..) |t, i| {
-        const title = try msgpack.Payload.strToPayload(t, allocator);
-        defer title.free(allocator);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = title }};
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = .{ .text = t } }};
         const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
         defer allocator.free(id);
         try app.storage_engine.insertOrReplace("tasks", id, "ns", &cols);
@@ -414,9 +408,7 @@ test "StoreService: queryWithCursor - pagination" {
     while (i < 5) : (i += 1) {
         const str = try std.fmt.allocPrint(allocator, "item-{}", .{i});
         defer allocator.free(str);
-        const val = try msgpack.Payload.strToPayload(str, allocator);
-        defer val.free(allocator);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = val }};
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = str } }};
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
         try app.storage_engine.insertOrReplace("data", id, "ns", &cols);

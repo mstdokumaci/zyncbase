@@ -27,15 +27,12 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 2) Queue a write BEFORE any subscription exists.
     //    This is the behavior that used to be dropped when capture was optional.
-    const val_written = try msgpack.Payload.strToPayload("task 1", allocator);
-    defer val_written.free(allocator);
-
     try engine.insertOrReplace(
         "items",
         "id1",
         "ns",
         &[_]sth.ColumnValue{
-            .{ .name = "val", .value = val_written },
+            .{ .name = "val", .value = .{ .text = "task 1" } },
         },
     );
 
