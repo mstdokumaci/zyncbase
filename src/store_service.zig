@@ -14,6 +14,25 @@ fn isBuiltInField(name: []const u8) bool {
         std.mem.eql(u8, name, "updated_at");
 }
 
+/// Returns the id value if the filter is a simple `id = ?` point lookup.
+fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
+    // Must have: exactly 1 AND condition, no OR, no order, no cursor
+    const conds = filter.conditions orelse return null;
+    if (conds.len != 1) return null;
+    if (filter.or_conditions != null) return null;
+    if (filter.order_by != null) return null;
+    if (filter.after != null) return null;
+
+    const cond = conds[0];
+    if (cond.op != .eq) return null;
+    if (!std.mem.eql(u8, cond.field, "id")) return null;
+
+    // Extract string value
+    const val = cond.value orelse return null;
+    if (val != .str) return null;
+    return val.str.value();
+}
+
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
@@ -151,6 +170,28 @@ pub const StoreService = struct {
     ) !QueryResult {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
         errdefer filter.deinit(allocator);
+
+        if (isIdEqualsFilter(filter)) |id| {
+            // Fast path: use selectDocument with cache
+            var doc = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
+
+            // Wrap single doc as 1-element array to match query response contract
+            const arr_payload = if (doc.value) |v| blk: {
+                const items = try allocator.alloc(msgpack.Payload, 1);
+                items[0] = v;
+                break :blk msgpack.Payload{ .arr = items };
+            } else msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+
+            // Transfer ownership: the ManagedPayload now holds the array wrapper.
+            // On cache hit: doc.handle still tracks the cache ref, inner value is borrowed.
+            // On cache miss: inner value is allocator-owned.
+            doc.value = arr_payload;
+
+            return QueryResult{
+                .results = doc,
+                .filter = filter,
+            };
+        }
 
         const results = try self.storage_engine.selectQuery(allocator, collection, namespace, filter);
         return QueryResult{
