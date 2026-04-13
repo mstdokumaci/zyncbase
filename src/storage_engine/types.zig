@@ -136,7 +136,7 @@ pub const TypedValue = union(enum) {
             .integer => TypedValue{ .integer = try payloadAsInt(value) },
             .real => TypedValue{ .real = try payloadAsFloat(value) },
             .boolean => TypedValue{ .boolean = try payloadAsBool(value) },
-            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator, items_type.?) },
+            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator, items_type orelse return StorageError.TypeMismatch) },
         };
     }
 

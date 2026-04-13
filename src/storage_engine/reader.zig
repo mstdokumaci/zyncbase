@@ -230,7 +230,7 @@ pub fn readColumnValue(allocator: Allocator, db: *sqlite.Db, stmt: *sqlite.c.sql
         const ptr = sqlite.c.sqlite3_column_text(stmt, i);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
         const s = if (ptr != null) ptr[0..len] else "[]";
-        return msgpack.jsonToPayload(s, allocator, field.?.items_type.?);
+        return msgpack.jsonToPayload(s, allocator, field.?.items_type orelse return types.StorageError.TypeMismatch);
     }
     return switch (col_type) {
         sqlite.c.SQLITE_INTEGER => {
