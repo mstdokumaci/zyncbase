@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const storage_mod = @import("storage_engine/types.zig");
+const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 
 pub const Envelope = struct {

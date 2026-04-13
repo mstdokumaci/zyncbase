@@ -2,9 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
-const storage_mod = @import("storage_engine/types.zig");
+const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 
 fn isBuiltInField(name: []const u8) bool {
