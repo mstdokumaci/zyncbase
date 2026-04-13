@@ -146,18 +146,17 @@ test "StorageEngine: selectQuery pagination (after)" {
 }
 
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
-    const name_p = try msgpack.Payload.strToPayload(name, allocator);
-    defer name_p.free(allocator);
+    _ = allocator;
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = name_p },
-        .{ .name = "age", .value = msgpack.Payload.intToPayload(age) },
+        .{ .name = "name", .value = .{ .text = name } },
+        .{ .name = "age", .value = .{ .integer = age } },
     };
     try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
-        .{ .name = "score", .value = msgpack.Payload.intToPayload(score) },
+        .{ .name = "score", .value = .{ .integer = score } },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
@@ -215,13 +214,15 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer tags_payload.free(allocator);
     const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator);
     defer labels_payload.free(allocator);
-    const name_payload = try msgpack.Payload.strToPayload("Task 1", allocator);
-    defer name_payload.free(allocator);
+    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, tags_payload);
+    defer tags_tv.deinit(allocator);
+    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, labels_payload);
+    defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = name_payload },
-        .{ .name = "tags", .value = tags_payload },
-        .{ .name = "labels", .value = labels_payload },
+        .{ .name = "name", .value = .{ .text = "Task 1" } },
+        .{ .name = "tags", .value = tags_tv },
+        .{ .name = "labels", .value = labels_tv },
     };
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
@@ -397,10 +398,9 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 }
 
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
-    const data_p = try msgpack.Payload.strToPayload(data, allocator);
-    defer data_p.free(allocator);
+    _ = allocator;
     const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = data_p },
+        .{ .name = "data", .value = .{ .text = data } },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

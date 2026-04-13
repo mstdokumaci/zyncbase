@@ -58,7 +58,7 @@ pub const StorageError = error{
 /// A column name + msgpack value pair for storage inserts/updates.
 pub const ColumnValue = struct {
     name: []const u8,
-    value: msgpack.Payload,
+    value: TypedValue,
 };
 
 /// A managed payload that might be backed by a cache handle.

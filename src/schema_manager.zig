@@ -68,17 +68,4 @@ pub const SchemaManager = struct {
         const tbl = self.getTable(table) orelse return types.StorageError.UnknownTable;
         if (tbl.getField(field) == null) return types.StorageError.UnknownField;
     }
-
-    /// Validate columns for an operation (e.g., insert/update).
-    /// Checks if the table exists, each column exists, and obeys type/nullability constraints.
-    pub fn validateColumns(self: *const SchemaManager, table_name: []const u8, columns: []const types.ColumnValue) !void {
-        const table_metadata = self.getTable(table_name) orelse return types.StorageError.UnknownTable;
-        for (columns) |col| {
-            const f = table_metadata.getField(col.name) orelse return types.StorageError.UnknownField;
-            if (f.required and col.value == .nil) return types.StorageError.NullNotAllowed;
-            if (col.value != .nil) {
-                try types.TypedValue.validateValue(f.sql_type, col.value);
-            }
-        }
-    }
 };

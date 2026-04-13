@@ -27,6 +27,7 @@ pub const OnDelete = enum { cascade, restrict, set_null };
 pub const Field = struct {
     name: []const u8, // flattened name, e.g. "address__city"
     sql_type: FieldType,
+    items_type: ?FieldType, // used for array fields
     required: bool,
     indexed: bool,
     references: ?[]const u8, // target table name, or null
@@ -42,6 +43,7 @@ pub const Field = struct {
         return .{
             .name = cloned_name,
             .sql_type = self.sql_type,
+            .items_type = self.items_type,
             .required = self.required,
             .indexed = self.indexed,
             .references = cloned_ref,
@@ -322,6 +324,13 @@ pub const SchemaParser = struct {
                 const sql_type = try mapType(type_str);
                 const is_required = required_set.contains(full_name);
 
+                var items_type: ?FieldType = null;
+                if (sql_type == .array) {
+                    const items_val = field_def.object.get("items") orelse return error.MissingArrayItems;
+                    if (items_val != .string) return error.InvalidArrayItems;
+                    items_type = try mapPrimitiveType(items_val.string);
+                }
+
                 const is_indexed = if (field_def.object.get("indexed")) |iv|
                     iv == .bool and iv.bool
                 else
@@ -349,6 +358,7 @@ pub const SchemaParser = struct {
                 try fields.append(self.allocator, .{
                     .name = full_name,
                     .sql_type = sql_type,
+                    .items_type = items_type,
                     .required = is_required,
                     .indexed = is_indexed,
                     .references = refs,
@@ -421,6 +431,12 @@ pub const SchemaParser = struct {
                 try writeJsonString(buf, self.allocator, remaining);
                 try buf.appendSlice(self.allocator, ":{\"type\":");
                 try writeJsonString(buf, self.allocator, fieldTypeName(field.sql_type));
+                if (field.sql_type == .array) {
+                    if (field.items_type) |items_type| {
+                        try buf.appendSlice(self.allocator, ",\"items\":");
+                        try writeJsonString(buf, self.allocator, fieldTypeName(items_type));
+                    }
+                }
                 if (field.indexed) try buf.appendSlice(self.allocator, ",\"indexed\":true");
                 if (field.references) |ref| {
                     try buf.appendSlice(self.allocator, ",\"references\":");
@@ -478,6 +494,12 @@ pub fn mapType(type_str: []const u8) !FieldType {
     if (std.mem.eql(u8, type_str, "boolean")) return .boolean;
     if (std.mem.eql(u8, type_str, "array")) return .array;
     return error.UnknownFieldType;
+}
+
+pub fn mapPrimitiveType(type_str: []const u8) !FieldType {
+    const ft = mapType(type_str) catch return error.UnsupportedArrayItemsType;
+    if (ft == .array) return error.UnsupportedArrayItemsType;
+    return ft;
 }
 
 pub fn fieldTypeName(ft: FieldType) []const u8 {

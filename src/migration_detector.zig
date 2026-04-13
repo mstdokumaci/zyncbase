@@ -161,6 +161,7 @@ pub const MigrationDetector = struct {
                         .field = schema_manager.Field{
                             .name = owned_field_name,
                             .sql_type = ft,
+                            .items_type = null,
                             .required = false,
                             .indexed = false,
                             .references = null,

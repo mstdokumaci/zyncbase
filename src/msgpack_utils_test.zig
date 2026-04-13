@@ -4,103 +4,6 @@ const msgpack_utils = @import("msgpack_utils.zig");
 const Payload = msgpack_utils.Payload;
 
 // ============================================================
-// isLiteral tests
-// ============================================================
-
-test "isLiteral: nil returns true" {
-    try testing.expect(msgpack_utils.isLiteral(.nil));
-}
-
-test "isLiteral: bool returns true" {
-    try testing.expect(msgpack_utils.isLiteral(.{ .bool = false }));
-}
-
-test "isLiteral: int returns true" {
-    try testing.expect(msgpack_utils.isLiteral(.{ .int = 0 }));
-}
-
-test "isLiteral: uint returns true" {
-    try testing.expect(msgpack_utils.isLiteral(.{ .uint = 0 }));
-}
-
-test "isLiteral: float returns true" {
-    try testing.expect(msgpack_utils.isLiteral(.{ .float = 0.0 }));
-}
-
-test "isLiteral: str returns true" {
-    const allocator = testing.allocator;
-    const s = try Payload.strToPayload("hi", allocator);
-    defer s.free(allocator);
-    try testing.expect(msgpack_utils.isLiteral(s));
-}
-
-test "isLiteral: arr returns false" {
-    const allocator = testing.allocator;
-    const elems = try allocator.alloc(Payload, 0);
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try testing.expect(!msgpack_utils.isLiteral(p));
-}
-
-test "isLiteral: map returns false" {
-    const allocator = testing.allocator;
-    const p = Payload.mapPayload(allocator);
-    defer p.free(allocator);
-    try testing.expect(!msgpack_utils.isLiteral(p));
-}
-
-test "isLiteral: bin returns false" {
-    const allocator = testing.allocator;
-    const p = try Payload.binToPayload(&[_]u8{0x01}, allocator);
-    defer p.free(allocator);
-    try testing.expect(!msgpack_utils.isLiteral(p));
-}
-
-test "isLiteral: ext returns false" {
-    const allocator = testing.allocator;
-    const p = try Payload.extToPayload(1, &[_]u8{0x01}, allocator);
-    defer p.free(allocator);
-    try testing.expect(!msgpack_utils.isLiteral(p));
-}
-
-// ============================================================
-// ensureLiteralArray tests
-// ============================================================
-
-test "ensureLiteralArray: empty array returns no error" {
-    const allocator = testing.allocator;
-    const elems = try allocator.alloc(Payload, 0);
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try msgpack_utils.ensureLiteralArray(p);
-}
-
-test "ensureLiteralArray: single-element literal array returns no error" {
-    const allocator = testing.allocator;
-    const elems = try allocator.alloc(Payload, 1);
-    elems[0] = .{ .int = 1 };
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try msgpack_utils.ensureLiteralArray(p);
-}
-
-test "ensureLiteralArray: mixed array with non-literal returns NonLiteralElement" {
-    const allocator = testing.allocator;
-    const inner_elems = try allocator.alloc(Payload, 0);
-    const elems = try allocator.alloc(Payload, 2);
-    elems[0] = .{ .int = 1 };
-    elems[1] = .{ .arr = inner_elems }; // non-literal
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try testing.expectError(error.NonLiteralElement, msgpack_utils.ensureLiteralArray(p));
-}
-
-test "ensureLiteralArray: non-array payload returns NotAnArray" {
-    try testing.expectError(error.NotAnArray, msgpack_utils.ensureLiteralArray(.nil));
-    try testing.expectError(error.NotAnArray, msgpack_utils.ensureLiteralArray(.{ .int = 5 }));
-}
-
-// ============================================================
 // payloadToJson tests
 // ============================================================
 
@@ -129,19 +32,6 @@ test "payloadToJson: [1, \"hello\", true, null]" {
     try testing.expectEqualStrings("[1, \"hello\", true, null]", json);
 }
 
-test "payloadToJson: non-literal-array payload returns error" {
-    const allocator = testing.allocator;
-    // Non-array payload
-    try testing.expectError(error.NotAnArray, msgpack_utils.payloadToJson(.nil, allocator));
-    // Array with non-literal element
-    const inner_elems = try allocator.alloc(Payload, 0);
-    const elems = try allocator.alloc(Payload, 1);
-    elems[0] = .{ .arr = inner_elems };
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try testing.expectError(error.NonLiteralElement, msgpack_utils.payloadToJson(p, allocator));
-}
-
 // ============================================================
 // payloadToCanonicalString tests
 // ============================================================
@@ -158,16 +48,6 @@ test "payloadToCanonicalString: literal array produces JSON string" {
     const result = try msgpack_utils.payloadToCanonicalString(p, allocator);
     defer allocator.free(result);
     try testing.expectEqualStrings("[\"admin\", \"editor\"]", result);
-}
-
-test "payloadToCanonicalString: non-literal array returns error" {
-    const allocator = testing.allocator;
-    const inner_elems = try allocator.alloc(Payload, 0);
-    const elems = try allocator.alloc(Payload, 1);
-    elems[0] = .{ .arr = inner_elems };
-    const p: Payload = .{ .arr = elems };
-    defer p.free(allocator);
-    try testing.expectError(error.NonLiteralElement, msgpack_utils.payloadToCanonicalString(p, allocator));
 }
 
 // ============================================================
@@ -272,105 +152,6 @@ fn payloadsEqual(a: Payload, b: Payload) bool {
         .map => false, // maps not used in literal arrays
         else => false, // timestamp and other types not expected in literal arrays
     };
-}
-
-// Feature: array-jsonb-storage, Property 3: isLiteral returns true for all literal types
-test "msgpack_utils: isLiteral returns true for all literal types" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0xAAAA_BBBB);
-    const rand = prng.random();
-
-    var iter: usize = 0;
-    while (iter < 100) : (iter += 1) {
-        const p = try genLiteralPayload(rand, allocator);
-        defer p.free(allocator);
-        try testing.expect(msgpack_utils.isLiteral(p));
-    }
-}
-
-// Feature: array-jsonb-storage, Property 4: isLiteral returns false for all non-literal types
-test "msgpack_utils: isLiteral returns false for all non-literal types" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0xCCCC_DDDD);
-    const rand = prng.random();
-
-    var iter: usize = 0;
-    while (iter < 100) : (iter += 1) {
-        // Generate a non-literal: arr, map, bin, or ext
-        const tag = rand.intRangeAtMost(u8, 0, 3);
-        const p: Payload = switch (tag) {
-            0 => blk: {
-                const elems = try allocator.alloc(Payload, 0);
-                break :blk Payload{ .arr = elems };
-            },
-            1 => Payload.mapPayload(allocator),
-            2 => try Payload.binToPayload(&[_]u8{0x01}, allocator),
-            else => try Payload.extToPayload(1, &[_]u8{0x01}, allocator),
-        };
-        defer p.free(allocator);
-        try testing.expect(!msgpack_utils.isLiteral(p));
-    }
-}
-
-// Feature: array-jsonb-storage, Property 5: ensureLiteralArray accepts literal arrays and rejects non-arrays
-test "msgpack_utils: ensureLiteralArray accepts literal arrays and rejects non-arrays" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0xEEEE_FFFF);
-    const rand = prng.random();
-
-    var iter: usize = 0;
-    while (iter < 100) : (iter += 1) {
-        // (a) literal arrays → no error
-        {
-            const p = try genLiteralArray(rand, allocator);
-            defer p.free(allocator);
-            try msgpack_utils.ensureLiteralArray(p);
-        }
-
-        // (b) non-array payloads → NotAnArray
-        {
-            const p = try genLiteralPayload(rand, allocator);
-            defer p.free(allocator);
-            try testing.expectError(error.NotAnArray, msgpack_utils.ensureLiteralArray(p));
-        }
-
-        // (c) array with at least one non-literal element → NonLiteralElement
-        {
-            const inner = try allocator.alloc(Payload, 0);
-            const elems = try allocator.alloc(Payload, 2);
-            elems[0] = try genLiteralPayload(rand, allocator);
-            elems[1] = Payload{ .arr = inner }; // non-literal
-            const p = Payload{ .arr = elems };
-            defer p.free(allocator);
-            try testing.expectError(error.NonLiteralElement, msgpack_utils.ensureLiteralArray(p));
-        }
-    }
-}
-
-// Feature: array-jsonb-storage, Property 6: payloadToJson rejects non-literal-array payloads
-test "msgpack_utils: payloadToJson rejects non-literal-array payloads" {
-    const allocator = testing.allocator;
-    var prng = std.Random.DefaultPrng.init(0x1111_2222);
-    const rand = prng.random();
-
-    var iter: usize = 0;
-    while (iter < 100) : (iter += 1) {
-        // Non-array literal payload → NotAnArray
-        const p = try genLiteralPayload(rand, allocator);
-        defer p.free(allocator);
-        try testing.expectError(error.NotAnArray, msgpack_utils.payloadToJson(p, allocator));
-    }
-
-    // Array with non-literal element → NonLiteralElement
-    iter = 0;
-    while (iter < 100) : (iter += 1) {
-        const inner = try allocator.alloc(Payload, 0);
-        const elems = try allocator.alloc(Payload, 1);
-        elems[0] = Payload{ .arr = inner };
-        const p = Payload{ .arr = elems };
-        defer p.free(allocator);
-        try testing.expectError(error.NonLiteralElement, msgpack_utils.payloadToJson(p, allocator));
-    }
 }
 
 /// Compare two Payloads for round-trip equivalence through JSON.

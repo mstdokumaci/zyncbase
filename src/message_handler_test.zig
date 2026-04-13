@@ -57,7 +57,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
         \\{
         \\  "version": "1.0.0",
         \\  "store": {
-        \\    "items": { "fields": { "tags": { "type": "array" } } }
+        \\    "items": { "fields": { "tags": { "type": "array", "items": "integer" } } }
         \\  }
         \\}
     ;
@@ -128,6 +128,7 @@ test "MessageHandler - flattened field path via StoreSet" {
     fields[0] = .{
         .name = try allocator.dupe(u8, "metadata__tags"),
         .sql_type = .array,
+        .items_type = .text,
         .required = false,
         .indexed = false,
         .references = null,
@@ -136,6 +137,7 @@ test "MessageHandler - flattened field path via StoreSet" {
     fields[1] = .{
         .name = try allocator.dupe(u8, "name"),
         .sql_type = .text,
+        .items_type = null,
         .required = false,
         .indexed = false,
         .references = null,
@@ -231,6 +233,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     fields[0] = .{
         .name = try allocator.dupe(u8, "a__b__c"),
         .sql_type = .text,
+        .items_type = null,
         .required = false,
         .indexed = false,
         .references = null,
