@@ -71,17 +71,9 @@ pub fn createMessage(
     return buf.toOwnedSlice(allocator);
 }
 
-/// Helper to get a value from a MsgPack map by string key
-pub fn getMapValue(payload: Payload, key: []const u8) ?Payload {
+pub fn getMapValue(payload: Payload, key: []const u8) !?Payload {
     if (payload != .map) return null;
-    var it = payload.map.map.iterator();
-    while (it.next()) |entry| {
-        const k = entry.key_ptr.*;
-        if (k == .str and std.mem.eql(u8, k.str.value(), key)) {
-            return entry.value_ptr.*;
-        }
-    }
-    return null;
+    return try payload.mapGet(key);
 }
 
 pub fn createStoreSetMessage(

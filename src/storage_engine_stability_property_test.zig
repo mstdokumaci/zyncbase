@@ -1,10 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
-const schema_manager = @import("schema_manager.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const StorageEngine = sth.StorageEngine;
+const ColumnValue = sth.ColumnValue;
+const schema_manager = sth.schema_manager;
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -94,8 +93,7 @@ test "storage: stability continues after transaction errors" {
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
-    const doc = managed.value;
-    try testing.expect(doc != null);
+    _ = try sth.expectFieldString(managed.value, "val", "value1");
     // Cause another transaction error
     _ = storage.rollbackTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
@@ -106,8 +104,7 @@ test "storage: stability continues after transaction errors" {
     try storage.flushPendingWrites();
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
-    const doc2 = managed2.value;
-    try testing.expect(doc2 != null);
+    _ = try sth.expectFieldString(managed2.value, "val", "value2");
 }
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
@@ -133,8 +130,7 @@ test "storage: stability handles rapid error conditions" {
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key", "test");
     defer managed.deinit();
-    const doc = managed.value;
-    try testing.expect(doc != null);
+    _ = try sth.expectFieldString(managed.value, "val", "value");
 }
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
@@ -169,8 +165,7 @@ test "storage: stability error recovery with valid operations" {
     // Verify some data was persisted
     var managed = try storage.selectDocument(allocator, "test", "key0", "test");
     defer managed.deinit();
-    const doc = managed.value;
-    try testing.expect(doc != null);
+    _ = try sth.expectFieldString(managed.value, "val", "value");
 }
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
@@ -202,8 +197,7 @@ test "storage: stability resource cleanup after errors" {
     // Verify the committed data is there
     var managed = try storage.selectDocument(allocator, "test", "key3", "test");
     defer managed.deinit();
-    const doc = managed.value;
-    try testing.expect(doc != null);
+    _ = try sth.expectFieldString(managed.value, "val", "value3");
 }
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
@@ -237,8 +231,7 @@ test "storage: stability mixed error and success scenarios" {
     // Verify first transaction succeeded
     var managed1 = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed1.deinit();
-    const doc1 = managed1.value;
-    try testing.expect(doc1 != null);
+    _ = try sth.expectFieldString(managed1.value, "val", "value1");
     // Verify second transaction was rolled back
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
@@ -247,8 +240,7 @@ test "storage: stability mixed error and success scenarios" {
     // Verify third operation succeeded
     var managed3 = try storage.selectDocument(allocator, "test", "key3", "test");
     defer managed3.deinit();
-    const doc3 = managed3.value;
-    try testing.expect(doc3 != null);
+    _ = try sth.expectFieldString(managed3.value, "val", "value3");
 }
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
@@ -311,6 +303,5 @@ test "storage: stability concurrent reads during write errors" {
     // Verify data is still intact
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
-    const doc1 = managed.value;
-    try testing.expect(doc1 != null);
+    _ = try sth.expectFieldString(managed.value, "val", "value1");
 }

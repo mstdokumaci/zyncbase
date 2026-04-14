@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
-const msgpack = @import("msgpack_utils.zig");
 
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
@@ -17,6 +16,85 @@ test "StorageEngine: init and deinit" {
     defer allocator.free(db_path);
     const file = try std.fs.cwd().openFile(db_path, .{});
     file.close();
+}
+test "StorageEngine: insert and select basic" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        sth.makeField("name", .text, false),
+        sth.makeField("age", .integer, false),
+    };
+    const table = sth.Table{ .name = "users", .fields = &fields_arr };
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-basic", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    // Insert
+    const cols = [_]sth.ColumnValue{
+        .{ .name = "name", .value = .{ .text = "Alice" }, .field_type = .text },
+        .{ .name = "age", .value = .{ .integer = 30 }, .field_type = .integer },
+    };
+    try engine.insertOrReplace("users", "id1", "ns", &cols);
+    try engine.flushPendingWrites();
+
+    // Select
+    var managed = try engine.selectDocument(allocator, "users", "id1", "ns");
+    defer managed.deinit();
+    const doc = managed.value orelse return error.NotFound;
+
+    _ = try sth.expectFieldString(doc, "name", "Alice");
+    _ = try sth.expectFieldInt(doc, "age", 30);
+}
+test "StorageEngine: update document" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-update", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "v1" }, .field_type = .text }};
+    try engine.insertOrReplace("test", "id1", "ns", &cols1);
+    try engine.flushPendingWrites();
+
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "v2" }, .field_type = .text }};
+    try engine.insertOrReplace("test", "id1", "ns", &cols2);
+    try engine.flushPendingWrites();
+
+    var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
+    defer managed.deinit();
+    const doc = managed.value orelse return error.TestValueMissing;
+    _ = try sth.expectFieldString(doc, "val", "v2");
+}
+test "StorageEngine: delete document" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]sth.Field{
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "crud-delete", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    try engine.insertOrReplace("test", "id1", "ns", &[_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "foo" }, .field_type = .text }});
+    try engine.flushPendingWrites();
+
+    try engine.deleteDocument("test", "id1", "ns");
+    try engine.flushPendingWrites();
+
+    var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
+    defer managed.deinit();
+    try testing.expect(managed.value == null);
 }
 test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
@@ -37,9 +115,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     defer managed.deinit();
     const result = managed.value;
     try testing.expect(result != null);
-    const key_payload = try msgpack.Payload.strToPayload("val", allocator);
-    defer key_payload.free(allocator);
-    try testing.expectEqualStrings("test", result.?.map.get(key_payload).?.str.value());
+    _ = try sth.expectFieldString(result, "val", "test");
 }
 test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
@@ -77,36 +153,7 @@ test "StorageEngine: update existing document" {
     defer managed.deinit();
     const result = managed.value;
     try testing.expect(result != null);
-    const key_payload = try msgpack.Payload.strToPayload("val", allocator);
-    defer key_payload.free(allocator);
-    try testing.expectEqualStrings("updated", result.?.map.get(key_payload).?.str.value());
-}
-test "StorageEngine: delete document" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-delete", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Set a value
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .text = "test" }, .field_type = .text }};
-    try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
-    try engine.flushPendingWrites();
-    // Verify it exists
-    var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
-    defer managed.deinit();
-    const result1 = managed.value;
-    try testing.expect(result1 != null);
-    // Delete the document
-    try engine.deleteDocument("items", "id1", "test_namespace");
-    try engine.flushPendingWrites();
-    // Verify it's gone
-    var managed_after = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
-    defer managed_after.deinit();
-    const result2 = managed_after.value;
-    try testing.expect(result2 == null);
+    _ = try sth.expectFieldString(result, "val", "updated");
 }
 test "StorageEngine: query collection" {
     const allocator = testing.allocator;
@@ -153,10 +200,8 @@ test "StorageEngine: multiple namespaces" {
     const result2 = managed2.value;
     try testing.expect(result1 != null);
     try testing.expect(result2 != null);
-    const key_payload = try msgpack.Payload.strToPayload("val", allocator);
-    defer key_payload.free(allocator);
-    try testing.expectEqualStrings("ns1", result1.?.map.get(key_payload).?.str.value());
-    try testing.expectEqualStrings("ns2", result2.?.map.get(key_payload).?.str.value());
+    _ = try sth.expectFieldString(result1, "val", "ns1");
+    _ = try sth.expectFieldString(result2, "val", "ns2");
 }
 test "StorageEngine: transaction support" {
     const allocator = testing.allocator;

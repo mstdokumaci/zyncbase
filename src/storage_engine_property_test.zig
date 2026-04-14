@@ -433,16 +433,10 @@ test "storage: document set/get round-trip" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value orelse return error.MissingDoc;
-        const got_title = (try doc.mapGet("title")) orelse return error.MissingTitle;
-        try testing.expectEqualStrings(title_str, got_title.str.value());
-        const got_score = (try doc.mapGet("score")) orelse return error.MissingScore;
-        const got_score_val: i64 = switch (got_score) {
-            .int => |v| v,
-            .uint => |v| @intCast(v),
-            else => return error.UnexpectedType,
-        };
-        try testing.expectEqual(score_val, got_score_val);
+        const doc = managed.value;
+        try testing.expect(doc != null);
+        _ = try sth.expectFieldString(doc, "title", title_str);
+        _ = try sth.expectFieldInt(doc, "score", score_val);
     }
 }
 test "storage: field set/get round-trip" {
@@ -475,15 +469,9 @@ test "storage: field set/get round-trip" {
         // Use selectDocument to verify the field update
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value orelse return error.MissingDoc;
-        const got = (try doc.mapGet("score")) orelse return error.MissingField;
-
-        const got_score_val: i64 = switch (got) {
-            .int => |v| v,
-            .uint => |v| @intCast(v),
-            else => return error.UnexpectedType,
-        };
-        try testing.expectEqual(new_score, got_score_val);
+        const doc = managed.value;
+        try testing.expect(doc != null);
+        _ = try sth.expectFieldInt(doc, "score", new_score);
     }
 }
 test "storage: query is namespace-scoped" {
@@ -576,25 +564,19 @@ test "storage: updated_at is always refreshed on write" {
         try engine.flushPendingWrites();
         var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed1.deinit();
-        const doc1 = managed1.value orelse return error.MissingDoc;
-        const updated_at_1_payload = (try doc1.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
-        const updated_at_1: i64 = switch (updated_at_1_payload) {
-            .int => |v| v,
-            .uint => |v| @intCast(v),
-            else => return error.UnexpectedType,
-        };
+        const doc1 = managed1.value;
+        try testing.expect(doc1 != null);
+        const updated_at_1 = try sth.getFieldInt(doc1, "updated_at");
         try testing.expect(updated_at_1 >= t_before_insert);
+
         try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = .{ .integer = 2 }, .field_type = .integer }});
         try engine.flushPendingWrites();
+
         var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();
-        const doc2 = managed2.value orelse return error.MissingDoc;
-        const updated_at_2_payload = (try doc2.mapGet("updated_at")) orelse return error.MissingUpdatedAt;
-        const updated_at_2: i64 = switch (updated_at_2_payload) {
-            .int => |v| v,
-            .uint => |v| @intCast(v),
-            else => return error.UnexpectedType,
-        };
+        const doc2 = managed2.value;
+        try testing.expect(doc2 != null);
+        const updated_at_2 = try sth.getFieldInt(doc2, "updated_at");
         try testing.expect(updated_at_2 >= updated_at_1);
     }
 }
@@ -633,19 +615,18 @@ test "storage: write/read round-trip for array fields" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value orelse return error.MissingDoc;
-        const got_tags = (try doc.mapGet("tags")) orelse return error.MissingTags;
-        try testing.expect(got_tags == .arr);
-        try testing.expectEqual(n, got_tags.arr.len);
+        const doc = managed.value;
+        try testing.expect(doc != null);
+        const got_tags = try sth.expectFieldArray(doc, "tags", n);
         for (elems, got_tags.arr) |orig, got| {
-            const orig_val: i64 = switch (orig) {
+            const orig_val = switch (orig) {
                 .int => |v| v,
-                else => return error.UnexpectedType,
+                else => unreachable,
             };
-            const got_val: i64 = switch (got) {
+            const got_val = switch (got) {
                 .int => |v| v,
-                .uint => |v| @intCast(v),
-                else => return error.UnexpectedType,
+                .uint => |v| @as(i64, @intCast(v)),
+                else => unreachable,
             };
             try testing.expectEqual(orig_val, got_val);
         }
@@ -685,17 +666,11 @@ test "storage: non-array fields are unaffected" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value orelse return error.MissingDoc;
-        const got_title = (try doc.mapGet("title")) orelse {
-            return error.MissingTitle;
-        };
-        try testing.expectEqualStrings(title_str, got_title.str.value());
-        const got_score = (try doc.mapGet("score")) orelse return error.MissingScore;
-        const got_score_val: i64 = switch (got_score) {
-            .int => |v| v,
-            .uint => |v| @intCast(v),
-            else => return error.UnexpectedType,
-        };
-        try testing.expectEqual(score_val, got_score_val);
+        const doc = managed.value;
+        try testing.expect(doc != null);
+        _ = try sth.expectFieldString(doc, "title", title_str);
+        _ = try sth.expectFieldInt(doc, "score", score_val);
+        _ = try sth.expectFieldReal(doc, "rating", rating_val);
+        _ = try sth.expectFieldBool(doc, "active", active_val);
     }
 }

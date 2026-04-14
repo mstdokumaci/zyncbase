@@ -50,8 +50,9 @@ pub fn parseResponse(allocator: std.mem.Allocator, response: []const u8) !struct
     const parsed = try msgpack_utils.decode(allocator, &reader);
     defer parsed.free(allocator);
 
-    const resp_type_val = msgpack.getMapValue(parsed, "type") orelse return error.MissingType;
-    const resp_code_val = msgpack.getMapValue(parsed, "code");
+    const resp_type_val_opt = try msgpack.getMapValue(parsed, "type");
+    const resp_type_val = resp_type_val_opt orelse return error.MissingType;
+    const resp_code_val = try msgpack.getMapValue(parsed, "code");
 
     return .{
         .resp_type = try allocator.dupe(u8, resp_type_val.str.value()),

@@ -54,7 +54,7 @@ pub const Field = struct {
 
 pub const Table = struct {
     name: []const u8,
-    fields: []Field,
+    fields: []const Field,
 
     pub fn clone(self: Table, allocator: Allocator) !Table {
         const cloned_name = try allocator.dupe(u8, self.name);
@@ -132,7 +132,7 @@ pub const TableMetadata = struct {
 
 pub const Schema = struct {
     version: []const u8, // "MAJOR.MINOR.PATCH"
-    tables: []Table,
+    tables: []const Table,
 
     pub fn clone(self: Schema, allocator: Allocator) !Schema {
         const cloned_version = try allocator.dupe(u8, self.version);

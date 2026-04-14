@@ -274,7 +274,8 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         var resp_reader: std.Io.Reader = .fixed(response_copy);
         const resp_parsed = try msgpack_utils.decode(allocator, &resp_reader);
         defer resp_parsed.free(allocator);
-        const resp_type = msgpack_helpers.getMapValue(resp_parsed, "type") orelse return error.MissingType;
+        const resp_type_opt = try msgpack_helpers.getMapValue(resp_parsed, "type");
+        const resp_type = resp_type_opt orelse return error.MissingType;
         try testing.expectEqualStrings("ok", resp_type.str.value());
     }
 
@@ -296,7 +297,8 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         var resp_reader: std.Io.Reader = .fixed(response_copy);
         const resp_parsed = try msgpack_utils.decode(allocator, &resp_reader);
         defer resp_parsed.free(allocator);
-        const value = msgpack_helpers.getMapValue(resp_parsed, "value") orelse return error.MissingValue;
+        const value_opt = try msgpack_helpers.getMapValue(resp_parsed, "value");
+        const value = value_opt orelse return error.MissingValue;
 
         // For StoreQueryResponse, the value is an array of records
         try testing.expect(value == .arr);
@@ -304,7 +306,8 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         const doc = value.arr[0];
 
         // Verify structure: doc.map["a__b__c"] == "value" (stay flat architecture)
-        const abc = msgpack_helpers.getMapValue(doc, "a__b__c") orelse return error.ValueMismatch;
+        const abc_opt = try msgpack_helpers.getMapValue(doc, "a__b__c");
+        const abc = abc_opt orelse return error.ValueMismatch;
         try testing.expectEqualStrings("value", abc.str.value());
     }
 }
@@ -415,8 +418,10 @@ test "MessageHandler: StoreSet success response format" {
     var reader_resp: std.Io.Reader = .fixed(response);
     const resp_parsed = try msgpack_utils.decode(allocator, &reader_resp);
     defer resp_parsed.free(allocator);
-    const msg_type = msgpack_helpers.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
-    const msg_id = msgpack_helpers.getMapValue(resp_parsed, "id") orelse return error.TestExpectedError;
+    const msg_type_opt = try msgpack_helpers.getMapValue(resp_parsed, "type");
+    const msg_type = msg_type_opt orelse return error.TestExpectedError;
+    const msg_id_opt = try msgpack_helpers.getMapValue(resp_parsed, "id");
+    const msg_id = msg_id_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("ok", msg_type.str.value());
     try testing.expectEqual(@as(u64, 1), msg_id.uint);
 }
