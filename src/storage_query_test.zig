@@ -32,11 +32,10 @@ test "StorageEngine: selectQuery basic equality" {
     defer filter.deinit(allocator);
 
     var conds = try allocator.alloc(query_parser.Condition, 1);
-    conds[0] = .{
-        .field = try allocator.dupe(u8, "name"),
-        .op = .eq,
-        .value = try msgpack.Payload.strToPayload("Bob", allocator),
-    };
+    const users_md = ctx.sm.getTable("users") orelse return error.TestExpectedValue;
+    const bob = try msgpack.Payload.strToPayload("Bob", allocator);
+    defer bob.free(allocator);
+    conds[0] = try query_parser.makeCanonicalCondition(allocator, users_md, "name", .eq, bob);
     filter.conditions = conds;
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
@@ -70,21 +69,12 @@ test "StorageEngine: selectQuery with OR and ordering" {
     defer filter.deinit(allocator);
 
     var or_conds = try allocator.alloc(query_parser.Condition, 2);
-    or_conds[0] = .{
-        .field = try allocator.dupe(u8, "age"),
-        .op = .lt,
-        .value = msgpack.Payload.intToPayload(30),
-    };
-    or_conds[1] = .{
-        .field = try allocator.dupe(u8, "age"),
-        .op = .gt,
-        .value = msgpack.Payload.intToPayload(30),
-    };
+    const users_md = ctx.sm.getTable("users") orelse return error.TestExpectedValue;
+    const age_30 = msgpack.Payload.intToPayload(30);
+    or_conds[0] = try query_parser.makeCanonicalCondition(allocator, users_md, "age", .lt, age_30);
+    or_conds[1] = try query_parser.makeCanonicalCondition(allocator, users_md, "age", .gt, age_30);
     filter.or_conditions = or_conds;
-    filter.order_by = .{
-        .field = try allocator.dupe(u8, "age"),
-        .desc = true,
-    };
+    filter.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, users_md, "age", true);
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
@@ -118,7 +108,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter1 = query_parser.QueryFilter{};
     defer filter1.deinit(allocator);
     filter1.limit = 2;
-    filter1.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false };
+    const scores_md = ctx.sm.getTable("scores") orelse return error.TestExpectedValue;
+    filter1.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, scores_md, "score", false);
 
     var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
     defer managed1.deinit();
@@ -131,11 +122,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter2 = query_parser.QueryFilter{};
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false };
-    filter2.after = query_parser.Cursor{
-        .sort_value = msgpack.Payload.intToPayload(100),
-        .id = try allocator.dupe(u8, "id2"),
-    };
+    filter2.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, scores_md, "score", false);
+    filter2.after = try query_parser.makeCanonicalCursorFromPayload(allocator, filter2.order_by, msgpack.Payload.intToPayload(100), "id2");
 
     var managed2 = try engine.selectQuery(allocator, "scores", "ns", filter2);
     defer managed2.deinit();

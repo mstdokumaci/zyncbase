@@ -2,6 +2,7 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
+const FieldType = schema_manager.FieldType;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -22,20 +23,53 @@ pub const Operator = enum(u8) {
 pub const Condition = struct {
     field: []const u8,
     op: Operator,
+    // Legacy/raw payload operand kept for compatibility during migration.
     value: ?msgpack.Payload,
+    field_type: ?FieldType = null,
+    items_type: ?FieldType = null,
+    canonical_value: ?CanonicalValue = null,
+    canonical_list: ?[]CanonicalValue = null,
+    normalized: bool = false,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
         if (self.value) |v| v.free(allocator);
+        if (self.canonical_value) |v| v.deinit(allocator);
+        if (self.canonical_list) |list| {
+            for (list) |item| item.deinit(allocator);
+            allocator.free(list);
+        }
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
         const field = try allocator.dupe(u8, self.field);
         errdefer allocator.free(field);
+        const cloned_value = if (self.value) |v| try v.deepClone(allocator) else null;
+        errdefer if (cloned_value) |v| v.free(allocator);
+        const cloned_canonical_value = if (self.canonical_value) |v| try v.clone(allocator) else null;
+        errdefer if (cloned_canonical_value) |v| v.deinit(allocator);
+        const cloned_canonical_list = if (self.canonical_list) |items| blk: {
+            const out = try allocator.alloc(CanonicalValue, items.len);
+            var i: usize = 0;
+            errdefer {
+                while (i > 0) : (i -= 1) out[i - 1].deinit(allocator);
+                allocator.free(out);
+            }
+            for (items, 0..) |it, idx| {
+                out[idx] = try it.clone(allocator);
+                i += 1;
+            }
+            break :blk out;
+        } else null;
         return .{
             .field = field,
             .op = self.op,
-            .value = if (self.value) |v| try v.deepClone(allocator) else null,
+            .value = cloned_value,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
+            .canonical_value = cloned_canonical_value,
+            .canonical_list = cloned_canonical_list,
+            .normalized = self.normalized,
         };
     }
 };
@@ -43,6 +77,8 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field: []const u8,
     desc: bool,
+    field_type: ?FieldType = null,
+    items_type: ?FieldType = null,
 
     pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -52,25 +88,64 @@ pub const SortDescriptor = struct {
         return .{
             .field = try allocator.dupe(u8, self.field),
             .desc = self.desc,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
         };
     }
 };
 
 pub const Cursor = struct {
+    // Legacy/raw cursor payload kept for compatibility during migration.
     sort_value: msgpack.Payload,
     id: []const u8,
+    canonical_sort_value: ?CanonicalValue = null,
+    sort_field_type: ?FieldType = null,
+    sort_items_type: ?FieldType = null,
+    normalized: bool = false,
 
     pub fn deinit(self: Cursor, allocator: std.mem.Allocator) void {
         self.sort_value.free(allocator);
         allocator.free(self.id);
+        if (self.canonical_sort_value) |v| v.deinit(allocator);
     }
 
     pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
         const sort_value = try self.sort_value.deepClone(allocator);
         errdefer sort_value.free(allocator);
+        const canonical_sort_value = if (self.canonical_sort_value) |v| try v.clone(allocator) else null;
+        errdefer if (canonical_sort_value) |v| v.deinit(allocator);
         return .{
             .sort_value = sort_value,
             .id = try allocator.dupe(u8, self.id),
+            .canonical_sort_value = canonical_sort_value,
+            .sort_field_type = self.sort_field_type,
+            .sort_items_type = self.sort_items_type,
+            .normalized = self.normalized,
+        };
+    }
+};
+
+pub const CanonicalValue = union(enum) {
+    integer: i64,
+    real: f64,
+    text: []const u8,
+    boolean: bool,
+    nil: void,
+
+    pub fn deinit(self: CanonicalValue, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .text => |s| allocator.free(s),
+            else => {},
+        }
+    }
+
+    pub fn clone(self: CanonicalValue, allocator: std.mem.Allocator) !CanonicalValue {
+        return switch (self) {
+            .integer => |v| .{ .integer = v },
+            .real => |v| .{ .real = v },
+            .text => |s| .{ .text = try allocator.dupe(u8, s) },
+            .boolean => |b| .{ .boolean = b },
+            .nil => .nil,
         };
     }
 };
@@ -133,6 +208,7 @@ pub const ParserError = error{
     MissingRequiredFields,
     UnknownTable,
     UnknownField,
+    TypeMismatch,
     OutOfMemory,
 };
 
@@ -173,27 +249,11 @@ pub fn parseQueryFilter(
     // ADR-019: reject __ from client
     if (std.mem.containsAtLeast(u8, collection, 1, "__")) return error.InvalidTableName;
 
-    // Find the table metadata in schema for validation
+    // Find the table metadata in schema for validation and normalization
     const table_metadata = sm.getTable(collection) orelse return error.UnknownTable;
 
-    var conditions: ?[]Condition = null;
-    var or_conditions: ?[]Condition = null;
-    var order_by: ?SortDescriptor = null;
-    var limit: ?u32 = null;
-    var after: ?Cursor = null;
-
-    errdefer {
-        if (conditions) |conds| {
-            for (conds) |c| c.deinit(allocator);
-            allocator.free(conds);
-        }
-        if (or_conditions) |or_conds| {
-            for (or_conds) |c| c.deinit(allocator);
-            allocator.free(or_conds);
-        }
-        if (order_by) |sb| sb.deinit(allocator);
-        if (after) |a| a.deinit(allocator);
-    }
+    var filter = QueryFilter{};
+    errdefer filter.deinit(allocator);
 
     var it = payload.map.iterator();
     while (it.next()) |entry| {
@@ -202,41 +262,35 @@ pub fn parseQueryFilter(
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
-            if (conditions) |old| {
+            if (filter.conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            conditions = try parseConditions(allocator, table_metadata, value);
+            filter.conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
-            if (or_conditions) |old| {
+            if (filter.or_conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            or_conditions = try parseConditions(allocator, table_metadata, value);
+            filter.or_conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            if (order_by) |old| old.deinit(allocator);
-            order_by = try parseSortDescriptor(allocator, table_metadata, value);
+            if (filter.order_by) |old| old.deinit(allocator);
+            filter.order_by = try parseSortDescriptor(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
-                limit = @intCast(value.uint);
+                filter.limit = @intCast(value.uint);
             } else if (value == .int and value.int >= 0) {
-                limit = @intCast(value.int);
+                filter.limit = @intCast(value.int);
             }
-            if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
+            if (filter.limit != null and filter.limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
-            if (after) |old| old.deinit(allocator);
-            after = try parseCursorToken(allocator, value.str.value());
+            if (filter.after) |old| old.deinit(allocator);
+            filter.after = try parseCursorToken(allocator, value.str.value());
         }
     }
-
-    return QueryFilter{
-        .conditions = conditions,
-        .or_conditions = or_conditions,
-        .order_by = order_by,
-        .limit = limit,
-        .after = after,
-    };
+    try normalizeFilterInPlace(allocator, table_metadata, &filter);
+    return filter;
 }
 
 fn parseConditions(
@@ -272,17 +326,7 @@ fn parseCondition(
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
 
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidOperatorCode;
     const op_code = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -302,6 +346,8 @@ fn parseCondition(
         .field = try allocator.dupe(u8, field),
         .op = op,
         .value = value,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
 }
 
@@ -317,17 +363,7 @@ fn parseSortDescriptor(
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
 
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidSortFormat;
     const desc_val = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -335,5 +371,261 @@ fn parseSortDescriptor(
     return SortDescriptor{
         .field = try allocator.dupe(u8, field),
         .desc = desc_val == 1,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
+}
+
+const ResolvedField = struct {
+    field_type: FieldType,
+    items_type: ?FieldType,
+};
+
+fn resolveFieldMetadata(table_metadata: schema_manager.TableMetadata, field: []const u8) ParserError!ResolvedField {
+    if (table_metadata.getField(field)) |f| {
+        return .{ .field_type = f.sql_type, .items_type = f.items_type };
+    }
+    if (std.mem.eql(u8, field, "id")) return .{ .field_type = .text, .items_type = null };
+    if (std.mem.eql(u8, field, "namespace_id")) return .{ .field_type = .text, .items_type = null };
+    if (std.mem.eql(u8, field, "created_at")) return .{ .field_type = .integer, .items_type = null };
+    if (std.mem.eql(u8, field, "updated_at")) return .{ .field_type = .integer, .items_type = null };
+    return error.UnknownField;
+}
+
+fn normalizePayloadValue(
+    allocator: std.mem.Allocator,
+    field_type: FieldType,
+    items_type: ?FieldType,
+    payload: msgpack.Payload,
+) ParserError!CanonicalValue {
+    // Phase 1 scope: canonical scalar query semantics only.
+    // Array-element typing (`items_type`) remains handled by the array compatibility path.
+    _ = items_type;
+    return switch (field_type) {
+        .text => switch (payload) {
+            .str => |s| .{ .text = try allocator.dupe(u8, s.value()) },
+            .nil => .nil,
+            else => error.TypeMismatch,
+        },
+        .integer => switch (payload) {
+            .int => |v| .{ .integer = v },
+            .uint => |v| .{ .integer = std.math.cast(i64, v) orelse return error.TypeMismatch },
+            .nil => .nil,
+            else => error.TypeMismatch,
+        },
+        .real => switch (payload) {
+            .float => |v| .{ .real = v },
+            .int => |v| .{ .real = @floatFromInt(v) },
+            .uint => |v| .{ .real = @floatFromInt(v) },
+            .nil => .nil,
+            else => error.TypeMismatch,
+        },
+        .boolean => switch (payload) {
+            .bool => |b| .{ .boolean = b },
+            .nil => .nil,
+            else => error.TypeMismatch,
+        },
+        .array => return error.TypeMismatch,
+    };
+}
+
+fn normalizeConditionInPlace(
+    allocator: std.mem.Allocator,
+    cond: *Condition,
+) ParserError!void {
+    if (cond.normalized) return;
+
+    if (cond.canonical_value) |v| {
+        v.deinit(allocator);
+        cond.canonical_value = null;
+    }
+    if (cond.canonical_list) |list| {
+        for (list) |item| item.deinit(allocator);
+        allocator.free(list);
+        cond.canonical_list = null;
+    }
+
+    const ft = cond.field_type orelse return;
+    const it = cond.items_type;
+
+    if (cond.op == .isNull or cond.op == .isNotNull) {
+        cond.normalized = true;
+        return;
+    }
+
+    const raw = cond.value orelse return error.InvalidConditionFormat;
+
+    if (cond.op == .in or cond.op == .notIn) {
+        if (raw == .arr) {
+            if (ft == .array) {
+                cond.normalized = false;
+                return;
+            }
+            const list = try allocator.alloc(CanonicalValue, raw.arr.len);
+            var count: usize = 0;
+            errdefer {
+                while (count > 0) : (count -= 1) list[count - 1].deinit(allocator);
+                allocator.free(list);
+            }
+            for (raw.arr, 0..) |item, i| {
+                list[i] = try normalizePayloadValue(allocator, ft, it, item);
+                count += 1;
+            }
+            cond.canonical_list = list;
+            cond.normalized = true;
+            return;
+        }
+        if (ft == .array) {
+            cond.normalized = false;
+            return;
+        }
+        cond.canonical_value = try normalizePayloadValue(allocator, ft, it, raw);
+        cond.normalized = true;
+        return;
+    }
+
+    if (cond.op == .contains or cond.op == .startsWith or cond.op == .endsWith) {
+        if (ft != .text) return error.TypeMismatch;
+        if (raw != .str) return error.TypeMismatch;
+        cond.canonical_value = .{ .text = try allocator.dupe(u8, raw.str.value()) };
+        cond.normalized = true;
+        return;
+    }
+
+    if (ft == .array) {
+        // Array filter semantics are intentionally out of scope for this phase.
+        cond.normalized = false;
+        return;
+    }
+
+    cond.canonical_value = try normalizePayloadValue(allocator, ft, it, raw);
+    cond.normalized = true;
+}
+
+pub fn makeCanonicalCondition(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_manager.TableMetadata,
+    field: []const u8,
+    op: Operator,
+    value: ?msgpack.Payload,
+) ParserError!Condition {
+    const resolved = try resolveFieldMetadata(table_metadata, field);
+    var cond = Condition{
+        .field = try allocator.dupe(u8, field),
+        .op = op,
+        .value = if (value) |v| try v.deepClone(allocator) else null,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
+    };
+    errdefer cond.deinit(allocator);
+    try normalizeConditionInPlace(allocator, &cond);
+    return cond;
+}
+
+pub fn makeCanonicalSortDescriptor(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_manager.TableMetadata,
+    field: []const u8,
+    desc: bool,
+) ParserError!SortDescriptor {
+    const resolved = try resolveFieldMetadata(table_metadata, field);
+    return .{
+        .field = try allocator.dupe(u8, field),
+        .desc = desc,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
+    };
+}
+
+pub fn normalizeFilterInPlace(
+    allocator: std.mem.Allocator,
+    table_metadata: schema_manager.TableMetadata,
+    filter: *QueryFilter,
+) ParserError!void {
+    // Transactional normalization: on error, keep input filter untouched.
+    var working = try filter.clone(allocator);
+    errdefer working.deinit(allocator);
+
+    if (working.conditions) |conds| {
+        const conds_mut = @constCast(conds);
+        for (conds_mut, 0..) |_, idx| {
+            if (conds_mut[idx].field_type == null) {
+                const resolved = try resolveFieldMetadata(table_metadata, conds_mut[idx].field);
+                conds_mut[idx].field_type = resolved.field_type;
+                conds_mut[idx].items_type = resolved.items_type;
+            }
+            try normalizeConditionInPlace(allocator, &conds_mut[idx]);
+        }
+    }
+
+    if (working.or_conditions) |conds| {
+        const conds_mut = @constCast(conds);
+        for (conds_mut, 0..) |_, idx| {
+            if (conds_mut[idx].field_type == null) {
+                const resolved = try resolveFieldMetadata(table_metadata, conds_mut[idx].field);
+                conds_mut[idx].field_type = resolved.field_type;
+                conds_mut[idx].items_type = resolved.items_type;
+            }
+            try normalizeConditionInPlace(allocator, &conds_mut[idx]);
+        }
+    }
+
+    if (working.order_by) |*order_by| {
+        if (order_by.field_type == null) {
+            const resolved = try resolveFieldMetadata(table_metadata, order_by.field);
+            order_by.field_type = resolved.field_type;
+            order_by.items_type = resolved.items_type;
+        }
+    }
+
+    if (working.after) |*after| {
+        try normalizeCursorForFilter(allocator, working.order_by, after);
+    }
+
+    filter.deinit(allocator);
+    filter.* = working;
+}
+
+pub fn normalizeCursorForFilter(
+    allocator: std.mem.Allocator,
+    order_by: ?SortDescriptor,
+    cursor: *Cursor,
+) ParserError!void {
+    const sort_ft: FieldType = if (order_by) |o| o.field_type orelse .text else .text;
+    const sort_it: ?FieldType = if (order_by) |o| o.items_type else null;
+    if (cursor.normalized and cursor.sort_field_type == sort_ft and cursor.sort_items_type == sort_it) return;
+    if (cursor.canonical_sort_value) |v| {
+        v.deinit(allocator);
+        cursor.canonical_sort_value = null;
+    }
+    cursor.canonical_sort_value = try normalizePayloadValue(allocator, sort_ft, sort_it, cursor.sort_value);
+    cursor.sort_field_type = sort_ft;
+    cursor.sort_items_type = sort_it;
+    cursor.normalized = true;
+}
+
+pub fn parseAndNormalizeCursorToken(
+    allocator: std.mem.Allocator,
+    order_by: ?SortDescriptor,
+    token: []const u8,
+) ParserError!Cursor {
+    var cursor = try parseCursorToken(allocator, token);
+    errdefer cursor.deinit(allocator);
+    try normalizeCursorForFilter(allocator, order_by, &cursor);
+    return cursor;
+}
+
+pub fn makeCanonicalCursorFromPayload(
+    allocator: std.mem.Allocator,
+    order_by: ?SortDescriptor,
+    sort_value: msgpack.Payload,
+    id: []const u8,
+) ParserError!Cursor {
+    var cursor = Cursor{
+        .sort_value = try sort_value.deepClone(allocator),
+        .id = try allocator.dupe(u8, id),
+    };
+    errdefer cursor.deinit(allocator);
+    try normalizeCursorForFilter(allocator, order_by, &cursor);
+    return cursor;
 }

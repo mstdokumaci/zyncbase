@@ -395,6 +395,28 @@ test "StoreService: query - negative cases" {
     }
 }
 
+test "StoreService: query - type mismatch surfaces early" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-type-mismatch", &.{
+        .{ .name = "users", .fields = &.{"age"}, .types = &.{.integer} },
+    });
+    defer app.deinit();
+
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
+
+    var conds_arr = try allocator.alloc(msgpack.Payload, 1);
+    var cond_arr = try allocator.alloc(msgpack.Payload, 3);
+    cond_arr[0] = try msgpack.Payload.strToPayload("age", allocator);
+    cond_arr[1] = msgpack.Payload.uintToPayload(0);
+    cond_arr[2] = try msgpack.Payload.strToPayload("not-an-int", allocator);
+    conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
+    try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
+
+    try testing.expectError(error.TypeMismatch, app.store_service.query(allocator, "users", "ns", filter_map));
+}
+
 test "StoreService: queryWithCursor - pagination" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
@@ -430,11 +452,8 @@ test "StoreService: queryWithCursor - pagination" {
     const encoded_cursor = try protocol.encodeCursor(allocator, qr.results.next_cursor_arr.?);
     defer allocator.free(encoded_cursor);
 
-    // Decode it back to a domain object (simulating what MessageHandler does)
-    const cursor = try protocol.decodeCursor(allocator, encoded_cursor);
-
     // 2. Query with cursor: fetch next 2
-    var next_results = try app.store_service.queryWithCursor(allocator, "data", "ns", &qr.filter, cursor);
+    var next_results = try app.store_service.queryWithCursor(allocator, "data", "ns", &qr.filter, encoded_cursor);
     defer next_results.deinit();
 
     const next_results_p = next_results.value orelse return error.TestExpectedValue;

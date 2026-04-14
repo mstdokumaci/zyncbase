@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const storage_mod = @import("storage_engine.zig");
-const query_parser = @import("query_parser.zig");
 
 pub const Envelope = struct {
     type: []const u8,
@@ -370,10 +369,6 @@ pub fn mapErrorToMessage(err: anyerror) []const u8 {
 
 pub fn encodeCursor(allocator: Allocator, cursor: msgpack.Payload) ![]const u8 {
     return try msgpack.encodeBase64(allocator, cursor);
-}
-
-pub fn decodeCursor(allocator: Allocator, token: []const u8) !query_parser.Cursor {
-    return try query_parser.parseCursorToken(allocator, token);
 }
 
 // === StoreDelta encoder (moved from notification_dispatcher.zig) ===

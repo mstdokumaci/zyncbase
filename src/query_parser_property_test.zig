@@ -81,6 +81,37 @@ test "property: reject unknown field names" {
     }
 }
 
+test "property: reject type-incompatible values" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(2);
+    const random = prng.random();
+
+    for (0..50) |_| {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+
+        const conds_arr = try allocator.alloc(msgpack.Payload, 1);
+        var cond = try allocator.alloc(msgpack.Payload, 3);
+        cond[0] = try msgpack.Payload.strToPayload("age", allocator);
+        cond[1] = msgpack.Payload.uintToPayload(if (random.boolean()) 0 else 4); // eq or gte
+        cond[2] = try msgpack.Payload.strToPayload("not-an-integer", allocator);
+        conds_arr[0] = .{ .arr = cond };
+        try root.mapPut("conditions", .{ .arr = conds_arr });
+
+        var fields = [_]schema_manager.Field{
+            sth.makeField("age", .integer, false),
+        };
+        const tables = [_]schema_manager.Table{
+            .{ .name = "items", .fields = &fields },
+        };
+
+        var sm = try sth.createSchemaManager(allocator, &tables);
+        defer sm.deinit();
+
+        try testing.expectError(error.TypeMismatch, query_parser.parseQueryFilter(allocator, &sm, "items", root));
+    }
+}
+
 fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_name: []const u8) !msgpack.Payload {
     const field = if (force_unknown_field) "another_field" else field_name;
     const op_code = random.intRangeAtMost(u8, 0, 12);
@@ -95,7 +126,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
         var cond = try allocator.alloc(msgpack.Payload, 3);
         cond[0] = try msgpack.Payload.strToPayload(field, allocator);
         cond[1] = msgpack.Payload.uintToPayload(op_code);
-        cond[2] = msgpack.Payload.uintToPayload(42); // simple value for property test
+        cond[2] = try msgpack.Payload.strToPayload("value", allocator); // match schema field type (.text)
         return .{ .arr = cond };
     }
 }

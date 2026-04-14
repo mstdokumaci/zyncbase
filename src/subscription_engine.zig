@@ -1,8 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_parser = @import("query_parser.zig");
+const schema_manager = @import("schema_manager.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
+const CanonicalValue = query_parser.CanonicalValue;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 
@@ -350,10 +352,7 @@ pub const SubscriptionEngine = struct {
         }
 
         for (conds) |c| {
-            const val_str = if (c.value) |v|
-                try msgpack.encodeBase64(allocator, v)
-            else
-                try allocator.dupe(u8, "null");
+            const val_str = try conditionOperandKey(allocator, c);
             sortable[count] = .{ .cond = c, .val_str = val_str };
             count += 1;
         }
@@ -425,6 +424,10 @@ pub const SubscriptionEngine = struct {
     fn evaluateCondition(cond: Condition, row: Payload) !bool {
         const val = (try row.mapGet(cond.field)) orelse return cond.op == .isNull;
 
+        if (cond.normalized and cond.field_type != null) {
+            return evaluateConditionNormalized(cond, val);
+        }
+
         return switch (cond.op) {
             .eq => payloadsEqual(val, cond.value orelse return false),
             .ne => !payloadsEqual(val, cond.value orelse return true),
@@ -466,6 +469,170 @@ pub const SubscriptionEngine = struct {
                 }
                 break :blk true;
             },
+        };
+    }
+
+    fn evaluateConditionNormalized(cond: Condition, val: Payload) bool {
+        const ft = cond.field_type orelse return false;
+        return switch (cond.op) {
+            .eq => payloadEqualsCanonical(ft, val, cond.canonical_value orelse return false),
+            .ne => !payloadEqualsCanonical(ft, val, cond.canonical_value orelse return true),
+            .gt => payloadCompareCanonical(ft, val, cond.canonical_value orelse return false) == .gt,
+            .gte => blk: {
+                const ord = payloadCompareCanonical(ft, val, cond.canonical_value orelse return false);
+                break :blk ord == .gt or ord == .eq;
+            },
+            .lt => payloadCompareCanonical(ft, val, cond.canonical_value orelse return false) == .lt,
+            .lte => blk: {
+                const ord = payloadCompareCanonical(ft, val, cond.canonical_value orelse return false);
+                break :blk ord == .lt or ord == .eq;
+            },
+            .isNull => val == .nil,
+            .isNotNull => val != .nil,
+            .startsWith => blk: {
+                const rhs = cond.canonical_value orelse return false;
+                if (rhs != .text or val != .str) break :blk false;
+                break :blk std.ascii.startsWithIgnoreCase(val.str.value(), rhs.text);
+            },
+            .endsWith => blk: {
+                const rhs = cond.canonical_value orelse return false;
+                if (rhs != .text or val != .str) break :blk false;
+                break :blk std.ascii.endsWithIgnoreCase(val.str.value(), rhs.text);
+            },
+            .contains => blk: {
+                const rhs = cond.canonical_value orelse return false;
+                if (rhs != .text or val != .str) break :blk false;
+                break :blk std.ascii.indexOfIgnoreCase(val.str.value(), rhs.text) != null;
+            },
+            .in => blk: {
+                if (cond.canonical_list) |items| {
+                    for (items) |item| {
+                        if (payloadEqualsCanonical(ft, val, item)) break :blk true;
+                    }
+                    break :blk false;
+                }
+                if (cond.canonical_value) |item| break :blk payloadEqualsCanonical(ft, val, item);
+                break :blk false;
+            },
+            .notIn => blk: {
+                if (cond.canonical_list) |items| {
+                    for (items) |item| {
+                        if (payloadEqualsCanonical(ft, val, item)) break :blk false;
+                    }
+                    break :blk true;
+                }
+                if (cond.canonical_value) |item| break :blk !payloadEqualsCanonical(ft, val, item);
+                break :blk true;
+            },
+        };
+    }
+
+    fn payloadEqualsCanonical(ft: schema_manager.FieldType, lhs: Payload, rhs: CanonicalValue) bool {
+        return switch (ft) {
+            .text => lhs == .str and rhs == .text and std.mem.eql(u8, lhs.str.value(), rhs.text),
+            .integer => switch (rhs) {
+                .integer => |ri| switch (lhs) {
+                    .int => |li| li == ri,
+                    .uint => |lu| std.math.cast(i64, lu) != null and std.math.cast(i64, lu).? == ri,
+                    else => false,
+                },
+                .nil => lhs == .nil,
+                else => false,
+            },
+            .real => switch (rhs) {
+                .real => |rr| switch (lhs) {
+                    .float => |lf| lf == rr,
+                    .int => |li| @as(f64, @floatFromInt(li)) == rr,
+                    .uint => |lu| @as(f64, @floatFromInt(lu)) == rr,
+                    else => false,
+                },
+                .nil => lhs == .nil,
+                else => false,
+            },
+            .boolean => switch (rhs) {
+                .boolean => |rb| lhs == .bool and lhs.bool == rb,
+                .nil => lhs == .nil,
+                else => false,
+            },
+            .array => false,
+        };
+    }
+
+    fn payloadCompareCanonical(ft: schema_manager.FieldType, lhs: Payload, rhs: CanonicalValue) std.math.Order {
+        return switch (ft) {
+            .text => switch (rhs) {
+                .text => |rt| if (lhs == .str) std.mem.order(u8, lhs.str.value(), rt) else .lt,
+                else => .lt,
+            },
+            .integer => switch (rhs) {
+                .integer => |ri| switch (lhs) {
+                    .int => |li| std.math.order(li, ri),
+                    .uint => |lu| if (std.math.cast(i64, lu)) |li| std.math.order(li, ri) else .gt,
+                    else => .lt,
+                },
+                else => .lt,
+            },
+            .real => switch (rhs) {
+                .real => |rr| blk: {
+                    const lf: f64 = switch (lhs) {
+                        .float => |v| v,
+                        .int => |v| @floatFromInt(v),
+                        .uint => |v| @floatFromInt(v),
+                        else => break :blk .lt,
+                    };
+                    if (lf < rr) break :blk .lt;
+                    if (lf > rr) break :blk .gt;
+                    break :blk .eq;
+                },
+                else => .lt,
+            },
+            else => .lt,
+        };
+    }
+
+    fn conditionOperandKey(allocator: Allocator, cond: Condition) ![]const u8 {
+        if (cond.canonical_list) |items| {
+            var rendered = try allocator.alloc([]const u8, items.len);
+            var count: usize = 0;
+            errdefer {
+                while (count > 0) : (count -= 1) allocator.free(@constCast(rendered[count - 1]));
+                allocator.free(rendered);
+            }
+            for (items, 0..) |item, i| {
+                rendered[i] = try canonicalValueKey(allocator, item);
+                count += 1;
+            }
+            std.sort.pdq([]const u8, rendered, {}, struct {
+                fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                    return std.mem.order(u8, a, b) == .lt;
+                }
+            }.lessThan);
+            var list = std.ArrayListUnmanaged(u8).empty;
+            errdefer list.deinit(allocator);
+            try list.append(allocator, '[');
+            for (rendered, 0..) |k, i| {
+                if (i > 0) try list.appendSlice(allocator, ",");
+                try list.appendSlice(allocator, k);
+                allocator.free(@constCast(k));
+            }
+            allocator.free(rendered);
+            try list.append(allocator, ']');
+            return list.toOwnedSlice(allocator);
+        }
+        if (cond.canonical_value) |v| {
+            return canonicalValueKey(allocator, v);
+        }
+        if (cond.value) |v| return msgpack.encodeBase64(allocator, v);
+        return allocator.dupe(u8, "null");
+    }
+
+    fn canonicalValueKey(allocator: Allocator, v: CanonicalValue) ![]u8 {
+        return switch (v) {
+            .integer => |i| std.fmt.allocPrint(allocator, "i:{d}", .{i}),
+            .real => |r| std.fmt.allocPrint(allocator, "r:{x}", .{@as(u64, @bitCast(r))}),
+            .text => |s| std.fmt.allocPrint(allocator, "s:{s}", .{s}),
+            .boolean => |b| allocator.dupe(u8, if (b) "b:1" else "b:0"),
+            .nil => allocator.dupe(u8, "n"),
         };
     }
 

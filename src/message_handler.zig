@@ -344,9 +344,7 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const cursor = try protocol.decodeCursor(arena_allocator, req.nextCursor);
-
-        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
+        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, req.nextCursor);
         defer results.deinit();
 
         return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results);

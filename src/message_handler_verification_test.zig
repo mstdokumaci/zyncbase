@@ -7,7 +7,7 @@ const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
-const protocol = @import("protocol.zig");
+const query_parser = @import("query_parser.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -270,7 +270,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     try testing.expect(next_cursor.str.value().len > 0);
 
     // Minimal validation to ensure it's a valid protocol token
-    const cursor = try protocol.decodeCursor(allocator, next_cursor.str.value());
+    const cursor = try query_parser.parseCursorToken(allocator, next_cursor.str.value());
     defer cursor.deinit(allocator);
     try testing.expect(cursor.id.len > 0);
 }

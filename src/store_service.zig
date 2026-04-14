@@ -27,7 +27,10 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
     if (cond.op != .eq) return null;
     if (!std.mem.eql(u8, cond.field, "id")) return null;
 
-    // Extract string value
+    if (cond.canonical_value) |cv| {
+        if (cv != .text) return null;
+        return cv.text;
+    }
     const val = cond.value orelse return null;
     if (val != .str) return null;
     return val.str.value();
@@ -218,10 +221,15 @@ pub const StoreService = struct {
         collection: []const u8,
         namespace: []const u8,
         filter: *query_parser.QueryFilter,
-        cursor: query_parser.Cursor,
+        cursor_token: []const u8,
     ) !storage_mod.ManagedPayload {
+        _ = self.schema_manager.getTable(collection) orelse return StorageError.UnknownTable;
+
+        var normalized_cursor = try query_parser.parseAndNormalizeCursorToken(allocator, filter.order_by, cursor_token);
+        errdefer normalized_cursor.deinit(allocator);
+
         if (filter.after) |*old| old.deinit(allocator);
-        filter.after = cursor;
+        filter.after = normalized_cursor;
 
         return try self.storage_engine.selectQuery(allocator, collection, namespace, filter.*);
     }
