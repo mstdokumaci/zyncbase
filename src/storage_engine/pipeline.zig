@@ -95,19 +95,19 @@ pub fn executeBatch(
 
     for (ops) |op| {
         switch (op) {
-            .insert => |iop| {
+            .upsert => |iop| {
                 const table_metadata = sm.getTable(iop.table) orelse return StorageError.UnknownTable;
                 var old_row: ?msgpack.Payload = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
                 } else |err| {
-                    std.log.err("Failed to capture old state (pre-INSERT) for {s}: {}", .{ iop.table, err });
+                    std.log.err("Failed to capture old state (pre-UPSERT) for {s}: {}", .{ iop.table, err });
                 }
-                const maybe_new_row = executeInsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
+                const maybe_new_row = executeUpsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |*r| r.free(allocator);
                     const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch INSERT", classified_err, iop.table);
+                    types.logDatabaseError("executeBatch UPSERT", classified_err, iop.table);
                     return classified_err;
                 };
 
@@ -121,38 +121,7 @@ pub fn executeBatch(
                     };
                 } else {
                     // This is unexpected for an INSERT OR REPLACE.
-                    std.log.err("INSERT for {s}/{s} returned no row via RETURNING", .{ iop.table, iop.id });
-                    if (old_row) |*r| r.free(allocator);
-                    continue;
-                }
-            },
-            .update => |uop| {
-                const table_metadata = sm.getTable(uop.table) orelse return StorageError.UnknownTable;
-                var old_row: ?msgpack.Payload = null;
-                const capture_res = getDocumentHelper(allocator, conn, sm, uop.table, uop.namespace, uop.id, &sql_cache, stmt_cache);
-                if (capture_res) |orow| {
-                    old_row = orow;
-                } else |err| {
-                    std.log.err("Failed to capture old state (pre-UPDATE) for {s}: {}", .{ uop.table, err });
-                }
-                const maybe_new_row = executeUpdate(allocator, conn, uop, table_metadata, stmt_cache) catch |err| {
-                    if (old_row) |*r| r.free(allocator);
-                    const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch UPDATE", classified_err, uop.table);
-                    return classified_err;
-                };
-
-                if (maybe_new_row) |new_row| {
-                    pushOwnedChange(allocator, pending_changes, uop.namespace, uop.table, .update, old_row, new_row) catch |err| {
-                        std.log.err("Failed to capture row change: {}", .{err});
-                        if (old_row) |*r| r.free(allocator);
-                        var r = new_row;
-                        r.free(allocator);
-                    };
-                } else {
-                    // If RETURNING * is empty, the row did not exist or was deleted concurrently.
-                    // We skip notifications as no change actually occurred.
-                    std.log.debug("UPDATE for {s}/{s}: no row found (already deleted)", .{ uop.table, uop.id });
+                    std.log.err("UPSERT for {s}/{s} returned no row via RETURNING", .{ iop.table, iop.id });
                     if (old_row) |*r| r.free(allocator);
                     continue;
                 }
@@ -225,13 +194,7 @@ pub fn flushBatch(
         // SAFETY: initialized below in the switch statement
         var ns: []const u8 = undefined;
         const has_affected = switch (op) {
-            .insert => |o| blk: {
-                table = o.table;
-                id = o.id;
-                ns = o.namespace;
-                break :blk true;
-            },
-            .update => |o| blk: {
+            .upsert => |o| blk: {
                 table = o.table;
                 id = o.id;
                 ns = o.namespace;
@@ -341,7 +304,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
         while (batch.items.len < batch_size) {
             if (ctx.write_queue.pop()) |op| {
                 switch (op) {
-                    .insert, .update, .delete => {
+                    .upsert, .delete => {
                         batch.append(ctx.allocator, op) catch |err| {
                             std.log.err("Failed to append to batch: {}", .{err});
                             op.deinit(ctx.allocator);
@@ -463,7 +426,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
     // Drain
     while (ctx.write_queue.pop()) |op| {
         switch (op) {
-            .insert, .update, .delete => {
+            .upsert, .delete => {
                 batch.append(ctx.allocator, op) catch {
                     op.deinit(ctx.allocator);
                     _ = ctx.pending_writes_count.fetchSub(1, .release);
@@ -492,7 +455,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
 // but we'll try to keep the interface clean.
 // For now, we'll assume the functions take a context or specific fields.
 
-pub fn executeInsert(
+pub fn executeUpsert(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
@@ -519,32 +482,6 @@ pub fn executeInsert(
     bind_idx += 1;
     if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
-    }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
-    return null;
-}
-
-pub fn executeUpdate(
-    allocator: Allocator,
-    conn: *sqlite.Db,
-    op: anytype,
-    table_metadata: schema_manager.TableMetadata,
-    stmt_cache: *sql_utils.StatementCache,
-) !?msgpack.Payload {
-    const sql = op.sql;
-    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
-    defer mstmt.release();
-    const stmt = mstmt.stmt;
-
-    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    try op.values[0].bindSQLite(conn, stmt, 3);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 4, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 5, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
