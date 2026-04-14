@@ -28,15 +28,19 @@ test "StorageEngine: selectQuery basic equality" {
     try engine.flushPendingWrites();
 
     // Query: name == "Bob"
-    var filter = query_parser.QueryFilter{};
-    defer filter.deinit(allocator);
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
 
-    var conds = try allocator.alloc(query_parser.Condition, 1);
-    const users_md = ctx.sm.getTable("users") orelse return error.TestExpectedValue;
-    const bob = try msgpack.Payload.strToPayload("Bob", allocator);
-    defer bob.free(allocator);
-    conds[0] = try query_parser.makeCanonicalCondition(allocator, users_md, "name", .eq, bob);
-    filter.conditions = conds;
+    var conds_inner = try allocator.alloc(msgpack.Payload, 1);
+    var cond = try allocator.alloc(msgpack.Payload, 3);
+    cond[0] = try msgpack.Payload.strToPayload("name", allocator);
+    cond[1] = msgpack.Payload.uintToPayload(@intFromEnum(query_parser.Operator.eq));
+    cond[2] = try msgpack.Payload.strToPayload("Bob", allocator);
+    conds_inner[0] = .{ .arr = cond };
+    try filter_map.mapPut("conditions", .{ .arr = conds_inner });
+
+    const filter = try query_parser.parseQueryFilter(allocator, &ctx.sm, "users", filter_map);
+    defer filter.deinit(allocator);
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
@@ -65,16 +69,30 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try engine.flushPendingWrites();
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
-    var filter = query_parser.QueryFilter{};
-    defer filter.deinit(allocator);
+    var filter_map = msgpack.Payload.mapPayload(allocator);
+    defer filter_map.free(allocator);
 
-    var or_conds = try allocator.alloc(query_parser.Condition, 2);
-    const users_md = ctx.sm.getTable("users") orelse return error.TestExpectedValue;
-    const age_30 = msgpack.Payload.intToPayload(30);
-    or_conds[0] = try query_parser.makeCanonicalCondition(allocator, users_md, "age", .lt, age_30);
-    or_conds[1] = try query_parser.makeCanonicalCondition(allocator, users_md, "age", .gt, age_30);
-    filter.or_conditions = or_conds;
-    filter.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, users_md, "age", true);
+    var or_conds_inner = try allocator.alloc(msgpack.Payload, 2);
+    var cond_lt = try allocator.alloc(msgpack.Payload, 3);
+    cond_lt[0] = try msgpack.Payload.strToPayload("age", allocator);
+    cond_lt[1] = msgpack.Payload.uintToPayload(@intFromEnum(query_parser.Operator.lt));
+    cond_lt[2] = msgpack.Payload.intToPayload(30);
+    or_conds_inner[0] = .{ .arr = cond_lt };
+
+    var cond_gt = try allocator.alloc(msgpack.Payload, 3);
+    cond_gt[0] = try msgpack.Payload.strToPayload("age", allocator);
+    cond_gt[1] = msgpack.Payload.uintToPayload(@intFromEnum(query_parser.Operator.gt));
+    cond_gt[2] = msgpack.Payload.intToPayload(30);
+    or_conds_inner[1] = .{ .arr = cond_gt };
+    try filter_map.mapPut("orConditions", .{ .arr = or_conds_inner });
+
+    var order_by = try allocator.alloc(msgpack.Payload, 2);
+    order_by[0] = try msgpack.Payload.strToPayload("age", allocator);
+    order_by[1] = msgpack.Payload.uintToPayload(1); // DESC
+    try filter_map.mapPut("orderBy", .{ .arr = order_by });
+
+    const filter = try query_parser.parseQueryFilter(allocator, &ctx.sm, "users", filter_map);
+    defer filter.deinit(allocator);
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
@@ -105,11 +123,16 @@ test "StorageEngine: selectQuery pagination (after)" {
     try engine.flushPendingWrites();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = query_parser.QueryFilter{};
+    var filter1_map = msgpack.Payload.mapPayload(allocator);
+    defer filter1_map.free(allocator);
+    try filter1_map.mapPut("limit", msgpack.Payload.uintToPayload(2));
+    var order_by_1 = try allocator.alloc(msgpack.Payload, 2);
+    order_by_1[0] = try msgpack.Payload.strToPayload("score", allocator);
+    order_by_1[1] = msgpack.Payload.uintToPayload(0); // ASC
+    try filter1_map.mapPut("orderBy", .{ .arr = order_by_1 });
+
+    var filter1 = try query_parser.parseQueryFilter(allocator, &ctx.sm, "scores", filter1_map);
     defer filter1.deinit(allocator);
-    filter1.limit = 2;
-    const scores_md = ctx.sm.getTable("scores") orelse return error.TestExpectedValue;
-    filter1.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, scores_md, "score", false);
 
     var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
     defer managed1.deinit();
@@ -119,11 +142,25 @@ test "StorageEngine: selectQuery pagination (after)" {
     try testing.expectEqualStrings("id2", try getMapStr(res1.arr[1], "id"));
 
     // Query 2: Same query but AFTER [100, "id2"]
-    var filter2 = query_parser.QueryFilter{};
+    var filter2_map = msgpack.Payload.mapPayload(allocator);
+    defer filter2_map.free(allocator);
+    try filter2_map.mapPut("limit", msgpack.Payload.uintToPayload(2));
+    var order_by_2 = try allocator.alloc(msgpack.Payload, 2);
+    order_by_2[0] = try msgpack.Payload.strToPayload("score", allocator);
+    order_by_2[1] = msgpack.Payload.uintToPayload(0); // ASC
+    try filter2_map.mapPut("orderBy", .{ .arr = order_by_2 });
+
+    var cursor_tuple = try allocator.alloc(msgpack.Payload, 2);
+    cursor_tuple[0] = msgpack.Payload.intToPayload(100);
+    cursor_tuple[1] = try msgpack.Payload.strToPayload("id2", allocator);
+    const cursor_payload: msgpack.Payload = .{ .arr = cursor_tuple };
+    defer cursor_payload.free(allocator);
+    const cursor_token = try msgpack.encodeBase64(allocator, cursor_payload);
+    defer allocator.free(cursor_token);
+    try filter2_map.mapPut("after", try msgpack.Payload.strToPayload(cursor_token, allocator));
+
+    var filter2 = try query_parser.parseQueryFilter(allocator, &ctx.sm, "scores", filter2_map);
     defer filter2.deinit(allocator);
-    filter2.limit = 2;
-    filter2.order_by = try query_parser.makeCanonicalSortDescriptor(allocator, scores_md, "score", false);
-    filter2.after = try query_parser.makeCanonicalCursorFromPayload(allocator, filter2.order_by, msgpack.Payload.intToPayload(100), "id2");
 
     var managed2 = try engine.selectQuery(allocator, "scores", "ns", filter2);
     defer managed2.deinit();

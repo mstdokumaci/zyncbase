@@ -504,41 +504,6 @@ fn normalizeConditionInPlace(
     cond.normalized = true;
 }
 
-pub fn makeCanonicalCondition(
-    allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
-    field: []const u8,
-    op: Operator,
-    value: ?msgpack.Payload,
-) ParserError!Condition {
-    const resolved = try resolveFieldMetadata(table_metadata, field);
-    var cond = Condition{
-        .field = try allocator.dupe(u8, field),
-        .op = op,
-        .value = if (value) |v| try v.deepClone(allocator) else null,
-        .field_type = resolved.field_type,
-        .items_type = resolved.items_type,
-    };
-    errdefer cond.deinit(allocator);
-    try normalizeConditionInPlace(allocator, &cond);
-    return cond;
-}
-
-pub fn makeCanonicalSortDescriptor(
-    allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
-    field: []const u8,
-    desc: bool,
-) ParserError!SortDescriptor {
-    const resolved = try resolveFieldMetadata(table_metadata, field);
-    return .{
-        .field = try allocator.dupe(u8, field),
-        .desc = desc,
-        .field_type = resolved.field_type,
-        .items_type = resolved.items_type,
-    };
-}
-
 pub fn normalizeFilterInPlace(
     allocator: std.mem.Allocator,
     table_metadata: schema_manager.TableMetadata,
@@ -612,21 +577,6 @@ pub fn parseAndNormalizeCursorToken(
     token: []const u8,
 ) ParserError!Cursor {
     var cursor = try parseCursorToken(allocator, token);
-    errdefer cursor.deinit(allocator);
-    try normalizeCursorForFilter(allocator, order_by, &cursor);
-    return cursor;
-}
-
-pub fn makeCanonicalCursorFromPayload(
-    allocator: std.mem.Allocator,
-    order_by: ?SortDescriptor,
-    sort_value: msgpack.Payload,
-    id: []const u8,
-) ParserError!Cursor {
-    var cursor = Cursor{
-        .sort_value = try sort_value.deepClone(allocator),
-        .id = try allocator.dupe(u8, id),
-    };
     errdefer cursor.deinit(allocator);
     try normalizeCursorForFilter(allocator, order_by, &cursor);
     return cursor;

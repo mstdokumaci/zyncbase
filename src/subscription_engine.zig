@@ -248,30 +248,6 @@ pub const SubscriptionEngine = struct {
         };
     }
 
-    /// Checks if there are any active subscriptions for the given collection/namespace.
-    pub fn hasSubscriptions(self: *SubscriptionEngine, namespace: []const u8, collection: []const u8) bool {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
-
-        var key_buf: [256]u8 = undefined;
-        var heap_key: ?[]u8 = null;
-        defer if (heap_key) |k| self.allocator.free(k);
-
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ namespace, collection }) catch blk: {
-            heap_key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ namespace, collection }) catch {
-                // If formatting and allocation both fail, conservatively assume there may be subscriptions.
-                std.log.err("Failed to format subscription key for metadata check: {s}:{s}", .{ namespace, collection });
-                return true;
-            };
-            break :blk heap_key.?;
-        };
-
-        if (self.groups_by_collection.get(key)) |list| {
-            return list.items.len > 0;
-        }
-        return false;
-    }
-
     /// Finds all subscribers matching a row change. Returns matches through a Result struct.
     pub const Match = struct {
         connection_id: u64,
