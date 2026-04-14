@@ -195,7 +195,8 @@ test "Verification: StoreQuery message processing" {
                 try testing.expectEqual(@as(usize, 1), val.arr.len);
                 const doc = val.arr[0];
                 try testing.expect(doc == .map);
-                const v_payload = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+                const v_opt = try msgpack.getMapValue(doc, "val");
+                const v_payload = v_opt orelse return error.TestExpectedError;
                 try testing.expectEqualStrings("stored_value", v_payload.str.value());
                 found_value = true;
             }
@@ -254,14 +255,17 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     const resp_parsed = try msgpack.decode(allocator, &resp_reader);
     defer resp_parsed.free(allocator);
 
-    const response_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+    const response_type_opt = try msgpack.getMapValue(resp_parsed, "type");
+    const response_type = response_type_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("ok", response_type.str.value());
 
-    const value = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+    const value_opt = try msgpack.getMapValue(resp_parsed, "value");
+    const value = value_opt orelse return error.TestExpectedError;
     try testing.expect(value == .arr);
     try testing.expectEqual(@as(usize, 1), value.arr.len);
 
-    const next_cursor = msgpack.getMapValue(resp_parsed, "nextCursor") orelse return error.TestExpectedError;
+    const next_cursor_opt = try msgpack.getMapValue(resp_parsed, "nextCursor");
+    const next_cursor = next_cursor_opt orelse return error.TestExpectedError;
     try testing.expect(next_cursor == .str);
     try testing.expect(next_cursor.str.value().len > 0);
 
@@ -434,7 +438,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const resp_parsed = try msgpack.decode(allocator, &resp_reader_any);
             defer resp_parsed.free(allocator);
 
-            const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+            const msg_type_opt = try msgpack.getMapValue(resp_parsed, "type");
+            const msg_type = msg_type_opt orelse return error.TestExpectedError;
             try testing.expectEqualStrings("ok", msg_type.str.value());
         }
     }
@@ -479,15 +484,18 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             defer resp_parsed.free(allocator);
             try testing.expect(resp_parsed == .map);
 
-            const results = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+            const results_opt = try msgpack.getMapValue(resp_parsed, "value");
+            const results = results_opt orelse return error.TestExpectedError;
             try testing.expect(results == .arr);
             try testing.expect(@as(usize, 1) <= results.arr.len);
 
             var found = false;
             for (results.arr) |doc| {
-                const id_payload = msgpack.getMapValue(doc, "id") orelse continue;
+                const id_opt = try msgpack.getMapValue(doc, "id");
+                const id_payload = id_opt orelse continue;
                 if (std.mem.eql(u8, id_payload.str.value(), td.id)) {
-                    const val_payload = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+                    const val_opt = try msgpack.getMapValue(doc, "val");
+                    const val_payload = val_opt orelse return error.TestExpectedError;
                     try testing.expectEqualStrings(td.value, val_payload.str.value());
                     found = true;
                     break;
@@ -564,26 +572,32 @@ test "Verification: StoreSubscribe message processing" {
 
     try testing.expect(resp_parsed == .map);
 
-    const msg_type = msgpack.getMapValue(resp_parsed, "type") orelse return error.TestExpectedError;
+    const msg_type_opt = try msgpack.getMapValue(resp_parsed, "type");
+    const msg_type = msg_type_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("ok", msg_type.str.value());
 
-    const sub_id = msgpack.getMapValue(resp_parsed, "subId") orelse return error.TestExpectedError;
+    const sub_id_opt = try msgpack.getMapValue(resp_parsed, "subId");
+    const sub_id = sub_id_opt orelse return error.TestExpectedError;
     try testing.expect(sub_id == .uint);
     try testing.expect(sub_id.uint > 0);
 
-    const has_more = msgpack.getMapValue(resp_parsed, "hasMore") orelse return error.TestExpectedError;
+    const has_more_opt = try msgpack.getMapValue(resp_parsed, "hasMore");
+    const has_more = has_more_opt orelse return error.TestExpectedError;
     try testing.expect(has_more == .bool);
     try testing.expectEqual(false, has_more.bool);
 
-    const next_cursor = msgpack.getMapValue(resp_parsed, "nextCursor") orelse return error.TestExpectedError;
+    const next_cursor_opt = try msgpack.getMapValue(resp_parsed, "nextCursor");
+    const next_cursor = next_cursor_opt orelse return error.TestExpectedError;
     try testing.expect(next_cursor == .nil);
 
-    const results_p = msgpack.getMapValue(resp_parsed, "value") orelse return error.TestExpectedError;
+    const results_p_opt = try msgpack.getMapValue(resp_parsed, "value");
+    const results_p = results_p_opt orelse return error.TestExpectedError;
     try testing.expect(results_p == .arr);
     try testing.expectEqual(@as(usize, 1), results_p.arr.len);
 
     const doc = results_p.arr[0];
-    const got_val = msgpack.getMapValue(doc, "val") orelse return error.TestExpectedError;
+    const got_val_opt = try msgpack.getMapValue(doc, "val");
+    const got_val = got_val_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("stored_value", got_val.str.value());
 }
 
@@ -639,18 +653,22 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     const subscribe_resp = try msgpack.decode(allocator, &subscribe_resp_reader);
     defer subscribe_resp.free(allocator);
 
-    const subscribe_type = msgpack.getMapValue(subscribe_resp, "type") orelse return error.TestExpectedError;
+    const subscribe_type_opt = try msgpack.getMapValue(subscribe_resp, "type");
+    const subscribe_type = subscribe_type_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("ok", subscribe_type.str.value());
 
-    const sub_id_payload = msgpack.getMapValue(subscribe_resp, "subId") orelse return error.TestExpectedError;
+    const sub_id_payload_opt = try msgpack.getMapValue(subscribe_resp, "subId");
+    const sub_id_payload = sub_id_payload_opt orelse return error.TestExpectedError;
     try testing.expect(sub_id_payload == .uint);
     const sub_id = sub_id_payload.uint;
 
-    const next_cursor_payload = msgpack.getMapValue(subscribe_resp, "nextCursor") orelse return error.TestExpectedError;
+    const next_cursor_payload_opt = try msgpack.getMapValue(subscribe_resp, "nextCursor");
+    const next_cursor_payload = next_cursor_payload_opt orelse return error.TestExpectedError;
     try testing.expect(next_cursor_payload == .str);
     const next_cursor = next_cursor_payload.str.value();
 
-    const has_more_payload = msgpack.getMapValue(subscribe_resp, "hasMore") orelse return error.TestExpectedError;
+    const has_more_payload_opt = try msgpack.getMapValue(subscribe_resp, "hasMore");
+    const has_more_payload = has_more_payload_opt orelse return error.TestExpectedError;
     try testing.expect(has_more_payload == .bool);
     try testing.expectEqual(true, has_more_payload.bool);
 
@@ -680,20 +698,25 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     const load_resp = try msgpack.decode(allocator, &load_resp_reader);
     defer load_resp.free(allocator);
 
-    const load_type = msgpack.getMapValue(load_resp, "type") orelse return error.TestExpectedError;
+    const load_type_opt = try msgpack.getMapValue(load_resp, "type");
+    const load_type = load_type_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("ok", load_type.str.value());
 
-    const load_sub_id = msgpack.getMapValue(load_resp, "subId") orelse return error.TestExpectedError;
+    const load_sub_id_opt = try msgpack.getMapValue(load_resp, "subId");
+    const load_sub_id = load_sub_id_opt orelse return error.TestExpectedError;
     try testing.expectEqual(sub_id, load_sub_id.uint);
 
-    const load_value = msgpack.getMapValue(load_resp, "value") orelse return error.TestExpectedError;
+    const load_value_opt = try msgpack.getMapValue(load_resp, "value");
+    const load_value = load_value_opt orelse return error.TestExpectedError;
     try testing.expect(load_value == .arr);
     try testing.expectEqual(@as(usize, 1), load_value.arr.len);
 
-    const load_has_more = msgpack.getMapValue(load_resp, "hasMore") orelse return error.TestExpectedError;
+    const load_has_more_opt = try msgpack.getMapValue(load_resp, "hasMore");
+    const load_has_more = load_has_more_opt orelse return error.TestExpectedError;
     try testing.expect(load_has_more == .bool);
     try testing.expectEqual(false, load_has_more.bool);
 
-    const load_next_cursor = msgpack.getMapValue(load_resp, "nextCursor") orelse return error.TestExpectedError;
+    const load_next_cursor_opt = try msgpack.getMapValue(load_resp, "nextCursor");
+    const load_next_cursor = load_next_cursor_opt orelse return error.TestExpectedError;
     try testing.expect(load_next_cursor == .nil);
 }

@@ -39,9 +39,8 @@ test "property: random query filters on StorageEngine" {
         // Execute query
         var managed = try engine.selectQuery(allocator, "entities", "ns1", filter);
         defer managed.deinit();
-        const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
-
-        try testing.expect(results == .arr);
+        try testing.expect(managed.value != null);
+        try testing.expect(managed.value.? == .arr);
     }
 }
 

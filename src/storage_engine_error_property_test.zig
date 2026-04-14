@@ -1,11 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine_mod = @import("storage_engine.zig");
-const StorageEngine = storage_engine_mod.StorageEngine;
-const ColumnValue = storage_engine_mod.ColumnValue;
-const schema_helpers = @import("schema_test_helpers.zig");
-const msgpack_test = @import("msgpack_test_helpers.zig");
-const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const sth = @import("storage_engine_test_helpers.zig");
+const StorageEngine = sth.StorageEngine;
+const ColumnValue = sth.ColumnValue;
 
 // This property test verifies that database operations handle errors gracefully:
 // 1. All database operation failures return descriptive errors
@@ -16,44 +13,37 @@ test "storage: error handling invalid database path" {
     const allocator = testing.allocator;
 
     // Try to create storage engine with invalid path
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "test", .fields = &.{"val"} },
+    var sm = try sth.createSchemaManager(allocator, &.{
+        .{ .name = "_dummy", .fields = &.{sth.makeField("val", .text, false)} },
+        .{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} },
     });
     defer sm.deinit();
 
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
+    var ms: sth.MemoryStrategy = undefined;
+    try ms.init(allocator);
+    defer ms.deinit();
 
     var storage: StorageEngine = undefined;
-    const result = storage.init(allocator, &memory_strategy, "/invalid/nonexistent/path/that/cannot/be/created", &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &sm, .{}, .{ .in_memory = false }, null, null);
     // Verify we get an error
     if (result) |_| {
         storage.deinit();
         return error.ExpectedError;
     } else |err| {
         switch (err) {
-            error.FileNotFound, error.ReadOnlyFileSystem, error.AccessDenied => {},
+            error.FileNotFound, error.ReadOnlyFileSystem, error.AccessDenied, error.InvalidDataDir => {},
             else => return err,
         }
     }
 }
 test "storage: error handling read-only filesystem" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-readonly");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     // Try to set a value
     {
         const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
@@ -64,25 +54,17 @@ test "storage: error handling read-only filesystem" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        try testing.expect(managed.value != null);
     }
 }
 test "storage: error handling constraint violations" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-constraints");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     // Set a value
     {
         const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
@@ -99,30 +81,17 @@ test "storage: error handling constraint violations" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
-        if (doc) |d| {
-            // Document retrieved as map, let's check field "val"
-            const val = msgpack_test.getMapValue(d, "val") orelse return error.TestExpectedError;
-            try testing.expectEqualStrings("value2", val.str.value());
-        }
+        _ = try sth.expectFieldString(managed.value, "val", "value2");
     }
 }
 test "storage: error handling transaction rollback on error" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-rollback");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-rollback", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     try storage.beginTransaction();
     {
         const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
@@ -132,25 +101,17 @@ test "storage: error handling transaction rollback on error" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc == null);
+        try testing.expect(managed.value == null);
     }
 }
 test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-concurrent");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-concurrent", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     {
         const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
@@ -161,36 +122,26 @@ test "storage: error handling concurrent access safety" {
         allocator: std.mem.Allocator,
     };
     const runRead = struct {
-        fn run(ctx: ThreadContext) void {
-            var managed = ctx.storage.selectDocument(ctx.allocator, "data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
+        fn run(t_ctx: ThreadContext) void {
+            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
             _ = managed.value;
         }
     }.run;
     var threads: [4]std.Thread = undefined;
     for (&threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, runRead, .{ThreadContext{ .storage = &storage, .allocator = allocator }});
+        t.* = try std.Thread.spawn(.{}, runRead, .{ThreadContext{ .storage = storage, .allocator = allocator }});
     }
     for (threads) |t| t.join();
 }
 test "storage: error handling empty paths" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-empty");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "data_table", .fields = &.{"val"} },
-        .{ .name = "test", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
 
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
     {
         const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "empty", "", &cols);
@@ -199,25 +150,17 @@ test "storage: error handling empty paths" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "empty", "");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        try testing.expect(managed.value != null);
     }
 }
 test "storage: error handling large values" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-large");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "test", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     const large_value = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(large_value);
     @memset(large_value, 'A');
@@ -229,31 +172,22 @@ test "storage: error handling large values" {
     {
         var managed = try storage.selectDocument(allocator, "test", "large_key", "test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        try testing.expect(managed.value != null);
     }
 }
 test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
-    var context = try schema_helpers.TestContext.init(allocator, "storage-error-delete");
-    defer context.deinit();
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-        .{ .name = "test", .fields = &.{"val"} },
-    });
-    defer sm.deinit();
-    var memory_strategy: MemoryStrategy = undefined;
-    try memory_strategy.init(allocator);
-    defer memory_strategy.deinit();
-    var storage: StorageEngine = undefined;
-    try schema_helpers.setupTestEngine(&storage, allocator, &memory_strategy, &context, &sm, .{ .in_memory = false });
-    defer storage.deinit();
+    const table = sth.Table{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
+    defer ctx.deinit();
+    const storage = &ctx.engine;
+
     try storage.deleteDocument("test", "nonexistent", "test");
     try storage.flushPendingWrites();
     {
         var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc == null);
+        try testing.expect(managed.value == null);
     }
 }
