@@ -480,7 +480,7 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(table_owned);
 
         const op = WriteOp{
-            .insert = .{
+            .upsert = .{
                 .table = table_owned,
                 .id = id_owned,
                 .namespace = ns_owned,

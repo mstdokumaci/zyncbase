@@ -230,16 +230,7 @@ pub const WriteOp = union(enum) {
     commit_transaction: struct { completion_signal: ?*CompletionSignal },
     rollback_transaction: struct { completion_signal: ?*CompletionSignal },
     checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
-    insert: struct {
-        table: []const u8,
-        id: []const u8,
-        namespace: []const u8,
-        sql: []const u8,
-        values: []TypedValue,
-        timestamp: i64,
-        completion_signal: ?*CompletionSignal = null,
-    },
-    update: struct {
+    upsert: struct {
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
@@ -295,23 +286,14 @@ pub const WriteOp = union(enum) {
             .commit_transaction => |op| op.completion_signal,
             .rollback_transaction => |op| op.completion_signal,
             .checkpoint => |op| op.completion_signal,
-            .insert => |op| op.completion_signal,
-            .update => |op| op.completion_signal,
+            .upsert => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
         };
     }
 
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
         switch (self) {
-            .insert => |op| {
-                allocator.free(op.namespace);
-                allocator.free(op.table);
-                allocator.free(op.id);
-                allocator.free(op.sql);
-                for (op.values) |val| val.deinit(allocator);
-                allocator.free(op.values);
-            },
-            .update => |op| {
+            .upsert => |op| {
                 allocator.free(op.namespace);
                 allocator.free(op.table);
                 allocator.free(op.id);
