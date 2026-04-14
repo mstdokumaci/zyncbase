@@ -48,19 +48,7 @@ pub const Condition = struct {
         errdefer if (cloned_value) |v| v.free(allocator);
         const cloned_canonical_value = if (self.canonical_value) |v| try v.clone(allocator) else null;
         errdefer if (cloned_canonical_value) |v| v.deinit(allocator);
-        const cloned_canonical_list = if (self.canonical_list) |items| blk: {
-            const out = try allocator.alloc(CanonicalValue, items.len);
-            var i: usize = 0;
-            errdefer {
-                while (i > 0) : (i -= 1) out[i - 1].deinit(allocator);
-                allocator.free(out);
-            }
-            for (items, 0..) |it, idx| {
-                out[idx] = try it.clone(allocator);
-                i += 1;
-            }
-            break :blk out;
-        } else null;
+        const cloned_canonical_list = if (self.canonical_list) |items| try cloneCanonicalList(allocator, items) else null;
         return .{
             .field = field,
             .op = self.op,
@@ -73,6 +61,20 @@ pub const Condition = struct {
         };
     }
 };
+
+fn cloneCanonicalList(allocator: std.mem.Allocator, items: []const CanonicalValue) ![]CanonicalValue {
+    const out = try allocator.alloc(CanonicalValue, items.len);
+    var i: usize = 0;
+    errdefer {
+        while (i > 0) : (i -= 1) out[i - 1].deinit(allocator);
+        allocator.free(out);
+    }
+    for (items, 0..) |it, idx| {
+        out[idx] = try it.clone(allocator);
+        i += 1;
+    }
+    return out;
+}
 
 pub const SortDescriptor = struct {
     field: []const u8,
