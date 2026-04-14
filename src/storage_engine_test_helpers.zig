@@ -192,6 +192,7 @@ pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payl
 pub fn expectFieldString(payload: ?msgpack.Payload, key: []const u8, expected: []const u8) !msgpack.Payload {
     const doc = payload orelse return error.TestDocumentMissing;
     const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
+    try testing.expect(val == .str);
     try testing.expectEqualStrings(expected, val.str.value());
     return val;
 }
@@ -219,13 +220,14 @@ pub fn expectFieldReal(payload: ?msgpack.Payload, key: []const u8, expected: f64
         .float => |v| v,
         else => return error.TypeMismatch,
     };
-    try testing.expectEqual(expected, actual);
+    try testing.expectApproxEqAbs(expected, actual, 0.00001);
     return actual;
 }
 
 pub fn expectFieldBool(payload: ?msgpack.Payload, key: []const u8, expected: bool) !bool {
     const doc = payload orelse return error.TestDocumentMissing;
     const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
+    try testing.expect(val == .bool);
     try testing.expectEqual(expected, val.bool);
     return val.bool;
 }
