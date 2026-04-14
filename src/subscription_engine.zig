@@ -570,8 +570,8 @@ pub const SubscriptionEngine = struct {
         if (cond.canonical_list) |items| {
             var rendered = try allocator.alloc([]const u8, items.len);
             var count: usize = 0;
-            errdefer {
-                while (count > 0) : (count -= 1) allocator.free(@constCast(rendered[count - 1]));
+            defer {
+                for (rendered[0..count]) |k| allocator.free(@constCast(k));
                 allocator.free(rendered);
             }
             for (items, 0..) |item, i| {
@@ -589,9 +589,7 @@ pub const SubscriptionEngine = struct {
             for (rendered, 0..) |k, i| {
                 if (i > 0) try list.appendSlice(allocator, ",");
                 try list.appendSlice(allocator, k);
-                allocator.free(@constCast(k));
             }
-            allocator.free(rendered);
             try list.append(allocator, ']');
             return list.toOwnedSlice(allocator);
         }
