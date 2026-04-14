@@ -36,9 +36,13 @@ pub const Condition = struct {
         if (self.value) |v| v.free(allocator);
         if (self.canonical_value) |v| v.deinit(allocator);
         if (self.canonical_list) |list| {
-            for (list) |item| item.deinit(allocator);
+            CanonicalValue.deinitSlice(allocator, list);
             allocator.free(list);
         }
+    }
+
+    pub fn deinitSlice(allocator: std.mem.Allocator, slice: []const Condition) void {
+        for (slice) |c| c.deinit(allocator);
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
@@ -141,6 +145,10 @@ pub const CanonicalValue = union(enum) {
         }
     }
 
+    pub fn deinitSlice(allocator: std.mem.Allocator, slice: []const CanonicalValue) void {
+        for (slice) |v| v.deinit(allocator);
+    }
+
     pub fn clone(self: CanonicalValue, allocator: std.mem.Allocator) !CanonicalValue {
         return switch (self) {
             .integer => |v| .{ .integer = v },
@@ -160,16 +168,17 @@ pub const QueryFilter = struct {
     after: ?Cursor = null,
 
     pub fn deinit(self: QueryFilter, allocator: std.mem.Allocator) void {
-        if (self.conditions) |conds| {
-            for (conds) |c| c.deinit(allocator);
-            allocator.free(conds);
-        }
-        if (self.or_conditions) |or_conds| {
-            for (or_conds) |c| c.deinit(allocator);
-            allocator.free(or_conds);
-        }
+        deinitConditions(allocator, self.conditions);
+        deinitConditions(allocator, self.or_conditions);
         if (self.order_by) |sb| sb.deinit(allocator);
         if (self.after) |a| a.deinit(allocator);
+    }
+
+    pub fn deinitConditions(allocator: std.mem.Allocator, conditions: ?[]const Condition) void {
+        if (conditions) |conds| {
+            Condition.deinitSlice(allocator, conds);
+            allocator.free(conds);
+        }
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {
@@ -264,16 +273,10 @@ pub fn parseQueryFilter(
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
-            if (filter.conditions) |old| {
-                for (old) |c| c.deinit(allocator);
-                allocator.free(old);
-            }
+            QueryFilter.deinitConditions(allocator, filter.conditions);
             filter.conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
-            if (filter.or_conditions) |old| {
-                for (old) |c| c.deinit(allocator);
-                allocator.free(old);
-            }
+            QueryFilter.deinitConditions(allocator, filter.or_conditions);
             filter.or_conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
             if (filter.order_by) |old| old.deinit(allocator);
@@ -305,7 +308,7 @@ fn parseConditions(
     const result = try allocator.alloc(Condition, arr.len);
     var count: usize = 0;
     errdefer {
-        for (result[0..count]) |c| c.deinit(allocator);
+        Condition.deinitSlice(allocator, result[0..count]);
         allocator.free(result);
     }
 
@@ -442,7 +445,7 @@ fn normalizeConditionInPlace(
         cond.canonical_value = null;
     }
     if (cond.canonical_list) |list| {
-        for (list) |item| item.deinit(allocator);
+        CanonicalValue.deinitSlice(allocator, list);
         allocator.free(list);
         cond.canonical_list = null;
     }
