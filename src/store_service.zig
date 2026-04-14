@@ -31,9 +31,7 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
         if (cv != .text) return null;
         return cv.text;
     }
-    const val = cond.value orelse return null;
-    if (val != .str) return null;
-    return val.str.value();
+    return null;
 }
 
 /// Validates a single field write operation.

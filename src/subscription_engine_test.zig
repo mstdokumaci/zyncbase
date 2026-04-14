@@ -10,11 +10,14 @@ test "SubscriptionEngine: basic subscribe and match" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const cond_val = try msgpack.Payload.strToPayload("active", allocator);
-    defer cond_val.free(allocator);
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = cond_val },
+            .{
+                .field = "status",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "active" },
+            },
         },
     };
 
@@ -51,7 +54,12 @@ test "SubscriptionEngine: group sharing" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18) },
+            .{
+                .field = "age",
+                .op = .gt,
+                .field_type = .integer,
+                .canonical_value = .{ .integer = 18 },
+            },
         },
     };
 
@@ -72,7 +80,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "x", .op = .isNotNull, .value = null },
+            .{ .field = "x", .op = .isNotNull, .field_type = .text },
         },
     };
 
@@ -87,11 +95,14 @@ test "SubscriptionEngine: unsubscribe clean up" {
 test "SubscriptionEngine: operator matching" {
     const allocator = testing.allocator;
 
-    const cond_val = try msgpack.Payload.strToPayload("Al", allocator);
-    defer cond_val.free(allocator);
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = cond_val },
+            .{
+                .field = "name",
+                .op = .startsWith,
+                .field_type = .text,
+                .canonical_value = .{ .text = "Al" },
+            },
         },
     };
 
@@ -112,19 +123,25 @@ test "SubscriptionEngine: canonical filter key includes values" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const val1 = try msgpack.Payload.strToPayload("active", allocator);
-    defer val1.free(allocator);
     const filter1 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1 },
+            .{
+                .field = "status",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "active" },
+            },
         },
     };
 
-    const val2 = try msgpack.Payload.strToPayload("inactive", allocator);
-    defer val2.free(allocator);
     const filter2 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val2 },
+            .{
+                .field = "status",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "inactive" },
+            },
         },
     };
 
@@ -171,24 +188,36 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
 test "SubscriptionEngine: case-insensitive string matching" {
     const allocator = testing.allocator;
 
-    const val = try msgpack.Payload.strToPayload("Al", allocator);
-    defer val.free(allocator);
-
     const filter_starts_with = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = val },
+            .{
+                .field = "name",
+                .op = .startsWith,
+                .field_type = .text,
+                .canonical_value = .{ .text = "Al" },
+            },
         },
     };
 
     const filter_ends_with = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .endsWith, .value = val },
+            .{
+                .field = "name",
+                .op = .endsWith,
+                .field_type = .text,
+                .canonical_value = .{ .text = "Al" },
+            },
         },
     };
 
     const filter_contains = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .contains, .value = val },
+            .{
+                .field = "name",
+                .op = .contains,
+                .field_type = .text,
+                .canonical_value = .{ .text = "Al" },
+            },
         },
     };
 
@@ -225,24 +254,39 @@ test "SubscriptionEngine: group sharing with different condition order" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const val1 = try msgpack.Payload.strToPayload("A", allocator);
-    defer val1.free(allocator);
-    const val2 = try msgpack.Payload.strToPayload("B", allocator);
-    defer val2.free(allocator);
-
     // Filter 1: status=A, type=B
     const filter1 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1 },
-            .{ .field = "type", .op = .eq, .value = val2 },
+            .{
+                .field = "status",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "A" },
+            },
+            .{
+                .field = "type",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "B" },
+            },
         },
     };
 
     // Filter 2: type=B, status=A (different order)
     const filter2 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "type", .op = .eq, .value = val2 },
-            .{ .field = "status", .op = .eq, .value = val1 },
+            .{
+                .field = "type",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "B" },
+            },
+            .{
+                .field = "status",
+                .op = .eq,
+                .field_type = .text,
+                .canonical_value = .{ .text = "A" },
+            },
         },
     };
 
@@ -260,14 +304,17 @@ test "SubscriptionEngine: in operator subscribe and match" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    var in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
-    in_val.arr[0] = try msgpack.Payload.strToPayload("admin", allocator);
-    in_val.arr[1] = try msgpack.Payload.strToPayload("editor", allocator);
-    defer in_val.free(allocator);
-
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .in, .value = in_val },
+            .{
+                .field = "role",
+                .op = .in,
+                .field_type = .text,
+                .canonical_list = &[_]query_parser.CanonicalValue{
+                    .{ .text = "admin" },
+                    .{ .text = "editor" },
+                },
+            },
         },
     };
 
@@ -295,14 +342,17 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    var not_in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
-    not_in_val.arr[0] = try msgpack.Payload.strToPayload("guest", allocator);
-    not_in_val.arr[1] = try msgpack.Payload.strToPayload("banned", allocator);
-    defer not_in_val.free(allocator);
-
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .notIn, .value = not_in_val },
+            .{
+                .field = "role",
+                .op = .notIn,
+                .field_type = .text,
+                .canonical_list = &[_]query_parser.CanonicalValue{
+                    .{ .text = "guest" },
+                    .{ .text = "banned" },
+                },
+            },
         },
     };
 

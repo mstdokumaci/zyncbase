@@ -128,18 +128,13 @@ pub fn buildSelectQuery(
                 try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
-            const sort_ft: schema_manager.FieldType = if (filter.order_by) |o| o.field_type orelse .text else .text;
-            const sort_it: ?schema_manager.FieldType = if (filter.order_by) |o| o.items_type else null;
-
             if (std.mem.eql(u8, sort_field, "id")) {
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv = if (cursor.canonical_sort_value) |cv|
-                    try typedValueFromCanonical(allocator, cv)
-                else
-                    try TypedValue.fromPayload(allocator, sort_ft, sort_it, cursor.sort_value);
+                const cv = cursor.canonical_sort_value orelse return error.MissingConditionValue;
+                const sv = try typedValueFromCanonical(allocator, cv);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
 
@@ -278,121 +273,80 @@ pub fn appendConditionSql(
     const sql_field = cond.field;
 
     const ft: schema_manager.FieldType = cond.field_type orelse return error.UnknownField;
-    const it: ?schema_manager.FieldType = cond.items_type;
-
     try sql_buf.appendSlice(allocator, sql_field);
 
     switch (cond.op) {
         .eq => {
             try sql_buf.appendSlice(allocator, " = ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .ne => {
             try sql_buf.appendSlice(allocator, " != ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gt => {
             try sql_buf.appendSlice(allocator, " > ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lt => {
             try sql_buf.appendSlice(allocator, " < ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .gte => {
             try sql_buf.appendSlice(allocator, " >= ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .lte => {
             try sql_buf.appendSlice(allocator, " <= ?");
-            const tv = if (cond.canonical_value) |cv| blk: {
-                break :blk try typedValueFromCanonical(allocator, cv);
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk try TypedValue.fromPayload(allocator, ft, it, val);
-            };
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            const tv = try typedValueFromCanonical(allocator, cv);
             errdefer tv.deinit(allocator);
             try values.append(allocator, tv);
         },
         .contains => {
-            const raw_str = if (cond.canonical_value) |cv| blk: {
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            if (ft == .array) {
+                const tv = try typedValueFromCanonical(allocator, cv);
+                errdefer tv.deinit(allocator);
+                try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
+                try values.append(allocator, tv);
+            } else {
                 if (cv != .text) return error.TypeMismatch;
-                break :blk cv.text;
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk switch (val) {
-                    .str => |s| s.value(),
-                    else => return error.TypeMismatch,
-                };
-            };
-            const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
-            try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .text = escaped });
+                const escaped = try escapeLikePattern(allocator, cv.text);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .text = escaped });
+            }
         },
         .startsWith => {
-            const raw_str = if (cond.canonical_value) |cv| blk: {
-                if (cv != .text) return error.TypeMismatch;
-                break :blk cv.text;
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk switch (val) {
-                    .str => |s| s.value(),
-                    else => return error.TypeMismatch,
-                };
-            };
-            const escaped = try escapeLikePattern(allocator, raw_str);
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            if (cv != .text) return error.TypeMismatch;
+            const escaped = try escapeLikePattern(allocator, cv.text);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
             try values.append(allocator, TypedValue{ .text = escaped });
         },
         .endsWith => {
-            const raw_str = if (cond.canonical_value) |cv| blk: {
-                if (cv != .text) return error.TypeMismatch;
-                break :blk cv.text;
-            } else blk: {
-                const val = cond.value orelse return error.MissingConditionValue;
-                break :blk switch (val) {
-                    .str => |s| s.value(),
-                    else => return error.TypeMismatch,
-                };
-            };
-            const escaped = try escapeLikePattern(allocator, raw_str);
+            const cv = cond.canonical_value orelse return error.MissingConditionValue;
+            if (cv != .text) return error.TypeMismatch;
+            const escaped = try escapeLikePattern(allocator, cv.text);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
             try values.append(allocator, TypedValue{ .text = escaped });
@@ -402,34 +356,13 @@ pub fn appendConditionSql(
         .in, .notIn => {
             const is_not = cond.op == .notIn;
             try sql_buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
-            if (cond.canonical_list) |items| {
-                for (items, 0..) |item, i| {
-                    if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-                    try sql_buf.appendSlice(allocator, "?");
-                    const tv = try typedValueFromCanonical(allocator, item);
-                    errdefer tv.deinit(allocator);
-                    try values.append(allocator, tv);
-                }
-            } else if (cond.canonical_value) |item| {
+            const items = cond.canonical_list orelse return error.MissingConditionValue;
+            for (items, 0..) |item, i| {
+                if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                 try sql_buf.appendSlice(allocator, "?");
                 const tv = try typedValueFromCanonical(allocator, item);
                 errdefer tv.deinit(allocator);
                 try values.append(allocator, tv);
-            } else if (cond.value) |val| {
-                if (val == .arr) {
-                    for (val.arr, 0..) |v, i| {
-                        if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-                        try sql_buf.appendSlice(allocator, "?");
-                        const tv = try TypedValue.fromPayload(allocator, ft, it, v);
-                        errdefer tv.deinit(allocator);
-                        try values.append(allocator, tv);
-                    }
-                } else {
-                    try sql_buf.appendSlice(allocator, "?");
-                    const tv = try TypedValue.fromPayload(allocator, ft, it, val);
-                    errdefer tv.deinit(allocator);
-                    try values.append(allocator, tv);
-                }
             }
             try sql_buf.appendSlice(allocator, ")");
         },

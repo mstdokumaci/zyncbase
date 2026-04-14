@@ -37,7 +37,7 @@ test "property: random query filters on StorageEngine" {
         defer filter.deinit(allocator);
         sth.normalizeFilterForTable(allocator, &ctx.sm, "entities", &filter) catch |err| switch (err) {
             // Random generator intentionally produces broad combinations; skip invalid ones.
-            error.TypeMismatch, error.InvalidConditionFormat, error.InvalidOperatorCode => continue,
+            error.TypeMismatch, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidInOperand, error.UnsupportedOperatorForFieldType, error.NullOperandUnsupported, error.InvalidOperandType => continue,
             else => return err,
         };
 

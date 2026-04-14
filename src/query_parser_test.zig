@@ -43,14 +43,12 @@ test "basic query filter parsing" {
     try testing.expectEqualStrings("age", filter.conditions.?[0].field);
     try testing.expectEqual(query_parser.Operator.gte, filter.conditions.?[0].op);
     try testing.expectEqual(schema_manager.FieldType.integer, filter.conditions.?[0].field_type.?);
-    try testing.expect(filter.conditions.?[0].normalized);
     try testing.expect(filter.conditions.?[0].canonical_value != null);
     try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].canonical_value.?.integer);
 
     try testing.expectEqualStrings("status", filter.conditions.?[1].field);
     try testing.expectEqual(query_parser.Operator.eq, filter.conditions.?[1].op);
     try testing.expectEqual(schema_manager.FieldType.text, filter.conditions.?[1].field_type.?);
-    try testing.expect(filter.conditions.?[1].normalized);
     try testing.expect(filter.conditions.?[1].canonical_value != null);
     try testing.expectEqualStrings("active", filter.conditions.?[1].canonical_value.?.text);
 
@@ -133,7 +131,6 @@ test "query with orderBy and after" {
     try testing.expectEqual(true, filter.order_by.?.desc);
     try testing.expectEqual(schema_manager.FieldType.integer, filter.order_by.?.field_type.?);
     try testing.expectEqualStrings("cursor_token", filter.after.?.id);
-    try testing.expect(filter.after.?.normalized);
     try testing.expect(filter.after.?.canonical_sort_value != null);
     try testing.expectEqual(@as(i64, 1700000000), filter.after.?.canonical_sort_value.?.integer);
 }
@@ -237,7 +234,7 @@ test "text operators reject non-text fields" {
     defer sm.deinit();
 
     try testing.expectError(
-        error.TypeMismatch,
+        error.UnsupportedOperatorForFieldType,
         query_parser.parseQueryFilter(allocator, &sm, "users", root),
     );
 }
@@ -293,7 +290,6 @@ test "normalizeFilterInPlace is idempotent" {
     try query_parser.normalizeFilterInPlace(allocator, table_md, &filter);
 
     try testing.expect(filter.conditions != null);
-    try testing.expect(filter.conditions.?[0].normalized);
     try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].canonical_value.?.integer);
 }
 
@@ -317,7 +313,6 @@ test "normalizeCursorForFilter is idempotent" {
     try query_parser.normalizeCursorForFilter(allocator, order_by, &cursor);
     try query_parser.normalizeCursorForFilter(allocator, order_by, &cursor);
 
-    try testing.expect(cursor.normalized);
     try testing.expect(cursor.canonical_sort_value != null);
     try testing.expectEqualStrings("sort-key", cursor.canonical_sort_value.?.text);
 }
@@ -357,7 +352,7 @@ test "normalizeFilterInPlace is transactional on error" {
     defer before.deinit(allocator);
 
     const table_md = sm.getTable("users") orelse return error.TestExpectedValue;
-    try testing.expectError(error.TypeMismatch, query_parser.normalizeFilterInPlace(allocator, table_md, &filter));
+    try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.normalizeFilterInPlace(allocator, table_md, &filter));
 
     // Filter must remain untouched after failed normalization.
     try testing.expect(filter.conditions != null);
@@ -366,6 +361,4 @@ test "normalizeFilterInPlace is transactional on error" {
     try testing.expectEqual(before.or_conditions.?.len, filter.or_conditions.?.len);
     try testing.expect(filter.conditions.?[0].canonical_value == null);
     try testing.expect(filter.or_conditions.?[0].canonical_value == null);
-    try testing.expect(!filter.conditions.?[0].normalized);
-    try testing.expect(!filter.or_conditions.?[0].normalized);
 }

@@ -126,7 +126,14 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
         var cond = try allocator.alloc(msgpack.Payload, 3);
         cond[0] = try msgpack.Payload.strToPayload(field, allocator);
         cond[1] = msgpack.Payload.uintToPayload(op_code);
-        cond[2] = try msgpack.Payload.strToPayload("value", allocator); // match schema field type (.text)
+        if (op_code == @intFromEnum(query_parser.Operator.in) or op_code == @intFromEnum(query_parser.Operator.notIn)) {
+            const arr = try allocator.alloc(msgpack.Payload, 2);
+            arr[0] = try msgpack.Payload.strToPayload("value", allocator);
+            arr[1] = try msgpack.Payload.strToPayload("value-2", allocator);
+            cond[2] = .{ .arr = arr };
+        } else {
+            cond[2] = try msgpack.Payload.strToPayload("value", allocator); // match schema field type (.text)
+        }
         return .{ .arr = cond };
     }
 }

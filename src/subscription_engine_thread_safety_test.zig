@@ -22,7 +22,12 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
             _ = alloc;
             const filter = query_parser.QueryFilter{
                 .conditions = &[_]query_parser.Condition{
-                    .{ .field = "status", .op = .eq, .value = msgpack.Payload.boolToPayload(true) },
+                    .{
+                        .field = "status",
+                        .op = .eq,
+                        .field_type = .boolean,
+                        .canonical_value = .{ .boolean = true },
+                    },
                 },
             };
 
@@ -85,7 +90,12 @@ test "SubscriptionEngine: concurrent unsubscribe" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "active", .op = .eq, .value = msgpack.Payload.boolToPayload(true) },
+            .{
+                .field = "active",
+                .op = .eq,
+                .field_type = .boolean,
+                .canonical_value = .{ .boolean = true },
+            },
         },
     };
 

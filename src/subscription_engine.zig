@@ -399,53 +399,7 @@ pub const SubscriptionEngine = struct {
 
     fn evaluateCondition(cond: Condition, row: Payload) !bool {
         const val = (try row.mapGet(cond.field)) orelse return cond.op == .isNull;
-
-        if (cond.normalized and cond.field_type != null) {
-            return evaluateConditionNormalized(cond, val);
-        }
-
-        return switch (cond.op) {
-            .eq => payloadsEqual(val, cond.value orelse return false),
-            .ne => !payloadsEqual(val, cond.value orelse return true),
-            .gt => comparePayloads(val, cond.value orelse return false) == .gt,
-            .gte => blk: {
-                const res = comparePayloads(val, cond.value orelse return false);
-                break :blk res == .gt or res == .eq;
-            },
-            .lt => comparePayloads(val, cond.value orelse return false) == .lt,
-            .lte => blk: {
-                const res = comparePayloads(val, cond.value orelse return false);
-                break :blk res == .lt or res == .eq;
-            },
-            .isNull => val == .nil,
-            .isNotNull => val != .nil,
-            .startsWith => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.startsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
-            },
-            .endsWith => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.endsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
-            },
-            .contains => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.str.value(), cond.value.?.str.value()) != null;
-            },
-            .in => blk: {
-                if (cond.value == null or cond.value.? != .arr) break :blk false;
-                for (cond.value.?.arr) |item| {
-                    if (payloadsEqual(val, item)) break :blk true;
-                }
-                break :blk false;
-            },
-            .notIn => blk: {
-                if (cond.value == null or cond.value.? != .arr) break :blk true;
-                for (cond.value.?.arr) |item| {
-                    if (payloadsEqual(val, item)) break :blk false;
-                }
-                break :blk true;
-            },
-        };
+        return evaluateConditionNormalized(cond, val);
     }
 
     fn evaluateConditionNormalized(cond: Condition, val: Payload) bool {
@@ -477,6 +431,14 @@ pub const SubscriptionEngine = struct {
             },
             .contains => blk: {
                 const rhs = cond.canonical_value orelse return false;
+                if (ft == .array) {
+                    const item_type = cond.items_type orelse return false;
+                    if (val != .arr) break :blk false;
+                    for (val.arr) |item| {
+                        if (payloadEqualsCanonical(item_type, item, rhs)) break :blk true;
+                    }
+                    break :blk false;
+                }
                 if (rhs != .text or val != .str) break :blk false;
                 break :blk std.ascii.indexOfIgnoreCase(val.str.value(), rhs.text) != null;
             },
@@ -596,8 +558,10 @@ pub const SubscriptionEngine = struct {
         if (cond.canonical_value) |v| {
             return canonicalValueKey(allocator, v);
         }
-        if (cond.value) |v| return msgpack.encodeBase64(allocator, v);
-        return allocator.dupe(u8, "null");
+        if (cond.op == .isNull or cond.op == .isNotNull) {
+            return allocator.dupe(u8, "null");
+        }
+        return error.MissingConditionValue;
     }
 
     fn canonicalValueKey(allocator: Allocator, v: CanonicalValue) ![]u8 {
@@ -607,47 +571,6 @@ pub const SubscriptionEngine = struct {
             .text => |s| std.fmt.allocPrint(allocator, "s:{s}", .{s}),
             .boolean => |b| allocator.dupe(u8, if (b) "b:1" else "b:0"),
             .nil => allocator.dupe(u8, "n"),
-        };
-    }
-
-    fn payloadsEqual(a: Payload, b: Payload) bool {
-        if (@as(std.meta.Tag(Payload), a) != @as(std.meta.Tag(Payload), b)) return false;
-        return switch (a) {
-            .nil => true,
-            .bool => a.bool == b.bool,
-            .int => a.int == b.int,
-            .uint => a.uint == b.uint,
-            .float => a.float == b.float,
-            .str => std.mem.eql(u8, a.str.value(), b.str.value()),
-            .bin => std.mem.eql(u8, a.bin.value(), b.bin.value()),
-            .arr => blk: {
-                if (a.arr.len != b.arr.len) break :blk false;
-                for (a.arr, 0..) |item, i| {
-                    if (!payloadsEqual(item, b.arr[i])) break :blk false;
-                }
-                break :blk true;
-            },
-            .map => false, // Map equality is complex and not needed for basic op codes
-            .ext => false,
-            .timestamp => false, // Not handled yet
-        };
-    }
-
-    fn comparePayloads(a: Payload, b: Payload) std.math.Order {
-        // Only same-type comparison for now to match selectQuery/SQLite
-        if (@as(std.meta.Tag(Payload), a) != @as(std.meta.Tag(Payload), b)) return .lt; // Should ideally be error.TypeMismatch
-
-        return switch (a) {
-            .int => std.math.order(a.int, b.int),
-            .uint => std.math.order(a.uint, b.uint),
-            .float => blk: {
-                if (a.float < b.float) break :blk .lt;
-                if (a.float > b.float) break :blk .gt;
-                break :blk .eq;
-            },
-            .str => std.mem.order(u8, a.str.value(), b.str.value()),
-            .bin => std.mem.order(u8, a.bin.value(), b.bin.value()),
-            else => .eq, // Unsortable types
         };
     }
 };

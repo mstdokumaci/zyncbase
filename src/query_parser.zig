@@ -23,13 +23,11 @@ pub const Operator = enum(u8) {
 pub const Condition = struct {
     field: []const u8,
     op: Operator,
-    // Legacy/raw payload operand kept for compatibility during migration.
-    value: ?msgpack.Payload,
+    value: ?msgpack.Payload = null,
     field_type: ?FieldType = null,
     items_type: ?FieldType = null,
     canonical_value: ?CanonicalValue = null,
-    canonical_list: ?[]CanonicalValue = null,
-    normalized: bool = false,
+    canonical_list: ?[]const CanonicalValue = null,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -61,7 +59,6 @@ pub const Condition = struct {
             .items_type = self.items_type,
             .canonical_value = cloned_canonical_value,
             .canonical_list = cloned_canonical_list,
-            .normalized = self.normalized,
         };
     }
 };
@@ -101,23 +98,21 @@ pub const SortDescriptor = struct {
 };
 
 pub const Cursor = struct {
-    // Legacy/raw cursor payload kept for compatibility during migration.
-    sort_value: msgpack.Payload,
+    sort_value: ?msgpack.Payload = null,
     id: []const u8,
     canonical_sort_value: ?CanonicalValue = null,
     sort_field_type: ?FieldType = null,
     sort_items_type: ?FieldType = null,
-    normalized: bool = false,
 
     pub fn deinit(self: Cursor, allocator: std.mem.Allocator) void {
-        self.sort_value.free(allocator);
+        if (self.sort_value) |v| v.free(allocator);
         allocator.free(self.id);
         if (self.canonical_sort_value) |v| v.deinit(allocator);
     }
 
     pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
-        const sort_value = try self.sort_value.deepClone(allocator);
-        errdefer sort_value.free(allocator);
+        const sort_value = if (self.sort_value) |v| try v.deepClone(allocator) else null;
+        errdefer if (sort_value) |v| v.free(allocator);
         const canonical_sort_value = if (self.canonical_sort_value) |v| try v.clone(allocator) else null;
         errdefer if (canonical_sort_value) |v| v.deinit(allocator);
         return .{
@@ -126,7 +121,6 @@ pub const Cursor = struct {
             .canonical_sort_value = canonical_sort_value,
             .sort_field_type = self.sort_field_type,
             .sort_items_type = self.sort_items_type,
-            .normalized = self.normalized,
         };
     }
 };
@@ -220,6 +214,13 @@ pub const ParserError = error{
     UnknownTable,
     UnknownField,
     TypeMismatch,
+    MissingOperand,
+    UnexpectedOperand,
+    InvalidOperandType,
+    InvalidInOperand,
+    NullOperandUnsupported,
+    UnsupportedOperatorForFieldType,
+    InvalidCursorSortValue,
     OutOfMemory,
 };
 
@@ -438,7 +439,13 @@ fn normalizeConditionInPlace(
     allocator: std.mem.Allocator,
     cond: *Condition,
 ) ParserError!void {
-    if (cond.normalized) return;
+    if (cond.value == null) {
+        return switch (cond.op) {
+            .isNull, .isNotNull => {},
+            .in, .notIn => if (cond.canonical_list != null) {} else error.MissingOperand,
+            else => if (cond.canonical_value != null) {} else error.MissingOperand,
+        };
+    }
 
     if (cond.canonical_value) |v| {
         v.deinit(allocator);
@@ -454,57 +461,60 @@ fn normalizeConditionInPlace(
     const it = cond.items_type;
 
     if (cond.op == .isNull or cond.op == .isNotNull) {
-        cond.normalized = true;
+        if (cond.value != null) return error.UnexpectedOperand;
         return;
     }
 
-    const raw = cond.value orelse return error.InvalidConditionFormat;
+    const raw = cond.value orelse return error.MissingOperand;
+    if (raw == .nil) return error.NullOperandUnsupported;
 
     if (cond.op == .in or cond.op == .notIn) {
-        if (raw == .arr) {
-            if (ft == .array) {
-                cond.normalized = false;
-                return;
-            }
-            const list = try allocator.alloc(CanonicalValue, raw.arr.len);
-            var count: usize = 0;
-            errdefer {
-                while (count > 0) : (count -= 1) list[count - 1].deinit(allocator);
-                allocator.free(list);
-            }
-            for (raw.arr, 0..) |item, i| {
-                list[i] = try normalizePayloadValue(allocator, ft, it, item);
-                count += 1;
-            }
-            cond.canonical_list = list;
-            cond.normalized = true;
-            return;
+        if (raw != .arr) return error.InvalidInOperand;
+        if (ft == .array) return error.UnsupportedOperatorForFieldType;
+        const list = try allocator.alloc(CanonicalValue, raw.arr.len);
+        var count: usize = 0;
+        errdefer {
+            while (count > 0) : (count -= 1) list[count - 1].deinit(allocator);
+            allocator.free(list);
         }
-        if (ft == .array) {
-            cond.normalized = false;
-            return;
+        for (raw.arr, 0..) |item, i| {
+            if (item == .nil) return error.NullOperandUnsupported;
+            list[i] = try normalizePayloadValue(allocator, ft, it, item);
+            count += 1;
         }
-        cond.canonical_value = try normalizePayloadValue(allocator, ft, it, raw);
-        cond.normalized = true;
+        cond.canonical_list = list;
         return;
     }
 
     if (cond.op == .contains or cond.op == .startsWith or cond.op == .endsWith) {
-        if (ft != .text) return error.TypeMismatch;
-        if (raw != .str) return error.TypeMismatch;
-        cond.canonical_value = .{ .text = try allocator.dupe(u8, raw.str.value()) };
-        cond.normalized = true;
-        return;
+        if (ft == .text) {
+            if (raw != .str) return error.InvalidOperandType;
+            cond.canonical_value = .{ .text = try allocator.dupe(u8, raw.str.value()) };
+            return;
+        }
+        if (ft == .array) {
+            if (cond.op != .contains) return error.UnsupportedOperatorForFieldType;
+            const elem_type = it orelse return error.TypeMismatch;
+            cond.canonical_value = try normalizePayloadValue(allocator, elem_type, null, raw);
+            return;
+        }
+        return error.UnsupportedOperatorForFieldType;
     }
 
     if (ft == .array) {
-        // Array filter semantics are intentionally out of scope for this phase.
-        cond.normalized = false;
-        return;
+        return error.UnsupportedOperatorForFieldType;
     }
 
     cond.canonical_value = try normalizePayloadValue(allocator, ft, it, raw);
-    cond.normalized = true;
+}
+
+fn clearConditionRawValues(allocator: std.mem.Allocator, conditions: []Condition) void {
+    for (conditions) |*cond| {
+        if (cond.value) |v| {
+            v.free(allocator);
+            cond.value = null;
+        }
+    }
 }
 
 fn normalizeConditionsInPlace(
@@ -513,6 +523,14 @@ fn normalizeConditionsInPlace(
 ) ParserError!void {
     for (conditions) |*cond| {
         try normalizeConditionInPlace(allocator, cond);
+    }
+    clearConditionRawValues(allocator, conditions);
+}
+
+fn clearCursorRawValue(allocator: std.mem.Allocator, cursor: *Cursor) void {
+    if (cursor.sort_value) |v| {
+        v.free(allocator);
+        cursor.sort_value = null;
     }
 }
 
@@ -553,15 +571,22 @@ pub fn normalizeCursorForFilter(
 ) ParserError!void {
     const sort_ft: FieldType = if (order_by) |o| o.field_type orelse .text else .text;
     const sort_it: ?FieldType = if (order_by) |o| o.items_type else null;
-    if (cursor.normalized and cursor.sort_field_type == sort_ft and cursor.sort_items_type == sort_it) return;
+    if (cursor.canonical_sort_value != null and cursor.sort_field_type == sort_ft and cursor.sort_items_type == sort_it) {
+        return;
+    }
     if (cursor.canonical_sort_value) |v| {
         v.deinit(allocator);
         cursor.canonical_sort_value = null;
     }
-    cursor.canonical_sort_value = try normalizePayloadValue(allocator, sort_ft, sort_it, cursor.sort_value);
+    const raw = cursor.sort_value orelse return error.InvalidCursorSortValue;
+    if (raw == .nil) return error.NullOperandUnsupported;
+    cursor.canonical_sort_value = normalizePayloadValue(allocator, sort_ft, sort_it, raw) catch |err| switch (err) {
+        error.TypeMismatch => return error.InvalidCursorSortValue,
+        else => return err,
+    };
     cursor.sort_field_type = sort_ft;
     cursor.sort_items_type = sort_it;
-    cursor.normalized = true;
+    clearCursorRawValue(allocator, cursor);
 }
 
 pub fn parseAndNormalizeCursorToken(
