@@ -433,8 +433,7 @@ test "storage: document set/get round-trip" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        const doc = managed.value orelse return error.MissingDoc;
         _ = try sth.expectFieldString(doc, "title", title_str);
         _ = try sth.expectFieldInt(doc, "score", score_val);
     }
@@ -469,8 +468,7 @@ test "storage: field set/get round-trip" {
         // Use selectDocument to verify the field update
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        const doc = managed.value orelse return error.MissingDoc;
         _ = try sth.expectFieldInt(doc, "score", new_score);
     }
 }
@@ -564,8 +562,7 @@ test "storage: updated_at is always refreshed on write" {
         try engine.flushPendingWrites();
         var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed1.deinit();
-        const doc1 = managed1.value;
-        try testing.expect(doc1 != null);
+        const doc1 = managed1.value orelse return error.MissingDoc;
         const updated_at_1 = try sth.getFieldInt(doc1, "updated_at");
         try testing.expect(updated_at_1 >= t_before_insert);
 
@@ -574,8 +571,7 @@ test "storage: updated_at is always refreshed on write" {
 
         var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();
-        const doc2 = managed2.value;
-        try testing.expect(doc2 != null);
+        const doc2 = managed2.value orelse return error.MissingDoc;
         const updated_at_2 = try sth.getFieldInt(doc2, "updated_at");
         try testing.expect(updated_at_2 >= updated_at_1);
     }
@@ -615,8 +611,7 @@ test "storage: write/read round-trip for array fields" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        const doc = managed.value orelse return error.MissingDoc;
         const got_tags = try sth.expectFieldArray(doc, "tags", n);
         for (elems, got_tags.arr) |orig, got| {
             const orig_val = switch (orig) {
@@ -666,8 +661,7 @@ test "storage: non-array fields are unaffected" {
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
-        const doc = managed.value;
-        try testing.expect(doc != null);
+        const doc = managed.value orelse return error.MissingDoc;
         _ = try sth.expectFieldString(doc, "title", title_str);
         _ = try sth.expectFieldInt(doc, "score", score_val);
         _ = try sth.expectFieldReal(doc, "rating", rating_val);
