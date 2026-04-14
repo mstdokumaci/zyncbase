@@ -25,26 +25,6 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
     return sql_buf.toOwnedSlice(allocator);
 }
 
-pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_name: []const u8, field_ctx: ?schema_manager.Field) ![]const u8 {
-    if (field_ctx != null and field_ctx.?.sql_type == .array) {
-        return try std.fmt.allocPrint(allocator, "SELECT json({s}) AS {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, field_name, table_name });
-    } else {
-        return try std.fmt.allocPrint(allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, table_name });
-    }
-}
-
-pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer sql_buf.deinit(allocator);
-
-    try sql_buf.appendSlice(allocator, "SELECT ");
-    try sql.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
-    try sql_buf.appendSlice(allocator, " FROM ");
-    try sql_buf.appendSlice(allocator, table_metadata.table.name);
-    try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
-    return sql_buf.toOwnedSlice(allocator);
-}
-
 pub const QueryResult = struct {
     sql: []const u8,
     values: []TypedValue,
@@ -298,9 +278,12 @@ pub fn appendConditionSql(
 ) !void {
     const sql_field = cond.field;
 
-    const field = table_metadata.getField(sql_field);
-    const ft: schema_manager.FieldType = cond.field_type orelse if (field) |f| f.sql_type else .text;
-    const it: ?schema_manager.FieldType = cond.items_type orelse if (field) |f| f.items_type else null;
+    const resolved = query_parser.resolveFieldMetadata(table_metadata, sql_field) catch |err| switch (err) {
+        error.UnknownField => query_parser.ResolvedField{ .field_type = .text, .items_type = null },
+        else => return err,
+    };
+    const ft: schema_manager.FieldType = cond.field_type orelse resolved.field_type;
+    const it: ?schema_manager.FieldType = cond.items_type orelse resolved.items_type;
 
     try sql_buf.appendSlice(allocator, sql_field);
 
@@ -503,60 +486,6 @@ pub fn execSelectDocument(
     if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
     return try decodeRow(allocator, db, stmt, table_metadata);
-}
-
-pub fn execSelectScalar(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
-    id: []const u8,
-    namespace: []const u8,
-    field_ctx: ?schema_manager.Field,
-) !?msgpack.Payload {
-    if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
-
-    return try readColumnValue(allocator, db, stmt, 0, field_ctx);
-}
-
-pub fn execSelectCollection(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
-    namespace: []const u8,
-    table_metadata: schema_manager.TableMetadata,
-) !msgpack.Payload {
-    if (sql.bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-
-    var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
-    errdefer {
-        for (arr.items) |item| item.free(allocator);
-        arr.deinit(allocator);
-    }
-
-    const col_contexts = try resolveAllColumnContexts(allocator, db, stmt, table_metadata);
-    defer allocator.free(col_contexts);
-
-    while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
-
-        var map = msgpack.Payload.mapPayload(allocator);
-        errdefer map.free(allocator);
-
-        for (col_contexts) |ctx| {
-            const val = try readColumnValue(allocator, db, stmt, ctx.index, ctx.field);
-            try map.mapPut(ctx.name, val);
-        }
-        try arr.append(allocator, map);
-    }
-
-    return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
 }
 
 fn extractCursorTupleFromRow(

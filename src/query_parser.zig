@@ -378,12 +378,12 @@ fn parseSortDescriptor(
     };
 }
 
-const ResolvedField = struct {
+pub const ResolvedField = struct {
     field_type: FieldType,
     items_type: ?FieldType,
 };
 
-fn resolveFieldMetadata(table_metadata: schema_manager.TableMetadata, field: []const u8) ParserError!ResolvedField {
+pub fn resolveFieldMetadata(table_metadata: schema_manager.TableMetadata, field: []const u8) ParserError!ResolvedField {
     if (table_metadata.getField(field)) |f| {
         return .{ .field_type = f.sql_type, .items_type = f.items_type };
     }
