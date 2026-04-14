@@ -5,7 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
-const sql_utils = @import("sql_utils.zig");
+const sql = @import("sql.zig");
 
 pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
 
@@ -145,7 +145,7 @@ pub const TypedValue = union(enum) {
         const rc = switch (self) {
             .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
             .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
-            .text => |s| sql_utils.bindTextTransient(stmt, index, s),
+            .text => |s| sql.bindTextTransient(stmt, index, s),
             .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
             .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         };
@@ -194,7 +194,7 @@ pub const CheckpointMode = enum {
 pub const ReaderNode = struct {
     conn: sqlite.Db,
     mutex: std.Thread.Mutex,
-    stmt_cache: sql_utils.StatementCache,
+    stmt_cache: sql.StatementCache,
 };
 
 pub const CheckpointStats = struct {

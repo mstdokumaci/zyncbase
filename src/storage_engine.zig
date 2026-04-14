@@ -6,14 +6,14 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const msgpack = @import("msgpack_utils.zig");
 const reader = @import("storage_engine/reader.zig");
-const pipeline = @import("storage_engine/pipeline.zig");
+const writer = @import("storage_engine/writer.zig");
 const connection = @import("storage_engine/connection.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const types = @import("storage_engine/types.zig");
-const sql_utils = @import("storage_engine/sql_utils.zig");
+const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
@@ -44,7 +44,7 @@ pub const StorageEngine = struct {
     allocator: Allocator,
     db_path: [:0]const u8,
     _writer_conn: sqlite.Db,
-    writer_stmt_cache: sql_utils.StatementCache,
+    writer_stmt_cache: sql.StatementCache,
     reader_pool: []ReaderNode,
     write_queue: WriteQueue,
     write_thread: ?std.Thread = null,
@@ -373,12 +373,12 @@ pub const StorageEngine = struct {
 
     /// Execute setup SQL (DDL/Migrations) before the engine starts.
     /// This method is only allowed when the engine is in the 'setup' state.
-    pub fn execSetupSQL(self: *StorageEngine, sql: []const u8) !void {
+    pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
         if (self.state.load(.acquire) != .setup) {
             std.log.err("execSetupSQL called outside of setup phase", .{});
             return error.InvalidState;
         }
-        try self._writer_conn.execMulti(sql, .{});
+        try self._writer_conn.execMulti(sql_query, .{});
         // Reset caches since DDL may have modified table structures, invalidating
         // any cached prepared statements and metadata.
         self.writer_stmt_cache.deinit(self.allocator);
@@ -397,7 +397,7 @@ pub const StorageEngine = struct {
         }
 
         // Spawn the write thread
-        self.write_thread = try std.Thread.spawn(.{}, pipeline.writeThreadLoop, .{self});
+        self.write_thread = try std.Thread.spawn(.{}, writer.writeThreadLoop, .{self});
         self.state.store(.running, .release);
 
         // Wait deterministically for the write thread to signal readiness
@@ -457,8 +457,8 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
 
-        const sql = try sql_utils.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
-        errdefer self.allocator.free(sql);
+        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
+        errdefer self.allocator.free(sql_string);
 
         const values = try self.allocator.alloc(TypedValue, columns.len);
         var initialized_count: usize = 0;
@@ -484,7 +484,7 @@ pub const StorageEngine = struct {
                 .table = table_owned,
                 .id = id_owned,
                 .namespace = ns_owned,
-                .sql = sql,
+                .sql = sql_string,
                 .values = values,
                 .timestamp = now,
                 .completion_signal = null,
@@ -525,13 +525,13 @@ pub const StorageEngine = struct {
         defer node.mutex.unlock();
 
         const table_metadata = self.schema_manager.getTable(table).?;
-        const sql = try reader.buildSelectDocumentSql(allocator, table_metadata);
-        defer allocator.free(sql);
+        const sql_query = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
         const seq_before = self.write_seq.load(.acquire);
 
-        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql);
+        var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
         const payload = try reader.execSelectDocument(allocator, &node.conn, stmt, id, namespace, table_metadata);
@@ -599,8 +599,8 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
 
-        const sql = try sql_utils.buildDeleteDocumentSql(self.allocator, table_metadata);
-        errdefer self.allocator.free(sql);
+        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
+        errdefer self.allocator.free(sql_string);
 
         const id_owned = try self.allocator.dupe(u8, id);
         errdefer self.allocator.free(id_owned);
@@ -614,7 +614,7 @@ pub const StorageEngine = struct {
                 .table = table_owned,
                 .id = id_owned,
                 .namespace = ns_owned,
-                .sql = sql,
+                .sql = sql_string,
                 .completion_signal = null,
             },
         };
@@ -624,6 +624,6 @@ pub const StorageEngine = struct {
     }
 
     fn writeThreadLoop(self: *StorageEngine) void {
-        pipeline.writeThreadLoop(self);
+        writer.writeThreadLoop(self);
     }
 };

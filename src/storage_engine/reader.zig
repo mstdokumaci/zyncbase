@@ -5,7 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const query_parser = @import("../query_parser.zig");
 const types = @import("types.zig");
-const sql_utils = @import("sql_utils.zig");
+const sql = @import("sql.zig");
 
 const TypedValue = types.TypedValue;
 const ColumnContext = types.ColumnContext;
@@ -17,7 +17,7 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=?");
@@ -37,7 +37,7 @@ pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_man
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
@@ -81,7 +81,7 @@ pub fn buildSelectQuery(
 
     // 1.. SELECT clause
     try sql_buf.appendSlice(allocator, "SELECT ");
-    try sql_utils.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+    try sql.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
 
@@ -446,8 +446,8 @@ pub fn execSelectDocument(
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !?msgpack.Payload {
-    if (sql_utils.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -464,8 +464,8 @@ pub fn execSelectScalar(
     namespace: []const u8,
     field_ctx: ?schema_manager.Field,
 ) !?msgpack.Payload {
-    if (sql_utils.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql_utils.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
@@ -481,7 +481,7 @@ pub fn execSelectCollection(
     namespace: []const u8,
     table_metadata: schema_manager.TableMetadata,
 ) !msgpack.Payload {
-    if (sql_utils.bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     errdefer {

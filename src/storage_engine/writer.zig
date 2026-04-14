@@ -6,7 +6,7 @@ const connection = @import("connection.zig");
 const types = @import("types.zig");
 const schema_manager = @import("../schema_manager.zig");
 const msgpack = @import("../msgpack_utils.zig");
-const sql_utils = @import("sql_utils.zig");
+const sql = @import("sql.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
 
@@ -21,15 +21,15 @@ fn getDocumentHelper(
     namespace: []const u8,
     id: []const u8,
     sql_cache: *std.StringHashMap([]const u8),
-    stmt_cache: *sql_utils.StatementCache,
+    stmt_cache: *sql.StatementCache,
 ) !?msgpack.Payload {
     const table_metadata = sm.getTable(table) orelse return null;
-    const sql = if (sql_cache.get(table)) |s| s else blk: {
+    const sql_str = if (sql_cache.get(table)) |s| s else blk: {
         const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
         try sql_cache.put(table, s);
         break :blk s;
     };
-    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
     return reader.execSelectDocument(allocator, conn, mstmt.stmt, id, namespace, table_metadata);
 }
@@ -63,14 +63,14 @@ pub fn executeBatch(
     ops: []const WriteOp,
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
     sm: *const schema_manager.SchemaManager,
-    stmt_cache: *sql_utils.StatementCache,
+    stmt_cache: *sql.StatementCache,
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
 
     var sql_cache = std.StringHashMap([]const u8).init(allocator);
     defer {
         var it = sql_cache.valueIterator();
-        while (it.next()) |sql| allocator.free(sql.*);
+        while (it.next()) |sql_str| allocator.free(sql_str.*);
         sql_cache.deinit();
     }
 
@@ -176,7 +176,7 @@ pub fn flushBatch(
     change_buffer: *ChangeBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
-    stmt_cache: *sql_utils.StatementCache,
+    stmt_cache: *sql.StatementCache,
 ) void {
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
@@ -460,17 +460,17 @@ pub fn executeUpsert(
     conn: *sqlite.Db,
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
-    stmt_cache: *sql_utils.StatementCache,
+    stmt_cache: *sql.StatementCache,
 ) !?msgpack.Payload {
-    const sql = op.sql;
-    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    const sql_str = op.sql;
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
     var bind_idx: c_int = 1;
-    if (sql_utils.bindTextTransient(stmt, bind_idx, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindTextTransient(stmt, bind_idx, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (sql_utils.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
 
     for (op.values) |val| {
@@ -496,15 +496,15 @@ pub fn executeDelete(
     conn: *sqlite.Db,
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
-    stmt_cache: *sql_utils.StatementCache,
+    stmt_cache: *sql.StatementCache,
 ) !?msgpack.Payload {
-    const sql = op.sql;
-    var mstmt = try stmt_cache.acquire(allocator, conn, sql);
+    const sql_str = op.sql;
+    var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    if (sql_utils.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sql_utils.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
