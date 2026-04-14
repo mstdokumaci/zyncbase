@@ -262,6 +262,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
         .value = try msgpack.Payload.strToPayload("Task 1", allocator),
     };
     filter.conditions = conds;
+    try sth.normalizeFilterForTable(allocator, &ctx.sm, "items", &filter);
 
     var managed = try engine.selectQuery(allocator, "items", "ns", filter);
     defer managed.deinit();
@@ -311,6 +312,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload("p%l", allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
         const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
@@ -329,6 +331,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload("p_l", allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
         const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
@@ -347,6 +350,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload("ap_", allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
         const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
@@ -365,6 +369,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload("%le", allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
         const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
@@ -383,6 +388,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload("\\", allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
         const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
@@ -409,6 +415,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .value = try msgpack.Payload.strToPayload(malicious, allocator),
         };
         filter.conditions = conds;
+        try sth.normalizeFilterForTable(allocator, &ctx.sm, "wildcards", &filter);
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
         var managed = try engine.selectQuery(allocator, "wildcards", "ns", filter);

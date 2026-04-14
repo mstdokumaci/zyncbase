@@ -340,6 +340,7 @@ test "normalizeFilterInPlace is transactional on error" {
         .field = try allocator.dupe(u8, "age"),
         .op = .eq,
         .value = msgpack.Payload.intToPayload(42),
+        .field_type = .integer,
     };
     filter.conditions = conds;
 
@@ -348,6 +349,7 @@ test "normalizeFilterInPlace is transactional on error" {
         .field = try allocator.dupe(u8, "age"),
         .op = .contains, // invalid for integer field
         .value = try msgpack.Payload.strToPayload("4", allocator),
+        .field_type = .integer,
     };
     filter.or_conditions = or_conds;
 

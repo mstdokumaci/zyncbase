@@ -86,7 +86,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -98,7 +98,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (or_conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -273,17 +273,12 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
-    table_metadata: schema_manager.TableMetadata,
     cond: query_parser.Condition,
 ) !void {
     const sql_field = cond.field;
 
-    const resolved = query_parser.resolveFieldMetadata(table_metadata, sql_field) catch |err| switch (err) {
-        error.UnknownField => query_parser.ResolvedField{ .field_type = .text, .items_type = null },
-        else => return err,
-    };
-    const ft: schema_manager.FieldType = cond.field_type orelse resolved.field_type;
-    const it: ?schema_manager.FieldType = cond.items_type orelse resolved.items_type;
+    const ft: schema_manager.FieldType = cond.field_type orelse return error.UnknownField;
+    const it: ?schema_manager.FieldType = cond.items_type;
 
     try sql_buf.appendSlice(allocator, sql_field);
 

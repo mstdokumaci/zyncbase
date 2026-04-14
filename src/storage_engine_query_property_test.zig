@@ -35,6 +35,11 @@ test "property: random query filters on StorageEngine" {
     for (0..random_query_count) |_| {
         var filter = try generateRandomFilter(allocator, random);
         defer filter.deinit(allocator);
+        sth.normalizeFilterForTable(allocator, &ctx.sm, "entities", &filter) catch |err| switch (err) {
+            // Random generator intentionally produces broad combinations; skip invalid ones.
+            error.TypeMismatch, error.InvalidConditionFormat, error.InvalidOperatorCode => continue,
+            else => return err,
+        };
 
         // Execute query
         var managed = try engine.selectQuery(allocator, "entities", "ns1", filter);

@@ -450,7 +450,7 @@ fn normalizeConditionInPlace(
         cond.canonical_list = null;
     }
 
-    const ft = cond.field_type orelse return;
+    const ft = cond.field_type orelse return error.UnknownField;
     const it = cond.items_type;
 
     if (cond.op == .isNull or cond.op == .isNotNull) {
@@ -507,45 +507,35 @@ fn normalizeConditionInPlace(
     cond.normalized = true;
 }
 
+fn normalizeConditionsInPlace(
+    allocator: std.mem.Allocator,
+    conditions: []Condition,
+) ParserError!void {
+    for (conditions) |*cond| {
+        try normalizeConditionInPlace(allocator, cond);
+    }
+}
+
 pub fn normalizeFilterInPlace(
     allocator: std.mem.Allocator,
     table_metadata: schema_manager.TableMetadata,
     filter: *QueryFilter,
 ) ParserError!void {
+    _ = table_metadata;
     // Transactional normalization: on error, keep input filter untouched.
     var working = try filter.clone(allocator);
     errdefer working.deinit(allocator);
 
     if (working.conditions) |conds| {
-        const conds_mut = @constCast(conds);
-        for (conds_mut, 0..) |_, idx| {
-            if (conds_mut[idx].field_type == null) {
-                const resolved = try resolveFieldMetadata(table_metadata, conds_mut[idx].field);
-                conds_mut[idx].field_type = resolved.field_type;
-                conds_mut[idx].items_type = resolved.items_type;
-            }
-            try normalizeConditionInPlace(allocator, &conds_mut[idx]);
-        }
+        try normalizeConditionsInPlace(allocator, @constCast(conds));
     }
 
     if (working.or_conditions) |conds| {
-        const conds_mut = @constCast(conds);
-        for (conds_mut, 0..) |_, idx| {
-            if (conds_mut[idx].field_type == null) {
-                const resolved = try resolveFieldMetadata(table_metadata, conds_mut[idx].field);
-                conds_mut[idx].field_type = resolved.field_type;
-                conds_mut[idx].items_type = resolved.items_type;
-            }
-            try normalizeConditionInPlace(allocator, &conds_mut[idx]);
-        }
+        try normalizeConditionsInPlace(allocator, @constCast(conds));
     }
 
     if (working.order_by) |*order_by| {
-        if (order_by.field_type == null) {
-            const resolved = try resolveFieldMetadata(table_metadata, order_by.field);
-            order_by.field_type = resolved.field_type;
-            order_by.items_type = resolved.items_type;
-        }
+        if (order_by.field_type == null) return error.UnknownField;
     }
 
     if (working.after) |*after| {

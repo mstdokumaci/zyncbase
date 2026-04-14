@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
+const query_parser = @import("query_parser.zig");
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
 pub const StorageEngine = storage_engine.StorageEngine;
@@ -167,6 +168,44 @@ pub fn setupEngineMultiTableWithDir(ctx: *EngineTestContext, allocator: Allocato
         .test_dir = try allocator.dupe(u8, test_dir),
     };
     try setupEngineMultiTableWithTestContext(ctx, allocator, tc, tables, options);
+}
+
+pub fn normalizeFilterForTable(
+    allocator: Allocator,
+    sm: *const SchemaManager,
+    table_name: []const u8,
+    filter: *query_parser.QueryFilter,
+) !void {
+    const table_md = sm.getTable(table_name) orelse return error.UnknownTable;
+    if (filter.conditions) |conds| {
+        try attachConditionsMetadataInPlace(table_md, @constCast(conds));
+    }
+    if (filter.or_conditions) |conds| {
+        try attachConditionsMetadataInPlace(table_md, @constCast(conds));
+    }
+    if (filter.order_by) |*order_by| {
+        try attachFieldMetadataInPlace(table_md, order_by);
+    }
+    try query_parser.normalizeFilterInPlace(allocator, table_md, filter);
+}
+
+fn attachConditionsMetadataInPlace(
+    table_md: TableMetadata,
+    conditions: []query_parser.Condition,
+) !void {
+    for (conditions) |*cond| {
+        try attachFieldMetadataInPlace(table_md, cond);
+    }
+}
+
+fn attachFieldMetadataInPlace(
+    table_md: TableMetadata,
+    target: anytype,
+) !void {
+    if (target.field_type != null) return;
+    const resolved = try query_parser.resolveFieldMetadata(table_md, target.field);
+    target.field_type = resolved.field_type;
+    target.items_type = resolved.items_type;
 }
 
 fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allocator, tc: TestContext, tables: []const Table, options: StorageEngine.Options) !void {
