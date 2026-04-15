@@ -167,16 +167,8 @@ pub const MigrationExecutor = struct {
         var common: std.ArrayList([]const u8) = .{};
         defer common.deinit(self.allocator);
 
-        const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-
         for (backup_cols) |bc| {
-            var in_new = false;
-            for (system_cols) |sc| {
-                if (std.mem.eql(u8, bc, sc)) {
-                    in_new = true;
-                    break;
-                }
-            }
+            var in_new = schema_manager.isSystemColumn(bc);
             if (!in_new) {
                 for (table.fields) |f| {
                     if (std.mem.eql(u8, bc, f.name)) {

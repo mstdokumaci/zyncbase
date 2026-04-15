@@ -262,11 +262,8 @@ pub fn resolveFieldMetadata(
         return .{ .field_type = f.sql_type, .items_type = f.items_type };
     }
     // Built-in columns
-    if (std.mem.eql(u8, field, "id") or std.mem.eql(u8, field, "namespace_id")) {
-        return .{ .field_type = .text, .items_type = null };
-    }
-    if (std.mem.eql(u8, field, "created_at") or std.mem.eql(u8, field, "updated_at")) {
-        return .{ .field_type = .integer, .items_type = null };
+    if (schema_manager.getSystemColumn(field)) |col| {
+        return .{ .field_type = col.sql_type, .items_type = col.items_type };
     }
     return error.UnknownField;
 }

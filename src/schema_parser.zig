@@ -24,6 +24,29 @@ pub const FieldType = enum {
 
 pub const OnDelete = enum { cascade, restrict, set_null };
 
+pub const built_in_columns = [_]Field{
+    .{ .name = "id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "namespace_id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "created_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
+    .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
+};
+
+pub const system_columns = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
+
+pub fn getSystemColumn(name: []const u8) ?Field {
+    for (built_in_columns) |col| {
+        if (std.mem.eql(u8, name, col.name)) return col;
+    }
+    return null;
+}
+
+pub fn isSystemColumn(name: []const u8) bool {
+    for (system_columns) |col| {
+        if (std.mem.eql(u8, name, col)) return true;
+    }
+    return false;
+}
+
 pub const Field = struct {
     name: []const u8, // flattened name, e.g. "address__city"
     sql_type: FieldType,
@@ -102,8 +125,7 @@ pub const TableMetadata = struct {
         }
 
         // Also cache system columns that aren't in the schema fields but appear in queries
-        const system_cols = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-        for (system_cols) |sc| {
+        for (system_columns) |sc| {
             if (!field_payloads.contains(sc)) {
                 const p = try msgpack.Payload.strToPayload(sc, allocator);
                 errdefer p.free(allocator);
@@ -314,6 +336,8 @@ pub const SchemaParser = struct {
             else
                 try self.allocator.dupe(u8, field_name);
             errdefer self.allocator.free(full_name);
+
+            if (isSystemColumn(full_name)) return error.ReservedFieldName;
 
             if (std.mem.eql(u8, type_str, "object")) {
                 const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;

@@ -15,15 +15,6 @@ pub const MigrationPlan = struct {
     is_destructive: bool,
 };
 
-const system_columns = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-
-fn isSystemColumn(name: []const u8) bool {
-    for (system_columns) |sc| {
-        if (std.mem.eql(u8, name, sc)) return true;
-    }
-    return false;
-}
-
 fn dbTypeToFieldType(db_type: []const u8) schema_manager.FieldType {
     if (std.mem.eql(u8, db_type, "TEXT")) return .text;
     if (std.mem.eql(u8, db_type, "INTEGER")) return .integer;
@@ -92,7 +83,7 @@ pub const MigrationDetector = struct {
                     if (row.dflt_value) |dv| self.allocator.free(dv);
                 }
                 table_exists = true;
-                if (!isSystemColumn(row.name)) {
+                if (!schema_manager.isSystemColumn(row.name)) {
                     const owned_name = try self.allocator.dupe(u8, row.name);
                     errdefer self.allocator.free(owned_name);
                     const owned_type = try self.allocator.dupe(u8, row.type);
@@ -113,7 +104,7 @@ pub const MigrationDetector = struct {
             }
 
             for (table.fields) |field| {
-                if (isSystemColumn(field.name)) continue;
+                if (schema_manager.isSystemColumn(field.name)) continue;
                 if (existing.get(field.name)) |db_type| {
                     if (!typesMatch(field.sql_type, db_type)) {
                         const owned_table = try self.allocator.dupe(u8, table.name);
