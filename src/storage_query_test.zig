@@ -149,15 +149,15 @@ test "StorageEngine: selectQuery pagination (after)" {
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .text = name }, .field_type = .text },
-        .{ .name = "age", .value = .{ .integer = age }, .field_type = .integer },
+        .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
+        .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
     };
     try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
-        .{ .name = "score", .value = .{ .integer = score }, .field_type = .integer },
+        .{ .name = "score", .value = .{ .scalar = .{ .integer = score } }, .field_type = .integer },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
@@ -221,7 +221,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .text = "Task 1" }, .field_type = .text },
+        .{ .name = "name", .value = .{ .scalar = .{ .text = "Task 1" } }, .field_type = .text },
         .{ .name = "tags", .value = tags_tv, .field_type = .array },
         .{ .name = "labels", .value = labels_tv, .field_type = .array },
     };
@@ -415,7 +415,7 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
     const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = .{ .text = data }, .field_type = .text },
+        .{ .name = "data", .value = .{ .scalar = .{ .text = data } }, .field_type = .text },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

@@ -84,30 +84,93 @@ pub const ManagedPayload = struct {
     }
 };
 
-/// A typed value for asynchronous storage binding.
-/// This structure holds the native SQLite-compatible representation of a field.
-/// Strings and blobs (for JSON arrays) are duplicated and owned by the WriteOp.
-pub const TypedValue = union(enum) {
+/// A simple scalar value for storage elements that don't support recursion or nil.
+pub const ScalarValue = union(enum) {
     integer: i64,
     real: f64,
     text: []const u8, // Owned
     boolean: bool,
+
+    pub fn clone(self: ScalarValue, allocator: Allocator) !ScalarValue {
+        return switch (self) {
+            .text => |s| .{ .text = try allocator.dupe(u8, s) },
+            else => self,
+        };
+    }
+
+    pub fn deinit(self: ScalarValue, allocator: Allocator) void {
+        switch (self) {
+            .text => |s| allocator.free(s),
+            else => {},
+        }
+    }
+
+    pub fn jsonStringify(self: ScalarValue, stream: anytype) !void {
+        switch (self) {
+            .integer => |v| try stream.write(v),
+            .real => |v| {
+                var buf: [64]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return error.WriteFailed;
+                if (std.mem.indexOfScalar(u8, s, '.') == null and std.mem.indexOfScalar(u8, s, 'e') == null and std.mem.indexOfScalar(u8, s, 'E') == null) {
+                    try stream.print("{s}.0", .{s});
+                } else {
+                    try stream.print("{s}", .{s});
+                }
+            },
+            .text => |s| try stream.write(s),
+            .boolean => |b| try stream.write(b),
+        }
+    }
+
+    /// Converts a msgpack.Payload to a ScalarValue based on the schema's FieldType.
+    pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !ScalarValue {
+        return switch (ft) {
+            .text => switch (value) {
+                .str => |s| ScalarValue{ .text = try allocator.dupe(u8, s.value()) },
+                else => StorageError.TypeMismatch,
+            },
+            .integer => ScalarValue{ .integer = try payloadAsInt(value) },
+            .real => ScalarValue{ .real = try payloadAsFloat(value) },
+            .boolean => ScalarValue{ .boolean = try payloadAsBool(value) },
+            else => StorageError.InvalidArrayElement,
+        };
+    }
+};
+
+/// A typed value for asynchronous storage binding.
+/// Supports scalars, nil, and flat arrays of scalars.
+pub const TypedValue = union(enum) {
+    scalar: ScalarValue,
+    array: []ScalarValue, // Owned slice of ScalarValues (no nesting, no nil)
     nil: void,
 
     pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
         return switch (self) {
-            .integer => |v| .{ .integer = v },
-            .real => |v| .{ .real = v },
-            .text => |s| .{ .text = try allocator.dupe(u8, s) },
-            .boolean => |b| .{ .boolean = b },
+            .scalar => |s| .{ .scalar = try s.clone(allocator) },
             .nil => .nil,
+            .array => |items| blk: {
+                const cloned = try allocator.alloc(ScalarValue, items.len);
+                var i: usize = 0;
+                errdefer {
+                    for (cloned[0..i]) |*item| item.deinit(allocator);
+                    allocator.free(cloned);
+                }
+                while (i < items.len) : (i += 1) {
+                    cloned[i] = try items[i].clone(allocator);
+                }
+                break :blk .{ .array = cloned };
+            },
         };
     }
 
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {
-            .text => |s| allocator.free(s),
-            else => {},
+            .scalar => |s| s.deinit(allocator),
+            .array => |items| {
+                for (items) |item| item.deinit(allocator);
+                allocator.free(items);
+            },
+            .nil => {},
         }
     }
 
@@ -124,30 +187,43 @@ pub const TypedValue = union(enum) {
         if (!match) return StorageError.TypeMismatch;
     }
 
-    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
     pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
         if (value == .nil) return .nil;
         return switch (ft) {
-            .text => switch (value) {
-                .str => |s| TypedValue{ .text = try allocator.dupe(u8, s.value()) },
-                else => StorageError.TypeMismatch,
+            .array => {
+                const arr = value.arr;
+                const items = try allocator.alloc(ScalarValue, arr.len);
+                var i: usize = 0;
+                errdefer {
+                    for (items[0..i]) |*item| item.deinit(allocator);
+                    allocator.free(items);
+                }
+                const it = items_type orelse return StorageError.TypeMismatch;
+                while (i < arr.len) : (i += 1) {
+                    if (arr[i] == .nil) return StorageError.NullNotAllowed;
+                    items[i] = try ScalarValue.fromPayload(allocator, it, arr[i]);
+                }
+                return TypedValue{ .array = items };
             },
-            .integer => TypedValue{ .integer = try payloadAsInt(value) },
-            .real => TypedValue{ .real = try payloadAsFloat(value) },
-            .boolean => TypedValue{ .boolean = try payloadAsBool(value) },
-            .array => TypedValue{ .text = try msgpack.payloadToJson(value, allocator, items_type orelse return StorageError.TypeMismatch) },
+            else => .{ .scalar = try ScalarValue.fromPayload(allocator, ft, value) },
         };
     }
 
     /// Binds the typed value to a SQLite statement query parameter slot.
-    pub fn bindSQLite(self: TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int) !void {
+    pub fn bindSQLite(self: TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
         const rc = switch (self) {
-            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
-            .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
-            .text => |s| sql.bindTextTransient(stmt, index, s),
-            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+            .scalar => |s| switch (s) {
+                .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
+                .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
+                .text => |s_val| sql.bindTextTransient(stmt, index, s_val),
+                .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+            },
             .nil => sqlite.c.sqlite3_bind_null(stmt, index),
+            .array => |items| blk: {
+                const json = try std.json.Stringify.valueAlloc(allocator, items, .{});
+                defer allocator.free(json);
+                break :blk sql.bindTextTransient(stmt, index, json);
+            },
         };
         if (rc != sqlite.c.SQLITE_OK) return classifyStepError(db);
     }

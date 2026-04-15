@@ -46,7 +46,7 @@ test "storage: error handling read-only filesystem" {
 
     // Try to set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -67,13 +67,13 @@ test "storage: error handling constraint violations" {
 
     // Set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value2" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value2" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -94,7 +94,7 @@ test "storage: error handling transaction rollback on error" {
 
     try storage.beginTransaction();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.rollbackTransaction();
@@ -113,7 +113,7 @@ test "storage: error handling concurrent access safety" {
     const storage = &ctx.engine;
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value1" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -143,7 +143,7 @@ test "storage: error handling empty paths" {
     const storage = &ctx.engine;
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = "value" }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value" } }, .field_type = .text }};
         try storage.insertOrReplace("data_table", "empty", "", &cols);
     }
     try storage.flushPendingWrites();
@@ -165,7 +165,7 @@ test "storage: error handling large values" {
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .text = large_value }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = large_value } }, .field_type = .text }};
         try storage.insertOrReplace("test", "large_key", "test", &cols);
     }
     try storage.flushPendingWrites();

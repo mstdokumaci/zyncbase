@@ -474,7 +474,7 @@ pub fn executeUpsert(
     bind_idx += 1;
 
     for (op.values) |val| {
-        try val.bindSQLite(conn, stmt, bind_idx);
+        try val.bindSQLite(conn, stmt, bind_idx, allocator);
         bind_idx += 1;
     }
 
