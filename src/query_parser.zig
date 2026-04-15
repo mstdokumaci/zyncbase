@@ -23,6 +23,8 @@ pub const Condition = struct {
     field: []const u8,
     op: Operator,
     value: ?msgpack.Payload,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -36,6 +38,8 @@ pub const Condition = struct {
             .field = field,
             .op = self.op,
             .value = if (self.value) |v| try v.deepClone(allocator) else null,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
         };
     }
 };
@@ -43,6 +47,8 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field: []const u8,
     desc: bool,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -52,6 +58,8 @@ pub const SortDescriptor = struct {
         return .{
             .field = try allocator.dupe(u8, self.field),
             .desc = self.desc,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
         };
     }
 };
@@ -239,6 +247,30 @@ pub fn parseQueryFilter(
     };
 }
 
+pub const ResolvedField = struct {
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
+};
+
+/// Resolves the metadata (FieldType and items_type) for a given field.
+/// Handles both schema-defined fields and built-in system columns.
+pub fn resolveFieldMetadata(
+    table_metadata: schema_manager.TableMetadata,
+    field: []const u8,
+) ParserError!ResolvedField {
+    if (table_metadata.getField(field)) |f| {
+        return .{ .field_type = f.sql_type, .items_type = f.items_type };
+    }
+    // Built-in columns
+    if (std.mem.eql(u8, field, "id") or std.mem.eql(u8, field, "namespace_id")) {
+        return .{ .field_type = .text, .items_type = null };
+    }
+    if (std.mem.eql(u8, field, "created_at") or std.mem.eql(u8, field, "updated_at")) {
+        return .{ .field_type = .integer, .items_type = null };
+    }
+    return error.UnknownField;
+}
+
 fn parseConditions(
     allocator: std.mem.Allocator,
     table_metadata: schema_manager.TableMetadata,
@@ -271,18 +303,7 @@ fn parseCondition(
 
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
-
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidOperatorCode;
     const op_code = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -302,6 +323,8 @@ fn parseCondition(
         .field = try allocator.dupe(u8, field),
         .op = op,
         .value = value,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
 }
 
@@ -316,18 +339,7 @@ fn parseSortDescriptor(
 
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
-
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidSortFormat;
     const desc_val = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -335,5 +347,7 @@ fn parseSortDescriptor(
     return SortDescriptor{
         .field = try allocator.dupe(u8, field),
         .desc = desc_val == 1,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
 }

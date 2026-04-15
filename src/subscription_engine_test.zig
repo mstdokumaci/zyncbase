@@ -14,7 +14,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     defer cond_val.free(allocator);
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = cond_val },
+            .{ .field = "status", .op = .eq, .value = cond_val, .field_type = .text, .items_type = null },
         },
     };
 
@@ -51,7 +51,7 @@ test "SubscriptionEngine: group sharing" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18) },
+            .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18), .field_type = .integer, .items_type = null },
         },
     };
 
@@ -72,7 +72,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "x", .op = .isNotNull, .value = null },
+            .{ .field = "x", .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
         },
     };
 
@@ -91,7 +91,7 @@ test "SubscriptionEngine: operator matching" {
     defer cond_val.free(allocator);
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = cond_val },
+            .{ .field = "name", .op = .startsWith, .value = cond_val, .field_type = .text, .items_type = null },
         },
     };
 
@@ -116,7 +116,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer val1.free(allocator);
     const filter1 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1 },
+            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
         },
     };
 
@@ -124,7 +124,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer val2.free(allocator);
     const filter2 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val2 },
+            .{ .field = "status", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
         },
     };
 
@@ -176,19 +176,19 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     const filter_starts_with = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = val },
+            .{ .field = "name", .op = .startsWith, .value = val, .field_type = .text, .items_type = null },
         },
     };
 
     const filter_ends_with = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .endsWith, .value = val },
+            .{ .field = "name", .op = .endsWith, .value = val, .field_type = .text, .items_type = null },
         },
     };
 
     const filter_contains = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .contains, .value = val },
+            .{ .field = "name", .op = .contains, .value = val, .field_type = .text, .items_type = null },
         },
     };
 
@@ -233,16 +233,16 @@ test "SubscriptionEngine: group sharing with different condition order" {
     // Filter 1: status=A, type=B
     const filter1 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1 },
-            .{ .field = "type", .op = .eq, .value = val2 },
+            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+            .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
         },
     };
 
     // Filter 2: type=B, status=A (different order)
     const filter2 = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "type", .op = .eq, .value = val2 },
-            .{ .field = "status", .op = .eq, .value = val1 },
+            .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
         },
     };
 
@@ -267,7 +267,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .in, .value = in_val },
+            .{ .field = "role", .op = .in, .value = in_val, .field_type = .text, .items_type = null },
         },
     };
 
@@ -302,7 +302,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     const filter = query_parser.QueryFilter{
         .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .notIn, .value = not_in_val },
+            .{ .field = "role", .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
         },
     };
 

@@ -36,6 +36,8 @@ test "StorageEngine: selectQuery basic equality" {
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
         .value = try msgpack.Payload.strToPayload("Bob", allocator),
+        .field_type = .text,
+        .items_type = null,
     };
     filter.conditions = conds;
 
@@ -74,16 +76,22 @@ test "StorageEngine: selectQuery with OR and ordering" {
         .field = try allocator.dupe(u8, "age"),
         .op = .lt,
         .value = msgpack.Payload.intToPayload(30),
+        .field_type = .integer,
+        .items_type = null,
     };
     or_conds[1] = .{
         .field = try allocator.dupe(u8, "age"),
         .op = .gt,
         .value = msgpack.Payload.intToPayload(30),
+        .field_type = .integer,
+        .items_type = null,
     };
     filter.or_conditions = or_conds;
     filter.order_by = .{
         .field = try allocator.dupe(u8, "age"),
         .desc = true,
+        .field_type = .integer,
+        .items_type = null,
     };
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
@@ -118,7 +126,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter1 = query_parser.QueryFilter{};
     defer filter1.deinit(allocator);
     filter1.limit = 2;
-    filter1.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false };
+    filter1.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false, .field_type = .integer, .items_type = null };
 
     var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
     defer managed1.deinit();
@@ -131,7 +139,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter2 = query_parser.QueryFilter{};
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false };
+    filter2.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false, .field_type = .integer, .items_type = null };
     filter2.after = query_parser.Cursor{
         .sort_value = msgpack.Payload.intToPayload(100),
         .id = try allocator.dupe(u8, "id2"),
@@ -235,6 +243,8 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
         .value = try msgpack.Payload.strToPayload("Task 1", allocator),
+        .field_type = .text,
+        .items_type = null,
     };
     filter.conditions = conds;
 
@@ -284,6 +294,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
             .value = try msgpack.Payload.strToPayload("p%l", allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
@@ -302,6 +314,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
             .value = try msgpack.Payload.strToPayload("p_l", allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
@@ -320,6 +334,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .startsWith,
             .value = try msgpack.Payload.strToPayload("ap_", allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
@@ -338,6 +354,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .endsWith,
             .value = try msgpack.Payload.strToPayload("%le", allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
@@ -356,6 +374,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
             .value = try msgpack.Payload.strToPayload("\\", allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
@@ -382,6 +402,8 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
             .value = try msgpack.Payload.strToPayload(malicious, allocator),
+            .field_type = .text,
+            .items_type = null,
         };
         filter.conditions = conds;
 

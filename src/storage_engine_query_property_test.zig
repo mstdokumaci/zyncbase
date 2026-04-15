@@ -95,9 +95,20 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     // Random OrderBy
     if (random.boolean()) {
         const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
+        const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
+        const field_name = fields[field_idx];
+        const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name") or std.mem.eql(u8, field_name, "id"))
+            .text
+        else if (std.mem.eql(u8, field_name, "score"))
+            .real
+        else
+            .integer;
+
         filter.order_by = .{
-            .field = try allocator.dupe(u8, fields[random.intRangeAtMost(usize, 0, fields.len - 1)]),
+            .field = try allocator.dupe(u8, field_name),
             .desc = random.boolean(),
+            .field_type = ft,
+            .items_type = null,
         };
     }
 
@@ -131,9 +142,13 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
         }
     }
 
+    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
+
     return .{
         .field = try allocator.dupe(u8, field),
         .op = op,
         .value = value,
+        .field_type = ft,
+        .items_type = null,
     };
 }

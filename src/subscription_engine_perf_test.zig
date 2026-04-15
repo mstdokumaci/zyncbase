@@ -20,7 +20,7 @@ test "SubscriptionEngine: handleRowChange performance" {
 
         const filter = query_parser.QueryFilter{
             .conditions = &[_]query_parser.Condition{
-                .{ .field = try allocator.dupe(u8, field_name), .op = .eq, .value = msgpack.Payload.intToPayload(@as(i64, @intCast(i % 5))) },
+                .{ .field = try allocator.dupe(u8, field_name), .op = .eq, .value = msgpack.Payload.intToPayload(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
             },
         };
         // Note: we'll leak strings in filters if we don't clean them up,

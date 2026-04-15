@@ -46,6 +46,8 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         .field = try allocator.dupe(u8, "val"),
         .op = .eq,
         .value = try val_to_match.deepClone(allocator),
+        .field_type = .text,
+        .items_type = null,
     };
 
     const filter = query_parser.QueryFilter{
