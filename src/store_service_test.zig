@@ -299,10 +299,10 @@ test "StoreService: query - basic search" {
     defer app.deinit();
 
     // Seed data
-    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .text = "Alice" }, .field_type = .text }};
+    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .scalar = .{ .text = "Alice" } }, .field_type = .text }};
     try app.storage_engine.insertOrReplace("users", "user-1", "ns", &cols_1);
 
-    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .text = "Bob" }, .field_type = .text }};
+    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = .{ .scalar = .{ .text = "Bob" } }, .field_type = .text }};
     try app.storage_engine.insertOrReplace("users", "user-2", "ns", &cols_2);
     try app.storage_engine.flushPendingWrites();
 
@@ -338,7 +338,7 @@ test "StoreService: query - orderBy and limit" {
 
     const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
     for (tasks, 0..) |t, i| {
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = .{ .text = t }, .field_type = .text }};
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = .{ .scalar = .{ .text = t } }, .field_type = .text }};
         const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
         defer allocator.free(id);
         try app.storage_engine.insertOrReplace("tasks", id, "ns", &cols);
@@ -408,7 +408,7 @@ test "StoreService: queryWithCursor - pagination" {
     while (i < 5) : (i += 1) {
         const str = try std.fmt.allocPrint(allocator, "item-{}", .{i});
         defer allocator.free(str);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .text = str }, .field_type = .text }};
+        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = str } }, .field_type = .text }};
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
         try app.storage_engine.insertOrReplace("data", id, "ns", &cols);

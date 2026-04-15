@@ -67,7 +67,7 @@ pub fn buildSelectQuery(
     try sql_buf.appendSlice(allocator, " WHERE namespace_id = ?");
     const ns_val = try allocator.dupe(u8, namespace);
     errdefer allocator.free(ns_val);
-    try values.append(allocator, TypedValue{ .text = ns_val });
+    try values.append(allocator, TypedValue{ .scalar = .{ .text = ns_val } });
 
     const conds = filter.conditions orelse @as([]const query_parser.Condition, &.{});
     const or_conds = filter.or_conditions orelse @as([]const query_parser.Condition, &.{});
@@ -125,7 +125,7 @@ pub fn buildSelectQuery(
             if (std.mem.eql(u8, sql_field, "id")) {
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
-                try values.append(allocator, TypedValue{ .text = ci });
+                try values.append(allocator, TypedValue{ .scalar = .{ .text = ci } });
             } else {
                 const sv = try TypedValue.fromPayload(allocator, filter.order_by.field_type, filter.order_by.items_type, cursor.sort_value);
                 errdefer sv.deinit(allocator);
@@ -133,7 +133,7 @@ pub fn buildSelectQuery(
 
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
-                try values.append(allocator, TypedValue{ .text = ci });
+                try values.append(allocator, TypedValue{ .scalar = .{ .text = ci } });
             }
         }
 
@@ -316,7 +316,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, raw_str);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .text = escaped });
+            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -327,7 +327,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, raw_str);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .text = escaped });
+            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
         },
         .endsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -338,7 +338,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, raw_str);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .text = escaped });
+            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
         },
         .isNull => try sql_buf.appendSlice(allocator, " IS NULL"),
         .isNotNull => try sql_buf.appendSlice(allocator, " IS NOT NULL"),
@@ -438,7 +438,7 @@ pub fn execQuery(
     sort_field: []const u8,
 ) !ExecQueryResult {
     for (values, 0..) |v, i| {
-        try v.bindSQLite(db, stmt, @intCast(i + 1));
+        try v.bindSQLite(db, stmt, @intCast(i + 1), allocator);
     }
 
     var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;

@@ -60,9 +60,9 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
         const score = random.float(f64) * 1000.0;
 
         const cols = [_]ColumnValue{
-            .{ .name = "name", .value = .{ .text = name }, .field_type = .text },
-            .{ .name = "age", .value = .{ .integer = age }, .field_type = .integer },
-            .{ .name = "score", .value = .{ .real = score }, .field_type = .real },
+            .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
+            .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
+            .{ .name = "score", .value = .{ .scalar = .{ .real = score } }, .field_type = .real },
         };
         try engine.insertOrReplace("entities", id, "ns1", &cols);
     }
