@@ -137,7 +137,7 @@ test "schema_parser: parse/print round-trip" {
 
     const field_types = [_][]const u8{ "string", "integer", "number", "boolean", "array" };
     const table_names = [_][]const u8{ "users", "posts", "comments", "tags", "orders" };
-    const field_names = [_][]const u8{ "id", "name", "value", "count", "active" };
+    const field_names = [_][]const u8{ "uid", "name", "value", "count", "active" };
 
     var iter: usize = 0;
     while (iter < 100) : (iter += 1) {

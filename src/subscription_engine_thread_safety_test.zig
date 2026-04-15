@@ -3,6 +3,7 @@ const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
+const qth = @import("query_parser_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 
 test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
@@ -19,19 +20,16 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
 
     const run_subscribe = struct {
         fn run(engine_ptr: *SubscriptionEngine, start_id: u32, sub_count: u32, alloc: std.mem.Allocator) void {
-            _ = alloc;
-            const filter = query_parser.QueryFilter{
-                .conditions = &[_]query_parser.Condition{
-                    .{ .field = "status", .op = .eq, .value = msgpack.Payload.boolToPayload(true) },
-                },
-            };
+            const filter = qth.makeFilterWithConditions(alloc, &[_]query_parser.Condition{
+                .{ .field = "status", .op = .eq, .value = msgpack.Payload.boolToPayload(true), .field_type = .boolean, .items_type = null },
+            }) catch @panic("OOM");
+            defer filter.deinit(alloc);
 
             var i: u32 = 0;
             while (i < sub_count) : (i += 1) {
                 const conn_id = start_id + i;
                 _ = engine_ptr.subscribe("ns", "coll", filter, conn_id, 1) catch @panic("subscribe failed");
             }
-            _ = alloc;
         }
     }.run;
 
@@ -83,11 +81,10 @@ test "SubscriptionEngine: concurrent unsubscribe" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "active", .op = .eq, .value = msgpack.Payload.boolToPayload(true) },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "active", .op = .eq, .value = msgpack.Payload.boolToPayload(true), .field_type = .boolean, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     const count = 400;
     for (0..count) |i| {

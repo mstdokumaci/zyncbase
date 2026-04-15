@@ -7,20 +7,13 @@ const query_parser = @import("query_parser.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 
-fn isBuiltInField(name: []const u8) bool {
-    return std.mem.eql(u8, name, "id") or
-        std.mem.eql(u8, name, "namespace_id") or
-        std.mem.eql(u8, name, "created_at") or
-        std.mem.eql(u8, name, "updated_at");
-}
-
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
 fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
     // Must have: exactly 1 AND condition, no OR, no order, no cursor
     const conds = filter.conditions orelse return null;
     if (conds.len != 1) return null;
     if (filter.or_conditions != null) return null;
-    if (filter.order_by != null) return null;
+    if (!std.mem.eql(u8, filter.order_by.field, "id") or filter.order_by.desc) return null;
     if (filter.after != null) return null;
 
     const cond = conds[0];
@@ -40,7 +33,7 @@ pub fn validateFieldWrite(
     field_name: []const u8,
     value: msgpack.Payload,
 ) !schema_manager.Field {
-    if (isBuiltInField(field_name)) return StorageError.ImmutableField;
+    if (schema_manager.isSystemColumn(field_name)) return StorageError.ImmutableField;
 
     const field = tbl_md.getField(field_name) orelse return StorageError.UnknownField;
 

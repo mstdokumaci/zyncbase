@@ -23,6 +23,8 @@ pub const Condition = struct {
     field: []const u8,
     op: Operator,
     value: ?msgpack.Payload,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -36,6 +38,8 @@ pub const Condition = struct {
             .field = field,
             .op = self.op,
             .value = if (self.value) |v| try v.deepClone(allocator) else null,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
         };
     }
 };
@@ -43,6 +47,8 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field: []const u8,
     desc: bool,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
@@ -52,6 +58,8 @@ pub const SortDescriptor = struct {
         return .{
             .field = try allocator.dupe(u8, self.field),
             .desc = self.desc,
+            .field_type = self.field_type,
+            .items_type = self.items_type,
         };
     }
 };
@@ -78,7 +86,7 @@ pub const Cursor = struct {
 pub const QueryFilter = struct {
     conditions: ?[]const Condition = null,
     or_conditions: ?[]const Condition = null,
-    order_by: ?SortDescriptor = null,
+    order_by: SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
 
@@ -91,7 +99,7 @@ pub const QueryFilter = struct {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (self.order_by) |sb| sb.deinit(allocator);
+        self.order_by.deinit(allocator);
         if (self.after) |a| a.deinit(allocator);
     }
 
@@ -113,9 +121,7 @@ pub const QueryFilter = struct {
             }
             copy.or_conditions = new_or;
         }
-        if (self.order_by) |ob| {
-            copy.order_by = try ob.clone(allocator);
-        }
+        copy.order_by = try self.order_by.clone(allocator);
         if (self.after) |a| {
             copy.after = try a.clone(allocator);
         }
@@ -178,7 +184,13 @@ pub fn parseQueryFilter(
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
-    var order_by: ?SortDescriptor = null;
+    const resolved_id = try resolveFieldMetadata(table_metadata, "id");
+    var order_by: SortDescriptor = .{
+        .field = try allocator.dupe(u8, "id"),
+        .desc = false,
+        .field_type = resolved_id.field_type,
+        .items_type = resolved_id.items_type,
+    };
     var limit: ?u32 = null;
     var after: ?Cursor = null;
 
@@ -191,7 +203,7 @@ pub fn parseQueryFilter(
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (order_by) |sb| sb.deinit(allocator);
+        order_by.deinit(allocator);
         if (after) |a| a.deinit(allocator);
     }
 
@@ -202,20 +214,23 @@ pub fn parseQueryFilter(
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
+            const new_conds = try parseConditions(allocator, table_metadata, value);
             if (conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            conditions = try parseConditions(allocator, table_metadata, value);
+            conditions = new_conds;
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
+            const new_or = try parseConditions(allocator, table_metadata, value);
             if (or_conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            or_conditions = try parseConditions(allocator, table_metadata, value);
+            or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            if (order_by) |old| old.deinit(allocator);
-            order_by = try parseSortDescriptor(allocator, table_metadata, value);
+            const new_order_by = try parseSortDescriptor(allocator, table_metadata, value);
+            order_by.deinit(allocator);
+            order_by = new_order_by;
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
                 limit = @intCast(value.uint);
@@ -225,8 +240,9 @@ pub fn parseQueryFilter(
             if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
+            const new_after = try parseCursorToken(allocator, value.str.value());
             if (after) |old| old.deinit(allocator);
-            after = try parseCursorToken(allocator, value.str.value());
+            after = new_after;
         }
     }
 
@@ -237,6 +253,27 @@ pub fn parseQueryFilter(
         .limit = limit,
         .after = after,
     };
+}
+
+pub const ResolvedField = struct {
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
+};
+
+/// Resolves the metadata (FieldType and items_type) for a given field.
+/// Handles both schema-defined fields and built-in system columns.
+pub fn resolveFieldMetadata(
+    table_metadata: schema_manager.TableMetadata,
+    field: []const u8,
+) ParserError!ResolvedField {
+    if (table_metadata.getField(field)) |f| {
+        return .{ .field_type = f.sql_type, .items_type = f.items_type };
+    }
+    // Built-in columns
+    if (schema_manager.getSystemColumn(field)) |col| {
+        return .{ .field_type = col.sql_type, .items_type = col.items_type };
+    }
+    return error.UnknownField;
 }
 
 fn parseConditions(
@@ -271,18 +308,7 @@ fn parseCondition(
 
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
-
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidOperatorCode;
     const op_code = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -302,6 +328,8 @@ fn parseCondition(
         .field = try allocator.dupe(u8, field),
         .op = op,
         .value = value,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
 }
 
@@ -316,18 +344,7 @@ fn parseSortDescriptor(
 
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
-
-    // Validate field name exists in the schema
-    if (table_metadata.getField(field) == null) {
-        // Check for built-in fields
-        if (!std.mem.eql(u8, field, "id") and
-            !std.mem.eql(u8, field, "namespace_id") and
-            !std.mem.eql(u8, field, "created_at") and
-            !std.mem.eql(u8, field, "updated_at"))
-        {
-            return error.UnknownField;
-        }
-    }
+    const resolved = try resolveFieldMetadata(table_metadata, field);
 
     if (arr[1] != .uint and arr[1] != .int) return error.InvalidSortFormat;
     const desc_val = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
@@ -335,5 +352,7 @@ fn parseSortDescriptor(
     return SortDescriptor{
         .field = try allocator.dupe(u8, field),
         .desc = desc_val == 1,
+        .field_type = resolved.field_type,
+        .items_type = resolved.items_type,
     };
 }

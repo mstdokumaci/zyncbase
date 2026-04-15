@@ -2,6 +2,7 @@ const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
+const schema_manager = @import("schema_manager.zig");
 const testing = std.testing;
 
 test "basic query filter parsing" {
@@ -31,6 +32,7 @@ test "basic query filter parsing" {
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "age", "status" },
+        .types = &[_]schema_manager.FieldType{ .integer, .text },
     }});
     defer sm.deinit();
 
@@ -41,10 +43,12 @@ test "basic query filter parsing" {
     try testing.expectEqualStrings("age", filter.conditions.?[0].field);
     try testing.expectEqual(query_parser.Operator.gte, filter.conditions.?[0].op);
     try testing.expectEqual(@as(u64, 18), filter.conditions.?[0].value.?.uint);
+    try testing.expectEqual(schema_manager.FieldType.integer, filter.conditions.?[0].field_type);
 
     try testing.expectEqualStrings("status", filter.conditions.?[1].field);
     try testing.expectEqual(query_parser.Operator.eq, filter.conditions.?[1].op);
     try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.str.value());
+    try testing.expectEqual(schema_manager.FieldType.text, filter.conditions.?[1].field_type);
 
     try testing.expectEqual(@as(u32, 50), filter.limit.?);
 }
@@ -105,16 +109,16 @@ test "query with orderBy and after" {
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
-        .fields = &[_][]const u8{ "created_at", "val" },
+        .fields = &[_][]const u8{"val"},
     }});
     defer sm.deinit();
 
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
-    try testing.expect(filter.order_by != null);
-    try testing.expectEqualStrings("created_at", filter.order_by.?.field);
-    try testing.expectEqual(true, filter.order_by.?.desc);
+    try testing.expectEqualStrings("created_at", filter.order_by.field);
+    try testing.expectEqual(true, filter.order_by.desc);
+    try testing.expectEqual(schema_manager.FieldType.integer, filter.order_by.field_type);
     try testing.expectEqualStrings("cursor_token", filter.after.?.id);
 }
 

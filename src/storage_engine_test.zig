@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const qth = @import("query_parser_test_helpers.zig");
 
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
@@ -171,7 +172,9 @@ test "StorageEngine: query collection" {
     try engine.insertOrReplace("users", "2", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Query for collection using empty filter
-    var managed = try engine.selectQuery(allocator, "users", "test_namespace", .{});
+    const filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+    var managed = try engine.selectQuery(allocator, "users", "test_namespace", filter);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 2), managed.value.?.arr.len);
 }

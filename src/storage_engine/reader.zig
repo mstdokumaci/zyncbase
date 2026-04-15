@@ -10,8 +10,6 @@ const sql = @import("sql.zig");
 const TypedValue = types.TypedValue;
 const ColumnContext = types.ColumnContext;
 
-// ─── SQL Builders ─────────────────────────────────────────────────────────
-
 pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -21,26 +19,6 @@ pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manag
     try sql_buf.appendSlice(allocator, " FROM ");
     try sql_buf.appendSlice(allocator, table_metadata.table.name);
     try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=?");
-    return sql_buf.toOwnedSlice(allocator);
-}
-
-pub fn buildSelectFieldSql(allocator: Allocator, table_name: []const u8, field_name: []const u8, field_ctx: ?schema_manager.Field) ![]const u8 {
-    if (field_ctx != null and field_ctx.?.sql_type == .array) {
-        return try std.fmt.allocPrint(allocator, "SELECT json({s}) AS {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, field_name, table_name });
-    } else {
-        return try std.fmt.allocPrint(allocator, "SELECT {s} FROM {s} WHERE id=? AND namespace_id=?", .{ field_name, table_name });
-    }
-}
-
-pub fn buildSelectCollectionSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
-    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer sql_buf.deinit(allocator);
-
-    try sql_buf.appendSlice(allocator, "SELECT ");
-    try sql.appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
-    try sql_buf.appendSlice(allocator, " FROM ");
-    try sql_buf.appendSlice(allocator, table_metadata.table.name);
-    try sql_buf.appendSlice(allocator, " WHERE namespace_id=?");
     return sql_buf.toOwnedSlice(allocator);
 }
 
@@ -105,7 +83,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -117,7 +95,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (or_conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -127,15 +105,12 @@ pub fn buildSelectQuery(
         if (filter.after) |cursor| {
             if (added_where) try sql_buf.appendSlice(allocator, " AND ");
 
-            const sort_field = if (filter.order_by) |o| o.field else "id";
-            const is_desc = if (filter.order_by) |o| o.desc else false;
-            const op = if (is_desc) "<" else ">";
-
-            const sql_field = sort_field;
+            const sql_field = filter.order_by.field;
+            const op = if (filter.order_by.desc) "<" else ">";
 
             // SQLite row-value comparison (requires SQLite 3.15.0+):
-            // (sort_field, id) > (?, ?)
-            if (std.mem.eql(u8, sort_field, "id")) {
+            // (sql_field, id) > (?, ?)
+            if (std.mem.eql(u8, sql_field, "id")) {
                 try sql_buf.appendSlice(allocator, "id ");
                 try sql_buf.appendSlice(allocator, op);
                 try sql_buf.appendSlice(allocator, " ?");
@@ -147,27 +122,12 @@ pub fn buildSelectQuery(
                 try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
-            // Find sort field type for correct binding
-            var sort_ft: schema_manager.FieldType = .text;
-            var sort_it: ?schema_manager.FieldType = null;
-            for (table_metadata.table.fields) |f| {
-                if (std.mem.eql(u8, f.name, sql_field)) {
-                    sort_ft = f.sql_type;
-                    sort_it = f.items_type;
-                    break;
-                }
-            }
-            if (std.mem.eql(u8, sort_field, "id")) sort_ft = .text;
-            if (std.mem.eql(u8, sort_field, "namespace_id")) sort_ft = .text;
-            if (std.mem.eql(u8, sort_field, "created_at")) sort_ft = .integer;
-            if (std.mem.eql(u8, sort_field, "updated_at")) sort_ft = .integer;
-
-            if (std.mem.eql(u8, sort_field, "id")) {
+            if (std.mem.eql(u8, sql_field, "id")) {
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv = try TypedValue.fromPayload(allocator, sort_ft, sort_it, cursor.sort_value);
+                const sv = try TypedValue.fromPayload(allocator, filter.order_by.field_type, filter.order_by.items_type, cursor.sort_value);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
 
@@ -182,15 +142,12 @@ pub fn buildSelectQuery(
 
     // 3.. ORDER BY
     try sql_buf.appendSlice(allocator, " ORDER BY ");
-    if (filter.order_by) |o| {
-        const sql_field = o.field;
-        try sql_buf.appendSlice(allocator, sql_field);
-        try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
-        try sql_buf.appendSlice(allocator, ", id ");
-        try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
-    } else {
-        try sql_buf.appendSlice(allocator, "id ASC");
-    }
+    const o = filter.order_by;
+    const sql_field = o.field;
+    try sql_buf.appendSlice(allocator, sql_field);
+    try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
+    try sql_buf.appendSlice(allocator, ", id ");
+    try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
@@ -208,8 +165,6 @@ pub fn buildSelectQuery(
 pub fn getCacheKey(allocator: Allocator, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
     return try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table, namespace, id });
 }
-
-// Error classification functions moved to types.zig
 
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
@@ -301,19 +256,11 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
-    table_metadata: schema_manager.TableMetadata,
     cond: query_parser.Condition,
 ) !void {
     const sql_field = cond.field;
-
-    const field = table_metadata.getField(sql_field);
-    var ft: schema_manager.FieldType = if (field) |f| f.sql_type else .text;
-    const it: ?schema_manager.FieldType = if (field) |f| f.items_type else null;
-
-    if (std.mem.eql(u8, cond.field, "id")) ft = .text;
-    if (std.mem.eql(u8, cond.field, "namespace_id")) ft = .text;
-    if (std.mem.eql(u8, cond.field, "created_at")) ft = .integer;
-    if (std.mem.eql(u8, cond.field, "updated_at")) ft = .integer;
+    const ft = cond.field_type;
+    const it = cond.items_type;
 
     try sql_buf.appendSlice(allocator, sql_field);
 
@@ -454,60 +401,6 @@ pub fn execSelectDocument(
     if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
     return try decodeRow(allocator, db, stmt, table_metadata);
-}
-
-pub fn execSelectScalar(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
-    id: []const u8,
-    namespace: []const u8,
-    field_ctx: ?schema_manager.Field,
-) !?msgpack.Payload {
-    if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-
-    const rc = sqlite.c.sqlite3_step(stmt);
-    if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
-
-    return try readColumnValue(allocator, db, stmt, 0, field_ctx);
-}
-
-pub fn execSelectCollection(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt: *sqlite.c.sqlite3_stmt,
-    namespace: []const u8,
-    table_metadata: schema_manager.TableMetadata,
-) !msgpack.Payload {
-    if (sql.bindTextTransient(stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-
-    var arr: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
-    errdefer {
-        for (arr.items) |item| item.free(allocator);
-        arr.deinit(allocator);
-    }
-
-    const col_contexts = try resolveAllColumnContexts(allocator, db, stmt, table_metadata);
-    defer allocator.free(col_contexts);
-
-    while (true) {
-        const rc = sqlite.c.sqlite3_step(stmt);
-        if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
-
-        var map = msgpack.Payload.mapPayload(allocator);
-        errdefer map.free(allocator);
-
-        for (col_contexts) |ctx| {
-            const val = try readColumnValue(allocator, db, stmt, ctx.index, ctx.field);
-            try map.mapPut(ctx.name, val);
-        }
-        try arr.append(allocator, map);
-    }
-
-    return msgpack.Payload{ .arr = try arr.toOwnedSlice(allocator) };
 }
 
 fn extractCursorTupleFromRow(
