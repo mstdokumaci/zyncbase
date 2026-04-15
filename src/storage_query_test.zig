@@ -7,6 +7,7 @@ const schema_manager = @import("schema_manager.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const qth = @import("query_parser_test_helpers.zig");
 
 test "StorageEngine: selectQuery basic equality" {
     const allocator = testing.allocator;
@@ -28,7 +29,7 @@ test "StorageEngine: selectQuery basic equality" {
     try engine.flushPendingWrites();
 
     // Query: name == "Bob"
-    var filter = query_parser.QueryFilter{};
+    var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
     var conds = try allocator.alloc(query_parser.Condition, 1);
@@ -68,7 +69,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try engine.flushPendingWrites();
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
-    var filter = query_parser.QueryFilter{};
+    var filter = try qth.makeFilter(allocator, "age", true, .integer, null);
     defer filter.deinit(allocator);
 
     var or_conds = try allocator.alloc(query_parser.Condition, 2);
@@ -87,12 +88,6 @@ test "StorageEngine: selectQuery with OR and ordering" {
         .items_type = null,
     };
     filter.or_conditions = or_conds;
-    filter.order_by = .{
-        .field = try allocator.dupe(u8, "age"),
-        .desc = true,
-        .field_type = .integer,
-        .items_type = null,
-    };
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
@@ -123,10 +118,9 @@ test "StorageEngine: selectQuery pagination (after)" {
     try engine.flushPendingWrites();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = query_parser.QueryFilter{};
+    var filter1 = try qth.makeFilter(allocator, "score", false, .integer, null);
     defer filter1.deinit(allocator);
     filter1.limit = 2;
-    filter1.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false, .field_type = .integer, .items_type = null };
 
     var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
     defer managed1.deinit();
@@ -136,10 +130,9 @@ test "StorageEngine: selectQuery pagination (after)" {
     try testing.expectEqualStrings("id2", try getMapStr(res1.arr[1], "id"));
 
     // Query 2: Same query but AFTER [100, "id2"]
-    var filter2 = query_parser.QueryFilter{};
+    var filter2 = try qth.makeFilter(allocator, "score", false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.order_by = .{ .field = try allocator.dupe(u8, "score"), .desc = false, .field_type = .integer, .items_type = null };
     filter2.after = query_parser.Cursor{
         .sort_value = msgpack.Payload.intToPayload(100),
         .id = try allocator.dupe(u8, "id2"),
@@ -235,7 +228,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
 
-    var filter = query_parser.QueryFilter{};
+    var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
     const conds = try allocator.alloc(query_parser.Condition, 1);
@@ -287,7 +280,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // 1. Contains '%' - should only match "app%le", not "apple"
     {
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
@@ -307,7 +300,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
     {
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
@@ -327,7 +320,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
     {
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
@@ -347,7 +340,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // 4. EndsWith '%le' - should only match "app%le"
     {
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
@@ -367,7 +360,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // 5. Contains '\' - should match "a\\le"
     {
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
@@ -391,7 +384,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         try seedDataInNs(allocator, engine, "5", "secret", "other_ns");
         try engine.flushPendingWrites();
 
-        var filter = query_parser.QueryFilter{};
+        var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
 

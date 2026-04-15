@@ -86,7 +86,7 @@ pub const Cursor = struct {
 pub const QueryFilter = struct {
     conditions: ?[]const Condition = null,
     or_conditions: ?[]const Condition = null,
-    order_by: ?SortDescriptor = null,
+    order_by: SortDescriptor,
     limit: ?u32 = null,
     after: ?Cursor = null,
 
@@ -99,7 +99,7 @@ pub const QueryFilter = struct {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (self.order_by) |sb| sb.deinit(allocator);
+        self.order_by.deinit(allocator);
         if (self.after) |a| a.deinit(allocator);
     }
 
@@ -121,9 +121,7 @@ pub const QueryFilter = struct {
             }
             copy.or_conditions = new_or;
         }
-        if (self.order_by) |ob| {
-            copy.order_by = try ob.clone(allocator);
-        }
+        copy.order_by = try self.order_by.clone(allocator);
         if (self.after) |a| {
             copy.after = try a.clone(allocator);
         }
@@ -186,7 +184,13 @@ pub fn parseQueryFilter(
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
-    var order_by: ?SortDescriptor = null;
+    const resolved_id = try resolveFieldMetadata(table_metadata, "id");
+    var order_by: SortDescriptor = .{
+        .field = try allocator.dupe(u8, "id"),
+        .desc = false,
+        .field_type = resolved_id.field_type,
+        .items_type = resolved_id.items_type,
+    };
     var limit: ?u32 = null;
     var after: ?Cursor = null;
 
@@ -199,7 +203,7 @@ pub fn parseQueryFilter(
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (order_by) |sb| sb.deinit(allocator);
+        order_by.deinit(allocator);
         if (after) |a| a.deinit(allocator);
     }
 
@@ -222,7 +226,7 @@ pub fn parseQueryFilter(
             }
             or_conditions = try parseConditions(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            if (order_by) |old| old.deinit(allocator);
+            order_by.deinit(allocator);
             order_by = try parseSortDescriptor(allocator, table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {

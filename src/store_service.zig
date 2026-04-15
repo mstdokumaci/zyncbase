@@ -13,7 +13,7 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
     const conds = filter.conditions orelse return null;
     if (conds.len != 1) return null;
     if (filter.or_conditions != null) return null;
-    if (filter.order_by != null) return null;
+    if (!std.mem.eql(u8, filter.order_by.field, "id") or filter.order_by.desc) return null;
     if (filter.after != null) return null;
 
     const cond = conds[0];

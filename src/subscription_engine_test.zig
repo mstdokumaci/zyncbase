@@ -3,6 +3,7 @@ const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
+const qth = @import("query_parser_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {
@@ -12,11 +13,10 @@ test "SubscriptionEngine: basic subscribe and match" {
 
     const cond_val = try msgpack.Payload.strToPayload("active", allocator);
     defer cond_val.free(allocator);
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = cond_val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "status", .op = .eq, .value = cond_val, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     // Subscribe
     _ = try engine.subscribe("default", "items", filter, 1, 100);
@@ -49,11 +49,10 @@ test "SubscriptionEngine: group sharing" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18), .field_type = .integer, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18), .field_type = .integer, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     // Two different subscribers for EXACTLY the same filter
     const first = try engine.subscribe("ns", "coll", filter, 1, 101);
@@ -70,11 +69,10 @@ test "SubscriptionEngine: unsubscribe clean up" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "x", .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "x", .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     _ = try engine.subscribe("n", "c", filter, 1, 1);
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
@@ -89,11 +87,10 @@ test "SubscriptionEngine: operator matching" {
 
     const cond_val = try msgpack.Payload.strToPayload("Al", allocator);
     defer cond_val.free(allocator);
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = cond_val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "name", .op = .startsWith, .value = cond_val, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     var row1 = msgpack.Payload.mapPayload(allocator);
     defer row1.free(allocator);
@@ -114,19 +111,17 @@ test "SubscriptionEngine: canonical filter key includes values" {
 
     const val1 = try msgpack.Payload.strToPayload("active", allocator);
     defer val1.free(allocator);
-    const filter1 = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+    });
+    defer filter1.deinit(allocator);
 
     const val2 = try msgpack.Payload.strToPayload("inactive", allocator);
     defer val2.free(allocator);
-    const filter2 = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "status", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
 
     // Subscribe with different values
     _ = try engine.subscribe("default", "items", filter1, 1, 101);
@@ -146,7 +141,8 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     const long_coll = "b" ** 150;
     // combined length (150 + 1 + 150 = 301) will be > 256 stack buffer
 
-    const filter = query_parser.QueryFilter{ .conditions = &.{} };
+    const filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
     _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
 
     var row = msgpack.Payload.mapPayload(allocator);
@@ -174,23 +170,20 @@ test "SubscriptionEngine: case-insensitive string matching" {
     const val = try msgpack.Payload.strToPayload("Al", allocator);
     defer val.free(allocator);
 
-    const filter_starts_with = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .startsWith, .value = val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter_starts_with = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "name", .op = .startsWith, .value = val, .field_type = .text, .items_type = null },
+    });
+    defer filter_starts_with.deinit(allocator);
 
-    const filter_ends_with = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .endsWith, .value = val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter_ends_with = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "name", .op = .endsWith, .value = val, .field_type = .text, .items_type = null },
+    });
+    defer filter_ends_with.deinit(allocator);
 
-    const filter_contains = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "name", .op = .contains, .value = val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter_contains = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "name", .op = .contains, .value = val, .field_type = .text, .items_type = null },
+    });
+    defer filter_contains.deinit(allocator);
 
     // Case-insensitive startsWith
     {
@@ -231,20 +224,18 @@ test "SubscriptionEngine: group sharing with different condition order" {
     defer val2.free(allocator);
 
     // Filter 1: status=A, type=B
-    const filter1 = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
-            .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+        .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+    });
+    defer filter1.deinit(allocator);
 
     // Filter 2: type=B, status=A (different order)
-    const filter2 = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
-            .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
 
     const first = try engine.subscribe("ns", "coll", filter1, 1, 101);
     const second = try engine.subscribe("ns", "coll", filter2, 2, 102);
@@ -265,11 +256,10 @@ test "SubscriptionEngine: in operator subscribe and match" {
     in_val.arr[1] = try msgpack.Payload.strToPayload("editor", allocator);
     defer in_val.free(allocator);
 
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .in, .value = in_val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .in, .value = in_val, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
@@ -300,11 +290,10 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     not_in_val.arr[1] = try msgpack.Payload.strToPayload("banned", allocator);
     defer not_in_val.free(allocator);
 
-    const filter = query_parser.QueryFilter{
-        .conditions = &[_]query_parser.Condition{
-            .{ .field = "role", .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
-        },
-    };
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
+    });
+    defer filter.deinit(allocator);
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 

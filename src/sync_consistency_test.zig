@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
+const qth = @import("query_parser_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 const sub_eng = @import("subscription_engine.zig");
 const cb = @import("change_buffer.zig");
@@ -50,9 +51,8 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         .items_type = null,
     };
 
-    const filter = query_parser.QueryFilter{
-        .conditions = conditions,
-    };
+    var filter = try qth.makeDefaultFilter(allocator);
+    filter.conditions = conditions;
     defer filter.deinit(allocator);
 
     _ = try sub_engine.subscribe("ns", "items", filter, 42, 101);

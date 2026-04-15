@@ -3,6 +3,7 @@ const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
+const qth = @import("query_parser_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 
 test "SubscriptionEngine: handleRowChange performance" {
@@ -18,23 +19,13 @@ test "SubscriptionEngine: handleRowChange performance" {
         var buf: [32]u8 = undefined;
         const field_name = try std.fmt.bufPrint(&buf, "field_{d}", .{i % 10});
 
-        const filter = query_parser.QueryFilter{
-            .conditions = &[_]query_parser.Condition{
-                .{ .field = try allocator.dupe(u8, field_name), .op = .eq, .value = msgpack.Payload.intToPayload(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
-            },
-        };
-        // Note: we'll leak strings in filters if we don't clean them up,
-        // but QueryFilter.deinit should handle it if we structured it right.
-        // Actually QueryFilter in query_parser.zig doesn't have a deinit that frees field names.
-        // I'll use constant strings for now or manually clean up.
+        const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+            .{ .field = field_name, .op = .eq, .value = msgpack.Payload.intToPayload(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
+        });
+        defer filter.deinit(allocator);
 
         for (0..subs_per_group) |j| {
             _ = try engine.subscribe("ns", "coll", filter, @as(u64, @intCast(i * 1000 + j)), 1);
-        }
-
-        // Clean up the filter we just subscribed (SubscriptionEngine clones it)
-        if (filter.conditions) |conds| {
-            allocator.free(conds[0].field);
         }
     }
 

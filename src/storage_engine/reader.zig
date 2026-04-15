@@ -105,8 +105,8 @@ pub fn buildSelectQuery(
         if (filter.after) |cursor| {
             if (added_where) try sql_buf.appendSlice(allocator, " AND ");
 
-            const sort_field = if (filter.order_by) |o| o.field else "id";
-            const is_desc = if (filter.order_by) |o| o.desc else false;
+            const sort_field = filter.order_by.field;
+            const is_desc = filter.order_by.desc;
             const op = if (is_desc) "<" else ">";
 
             const sql_field = sort_field;
@@ -125,9 +125,8 @@ pub fn buildSelectQuery(
                 try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
-            // Find sort field type for correct binding
-            const sort_ft = if (filter.order_by) |o| o.field_type else .text;
-            const sort_it = if (filter.order_by) |o| o.items_type else null;
+            const sort_ft = filter.order_by.field_type;
+            const sort_it = filter.order_by.items_type;
 
             if (std.mem.eql(u8, sort_field, "id")) {
                 const ci = try allocator.dupe(u8, cursor.id);
@@ -149,15 +148,12 @@ pub fn buildSelectQuery(
 
     // 3.. ORDER BY
     try sql_buf.appendSlice(allocator, " ORDER BY ");
-    if (filter.order_by) |o| {
-        const sql_field = o.field;
-        try sql_buf.appendSlice(allocator, sql_field);
-        try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
-        try sql_buf.appendSlice(allocator, ", id ");
-        try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
-    } else {
-        try sql_buf.appendSlice(allocator, "id ASC");
-    }
+    const o = filter.order_by;
+    const sql_field = o.field;
+    try sql_buf.appendSlice(allocator, sql_field);
+    try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
+    try sql_buf.appendSlice(allocator, ", id ");
+    try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {

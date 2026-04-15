@@ -566,7 +566,7 @@ pub const StorageEngine = struct {
         const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
         defer query_res.deinit(allocator);
 
-        const sort_field = if (filter.order_by) |o| o.field else "id";
+        const sort_field = filter.order_by.field;
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
         defer mstmt.release();
         const stmt = mstmt.stmt;

@@ -70,7 +70,24 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
 }
 
 fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query_parser.QueryFilter {
-    var filter = query_parser.QueryFilter{};
+    const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
+    const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
+    const field_name = fields[field_idx];
+    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name") or std.mem.eql(u8, field_name, "id"))
+        .text
+    else if (std.mem.eql(u8, field_name, "score"))
+        .real
+    else
+        .integer;
+
+    var filter = query_parser.QueryFilter{
+        .order_by = .{
+            .field = try allocator.dupe(u8, field_name),
+            .desc = random.boolean(),
+            .field_type = ft,
+            .items_type = null,
+        },
+    };
 
     // Random conditions
     const num_conds = random.intRangeAtMost(usize, 0, 3);
@@ -92,25 +109,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
         filter.or_conditions = or_conds;
     }
 
-    // Random OrderBy
-    if (random.boolean()) {
-        const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
-        const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
-        const field_name = fields[field_idx];
-        const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name") or std.mem.eql(u8, field_name, "id"))
-            .text
-        else if (std.mem.eql(u8, field_name, "score"))
-            .real
-        else
-            .integer;
-
-        filter.order_by = .{
-            .field = try allocator.dupe(u8, field_name),
-            .desc = random.boolean(),
-            .field_type = ft,
-            .items_type = null,
-        };
-    }
+    // Random Limit
 
     // Random Limit
     if (random.boolean()) {

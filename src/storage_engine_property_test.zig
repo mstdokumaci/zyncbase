@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
+const qth = @import("query_parser_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
 const ColumnValue = sth.ColumnValue;
 
@@ -508,12 +509,16 @@ test "storage: query is namespace-scoped" {
         try engine.flushPendingWrites();
 
         // Use selectQuery with an empty filter to verify collection scoping
-        var managed_a = try engine.selectQuery(allocator, "items", ns_a, .{});
+        const filter_a = try qth.makeDefaultFilter(allocator);
+        defer filter_a.deinit(allocator);
+        var managed_a = try engine.selectQuery(allocator, "items", ns_a, filter_a);
         defer managed_a.deinit();
         const coll_a = managed_a.value orelse return error.MissingCollection;
         try testing.expectEqual(count_a, coll_a.arr.len);
 
-        var managed_b = try engine.selectQuery(allocator, "items", ns_b, .{});
+        const filter_b = try qth.makeDefaultFilter(allocator);
+        defer filter_b.deinit(allocator);
+        var managed_b = try engine.selectQuery(allocator, "items", ns_b, filter_b);
         defer managed_b.deinit();
         const coll_b = managed_b.value orelse return error.MissingCollection;
         try testing.expectEqual(count_b, coll_b.arr.len);

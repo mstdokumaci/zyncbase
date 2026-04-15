@@ -361,7 +361,8 @@ pub const SubscriptionEngine = struct {
             defer allocator.free(s);
             try list.appendSlice(allocator, s);
         }
-        if (filter.order_by) |ob| {
+        {
+            const ob = filter.order_by;
             const s = try std.fmt.allocPrint(allocator, ":O:{s}:{}", .{ ob.field, ob.desc });
             defer allocator.free(s);
             try list.appendSlice(allocator, s);

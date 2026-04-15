@@ -116,10 +116,9 @@ test "query with orderBy and after" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
-    try testing.expect(filter.order_by != null);
-    try testing.expectEqualStrings("created_at", filter.order_by.?.field);
-    try testing.expectEqual(true, filter.order_by.?.desc);
-    try testing.expectEqual(schema_manager.FieldType.integer, filter.order_by.?.field_type);
+    try testing.expectEqualStrings("created_at", filter.order_by.field);
+    try testing.expectEqual(true, filter.order_by.desc);
+    try testing.expectEqual(schema_manager.FieldType.integer, filter.order_by.field_type);
     try testing.expectEqualStrings("cursor_token", filter.after.?.id);
 }
 
