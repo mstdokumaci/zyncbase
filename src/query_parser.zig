@@ -214,20 +214,23 @@ pub fn parseQueryFilter(
         const value = entry.value_ptr.*;
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
+            const new_conds = try parseConditions(allocator, table_metadata, value);
             if (conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            conditions = try parseConditions(allocator, table_metadata, value);
+            conditions = new_conds;
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
+            const new_or = try parseConditions(allocator, table_metadata, value);
             if (or_conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            or_conditions = try parseConditions(allocator, table_metadata, value);
+            or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
+            const new_order_by = try parseSortDescriptor(allocator, table_metadata, value);
             order_by.deinit(allocator);
-            order_by = try parseSortDescriptor(allocator, table_metadata, value);
+            order_by = new_order_by;
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
                 limit = @intCast(value.uint);
@@ -237,8 +240,9 @@ pub fn parseQueryFilter(
             if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
+            const new_after = try parseCursorToken(allocator, value.str.value());
             if (after) |old| old.deinit(allocator);
-            after = try parseCursorToken(allocator, value.str.value());
+            after = new_after;
         }
     }
 

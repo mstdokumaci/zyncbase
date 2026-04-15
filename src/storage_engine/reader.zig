@@ -105,15 +105,12 @@ pub fn buildSelectQuery(
         if (filter.after) |cursor| {
             if (added_where) try sql_buf.appendSlice(allocator, " AND ");
 
-            const sort_field = filter.order_by.field;
-            const is_desc = filter.order_by.desc;
-            const op = if (is_desc) "<" else ">";
-
-            const sql_field = sort_field;
+            const sql_field = filter.order_by.field;
+            const op = if (filter.order_by.desc) "<" else ">";
 
             // SQLite row-value comparison (requires SQLite 3.15.0+):
-            // (sort_field, id) > (?, ?)
-            if (std.mem.eql(u8, sort_field, "id")) {
+            // (sql_field, id) > (?, ?)
+            if (std.mem.eql(u8, sql_field, "id")) {
                 try sql_buf.appendSlice(allocator, "id ");
                 try sql_buf.appendSlice(allocator, op);
                 try sql_buf.appendSlice(allocator, " ?");
@@ -125,15 +122,12 @@ pub fn buildSelectQuery(
                 try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
-            const sort_ft = filter.order_by.field_type;
-            const sort_it = filter.order_by.items_type;
-
-            if (std.mem.eql(u8, sort_field, "id")) {
+            if (std.mem.eql(u8, sql_field, "id")) {
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .text = ci });
             } else {
-                const sv = try TypedValue.fromPayload(allocator, sort_ft, sort_it, cursor.sort_value);
+                const sv = try TypedValue.fromPayload(allocator, filter.order_by.field_type, filter.order_by.items_type, cursor.sort_value);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
 
