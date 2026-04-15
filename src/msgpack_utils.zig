@@ -136,45 +136,6 @@ pub fn decodeBase64(allocator: std.mem.Allocator, token: []const u8) !Payload {
     return decodeTrusted(allocator, &reader) catch return error.InvalidBase64Token;
 }
 
-/// Converts a Literal_Array Payload to a JSON array string.
-/// The elements are assumed to be of items_type (or nil).
-/// The caller owns the returned slice.
-pub fn payloadToJson(payload: Payload, allocator: std.mem.Allocator, items_type: FieldType) ![]const u8 {
-    const arr = payload.arr;
-    if (arr.len == 0) return try allocator.dupe(u8, "[]");
-
-    return switch (items_type) {
-        .text => payloadArrayToJson([]const u8, allocator, arr, extractStr),
-        .integer => payloadArrayToJson(i64, allocator, arr, extractInt),
-        .real => blk: {
-            // Manual loop for real to preserve .0 suffix for whole numbers as required by storage
-            var buf = std.ArrayListUnmanaged(u8).empty;
-            errdefer buf.deinit(allocator);
-            try buf.append(allocator, '[');
-            for (arr, 0..) |item, i| {
-                if (i > 0) try buf.appendSlice(allocator, ", ");
-                if (item == .nil) {
-                    try buf.appendSlice(allocator, "null");
-                } else if (item == .float) {
-                    const v = item.float;
-                    const s = try std.fmt.allocPrint(allocator, "{d}", .{v});
-                    defer allocator.free(s);
-                    try buf.appendSlice(allocator, s);
-                    if (std.mem.indexOfScalar(u8, s, '.') == null and std.mem.indexOfScalar(u8, s, 'e') == null and std.mem.indexOfScalar(u8, s, 'E') == null) {
-                        try buf.appendSlice(allocator, ".0");
-                    }
-                } else {
-                    return error.NonLiteralElement;
-                }
-            }
-            try buf.append(allocator, ']');
-            break :blk try buf.toOwnedSlice(allocator);
-        },
-        .boolean => payloadArrayToJson(bool, allocator, arr, extractBool),
-        .array => error.UnsupportedArrayItemsType,
-    };
-}
-
 /// Parses a JSON array string and returns a Literal_Array Payload of items_type.
 /// The caller owns the returned Payload and must call payload.free(allocator).
 pub fn jsonToPayload(json: []const u8, allocator: std.mem.Allocator, items_type: FieldType) !Payload {
@@ -202,20 +163,6 @@ fn mapBool(v: bool, _: std.mem.Allocator) !Payload {
     return .{ .bool = v };
 }
 
-fn extractStr(item: Payload) ?[]const u8 {
-    return if (item == .str) item.str.value() else null;
-}
-fn extractInt(item: Payload) ?i64 {
-    return switch (item) {
-        .int => |v| v,
-        .uint => |v| @intCast(v),
-        else => null,
-    };
-}
-fn extractBool(item: Payload) ?bool {
-    return if (item == .bool) item.bool else null;
-}
-
 fn jsonArrayToPayload(
     comptime T: type, // zwanzig-disable-line: unused-parameter
     allocator: std.mem.Allocator,
@@ -230,18 +177,4 @@ fn jsonArrayToPayload(
         arr[i] = if (v) |val| try mapper(val, allocator) else .nil;
     }
     return .{ .arr = arr };
-}
-
-fn payloadArrayToJson(
-    comptime T: type, // zwanzig-disable-line: unused-parameter
-    allocator: std.mem.Allocator,
-    arr: []const Payload,
-    extractor: anytype,
-) ![]const u8 {
-    const slice = try allocator.alloc(?T, arr.len);
-    defer allocator.free(slice);
-    for (arr, 0..) |item, i| {
-        slice[i] = extractor(item);
-    }
-    return try std.json.Stringify.valueAlloc(allocator, slice, .{});
 }
