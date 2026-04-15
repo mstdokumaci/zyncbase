@@ -110,7 +110,7 @@ pub const ScalarValue = union(enum) {
             .integer => |v| try stream.write(v),
             .real => |v| {
                 var buf: [64]u8 = undefined;
-                const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch @panic("float formatting exceeded 64 byte buffer");
+                const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return error.WriteFailed;
                 if (std.mem.indexOfScalar(u8, s, '.') == null and std.mem.indexOfScalar(u8, s, 'e') == null and std.mem.indexOfScalar(u8, s, 'E') == null) {
                     try stream.print("{s}.0", .{s});
                 } else {
