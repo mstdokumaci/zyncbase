@@ -37,11 +37,17 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
     errdefer filter.deinit(allocator);
 
     const heap_conds = try allocator.alloc(Condition, conds.len);
-    errdefer allocator.free(heap_conds); // Note: elements not initialized yet
-
-    for (conds, 0..) |c, i| {
-        heap_conds[i] = try c.clone(allocator);
+    var count: usize = 0;
+    errdefer {
+        for (heap_conds[0..count]) |*c| c.deinit(allocator);
+        allocator.free(heap_conds);
     }
+
+    for (conds) |c| {
+        heap_conds[count] = try c.clone(allocator);
+        count += 1;
+    }
+
     filter.conditions = heap_conds;
     return filter;
 }

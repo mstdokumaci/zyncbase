@@ -31,8 +31,6 @@ pub const built_in_columns = [_]Field{
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
 
-pub const system_columns = [_][]const u8{ "id", "namespace_id", "created_at", "updated_at" };
-
 pub fn getSystemColumn(name: []const u8) ?Field {
     for (built_in_columns) |col| {
         if (std.mem.eql(u8, name, col.name)) return col;
@@ -41,10 +39,7 @@ pub fn getSystemColumn(name: []const u8) ?Field {
 }
 
 pub fn isSystemColumn(name: []const u8) bool {
-    for (system_columns) |col| {
-        if (std.mem.eql(u8, name, col)) return true;
-    }
-    return false;
+    return getSystemColumn(name) != null;
 }
 
 pub const Field = struct {
@@ -125,11 +120,11 @@ pub const TableMetadata = struct {
         }
 
         // Also cache system columns that aren't in the schema fields but appear in queries
-        for (system_columns) |sc| {
-            if (!field_payloads.contains(sc)) {
-                const p = try msgpack.Payload.strToPayload(sc, allocator);
+        for (built_in_columns) |sc| {
+            if (!field_payloads.contains(sc.name)) {
+                const p = try msgpack.Payload.strToPayload(sc.name, allocator);
                 errdefer p.free(allocator);
-                try field_payloads.put(sc, p);
+                try field_payloads.put(sc.name, p);
             }
         }
 

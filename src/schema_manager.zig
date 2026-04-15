@@ -15,7 +15,6 @@ pub const freeSchema = schema_parser.freeSchema;
 pub const freeTable = schema_parser.freeTable;
 pub const freeField = schema_parser.freeField;
 pub const built_in_columns = schema_parser.built_in_columns;
-pub const system_columns = schema_parser.system_columns;
 pub const getSystemColumn = schema_parser.getSystemColumn;
 pub const isSystemColumn = schema_parser.isSystemColumn;
 
