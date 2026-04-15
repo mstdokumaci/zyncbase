@@ -275,8 +275,7 @@ test "logging: error details" {
         // Try to get from non-existent namespace/path
         var managed = try storage_engine.selectDocument(testing.allocator, "data_table", "path", "nonexistent");
         defer managed.deinit();
-        const result = managed.value;
-        try testing.expect(result == null);
+        try testing.expect(managed.rows.len == 0);
     }
 
     // Test 4: Multiple error types are logged

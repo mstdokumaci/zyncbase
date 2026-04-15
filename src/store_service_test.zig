@@ -5,6 +5,7 @@ const storage_mod = @import("storage_engine.zig");
 const helpers = @import("app_test_helpers.zig");
 const protocol = @import("protocol.zig");
 const schema_manager = @import("schema_manager.zig");
+const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
 const StorageError = storage_mod.StorageError;
 
@@ -36,17 +37,13 @@ test "StoreService: set - full document replacement" {
         var managed = try app.storage_engine.selectDocument(allocator, "users", "user-1", "public");
         defer managed.deinit();
 
-        try testing.expect(managed.value != null);
-        const doc = managed.value.?;
-        const name_payload = try msgpack.Payload.strToPayload("name", allocator);
-        defer name_payload.free(allocator);
-        const name_val = doc.map.get(name_payload) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("Alice", name_val.str.value());
+        try testing.expect(managed.rows.len > 0);
+        const doc = managed.rows[0];
+        const name_val = doc.getField("name") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("Alice", name_val.scalar.text);
 
-        const age_payload = try msgpack.Payload.strToPayload("age", allocator);
-        defer age_payload.free(allocator);
-        const age_val = doc.map.get(age_payload) orelse return error.UnexpectedNull;
-        try testing.expectEqual(@as(i64, 30), age_val.int);
+        const age_val = doc.getField("age") orelse return error.UnexpectedNull;
+        try testing.expectEqual(@as(i64, 30), age_val.scalar.integer);
     }
 
     // 5. Negative path: Unknown table
@@ -84,11 +81,10 @@ test "StoreService: set - field level update" {
         // Verify
         var managed = try app.storage_engine.selectDocument(allocator, "items", "item-1", "public");
         defer managed.deinit();
-        const doc = managed.value orelse return error.UnexpectedNull;
-        const status_payload = try msgpack.Payload.strToPayload("status", allocator);
-        defer status_payload.free(allocator);
-        const status_val = doc.map.get(status_payload) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("active", status_val.str.value());
+        if (managed.rows.len == 0) return error.UnexpectedNull;
+        const doc = managed.rows[0];
+        const status_val = doc.getField("status") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("active", status_val.scalar.text);
     }
 }
 
@@ -130,7 +126,7 @@ test "StoreService: remove" {
 
         var managed = try app.storage_engine.selectDocument(allocator, "users", "user-1", "public");
         defer managed.deinit();
-        try testing.expect(managed.value == null);
+        try testing.expect(managed.rows.len == 0);
     }
 
     // 3. Negative: Unknown table
@@ -233,12 +229,10 @@ test "StoreService: persistence and namespace isolation" {
 
         var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
-        const val_key = try msgpack.Payload.strToPayload("val", allocator);
-        defer val_key.free(allocator);
-        const stored_doc = managed.value.?;
-        const stored_val = stored_doc.map.get(val_key) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", stored_val.str.value());
+        try testing.expect(managed.rows.len > 0);
+        const stored_doc = managed.rows[0];
+        const stored_val = stored_doc.getField("val") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value1", stored_val.scalar.text);
     }
 
     // 2. Namespace Isolation
@@ -250,24 +244,21 @@ test "StoreService: persistence and namespace isolation" {
         try service.set("test", "key1", "ns-b", 3, "val", val);
         try app.storage_engine.flushPendingWrites();
 
-        const val_key = try msgpack.Payload.strToPayload("val", allocator);
-        defer val_key.free(allocator);
-
         // Verify ns-a still has value1
         var managed_a = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
         defer managed_a.deinit();
-        try testing.expect(managed_a.value != null);
-        const doc_a = managed_a.value.?;
-        const v_a = doc_a.map.get(val_key) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", v_a.str.value());
+        try testing.expect(managed_a.rows.len > 0);
+        const doc_a = managed_a.rows[0];
+        const v_a = doc_a.getField("val") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value1", v_a.scalar.text);
 
         // Verify ns-b has value2
         var managed_b = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-b");
         defer managed_b.deinit();
-        try testing.expect(managed_b.value != null);
-        const doc_b = managed_b.value.?;
-        const v_b = doc_b.map.get(val_key) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value2", v_b.str.value());
+        try testing.expect(managed_b.rows.len > 0);
+        const doc_b = managed_b.rows[0];
+        const v_b = doc_b.getField("val") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("value2", v_b.scalar.text);
     }
 
     // 3. Updates
@@ -283,10 +274,10 @@ test "StoreService: persistence and namespace isolation" {
 
         var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
-        const doc = managed.value.?;
-        const stored_val = doc.map.get(val_key) orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("updated", stored_val.str.value());
+        try testing.expect(managed.rows.len > 0);
+        const doc = managed.rows[0];
+        const stored_val = doc.getField("val") orelse return error.UnexpectedNull;
+        try testing.expectEqualStrings("updated", stored_val.scalar.text);
     }
 }
 
@@ -321,11 +312,11 @@ test "StoreService: query - basic search" {
     var qr = try app.store_service.query(allocator, "users", "ns", filter_map);
     defer qr.deinit(allocator);
 
-    const results_p = qr.results.value orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 1), results_p.arr.len);
-    const doc = results_p.arr[0];
-    const name_val = (try doc.mapGet("name")) orelse return error.TestExpectedValue;
-    try testing.expectEqualStrings("Alice", name_val.str.value());
+    if (qr.results.rows.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
+    const doc = qr.results.rows[0];
+    const name_val = doc.getField("name") orelse return error.TestExpectedValue;
+    try testing.expectEqualStrings("Alice", name_val.scalar.text);
 }
 
 test "StoreService: query - orderBy and limit" {
@@ -358,9 +349,9 @@ test "StoreService: query - orderBy and limit" {
     var qr = try app.store_service.query(allocator, "tasks", "ns", filter_map);
     defer qr.deinit(allocator);
 
-    const results_p = qr.results.value orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), results_p.arr.len);
-    try testing.expect(qr.results.next_cursor_arr != null);
+    if (qr.results.rows.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
+    try testing.expect(qr.results.next_cursor != null);
 }
 
 test "StoreService: query - negative cases" {
@@ -423,33 +414,33 @@ test "StoreService: queryWithCursor - pagination" {
     var qr = try app.store_service.query(allocator, "data", "ns", filter_map);
     defer qr.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 2), qr.results.value.?.arr.len);
-    try testing.expect(qr.results.next_cursor_arr != null);
+    try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
+    try testing.expect(qr.results.next_cursor != null);
 
     // Save the cursor token (encoded)
-    const encoded_cursor = try protocol.encodeCursor(allocator, qr.results.next_cursor_arr.?);
+    const cursor_val = qr.results.next_cursor orelse return error.TestExpectedValue;
+    const encoded_cursor = try protocol.encodeCursor(allocator, cursor_val);
     defer allocator.free(encoded_cursor);
 
     // Decode it back to a domain object (simulating what MessageHandler does)
-    const cursor = try protocol.decodeCursor(allocator, encoded_cursor);
+    const cursor = try query_parser.parseCursorToken(allocator, encoded_cursor, .text, null);
 
     // 2. Query with cursor: fetch next 2
     var next_results = try app.store_service.queryWithCursor(allocator, "data", "ns", &qr.filter, cursor);
     defer next_results.deinit();
 
-    const next_results_p = next_results.value orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), next_results_p.arr.len);
+    if (next_results.rows.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), next_results.rows.len);
 
     // Verify results are different (pagination worked)
-    const first_results = qr.results.value orelse return error.TestExpectedValue;
-    const first_doc = first_results.arr[0];
-    const first_id_payload = (try first_doc.mapGet("id")) orelse return error.TestExpectedValue;
-    const first_page_id = first_id_payload.str.value();
+    if (qr.results.rows.len == 0) return error.TestExpectedValue;
+    const first_doc = qr.results.rows[0];
+    const first_id_payload = first_doc.getField("id") orelse return error.TestExpectedValue;
+    const first_page_id = first_id_payload.scalar.text;
 
-    const second_results = next_results.value orelse return error.TestExpectedValue;
-    const second_doc = second_results.arr[0];
-    const second_id_payload = (try second_doc.mapGet("id")) orelse return error.TestExpectedValue;
-    const second_page_id = second_id_payload.str.value();
+    const second_doc = next_results.rows[0];
+    const second_id_payload = second_doc.getField("id") orelse return error.TestExpectedValue;
+    const second_page_id = second_id_payload.scalar.text;
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
 }

@@ -4,7 +4,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const msgpack = @import("msgpack_utils.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "SubscriptionEngine: handleRowChange performance" {
     const allocator = testing.allocator;
@@ -20,7 +20,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         const field_name = try std.fmt.bufPrint(&buf, "field_{d}", .{i % 10});
 
         const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-            .{ .field = field_name, .op = .eq, .value = msgpack.Payload.intToPayload(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
+            .{ .field = field_name, .op = .eq, .value = tth.valInt(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
         });
         defer filter.deinit(allocator);
 
@@ -29,17 +29,18 @@ test "SubscriptionEngine: handleRowChange performance" {
         }
     }
 
-    var row = msgpack.Payload.mapPayload(allocator);
-    defer row.free(allocator);
-    try row.map.putString("field_0", msgpack.Payload.intToPayload(@as(i64, 0)));
-    try row.map.putString("field_1", msgpack.Payload.intToPayload(@as(i64, 1)));
-    try row.map.putString("field_2", msgpack.Payload.intToPayload(@as(i64, 2)));
+    const new_row = try tth.row(allocator, .{
+        .field_0 = tth.valInt(0),
+        .field_1 = tth.valInt(1),
+        .field_2 = tth.valInt(2),
+    });
+    defer new_row.deinit(allocator);
 
     const change = RowChange{
         .namespace = "ns",
         .collection = "coll",
         .operation = .insert,
-        .new_row = row,
+        .new_row = new_row,
         .old_row = null,
     };
 

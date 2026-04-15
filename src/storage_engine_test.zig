@@ -43,7 +43,8 @@ test "StorageEngine: insert and select basic" {
     // Select
     var managed = try engine.selectDocument(allocator, "users", "id1", "ns");
     defer managed.deinit();
-    const doc = managed.value orelse return error.NotFound;
+    if (managed.rows.len == 0) return error.NotFound;
+    const doc = managed.rows[0];
 
     _ = try sth.expectFieldString(doc, "name", "Alice");
     _ = try sth.expectFieldInt(doc, "age", 30);
@@ -71,7 +72,8 @@ test "StorageEngine: update document" {
 
     var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
     defer managed.deinit();
-    const doc = managed.value orelse return error.TestValueMissing;
+    if (managed.rows.len == 0) return error.TestValueMissing;
+    const doc = managed.rows[0];
     _ = try sth.expectFieldString(doc, "val", "v2");
 }
 test "StorageEngine: delete document" {
@@ -95,7 +97,7 @@ test "StorageEngine: delete document" {
 
     var managed = try engine.selectDocument(allocator, "test", "id1", "ns");
     defer managed.deinit();
-    try testing.expect(managed.value == null);
+    try testing.expect(managed.rows.len == 0);
 }
 test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
@@ -114,8 +116,8 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     // Get the value
     var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
     defer managed.deinit();
-    const result = managed.value;
-    try testing.expect(result != null);
+    try testing.expect(managed.rows.len > 0);
+    const result = managed.rows[0];
     _ = try sth.expectFieldString(result, "val", "test");
 }
 test "StorageEngine: selectDocument non-existent key" {
@@ -129,8 +131,7 @@ test "StorageEngine: selectDocument non-existent key" {
 
     var managed = try engine.selectDocument(allocator, "items", "nonexistent", "test_namespace");
     defer managed.deinit();
-    const result = managed.value;
-    try testing.expect(result == null);
+    try testing.expect(managed.rows.len == 0);
 }
 test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
@@ -152,8 +153,8 @@ test "StorageEngine: update existing document" {
     // Get the value
     var managed = try engine.selectDocument(allocator, "items", "id1", "test_namespace");
     defer managed.deinit();
-    const result = managed.value;
-    try testing.expect(result != null);
+    try testing.expect(managed.rows.len > 0);
+    const result = managed.rows[0];
     _ = try sth.expectFieldString(result, "val", "updated");
 }
 test "StorageEngine: query collection" {
@@ -176,7 +177,7 @@ test "StorageEngine: query collection" {
     defer filter.deinit(allocator);
     var managed = try engine.selectQuery(allocator, "users", "test_namespace", filter);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 2), managed.value.?.arr.len);
+    try testing.expectEqual(@as(usize, 2), managed.rows.len);
 }
 test "StorageEngine: multiple namespaces" {
     const allocator = testing.allocator;
@@ -196,13 +197,13 @@ test "StorageEngine: multiple namespaces" {
     // Get values from different namespaces
     var managed1 = try engine.selectDocument(allocator, "items", "id1", "namespace1");
     defer managed1.deinit();
-    const result1 = managed1.value;
+    try testing.expect(managed1.rows.len > 0);
+    const result1 = managed1.rows[0];
 
     var managed2 = try engine.selectDocument(allocator, "items", "id1", "namespace2");
     defer managed2.deinit();
-    const result2 = managed2.value;
-    try testing.expect(result1 != null);
-    try testing.expect(result2 != null);
+    try testing.expect(managed2.rows.len > 0);
+    const result2 = managed2.rows[0];
     _ = try sth.expectFieldString(result1, "val", "ns1");
     _ = try sth.expectFieldString(result2, "val", "ns2");
 }
@@ -255,13 +256,11 @@ test "StorageEngine: automatic rollback in batch operations" {
     // Verify data was written
     var managed1 = try engine.selectDocument(allocator, "items", "id1", "test_ns");
     defer managed1.deinit();
-    const result1 = managed1.value;
-    try testing.expect(result1 != null);
+    try testing.expect(managed1.rows.len > 0);
 
     var managed2 = try engine.selectDocument(allocator, "items", "id2", "test_ns");
     defer managed2.deinit();
-    const result2 = managed2.value;
-    try testing.expect(result2 != null);
+    try testing.expect(managed2.rows.len > 0);
 }
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
@@ -282,8 +281,7 @@ test "StorageEngine: concurrent reads" {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, id: []const u8) !void {
             var managed = try eng.selectDocument(alloc, "items", id, "test_namespace");
             defer managed.deinit();
-            const result = managed.value;
-            try testing.expect(result != null);
+            try testing.expect(managed.rows.len > 0);
         }
     };
     var threads: [4]std.Thread = undefined;
@@ -344,8 +342,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
         var managed = try verify_engine.selectDocument(allocator, "items", id, "ns");
         defer managed.deinit();
-        const result = managed.value;
-        try testing.expect(result != null);
+        try testing.expect(managed.rows.len > 0);
     }
 }
 test "StorageEngine: client writes blocked during migration" {

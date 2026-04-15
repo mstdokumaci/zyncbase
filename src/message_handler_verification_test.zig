@@ -7,7 +7,7 @@ const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
-const protocol = @import("protocol.zig");
+const query_parser = @import("query_parser.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -112,15 +112,11 @@ test "Verification: StoreSet message processing" {
     // Verify data was stored
     var managed = try app.storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
     defer managed.deinit();
-    const stored_doc = managed.value;
+    if (managed.rows.len == 0) return error.DocumentNotFound;
+    const doc = managed.rows[0];
 
-    // Value is stored as MessagePack-serialized, but selectDocument decodes it
-    if (stored_doc) |doc| {
-        const val_payload = (try doc.mapGet("val")) orelse return error.ValueNotFound;
-        try testing.expectEqualStrings("test_value", val_payload.str.value());
-    } else {
-        return error.DocumentNotFound;
-    }
+    const val_payload = doc.getField("val") orelse return error.ValueNotFound;
+    try testing.expectEqualStrings("test_value", val_payload.scalar.text);
 }
 
 // Task 14 Verification: StoreQuery message processing
@@ -270,7 +266,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     try testing.expect(next_cursor.str.value().len > 0);
 
     // Minimal validation to ensure it's a valid protocol token
-    const cursor = try protocol.decodeCursor(allocator, next_cursor.str.value());
+    const cursor = try query_parser.parseCursorToken(allocator, next_cursor.str.value(), .integer, null);
     defer cursor.deinit(allocator);
     try testing.expect(cursor.id.len > 0);
 }
@@ -509,12 +505,11 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     for (test_data) |td| {
         var managed = try app.storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
         defer managed.deinit();
-        const stored_doc = managed.value;
-        try testing.expect(stored_doc != null);
-        const doc = stored_doc.?;
+        try testing.expect(managed.rows.len > 0);
+        const doc = managed.rows[0];
 
-        const got_val = (try doc.mapGet("val")) orelse return error.MissingValue;
-        try testing.expectEqualStrings(td.value, got_val.str.value());
+        const got_val = doc.getField("val") orelse return error.MissingValue;
+        try testing.expectEqualStrings(td.value, got_val.scalar.text);
     }
 }
 

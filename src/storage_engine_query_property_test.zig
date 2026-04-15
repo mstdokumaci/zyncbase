@@ -4,7 +4,6 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
@@ -39,8 +38,7 @@ test "property: random query filters on StorageEngine" {
         // Execute query
         var managed = try engine.selectQuery(allocator, "entities", "ns1", filter);
         defer managed.deinit();
-        try testing.expect(managed.value != null);
-        try testing.expect(managed.value.? == .arr);
+        try testing.expect(managed.rows.len >= 0);
     }
 }
 
@@ -127,17 +125,17 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
     const op: query_parser.Operator = @enumFromInt(op_int);
 
-    var value: ?msgpack.Payload = null;
+    var value: ?storage_engine.TypedValue = null;
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {
-            value = try msgpack.Payload.strToPayload("test_value", allocator);
+            value = .{ .scalar = .{ .text = try allocator.dupe(u8, "test_value") } };
         } else if (std.mem.eql(u8, field, "name")) {
-            value = try msgpack.Payload.strToPayload("name_5", allocator);
+            value = .{ .scalar = .{ .text = try allocator.dupe(u8, "name_5") } };
         } else if (std.mem.eql(u8, field, "age")) {
-            value = msgpack.Payload.intToPayload(random.intRangeAtMost(i64, 0, 100));
+            value = .{ .scalar = .{ .integer = random.intRangeAtMost(i64, 0, 100) } };
         } else {
-            value = msgpack.Payload.floatToPayload(500.0);
+            value = .{ .scalar = .{ .real = 500.0 } };
         }
     }
 

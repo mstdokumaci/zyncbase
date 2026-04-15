@@ -1,21 +1,21 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Payload = @import("msgpack_utils.zig").Payload;
+const TypedRow = @import("storage_engine/types.zig").TypedRow;
 
 pub const OwnedRowChange = struct {
     namespace: []const u8,
     collection: []const u8,
     operation: Operation,
-    old_row: ?Payload,
-    new_row: ?Payload,
+    old_row: ?TypedRow,
+    new_row: ?TypedRow,
 
     pub const Operation = enum { insert, update, delete };
 
     pub fn deinit(self: *OwnedRowChange, allocator: Allocator) void {
         allocator.free(self.namespace);
         allocator.free(self.collection);
-        if (self.old_row) |*p| p.free(allocator);
-        if (self.new_row) |*p| p.free(allocator);
+        if (self.old_row) |r| r.deinit(allocator);
+        if (self.new_row) |r| r.deinit(allocator);
     }
 };
 

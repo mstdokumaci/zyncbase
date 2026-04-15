@@ -7,7 +7,7 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const sql = @import("sql.zig");
 
-pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
+pub const typed_cache_type = lockFreeCache(TypedRow);
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -62,25 +62,96 @@ pub const ColumnValue = struct {
     field_type: schema_manager.FieldType,
 };
 
-/// A managed payload that might be backed by a cache handle.
-/// Caller MUST call deinit() to release any potential cache handles.
-pub const ManagedPayload = struct {
-    value: ?msgpack.Payload,
-    next_cursor_arr: ?msgpack.Payload = null,
-    handle: ?metadata_cache_type.Handle = null,
+/// A managed result that might be backed by a cache handle.
+/// Every result is exposed as a slice of TypedRows.
+/// Caller MUST call deinit() to release any potential cache handles and memory.
+pub const ManagedResult = struct {
+    rows: []TypedRow,
+    next_cursor: ?TypedCursor = null,
+    handle: ?typed_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
-    pub fn deinit(self: *ManagedPayload) void {
-        if (self.handle) |*h| {
+    pub fn deinit(self: *ManagedResult) void {
+        if (self.handle) |h| {
+            // CACHE HIT: 'rows' is just a 1-length slice pointing directly at the
+            // cached TypedRow memory via `handle.data()`. No wrapper array was
+            // dynamically allocated. We simply release the cache handle.
             h.release();
+        } else if (self.allocator) |alloc| {
+            // CACHE MISS / QUERY: We dynamically allocated the rows array
+            // and everything inside it. We must clean up.
+            for (self.rows) |r| r.deinit(alloc);
+            alloc.free(self.rows);
+            if (self.next_cursor) |*nc| nc.deinit(alloc);
         }
+    }
+};
 
-        if (self.allocator) |alloc| {
-            if (self.handle == null) {
-                if (self.value) |*p| p.free(alloc);
-            }
-            if (self.next_cursor_arr) |*cursor| cursor.free(alloc);
+pub const FieldEntry = struct {
+    name: []const u8, // Owned
+    value: TypedValue,
+
+    pub fn deinit(self: FieldEntry, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: FieldEntry, allocator: Allocator) !FieldEntry {
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        return .{ .name = name, .value = try self.value.clone(allocator) };
+    }
+};
+
+pub const TypedRow = struct {
+    fields: []FieldEntry, // Owned
+
+    pub fn deinit(self: TypedRow, allocator: Allocator) void {
+        for (self.fields) |f| f.deinit(allocator);
+        allocator.free(self.fields);
+    }
+
+    pub fn clone(self: TypedRow, allocator: Allocator) !TypedRow {
+        const cloned = try allocator.alloc(FieldEntry, self.fields.len);
+        var i: usize = 0;
+        errdefer {
+            for (cloned[0..i]) |f| f.deinit(allocator);
+            allocator.free(cloned);
         }
+        while (i < self.fields.len) : (i += 1) {
+            cloned[i] = try self.fields[i].clone(allocator);
+        }
+        return .{ .fields = cloned };
+    }
+
+    pub fn getField(self: TypedRow, name: []const u8) ?TypedValue {
+        for (self.fields) |f| {
+            if (std.mem.eql(u8, f.name, name)) return f.value;
+        }
+        return null;
+    }
+};
+
+pub fn deinitTypedRow(allocator: std.mem.Allocator, row: *TypedRow) void {
+    row.deinit(allocator);
+}
+
+pub const TypedCursor = struct {
+    sort_value: TypedValue,
+    id: []const u8, // Owned
+
+    pub fn deinit(self: *TypedCursor, allocator: Allocator) void {
+        self.sort_value.deinit(allocator);
+        allocator.free(self.id);
+    }
+
+    pub fn clone(self: TypedCursor, allocator: Allocator) !TypedCursor {
+        const id = try allocator.dupe(u8, self.id);
+        errdefer allocator.free(id);
+        return .{
+            .sort_value = try self.sort_value.clone(allocator),
+            .id = id,
+        };
     }
 };
 
@@ -297,7 +368,6 @@ pub const ReconnectionConfig = struct {
 pub const ColumnContext = struct {
     index: c_int,
     name: []const u8,
-    key: msgpack.Payload,
     field: ?schema_manager.Field,
 };
 

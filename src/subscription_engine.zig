@@ -3,8 +3,9 @@ const Allocator = std.mem.Allocator;
 const query_parser = @import("query_parser.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
-const msgpack = @import("msgpack_utils.zig");
-const Payload = msgpack.Payload;
+const types = @import("storage_engine/types.zig");
+const TypedRow = types.TypedRow;
+const TypedValue = types.TypedValue;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -36,14 +37,14 @@ pub const RowChange = struct {
     namespace: []const u8,
     collection: []const u8,
     operation: enum { insert, update, delete },
-    /// The full record (map payload) after the change. Null only for delete.
-    new_row: ?Payload,
+    /// The full record after the change. Null only for delete.
+    new_row: ?TypedRow,
     /// The full record before the change. Null only for insert.
-    old_row: ?Payload,
+    old_row: ?TypedRow,
 
     pub fn deinit(self: *const RowChange, allocator: Allocator) void {
-        if (self.new_row) |r| r.free(allocator);
-        if (self.old_row) |r| r.free(allocator);
+        if (self.new_row) |r| r.deinit(allocator);
+        if (self.old_row) |r| r.deinit(allocator);
     }
 };
 
@@ -326,10 +327,19 @@ pub const SubscriptionEngine = struct {
         }
 
         for (conds) |c| {
-            const val_str = if (c.value) |v|
-                try msgpack.encodeBase64(allocator, v)
-            else
-                try allocator.dupe(u8, "null");
+            const val_str = if (c.value) |v| blk: {
+                // Approximate canonical string for TypedValue
+                switch (v) {
+                    .scalar => |s| switch (s) {
+                        .integer => |iv| break :blk try std.fmt.allocPrint(allocator, "i:{}", .{iv}),
+                        .real => |rv| break :blk try std.fmt.allocPrint(allocator, "f:{}", .{rv}),
+                        .text => |tv| break :blk try allocator.dupe(u8, tv),
+                        .boolean => |bv| break :blk try allocator.dupe(u8, if (bv) "true" else "false"),
+                    },
+                    .array => |arr| break :blk try std.fmt.allocPrint(allocator, "a:{}", .{arr.len}),
+                    .nil => break :blk try allocator.dupe(u8, "nil"),
+                }
+            } else try allocator.dupe(u8, "null");
             sortable[count] = .{ .cond = c, .val_str = val_str };
             count += 1;
         }
@@ -371,10 +381,8 @@ pub const SubscriptionEngine = struct {
         return try list.toOwnedSlice(allocator);
     }
 
-    /// Evaluates a row (msgpack map) against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, row: Payload) !bool {
-        if (row != .map) return false;
-
+    /// Evaluates a row against a filter AST.
+    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
         // 1. Evaluate AND conditions (all must match)
         if (filter.conditions) |conds| {
             for (conds) |cond| {
@@ -399,91 +407,91 @@ pub const SubscriptionEngine = struct {
         return true;
     }
 
-    fn evaluateCondition(cond: Condition, row: Payload) !bool {
-        const val = (try row.mapGet(cond.field)) orelse return cond.op == .isNull;
+    fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
+        const val = row.getField(cond.field) orelse return cond.op == .isNull;
 
         return switch (cond.op) {
-            .eq => payloadsEqual(val, cond.value orelse return false),
-            .ne => !payloadsEqual(val, cond.value orelse return true),
-            .gt => comparePayloads(val, cond.value orelse return false) == .gt,
+            .eq => typedValuesEqual(val, cond.value orelse return false),
+            .ne => !typedValuesEqual(val, cond.value orelse return true),
+            .gt => compareTypedValues(val, cond.value orelse return false) == .gt,
             .gte => blk: {
-                const res = comparePayloads(val, cond.value orelse return false);
+                const res = compareTypedValues(val, cond.value orelse return false);
                 break :blk res == .gt or res == .eq;
             },
-            .lt => comparePayloads(val, cond.value orelse return false) == .lt,
+            .lt => compareTypedValues(val, cond.value orelse return false) == .lt,
             .lte => blk: {
-                const res = comparePayloads(val, cond.value orelse return false);
+                const res = compareTypedValues(val, cond.value orelse return false);
                 break :blk res == .lt or res == .eq;
             },
             .isNull => val == .nil,
             .isNotNull => val != .nil,
             .startsWith => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.startsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
+                if (val != .scalar or val.scalar != .text) break :blk false;
+                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+                break :blk std.ascii.startsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
             },
             .endsWith => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.endsWithIgnoreCase(val.str.value(), cond.value.?.str.value());
+                if (val != .scalar or val.scalar != .text) break :blk false;
+                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+                break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
             },
             .contains => blk: {
-                if (val != .str or cond.value == null or cond.value.? != .str) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.str.value(), cond.value.?.str.value()) != null;
+                if (val != .scalar or val.scalar != .text) break :blk false;
+                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+                break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
             },
             .in => blk: {
-                if (cond.value == null or cond.value.? != .arr) break :blk false;
-                for (cond.value.?.arr) |item| {
-                    if (payloadsEqual(val, item)) break :blk true;
+                if (cond.value == null or cond.value.? != .array) break :blk false;
+                for (cond.value.?.array) |item| {
+                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk true;
                 }
                 break :blk false;
             },
             .notIn => blk: {
-                if (cond.value == null or cond.value.? != .arr) break :blk true;
-                for (cond.value.?.arr) |item| {
-                    if (payloadsEqual(val, item)) break :blk false;
+                if (cond.value == null or cond.value.? != .array) break :blk true;
+                for (cond.value.?.array) |item| {
+                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk false;
                 }
                 break :blk true;
             },
         };
     }
 
-    fn payloadsEqual(a: Payload, b: Payload) bool {
-        if (@as(std.meta.Tag(Payload), a) != @as(std.meta.Tag(Payload), b)) return false;
+    fn typedValuesEqual(a: TypedValue, b: TypedValue) bool {
+        if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return false;
         return switch (a) {
             .nil => true,
-            .bool => a.bool == b.bool,
-            .int => a.int == b.int,
-            .uint => a.uint == b.uint,
-            .float => a.float == b.float,
-            .str => std.mem.eql(u8, a.str.value(), b.str.value()),
-            .bin => std.mem.eql(u8, a.bin.value(), b.bin.value()),
-            .arr => blk: {
-                if (a.arr.len != b.arr.len) break :blk false;
-                for (a.arr, 0..) |item, i| {
-                    if (!payloadsEqual(item, b.arr[i])) break :blk false;
+            .scalar => |sa| switch (sa) {
+                .integer => sa.integer == b.scalar.integer,
+                .real => sa.real == b.scalar.real,
+                .text => std.mem.eql(u8, sa.text, b.scalar.text),
+                .boolean => sa.boolean == b.scalar.boolean,
+            },
+            .array => |arr| blk: {
+                if (arr.len != b.array.len) break :blk false;
+                for (arr, 0..) |item, i| {
+                    if (!typedValuesEqual(TypedValue{ .scalar = item }, TypedValue{ .scalar = b.array[i] })) break :blk false;
                 }
                 break :blk true;
             },
-            .map => false, // Map equality is complex and not needed for basic op codes
-            .ext => false,
-            .timestamp => false, // Not handled yet
         };
     }
 
-    fn comparePayloads(a: Payload, b: Payload) std.math.Order {
-        // Only same-type comparison for now to match selectQuery/SQLite
-        if (@as(std.meta.Tag(Payload), a) != @as(std.meta.Tag(Payload), b)) return .lt; // Should ideally be error.TypeMismatch
+    fn compareTypedValues(a: TypedValue, b: TypedValue) std.math.Order {
+        if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return .lt;
 
         return switch (a) {
-            .int => std.math.order(a.int, b.int),
-            .uint => std.math.order(a.uint, b.uint),
-            .float => blk: {
-                if (a.float < b.float) break :blk .lt;
-                if (a.float > b.float) break :blk .gt;
-                break :blk .eq;
+            .scalar => |sa| switch (sa) {
+                .integer => std.math.order(sa.integer, b.scalar.integer),
+                .real => blk: {
+                    if (sa.real < b.scalar.real) break :blk .lt;
+                    if (sa.real > b.scalar.real) break :blk .gt;
+                    break :blk .eq;
+                },
+                .text => std.mem.order(u8, sa.text, b.scalar.text),
+                .boolean => std.math.order(@intFromBool(sa.boolean), @intFromBool(b.scalar.boolean)),
             },
-            .str => std.mem.order(u8, a.str.value(), b.str.value()),
-            .bin => std.mem.order(u8, a.bin.value(), b.bin.value()),
-            else => .eq, // Unsortable types
+            else => .eq, // Unsortable
         };
     }
 };

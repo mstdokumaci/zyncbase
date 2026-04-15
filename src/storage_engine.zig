@@ -4,7 +4,6 @@ pub const std_options = struct {
 };
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const msgpack = @import("msgpack_utils.zig");
 const reader = @import("storage_engine/reader.zig");
 const writer = @import("storage_engine/writer.zig");
 const connection = @import("storage_engine/connection.zig");
@@ -18,15 +17,17 @@ const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
 pub const ColumnValue = types.ColumnValue;
-pub const ManagedPayload = types.ManagedPayload;
+pub const ManagedResult = types.ManagedResult;
 pub const TypedValue = types.TypedValue;
+pub const TypedRow = types.TypedRow;
+pub const TypedCursor = types.TypedCursor;
 pub const CheckpointMode = types.CheckpointMode;
 pub const ReaderNode = types.ReaderNode;
 pub const CheckpointStats = types.CheckpointStats;
 pub const ReconnectionConfig = types.ReconnectionConfig;
 pub const WriteOp = types.WriteOp;
 pub const WriteQueue = types.WriteQueue;
-pub const metadata_cache_type = types.metadata_cache_type;
+pub const typed_cache_type = types.typed_cache_type;
 pub const ColumnContext = types.ColumnContext;
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
@@ -62,7 +63,7 @@ pub const StorageEngine = struct {
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const SchemaManager,
-    metadata_cache: metadata_cache_type,
+    metadata_cache: typed_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
     /// before the DB read and only populate the cache if it hasn't advanced,
@@ -74,8 +75,8 @@ pub const StorageEngine = struct {
     event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
 
-    fn deinitPayload(allocator: Allocator, payload: *msgpack.Payload) void {
-        payload.free(allocator);
+    fn deinitTypedRow(allocator: Allocator, row: *types.TypedRow) void {
+        row.deinit(allocator);
     }
 
     pub fn init(
@@ -204,7 +205,7 @@ pub const StorageEngine = struct {
         self.writer_stmt_cache.init(allocator, self.performance_config.statement_cache_size);
         errdefer self.writer_stmt_cache.deinit(allocator);
 
-        try self.metadata_cache.init(allocator, .{}, deinitPayload);
+        try self.metadata_cache.init(allocator, .{}, deinitTypedRow);
         errdefer self.metadata_cache.deinit();
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
@@ -384,7 +385,7 @@ pub const StorageEngine = struct {
         self.writer_stmt_cache.deinit(self.allocator);
         self.writer_stmt_cache.init(self.allocator, self.performance_config.statement_cache_size);
         self.metadata_cache.deinit();
-        try self.metadata_cache.init(self.allocator, .{}, deinitPayload);
+        try self.metadata_cache.init(self.allocator, .{}, types.deinitTypedRow);
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         _ = self.write_seq.fetchAdd(1, .release);
     }
@@ -502,7 +503,7 @@ pub const StorageEngine = struct {
         table: []const u8,
         id: []const u8,
         namespace: []const u8,
-    ) !ManagedPayload {
+    ) !ManagedResult {
         try self.ensureRunning();
         try self.schema_manager.validateTable(table);
 
@@ -510,8 +511,10 @@ pub const StorageEngine = struct {
         defer allocator.free(cache_key);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
-            return ManagedPayload{
-                .value = handle.data().*,
+            const typed_row_ptr = handle.data();
+            const slice = @as([*]types.TypedRow, @ptrCast(typed_row_ptr))[0..1];
+            return ManagedResult{
+                .rows = slice,
                 .handle = handle,
             };
         } else |err| switch (err) {
@@ -534,16 +537,19 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const payload = try reader.execSelectDocument(allocator, &node.conn, stmt, id, namespace, table_metadata);
-        if (payload) |p| {
+        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, namespace, table_metadata);
+        if (result) |row| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
-                const cache_payload = try p.deepClone(self.allocator);
-                errdefer cache_payload.free(self.allocator);
-                try self.metadata_cache.update(cache_key, cache_payload);
+                const cache_row = try row.clone(self.allocator);
+                errdefer cache_row.deinit(self.allocator);
+                try self.metadata_cache.update(cache_key, cache_row);
             }
+            const items = try allocator.alloc(types.TypedRow, 1);
+            items[0] = row;
+            return ManagedResult{ .rows = items, .allocator = allocator };
         }
-        return ManagedPayload{ .value = payload, .handle = null, .allocator = allocator };
+        return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
     }
 
     /// SELECT for a query filter.
@@ -553,7 +559,7 @@ pub const StorageEngine = struct {
         table: []const u8,
         namespace: []const u8,
         filter: query_parser.QueryFilter,
-    ) !ManagedPayload {
+    ) !ManagedResult {
         try self.ensureRunning();
         try self.schema_manager.validateTable(table);
 
@@ -570,7 +576,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const exec_res = try reader.execQuery(
+        const exec_res = try reader.execQueryTyped(
             allocator,
             &node.conn,
             stmt,
@@ -580,9 +586,9 @@ pub const StorageEngine = struct {
             sort_field,
         );
 
-        return ManagedPayload{
-            .value = exec_res.data,
-            .next_cursor_arr = exec_res.next_cursor_arr,
+        return ManagedResult{
+            .rows = exec_res.rows,
+            .next_cursor = exec_res.next_cursor,
             .handle = null,
             .allocator = allocator,
         };
