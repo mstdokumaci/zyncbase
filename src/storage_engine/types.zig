@@ -285,6 +285,36 @@ pub const TypedValue = union(enum) {
         }
     }
 
+    /// Reads and converts a SQLite result column into a TypedValue.
+    pub fn fromSQLiteColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !TypedValue {
+        const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+        if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
+            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+            const s = if (ptr != null) ptr[0..len] else "[]";
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
+            defer parsed.deinit();
+            return TypedValue.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
+        }
+        return switch (col_type) {
+            sqlite.c.SQLITE_INTEGER => {
+                const val = sqlite.c.sqlite3_column_int64(stmt, i);
+                if (field != null and field.?.sql_type == .boolean) {
+                    return TypedValue{ .scalar = .{ .boolean = val != 0 } };
+                }
+                return TypedValue{ .scalar = .{ .integer = val } };
+            },
+            sqlite.c.SQLITE_FLOAT => TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+            sqlite.c.SQLITE_TEXT => blk: {
+                const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+                const s = if (ptr != null) ptr[0..len] else "";
+                break :blk TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+            },
+            else => .nil,
+        };
+    }
+
     /// Validates if a msgpack.Payload is compatible with a schema field type.
     pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
         if (value == .nil) return;

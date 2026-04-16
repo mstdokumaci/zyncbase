@@ -166,36 +166,6 @@ pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
     return out.toOwnedSlice(allocator);
 }
 
-pub fn readColumnTypedValue(allocator: Allocator, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !types.TypedValue {
-    const col_type = sqlite.c.sqlite3_column_type(stmt, i);
-    _ = db;
-    if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
-        const ptr = sqlite.c.sqlite3_column_text(stmt, i);
-        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
-        const s = if (ptr != null) ptr[0..len] else "[]";
-        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
-        defer parsed.deinit();
-        return types.TypedValue.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
-    }
-    return switch (col_type) {
-        sqlite.c.SQLITE_INTEGER => {
-            const val = sqlite.c.sqlite3_column_int64(stmt, i);
-            if (field != null and field.?.sql_type == .boolean) {
-                return types.TypedValue{ .scalar = .{ .boolean = val != 0 } };
-            }
-            return types.TypedValue{ .scalar = .{ .integer = val } };
-        },
-        sqlite.c.SQLITE_FLOAT => types.TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
-        sqlite.c.SQLITE_TEXT => blk: {
-            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
-            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
-            const s = if (ptr != null) ptr[0..len] else "";
-            break :blk types.TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
-        },
-        else => .nil,
-    };
-}
-
 pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
@@ -288,7 +258,6 @@ pub fn appendConditionSql(
 
 pub fn decodeTypedRow(
     allocator: Allocator,
-    db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: schema_manager.TableMetadata,
 ) !types.TypedRow {
@@ -305,7 +274,7 @@ pub fn decodeTypedRow(
         const col_name = std.mem.span(col_name_c);
         const field = table_metadata.getField(col_name);
 
-        const val = try readColumnTypedValue(allocator, db, stmt, @intCast(i), field);
+        const val = try types.TypedValue.fromSQLiteColumn(allocator, stmt, @intCast(i), field);
         errdefer val.deinit(allocator);
 
         fields[i] = types.FieldEntry{
@@ -331,7 +300,7 @@ pub fn execSelectDocumentTyped(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
-    return try decodeTypedRow(allocator, db, stmt, table_metadata);
+    return try decodeTypedRow(allocator, stmt, table_metadata);
 }
 
 pub fn execQueryTyped(
@@ -358,7 +327,7 @@ pub fn execQueryTyped(
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
 
-        try rows.append(allocator, try decodeTypedRow(allocator, db, stmt, table_metadata));
+        try rows.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
     }
 
     var next_cursor: ?types.TypedCursor = null;

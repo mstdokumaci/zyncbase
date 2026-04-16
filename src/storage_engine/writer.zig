@@ -484,7 +484,7 @@ pub fn executeUpsert(
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeTypedRow(allocator, conn, stmt, table_metadata);
+        return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
     if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
@@ -507,7 +507,7 @@ pub fn executeDelete(
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeTypedRow(allocator, conn, stmt, table_metadata);
+        return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
     if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
