@@ -519,6 +519,7 @@ pub const SubscriptionEngine = struct {
             },
             .in => blk: {
                 if (val != .scalar) break :blk false;
+                if (cond.value == null or cond.value.? != .array) break :blk false;
                 for (cond.value.?.array) |item| {
                     if (scalarValuesEqual(val.scalar, item)) break :blk true;
                 }
@@ -526,6 +527,7 @@ pub const SubscriptionEngine = struct {
             },
             .notIn => blk: {
                 if (val != .scalar) break :blk true;
+                if (cond.value == null or cond.value.? != .array) break :blk false;
                 for (cond.value.?.array) |item| {
                     if (scalarValuesEqual(val.scalar, item)) break :blk false;
                 }
@@ -535,6 +537,7 @@ pub const SubscriptionEngine = struct {
     }
 
     fn scalarValuesEqual(a: types.ScalarValue, b: types.ScalarValue) bool {
+        if (@as(std.meta.Tag(types.ScalarValue), a) != @as(std.meta.Tag(types.ScalarValue), b)) return false;
         return switch (a) {
             .integer => a.integer == b.integer,
             .real => a.real == b.real,
