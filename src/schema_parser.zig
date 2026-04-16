@@ -103,6 +103,10 @@ pub const TableMetadata = struct {
         var field_map = std.StringHashMap(Field).init(allocator);
         errdefer field_map.deinit();
 
+        for (built_in_columns) |f| {
+            try field_map.put(f.name, f);
+        }
+
         for (table.fields) |f| {
             try field_map.put(f.name, f);
         }

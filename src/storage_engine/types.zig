@@ -88,18 +88,15 @@ pub const ManagedResult = struct {
 };
 
 pub const FieldEntry = struct {
-    name: []const u8, // Owned
+    name: []const u8, // Borrowed (schema metadata/static)
     value: TypedValue,
 
     pub fn deinit(self: FieldEntry, allocator: Allocator) void {
-        allocator.free(self.name);
         self.value.deinit(allocator);
     }
 
     pub fn clone(self: FieldEntry, allocator: Allocator) !FieldEntry {
-        const name = try allocator.dupe(u8, self.name);
-        errdefer allocator.free(name);
-        return .{ .name = name, .value = try self.value.clone(allocator) };
+        return .{ .name = self.name, .value = try self.value.clone(allocator) };
     }
 };
 

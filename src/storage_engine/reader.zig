@@ -272,13 +272,13 @@ pub fn decodeTypedRow(
     while (i < col_count) : (i += 1) {
         const col_name_c = sqlite.c.sqlite3_column_name(stmt, @intCast(i)) orelse return error.InternalError;
         const col_name = std.mem.span(col_name_c);
-        const field = table_metadata.getField(col_name);
+        const field = table_metadata.getField(col_name) orelse return types.StorageError.UnknownField;
 
         const val = try types.TypedValue.fromSQLiteColumn(allocator, stmt, @intCast(i), field);
         errdefer val.deinit(allocator);
 
         fields[i] = types.FieldEntry{
-            .name = try allocator.dupe(u8, col_name),
+            .name = field.name,
             .value = val,
         };
     }

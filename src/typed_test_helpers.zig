@@ -49,7 +49,7 @@ pub fn row(allocator: std.mem.Allocator, fields: anytype) !TypedRow {
     inline for (info.@"struct".fields, 0..) |f, i| {
         const val = @field(fields, f.name);
         entries[i] = .{
-            .name = try allocator.dupe(u8, f.name),
+            .name = f.name,
             .value = try val.clone(allocator),
         };
     }
