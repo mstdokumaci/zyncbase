@@ -310,6 +310,42 @@ test "SubscriptionEngine: in operator subscribe and match" {
     try testing.expectEqual(@as(usize, 1), matches.len);
 }
 
+test "SubscriptionEngine: canonical key normalizes array element order" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const in_val_1 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .integer = 1 },
+        .{ .integer = 2 },
+        .{ .integer = 3 },
+    });
+    defer in_val_1.deinit(allocator);
+    const in_val_2 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .integer = 3 },
+        .{ .integer = 1 },
+        .{ .integer = 2 },
+    });
+    defer in_val_2.deinit(allocator);
+
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "id", .op = .in, .value = in_val_1, .field_type = .integer, .items_type = null },
+    });
+    defer filter1.deinit(allocator);
+
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "id", .op = .in, .value = in_val_2, .field_type = .integer, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
+
+    const first = try engine.subscribe("ns", "coll", filter1, 1, 101);
+    const second = try engine.subscribe("ns", "coll", filter2, 2, 102);
+
+    try testing.expect(first);
+    try testing.expect(!second);
+    try testing.expectEqual(@as(u32, 1), engine.groups.count());
+}
+
 test "SubscriptionEngine: notIn operator subscribe and match" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);

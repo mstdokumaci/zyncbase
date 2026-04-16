@@ -50,6 +50,7 @@ test {
     _ = @import("storage_engine_query_property_test.zig");
     _ = @import("subscription_engine_test.zig");
     _ = @import("subscription_engine_perf_test.zig");
+    _ = @import("contains_array_equivalence_test.zig");
 
     // Thread-safety tests
     _ = @import("subscription_engine_thread_safety_test.zig");

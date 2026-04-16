@@ -1,0 +1,229 @@
+const std = @import("std");
+const testing = std.testing;
+const storage_engine = @import("storage_engine.zig");
+const ColumnValue = storage_engine.ColumnValue;
+const schema_manager = @import("schema_manager.zig");
+const query_parser = @import("query_parser.zig");
+const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const sth = @import("storage_engine_test_helpers.zig");
+const qth = @import("query_parser_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
+
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow) !std.StringHashMap(void) {
+    var ids = std.StringHashMap(void).init(allocator);
+    errdefer ids.deinit();
+    for (rows) |row| {
+        const id_val = row.getField("id") orelse continue;
+        try ids.put(id_val.scalar.text, {});
+    }
+    return ids;
+}
+
+test "contains on array field: SQL and in-memory evaluator return same rows (text)" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "tags", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+    };
+    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    const ns = "ns";
+
+    {
+        const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
+        defer tags_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
+            .{ .name = "tags", .value = tags_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("items", "1", ns, &cols);
+    }
+
+    {
+        const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
+        defer tags_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Task 2"), .field_type = .text },
+            .{ .name = "tags", .value = tags_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("items", "2", ns, &cols);
+    }
+
+    {
+        const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "work" } });
+        defer tags_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Task 3"), .field_type = .text },
+            .{ .name = "tags", .value = tags_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("items", "3", ns, &cols);
+    }
+
+    {
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Task 4"), .field_type = .text },
+        };
+        try engine.insertOrReplace("items", "4", ns, &cols);
+    }
+
+    try engine.flushPendingWrites();
+
+    // --- SQL path: tags contains "urgent" ---
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{
+            .field = "tags",
+            .op = .contains,
+            .value = tth.valText("urgent"),
+            .field_type = .array,
+            .items_type = .text,
+        },
+    });
+    defer sql_filter.deinit(allocator);
+
+    var sql_managed = try engine.selectQuery(allocator, "items", ns, sql_filter);
+    defer sql_managed.deinit();
+
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    defer sql_ids.deinit();
+
+    // --- In-memory path ---
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{
+            .field = "tags",
+            .op = .contains,
+            .value = tth.valText("urgent"),
+            .field_type = .array,
+            .items_type = .text,
+        },
+    });
+    defer mem_filter.deinit(allocator);
+
+    var all_filter = try qth.makeDefaultFilter(allocator);
+    defer all_filter.deinit(allocator);
+
+    var all_managed = try engine.selectQuery(allocator, "items", ns, all_filter);
+    defer all_managed.deinit();
+
+    var mem_ids = std.StringHashMap(void).init(allocator);
+    defer mem_ids.deinit();
+
+    for (all_managed.rows) |row| {
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
+            const id_val = row.getField("id") orelse continue;
+            try mem_ids.put(id_val.scalar.text, {});
+        }
+    }
+
+    // --- Assert equivalence ---
+    try testing.expectEqual(sql_ids.count(), mem_ids.count());
+    var iter = sql_ids.iterator();
+    while (iter.next()) |entry| {
+        try testing.expect(mem_ids.contains(entry.key_ptr.*));
+    }
+}
+
+test "contains on array field: SQL and in-memory evaluator return same rows (integer)" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema_manager.Field{
+        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "scores", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
+    };
+    const table = schema_manager.Table{ .name = "players", .fields = &fields_arr };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    const ns = "ns";
+
+    {
+        const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } });
+        defer arr_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Alice"), .field_type = .text },
+            .{ .name = "scores", .value = arr_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("players", "1", ns, &cols);
+    }
+
+    {
+        const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 5 }, .{ .integer = 15 } });
+        defer arr_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Bob"), .field_type = .text },
+            .{ .name = "scores", .value = arr_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("players", "2", ns, &cols);
+    }
+
+    {
+        const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 20 }, .{ .integer = 40 } });
+        defer arr_tv.deinit(allocator);
+        const cols = [_]ColumnValue{
+            .{ .name = "name", .value = tth.valText("Carol"), .field_type = .text },
+            .{ .name = "scores", .value = arr_tv, .field_type = .array },
+        };
+        try engine.insertOrReplace("players", "3", ns, &cols);
+    }
+
+    try engine.flushPendingWrites();
+
+    // --- SQL path: scores contains 20 ---
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{
+            .field = "scores",
+            .op = .contains,
+            .value = tth.valInt(20),
+            .field_type = .array,
+            .items_type = .integer,
+        },
+    });
+    defer sql_filter.deinit(allocator);
+
+    var sql_managed = try engine.selectQuery(allocator, "players", ns, sql_filter);
+    defer sql_managed.deinit();
+
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    defer sql_ids.deinit();
+
+    // --- In-memory path ---
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{
+            .field = "scores",
+            .op = .contains,
+            .value = tth.valInt(20),
+            .field_type = .array,
+            .items_type = .integer,
+        },
+    });
+    defer mem_filter.deinit(allocator);
+
+    var all_filter = try qth.makeDefaultFilter(allocator);
+    defer all_filter.deinit(allocator);
+
+    var all_managed = try engine.selectQuery(allocator, "players", ns, all_filter);
+    defer all_managed.deinit();
+
+    var mem_ids = std.StringHashMap(void).init(allocator);
+    defer mem_ids.deinit();
+
+    for (all_managed.rows) |row| {
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
+            const id_val = row.getField("id") orelse continue;
+            try mem_ids.put(id_val.scalar.text, {});
+        }
+    }
+
+    // --- Assert equivalence ---
+    try testing.expectEqual(sql_ids.count(), mem_ids.count());
+    var iter = sql_ids.iterator();
+    while (iter.next()) |entry| {
+        try testing.expect(mem_ids.contains(entry.key_ptr.*));
+    }
+}

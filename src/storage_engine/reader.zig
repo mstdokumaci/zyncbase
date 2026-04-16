@@ -208,11 +208,21 @@ pub fn appendConditionSql(
         },
         .contains => {
             const val = cond.value orelse return error.MissingConditionValue;
-            const raw_str = val.scalar.text;
-            const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
-            try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
+            if (cond.field_type == .array) {
+                try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
+                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
+                try values.append(allocator, try val.clone(allocator));
+                return;
+            } else {
+                if (val != .scalar or val.scalar != .text) {
+                    return error.InvalidConditionValue;
+                }
+                const escaped = try escapeLikePattern(allocator, val.scalar.text);
+                errdefer allocator.free(escaped);
+                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
+                try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
+            }
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;

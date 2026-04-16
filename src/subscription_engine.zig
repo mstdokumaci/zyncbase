@@ -294,18 +294,46 @@ pub const SubscriptionEngine = struct {
         return try matches.toOwnedSlice(allocator);
     }
 
-    const SortableCondition = struct {
-        cond: Condition,
-        val_str: []const u8,
-
-        fn lessThan(_: void, a: SortableCondition, b: SortableCondition) bool {
-            const f = std.mem.order(u8, a.cond.field, b.cond.field);
-            if (f != .eq) return f == .lt;
-            const o = std.math.order(@intFromEnum(a.cond.op), @intFromEnum(b.cond.op));
-            if (o != .eq) return o == .lt;
-            return std.mem.order(u8, a.val_str, b.val_str) == .lt;
+    fn scalarValueLessThan(_: void, a: types.ScalarValue, b: types.ScalarValue) bool {
+        if (@as(std.meta.Tag(types.ScalarValue), a) != @as(std.meta.Tag(types.ScalarValue), b)) {
+            return @intFromEnum(a) < @intFromEnum(b);
         }
-    };
+        return switch (a) {
+            .integer => |iv| iv < b.integer,
+            .real => |rv| rv < b.real,
+            .text => |tv| std.mem.order(u8, tv, b.text) == .lt,
+            .boolean => |bv| @intFromBool(bv) < @intFromBool(b.boolean),
+        };
+    }
+
+    fn typedValueLessThan(_: void, a: TypedValue, b: TypedValue) bool {
+        if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) {
+            return @intFromEnum(a) < @intFromEnum(b);
+        }
+        return switch (a) {
+            .nil => false,
+            .scalar => |sa| scalarValueLessThan({}, sa, b.scalar),
+            .array => |arr_a| blk: {
+                const arr_b = b.array;
+                const min_len = @min(arr_a.len, arr_b.len);
+                for (0..min_len) |i| {
+                    if (scalarValueLessThan({}, arr_a[i], arr_b[i])) break :blk true;
+                    if (scalarValueLessThan({}, arr_b[i], arr_a[i])) break :blk false;
+                }
+                break :blk arr_a.len < arr_b.len;
+            },
+        };
+    }
+
+    fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
+        const f = std.mem.order(u8, a.field, b.field);
+        if (f != .eq) return f == .lt;
+        const o = std.math.order(@intFromEnum(a.op), @intFromEnum(b.op));
+        if (o != .eq) return o == .lt;
+        const va = a.value orelse return b.value != null;
+        const vb = b.value orelse return false;
+        return typedValueLessThan({}, va, vb);
+    }
 
     fn appendTypedValueKey(
         allocator: Allocator,
@@ -325,8 +353,23 @@ pub const SubscriptionEngine = struct {
                 .boolean => |bv| try writer.print("b:{}", .{@intFromBool(bv)}),
             },
             .array => |arr| {
+                const max_inline = 64;
+                var inline_buf: [max_inline]types.ScalarValue = undefined;
+                var heap_buf: ?[]types.ScalarValue = null;
+                defer if (heap_buf) |buf| allocator.free(buf);
+
+                const sorted = if (arr.len <= max_inline)
+                    inline_buf[0..arr.len]
+                else blk: {
+                    const buf = try allocator.alloc(types.ScalarValue, arr.len);
+                    heap_buf = buf;
+                    break :blk buf;
+                };
+                @memcpy(sorted, arr);
+                std.sort.pdq(types.ScalarValue, sorted, {}, scalarValueLessThan);
+
                 try writer.writeAll("a:[");
-                for (arr, 0..) |item, i| {
+                for (sorted, 0..) |item, i| {
                     if (i > 0) try list.append(allocator, ',');
                     try appendTypedValueKey(allocator, list, TypedValue{ .scalar = item });
                 }
@@ -346,34 +389,35 @@ pub const SubscriptionEngine = struct {
 
         if (prefix) |p| try list.appendSlice(allocator, p);
 
-        var sortable = try allocator.alloc(SortableCondition, conds.len);
-        defer allocator.free(sortable);
+        const max_inline = 16;
+        var inline_buf: [max_inline]Condition = undefined;
+        var heap_buf: ?[]Condition = null;
+        defer if (heap_buf) |buf| allocator.free(buf);
 
-        var count: usize = 0;
-        errdefer {
-            for (0..count) |i| allocator.free(@constCast(sortable[i].val_str));
-        }
+        const sorted = if (conds.len <= max_inline)
+            inline_buf[0..conds.len]
+        else blk: {
+            const buf = try allocator.alloc(Condition, conds.len);
+            heap_buf = buf;
+            break :blk buf;
+        };
+        @memcpy(sorted, conds);
 
-        for (conds) |c| {
-            var val_buf = std.ArrayListUnmanaged(u8).empty;
-            errdefer val_buf.deinit(allocator);
+        std.sort.pdq(Condition, sorted, {}, conditionLessThan);
+
+        const writer = list.writer(allocator);
+        for (sorted) |c| {
+            try writer.writeAll("(");
+            try writer.writeAll(c.field);
+            try writer.writeAll(":");
+            try writer.writeAll(@tagName(c.op));
+            try writer.writeAll(":");
             if (c.value) |v| {
-                try appendTypedValueKey(allocator, &val_buf, v);
+                try appendTypedValueKey(allocator, list, v);
             } else {
-                try val_buf.appendSlice(allocator, "null");
+                try writer.writeAll("null");
             }
-            const val_str = try val_buf.toOwnedSlice(allocator);
-            sortable[count] = .{ .cond = c, .val_str = val_str };
-            count += 1;
-        }
-
-        std.sort.pdq(SortableCondition, sortable, {}, SortableCondition.lessThan);
-
-        for (sortable) |sc| {
-            const s = try std.fmt.allocPrint(allocator, "({s}:{s}:{s})", .{ sc.cond.field, @tagName(sc.cond.op), sc.val_str });
-            defer allocator.free(s);
-            try list.appendSlice(allocator, s);
-            allocator.free(@constCast(sc.val_str));
+            try writer.writeAll(")");
         }
     }
 
@@ -459,24 +503,46 @@ pub const SubscriptionEngine = struct {
                 break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
             },
             .contains => blk: {
-                if (val != .scalar or val.scalar != .text) break :blk false;
-                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+                if (cond.field_type == .array) {
+                    if (val != .array) break :blk false;
+                    if (cond.value == null) break :blk false;
+                    if (cond.value.? != .scalar) break :blk false;
+                    for (val.array) |item| {
+                        if (scalarValuesEqual(cond.value.?.scalar, item)) break :blk true;
+                    }
+                    break :blk false;
+                } else {
+                    if (val != .scalar or val.scalar != .text) break :blk false;
+                    if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+                    break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+                }
             },
             .in => blk: {
+                if (val != .scalar) break :blk false;
                 if (cond.value == null or cond.value.? != .array) break :blk false;
                 for (cond.value.?.array) |item| {
-                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk true;
+                    if (scalarValuesEqual(val.scalar, item)) break :blk true;
                 }
                 break :blk false;
             },
             .notIn => blk: {
-                if (cond.value == null or cond.value.? != .array) break :blk true;
+                if (val != .scalar) break :blk true;
+                if (cond.value == null or cond.value.? != .array) break :blk false;
                 for (cond.value.?.array) |item| {
-                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk false;
+                    if (scalarValuesEqual(val.scalar, item)) break :blk false;
                 }
                 break :blk true;
             },
+        };
+    }
+
+    fn scalarValuesEqual(a: types.ScalarValue, b: types.ScalarValue) bool {
+        if (@as(std.meta.Tag(types.ScalarValue), a) != @as(std.meta.Tag(types.ScalarValue), b)) return false;
+        return switch (a) {
+            .integer => a.integer == b.integer,
+            .real => a.real == b.real,
+            .text => std.mem.eql(u8, a.text, b.text),
+            .boolean => a.boolean == b.boolean,
         };
     }
 
@@ -484,12 +550,7 @@ pub const SubscriptionEngine = struct {
         if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return false;
         return switch (a) {
             .nil => true,
-            .scalar => |sa| switch (sa) {
-                .integer => sa.integer == b.scalar.integer,
-                .real => sa.real == b.scalar.real,
-                .text => std.mem.eql(u8, sa.text, b.scalar.text),
-                .boolean => sa.boolean == b.scalar.boolean,
-            },
+            .scalar => scalarValuesEqual(a.scalar, b.scalar),
             .array => |arr| blk: {
                 if (arr.len != b.array.len) break :blk false;
                 for (arr, 0..) |item, i| {
