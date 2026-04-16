@@ -3,7 +3,7 @@ const testing = std.testing;
 const protocol = @import("protocol.zig");
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const storage_engine = @import("storage_engine.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "extractAs: Envelope from valid map" {
     const allocator = testing.allocator;
@@ -165,7 +165,7 @@ test "buildErrorResponse: produces valid MsgPack" {
 test "encodeDeltaSuffix: set operation" {
     const allocator = testing.allocator;
 
-    const id_val = storage_engine.TypedValue{ .scalar = .{ .integer = 12345 } };
+    const id_val = tth.valInt(12345);
     const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_val, false, null);
     defer allocator.free(suffix);
 
@@ -201,7 +201,7 @@ test "encodeDeltaSuffix: set operation" {
 test "encodeDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
-    const id_val = storage_engine.TypedValue{ .scalar = .{ .integer = 999 } };
+    const id_val = tth.valInt(999);
     const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_val, true, null);
     defer allocator.free(suffix);
 
@@ -267,7 +267,7 @@ test "store_delta_header: decodes to StoreDelta type" {
 test "encodeDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
-    const id_val = storage_engine.TypedValue{ .scalar = .{ .text = "doc-abc-123" } };
+    const id_val = tth.valText("doc-abc-123");
     const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_val, false, null);
     defer allocator.free(suffix);
 

@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
@@ -34,8 +35,8 @@ test "StorageEngine: insert and select basic" {
 
     // Insert
     const cols = [_]sth.ColumnValue{
-        .{ .name = "name", .value = .{ .scalar = .{ .text = "Alice" } }, .field_type = .text },
-        .{ .name = "age", .value = .{ .scalar = .{ .integer = 30 } }, .field_type = .integer },
+        .{ .name = "name", .value = tth.valText("Alice"), .field_type = .text },
+        .{ .name = "age", .value = tth.valInt(30), .field_type = .integer },
     };
     try engine.insertOrReplace("users", "id1", "ns", &cols);
     try engine.flushPendingWrites();
@@ -62,11 +63,11 @@ test "StorageEngine: update document" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "v1" } }, .field_type = .text }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("v1"), .field_type = .text }};
     try engine.insertOrReplace("test", "id1", "ns", &cols1);
     try engine.flushPendingWrites();
 
-    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "v2" } }, .field_type = .text }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("v2"), .field_type = .text }};
     try engine.insertOrReplace("test", "id1", "ns", &cols2);
     try engine.flushPendingWrites();
 
@@ -89,7 +90,7 @@ test "StorageEngine: delete document" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    try engine.insertOrReplace("test", "id1", "ns", &[_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "foo" } }, .field_type = .text }});
+    try engine.insertOrReplace("test", "id1", "ns", &[_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("foo"), .field_type = .text }});
     try engine.flushPendingWrites();
 
     try engine.deleteDocument("test", "id1", "ns");
@@ -109,7 +110,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     const engine = &ctx.engine;
 
     // Set a value
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "test" } }, .field_type = .text }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("test"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols);
     // Flush writes
     try engine.flushPendingWrites();
@@ -143,11 +144,11 @@ test "StorageEngine: update existing document" {
     const engine = &ctx.engine;
 
     // Set initial value
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "initial" } }, .field_type = .text }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("initial"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
     try engine.flushPendingWrites();
     // Update value
-    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "updated" } }, .field_type = .text }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("updated"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Get the value
@@ -167,9 +168,9 @@ test "StorageEngine: query collection" {
     const engine = &ctx.engine;
 
     // Set multiple documents
-    const cols1 = [_]sth.ColumnValue{.{ .name = "name", .value = .{ .scalar = .{ .text = "Alice" } }, .field_type = .text }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "name", .value = tth.valText("Alice"), .field_type = .text }};
     try engine.insertOrReplace("users", "1", "test_namespace", &cols1);
-    const cols2 = [_]sth.ColumnValue{.{ .name = "name", .value = .{ .scalar = .{ .text = "Bob" } }, .field_type = .text }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "name", .value = tth.valText("Bob"), .field_type = .text }};
     try engine.insertOrReplace("users", "2", "test_namespace", &cols2);
     try engine.flushPendingWrites();
     // Query for collection using empty filter
@@ -189,9 +190,9 @@ test "StorageEngine: multiple namespaces" {
     const engine = &ctx.engine;
 
     // Set values in different namespaces
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "ns1" } }, .field_type = .text }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("ns1"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "namespace1", &cols1);
-    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "ns2" } }, .field_type = .text }};
+    const cols2 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("ns2"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "namespace2", &cols2);
     try engine.flushPendingWrites();
     // Get values from different namespaces
@@ -246,7 +247,7 @@ test "StorageEngine: automatic rollback in batch operations" {
     const engine = &ctx.engine;
 
     // Queue some operations
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "test_ns", &cols);
     try engine.insertOrReplace("items", "id2", "test_ns", &cols);
     // Wait for operations to be processed
@@ -272,7 +273,7 @@ test "StorageEngine: concurrent reads" {
     const engine = &ctx.engine;
 
     // Set some values
-    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .integer = 1 } }, .field_type = .integer }};
+    const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valInt(1), .field_type = .integer }};
     try engine.insertOrReplace("items", "id1", "test_namespace", &cols1);
     try engine.insertOrReplace("items", "id2", "test_namespace", &cols1);
     try engine.flushPendingWrites();
@@ -319,7 +320,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         for (0..num_keys) |i| {
             var id_buf: [32]u8 = undefined;
             const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
-            const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .integer = @intCast(i) } }, .field_type = .integer }};
+            const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valInt(@intCast(i)), .field_type = .integer }};
             try engine.insertOrReplace("items", id, "ns", &cols);
         }
         // deinitNoCleanup will stop the engine but NOT delete the files.
@@ -358,7 +359,7 @@ test "StorageEngine: client writes blocked during migration" {
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
     // insertOrReplace should be blocked
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .integer = 1 } }, .field_type = .integer }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valInt(1), .field_type = .integer }};
     const err1 = engine.insertOrReplace("items", "id1", "ns", &cols);
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
@@ -381,7 +382,7 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     // 2. Begin transaction
     try engine.beginTransaction();
     // 3. Write something
-    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "updated" } }, .field_type = .text }};
+    const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("updated"), .field_type = .text }};
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     // 4. Flush batch. This should increment write_seq to 2.
     try engine.flushPendingWrites();

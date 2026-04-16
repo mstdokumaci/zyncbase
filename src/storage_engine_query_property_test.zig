@@ -6,6 +6,7 @@ const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
@@ -58,9 +59,9 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
         const score = random.float(f64) * 1000.0;
 
         const cols = [_]ColumnValue{
-            .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
-            .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
-            .{ .name = "score", .value = .{ .scalar = .{ .real = score } }, .field_type = .real },
+            .{ .name = "name", .value = tth.valText(name), .field_type = .text },
+            .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
+            .{ .name = "score", .value = tth.valReal(score), .field_type = .real },
         };
         try engine.insertOrReplace("entities", id, "ns1", &cols);
     }
@@ -129,13 +130,13 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {
-            value = .{ .scalar = .{ .text = try allocator.dupe(u8, "test_value") } };
+            value = try tth.valTextOwned(allocator, "test_value");
         } else if (std.mem.eql(u8, field, "name")) {
-            value = .{ .scalar = .{ .text = try allocator.dupe(u8, "name_5") } };
+            value = try tth.valTextOwned(allocator, "name_5");
         } else if (std.mem.eql(u8, field, "age")) {
-            value = .{ .scalar = .{ .integer = random.intRangeAtMost(i64, 0, 100) } };
+            value = tth.valInt(random.intRangeAtMost(i64, 0, 100));
         } else {
-            value = .{ .scalar = .{ .real = 500.0 } };
+            value = tth.valReal(500.0);
         }
     }
 

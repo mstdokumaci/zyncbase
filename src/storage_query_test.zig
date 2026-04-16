@@ -36,7 +36,7 @@ test "StorageEngine: selectQuery basic equality" {
     conds[0] = .{
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
-        .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "Bob") } },
+        .value = try tth.valTextOwned(allocator, "Bob"),
         .field_type = .text,
         .items_type = null,
     };
@@ -76,14 +76,14 @@ test "StorageEngine: selectQuery with OR and ordering" {
     or_conds[0] = .{
         .field = try allocator.dupe(u8, "age"),
         .op = .lt,
-        .value = .{ .scalar = .{ .integer = 30 } },
+        .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
     or_conds[1] = .{
         .field = try allocator.dupe(u8, "age"),
         .op = .gt,
-        .value = .{ .scalar = .{ .integer = 30 } },
+        .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
@@ -134,7 +134,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
-        .sort_value = .{ .scalar = .{ .integer = 100 } },
+        .sort_value = tth.valInt(100),
         .id = try allocator.dupe(u8, "id2"),
     };
 
@@ -149,15 +149,15 @@ test "StorageEngine: selectQuery pagination (after)" {
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
-        .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
+        .{ .name = "name", .value = tth.valText(name), .field_type = .text },
+        .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
     };
     try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
-        .{ .name = "score", .value = .{ .scalar = .{ .integer = score } }, .field_type = .integer },
+        .{ .name = "score", .value = tth.valInt(score), .field_type = .integer },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
@@ -208,7 +208,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .scalar = .{ .text = "Task 1" } }, .field_type = .text },
+        .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
         .{ .name = "tags", .value = tags_tv, .field_type = .array },
         .{ .name = "labels", .value = labels_tv, .field_type = .array },
     };
@@ -222,7 +222,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     conds[0] = .{
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
-        .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "Task 1") } },
+        .value = try tth.valTextOwned(allocator, "Task 1"),
         .field_type = .text,
         .items_type = null,
     };
@@ -273,7 +273,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "p%l") } },
+            .value = try tth.valTextOwned(allocator, "p%l"),
             .field_type = .text,
             .items_type = null,
         };
@@ -293,7 +293,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "p_l") } },
+            .value = try tth.valTextOwned(allocator, "p_l"),
             .field_type = .text,
             .items_type = null,
         };
@@ -313,7 +313,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .startsWith,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "ap_") } },
+            .value = try tth.valTextOwned(allocator, "ap_"),
             .field_type = .text,
             .items_type = null,
         };
@@ -333,7 +333,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .endsWith,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "%le") } },
+            .value = try tth.valTextOwned(allocator, "%le"),
             .field_type = .text,
             .items_type = null,
         };
@@ -353,7 +353,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "\\") } },
+            .value = try tth.valTextOwned(allocator, "\\"),
             .field_type = .text,
             .items_type = null,
         };
@@ -381,7 +381,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = .{ .scalar = .{ .text = try allocator.dupe(u8, malicious) } },
+            .value = try tth.valTextOwned(allocator, malicious),
             .field_type = .text,
             .items_type = null,
         };
@@ -402,7 +402,7 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
     const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = .{ .scalar = .{ .text = data } }, .field_type = .text },
+        .{ .name = "data", .value = tth.valText(data), .field_type = .text },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

@@ -9,8 +9,16 @@ pub fn valText(t: []const u8) TypedValue {
     return .{ .scalar = .{ .text = t } };
 }
 
+pub fn valTextOwned(allocator: std.mem.Allocator, t: []const u8) !TypedValue {
+    return .{ .scalar = .{ .text = try allocator.dupe(u8, t) } };
+}
+
 pub fn valInt(i: i64) TypedValue {
     return .{ .scalar = .{ .integer = i } };
+}
+
+pub fn valReal(r: f64) TypedValue {
+    return .{ .scalar = .{ .real = r } };
 }
 
 pub fn valBool(b: bool) TypedValue {

@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 const sub_eng = @import("subscription_engine.zig");
 const cb = @import("change_buffer.zig");
@@ -33,7 +34,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         "id1",
         "ns",
         &[_]sth.ColumnValue{
-            .{ .name = "val", .value = .{ .scalar = .{ .text = "task 1" } }, .field_type = .text },
+            .{ .name = "val", .value = tth.valText("task 1"), .field_type = .text },
         },
     );
 
@@ -43,7 +44,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     conditions[0] = query_parser.Condition{
         .field = try allocator.dupe(u8, "val"),
         .op = .eq,
-        .value = .{ .scalar = .{ .text = try allocator.dupe(u8, "task 1") } },
+        .value = try tth.valTextOwned(allocator, "task 1"),
         .field_type = .text,
         .items_type = null,
     };
