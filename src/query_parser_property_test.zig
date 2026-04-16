@@ -95,7 +95,11 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
         var cond = try allocator.alloc(msgpack.Payload, 3);
         cond[0] = try msgpack.Payload.strToPayload(field, allocator);
         cond[1] = msgpack.Payload.uintToPayload(op_code);
-        cond[2] = try randomValueForType(allocator, random, field_type);
+        cond[2] = switch (op_code) {
+            6, 7, 8 => try msgpack.Payload.strToPayload("v", allocator),
+            9, 10 => try randomInValueForType(allocator, random, field_type),
+            else => try randomValueForType(allocator, random, field_type),
+        };
         return .{ .arr = cond };
     }
 }
@@ -112,4 +116,13 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
             break :blk .{ .arr = arr };
         },
     };
+}
+
+fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_manager.FieldType) !msgpack.Payload {
+    const len = random.intRangeAtMost(usize, 0, 3);
+    const arr = try allocator.alloc(msgpack.Payload, len);
+    for (arr) |*item| {
+        item.* = try randomValueForType(allocator, random, field_type);
+    }
+    return .{ .arr = arr };
 }

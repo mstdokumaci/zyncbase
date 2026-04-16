@@ -219,6 +219,13 @@ pub const err_msg_invalid_payload = comptimeEncodeKey("Invalid payload structure
 pub const err_msg_invalid_query_filter = comptimeEncodeKey("Invalid query filter format");
 pub const err_msg_unknown_operator = comptimeEncodeKey("Unknown query operator");
 pub const err_msg_malformed_sort = comptimeEncodeKey("Malformed sort parameters");
+pub const err_msg_missing_query_operand = comptimeEncodeKey("Query operator is missing an operand");
+pub const err_msg_unexpected_query_operand = comptimeEncodeKey("Query operator does not accept an operand");
+pub const err_msg_invalid_query_operand_type = comptimeEncodeKey("Query operand type is invalid for this field");
+pub const err_msg_invalid_in_operand = comptimeEncodeKey("IN and NOT IN require an array operand");
+pub const err_msg_null_query_operand = comptimeEncodeKey("Null is not allowed as a query operand");
+pub const err_msg_unsupported_query_operator = comptimeEncodeKey("Query operator is not supported for this field type");
+pub const err_msg_invalid_cursor_sort_value = comptimeEncodeKey("Cursor sort value does not match the active sort field");
 pub const err_msg_invalid_sub_id_format = comptimeEncodeKey("Invalid subscription ID format");
 pub const err_msg_missing_required_fields = comptimeEncodeKey("Request missing required fields");
 pub const err_msg_missing_sub_id = comptimeEncodeKey("Request missing subscription ID");
@@ -321,7 +328,20 @@ pub fn mapErrorToCode(err: anyerror) []const u8 {
         error.TypeMismatch, error.ConstraintViolation => err_code_schema_validation_failed,
         error.InvalidArrayElement => err_code_invalid_array_element,
         error.InvalidFieldName => err_code_invalid_field_name,
-        error.InvalidMessageFormat, error.InvalidPayload, error.InvalidConditionFormat, error.InvalidOperatorCode, error.InvalidSortFormat, error.InvalidSubscriptionId => err_code_invalid_message,
+        error.InvalidMessageFormat,
+        error.InvalidPayload,
+        error.InvalidConditionFormat,
+        error.InvalidOperatorCode,
+        error.InvalidSortFormat,
+        error.MissingOperand,
+        error.UnexpectedOperand,
+        error.InvalidOperandType,
+        error.InvalidInOperand,
+        error.NullOperandUnsupported,
+        error.UnsupportedOperatorForFieldType,
+        error.InvalidCursorSortValue,
+        error.InvalidSubscriptionId,
+        => err_code_invalid_message,
         error.MissingRequiredFields, error.MissingSubscriptionId => err_code_invalid_message_format,
         error.SubscriptionNotFound => err_code_subscription_not_found,
         error.AuthFailed => err_code_auth_failed,
@@ -350,6 +370,13 @@ pub fn mapErrorToMessage(err: anyerror) []const u8 {
         error.InvalidConditionFormat => err_msg_invalid_query_filter,
         error.InvalidOperatorCode => err_msg_unknown_operator,
         error.InvalidSortFormat => err_msg_malformed_sort,
+        error.MissingOperand => err_msg_missing_query_operand,
+        error.UnexpectedOperand => err_msg_unexpected_query_operand,
+        error.InvalidOperandType => err_msg_invalid_query_operand_type,
+        error.InvalidInOperand => err_msg_invalid_in_operand,
+        error.NullOperandUnsupported => err_msg_null_query_operand,
+        error.UnsupportedOperatorForFieldType => err_msg_unsupported_query_operator,
+        error.InvalidCursorSortValue => err_msg_invalid_cursor_sort_value,
         error.InvalidSubscriptionId => err_msg_invalid_sub_id_format,
         error.MissingRequiredFields => err_msg_missing_required_fields,
         error.MissingSubscriptionId => err_msg_missing_sub_id,
