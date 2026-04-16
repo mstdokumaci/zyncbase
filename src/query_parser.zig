@@ -141,6 +141,14 @@ pub const ParserError = error{
     MissingRequiredFields,
     UnknownTable,
     UnknownField,
+    TypeMismatch,
+    MissingOperand,
+    UnexpectedOperand,
+    InvalidOperandType,
+    InvalidInOperand,
+    NullOperandUnsupported,
+    UnsupportedOperatorForFieldType,
+    InvalidCursorSortValue,
     OutOfMemory,
 };
 
@@ -159,15 +167,25 @@ pub fn parseCursorToken(
     if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
     if (cursor_payload.arr[1] != .str) return error.InvalidMessageFormat;
 
-    const sort_value = TypedValue.fromPayload(allocator, field_type, items_type, cursor_payload.arr[0]) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidMessageFormat,
-    };
+    const sort_value = try parseCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
     errdefer sort_value.deinit(allocator);
 
     return Cursor{
         .sort_value = sort_value,
         .id = try allocator.dupe(u8, cursor_payload.arr[1].str.value()),
+    };
+}
+
+fn parseCursorSortValue(
+    allocator: std.mem.Allocator,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
+    payload: msgpack.Payload,
+) ParserError!TypedValue {
+    if (payload == .nil) return error.InvalidCursorSortValue;
+    return TypedValue.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidCursorSortValue,
     };
 }
 
@@ -199,6 +217,7 @@ pub fn parseQueryFilter(
     };
     var limit: ?u32 = null;
     var after: ?Cursor = null;
+    var after_token: ?[]u8 = null;
 
     errdefer {
         if (conditions) |conds| {
@@ -211,6 +230,7 @@ pub fn parseQueryFilter(
         }
         order_by.deinit(allocator);
         if (after) |a| a.deinit(allocator);
+        if (after_token) |token| allocator.free(token);
     }
 
     var it = payload.map.iterator();
@@ -246,10 +266,15 @@ pub fn parseQueryFilter(
             if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
-            const new_after = try parseCursorToken(allocator, value.str.value(), order_by.field_type, order_by.items_type);
-            if (after) |old| old.deinit(allocator);
-            after = new_after;
+            if (after_token) |old| allocator.free(old);
+            after_token = try allocator.dupe(u8, value.str.value());
         }
+    }
+
+    if (after_token) |token| {
+        after = try parseCursorToken(allocator, token, order_by.field_type, order_by.items_type);
+        allocator.free(token);
+        after_token = null;
     }
 
     return QueryFilter{
@@ -280,6 +305,136 @@ pub fn resolveFieldMetadata(
         return .{ .field_type = col.sql_type, .items_type = col.items_type };
     }
     return error.UnknownField;
+}
+
+fn parseOperator(payload: msgpack.Payload) ParserError!Operator {
+    if (payload != .uint and payload != .int) return error.InvalidOperatorCode;
+    const op_code = if (payload == .uint) payload.uint else blk: {
+        if (payload.int < 0) return error.InvalidOperatorCode;
+        break :blk @as(u64, @intCast(payload.int));
+    };
+    if (op_code > @intFromEnum(Operator.isNotNull)) return error.InvalidOperatorCode;
+    return @enumFromInt(@as(u8, @intCast(op_code)));
+}
+
+fn parseSortDirection(payload: msgpack.Payload) ParserError!bool {
+    if (payload != .uint and payload != .int) return error.InvalidSortFormat;
+    const raw = if (payload == .uint) payload.uint else blk: {
+        if (payload.int < 0) return error.InvalidSortFormat;
+        break :blk @as(u64, @intCast(payload.int));
+    };
+    return switch (raw) {
+        0 => false,
+        1 => true,
+        else => error.InvalidSortFormat,
+    };
+}
+
+fn parseScalarValue(
+    allocator: std.mem.Allocator,
+    field_type: schema_manager.FieldType,
+    payload: msgpack.Payload,
+) ParserError!TypedValue {
+    if (payload == .nil) return error.NullOperandUnsupported;
+    if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+    return TypedValue.fromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.TypeMismatch,
+    };
+}
+
+fn parseFieldValue(
+    allocator: std.mem.Allocator,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
+    payload: msgpack.Payload,
+) ParserError!TypedValue {
+    if (payload == .nil) return error.NullOperandUnsupported;
+    return TypedValue.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.TypeMismatch,
+    };
+}
+
+fn parseArrayElementValue(
+    allocator: std.mem.Allocator,
+    items_type: ?schema_manager.FieldType,
+    payload: msgpack.Payload,
+) ParserError!TypedValue {
+    const item_type = items_type orelse return error.TypeMismatch;
+    return parseScalarValue(allocator, item_type, payload);
+}
+
+fn parseInOperand(
+    allocator: std.mem.Allocator,
+    field_type: schema_manager.FieldType,
+    payload: msgpack.Payload,
+) ParserError!TypedValue {
+    if (payload == .nil) return error.NullOperandUnsupported;
+    if (payload != .arr) return error.InvalidInOperand;
+    if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+
+    const items = try allocator.alloc(types.ScalarValue, payload.arr.len);
+    var count: usize = 0;
+    errdefer {
+        for (items[0..count]) |item| item.deinit(allocator);
+        allocator.free(items);
+    }
+
+    for (payload.arr, 0..) |item, i| {
+        if (item == .nil) return error.NullOperandUnsupported;
+        const typed = try parseScalarValue(allocator, field_type, item);
+        switch (typed) {
+            .scalar => |scalar| {
+                items[i] = scalar;
+                count += 1;
+            },
+            else => unreachable,
+        }
+    }
+
+    return .{ .array = items };
+}
+
+fn parseConditionValueForOperator(
+    allocator: std.mem.Allocator,
+    op: Operator,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
+    payload: ?msgpack.Payload,
+) ParserError!?TypedValue {
+    switch (op) {
+        .isNull, .isNotNull => {
+            if (payload != null) return error.UnexpectedOperand;
+            return null;
+        },
+        else => {},
+    }
+
+    const raw = payload orelse return error.MissingOperand;
+
+    return switch (op) {
+        .eq, .ne => try parseFieldValue(allocator, field_type, items_type, raw),
+        .gt, .lt, .gte, .lte => {
+            if (field_type == .array) return error.UnsupportedOperatorForFieldType;
+            return try parseScalarValue(allocator, field_type, raw);
+        },
+        .contains => switch (field_type) {
+            .text => blk: {
+                if (raw != .str) return error.InvalidOperandType;
+                break :blk try parseScalarValue(allocator, .text, raw);
+            },
+            .array => try parseArrayElementValue(allocator, items_type, raw),
+            else => return error.UnsupportedOperatorForFieldType,
+        },
+        .startsWith, .endsWith => {
+            if (field_type != .text) return error.UnsupportedOperatorForFieldType;
+            if (raw != .str) return error.InvalidOperandType;
+            return try parseScalarValue(allocator, .text, raw);
+        },
+        .in, .notIn => try parseInOperand(allocator, field_type, raw),
+        .isNull, .isNotNull => unreachable,
+    };
 }
 
 fn parseConditions(
@@ -316,21 +471,9 @@ fn parseCondition(
     const field = arr[0].str.value();
     const resolved = try resolveFieldMetadata(table_metadata, field);
 
-    if (arr[1] != .uint and arr[1] != .int) return error.InvalidOperatorCode;
-    const op_code = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
-    if (op_code > 12) return error.InvalidOperatorCode;
-    const op: Operator = @enumFromInt(@as(u8, @intCast(op_code)));
-
-    var value: ?TypedValue = null;
-    if (arr.len == 3) {
-        value = TypedValue.fromPayload(allocator, resolved.field_type, resolved.items_type, arr[2]) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.InvalidConditionFormat,
-        };
-    } else {
-        // isNull and isNotNull don't require value
-        if (op != .isNull and op != .isNotNull) return error.InvalidConditionFormat;
-    }
+    const op = try parseOperator(arr[1]);
+    const operand = if (arr.len == 3) arr[2] else null;
+    const value = try parseConditionValueForOperator(allocator, op, resolved.field_type, resolved.items_type, operand);
     errdefer if (value) |v| v.deinit(allocator);
 
     return Condition{
@@ -354,13 +497,11 @@ fn parseSortDescriptor(
     if (arr[0] != .str) return error.InvalidFieldName;
     const field = arr[0].str.value();
     const resolved = try resolveFieldMetadata(table_metadata, field);
-
-    if (arr[1] != .uint and arr[1] != .int) return error.InvalidSortFormat;
-    const desc_val = if (arr[1] == .uint) arr[1].uint else @as(u64, @intCast(arr[1].int));
+    const desc = try parseSortDirection(arr[1]);
 
     return SortDescriptor{
         .field = try allocator.dupe(u8, field),
-        .desc = desc_val == 1,
+        .desc = desc,
         .field_type = resolved.field_type,
         .items_type = resolved.items_type,
     };

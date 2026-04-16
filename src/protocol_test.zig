@@ -240,6 +240,15 @@ test "mapErrorToMessage: returns non-empty comptime-encoded messages" {
     try testing.expect(msg2.len > 0);
 }
 
+test "mapErrorToMessage: query parser errors keep distinct human messages" {
+    try testing.expectEqualSlices(u8, protocol.err_msg_missing_query_operand, protocol.mapErrorToMessage(error.MissingOperand));
+    try testing.expectEqualSlices(u8, protocol.err_msg_unexpected_query_operand, protocol.mapErrorToMessage(error.UnexpectedOperand));
+    try testing.expectEqualSlices(u8, protocol.err_msg_invalid_in_operand, protocol.mapErrorToMessage(error.InvalidInOperand));
+    try testing.expectEqualSlices(u8, protocol.err_msg_null_query_operand, protocol.mapErrorToMessage(error.NullOperandUnsupported));
+    try testing.expectEqualSlices(u8, protocol.err_msg_unsupported_query_operator, protocol.mapErrorToMessage(error.UnsupportedOperatorForFieldType));
+    try testing.expectEqualSlices(u8, protocol.err_msg_invalid_cursor_sort_value, protocol.mapErrorToMessage(error.InvalidCursorSortValue));
+}
+
 test "store_delta_header: decodes to StoreDelta type" {
     const allocator = testing.allocator;
 
