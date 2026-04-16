@@ -169,6 +169,34 @@ pub const ScalarValue = union(enum) {
         }
     }
 
+    pub fn lessThan(self: ScalarValue, other: ScalarValue) bool {
+        if (@as(std.meta.Tag(ScalarValue), self) != @as(std.meta.Tag(ScalarValue), other)) {
+            return @intFromEnum(self) < @intFromEnum(other);
+        }
+        return switch (self) {
+            .integer => |iv| iv < other.integer,
+            .real => |rv| rv < other.real,
+            .text => |tv| std.mem.order(u8, tv, other.text) == .lt,
+            .boolean => |bv| @intFromBool(bv) < @intFromBool(other.boolean),
+        };
+    }
+
+    pub fn order(self: ScalarValue, other: ScalarValue) std.math.Order {
+        if (@as(std.meta.Tag(ScalarValue), self) != @as(std.meta.Tag(ScalarValue), other)) {
+            return std.math.order(@intFromEnum(self), @intFromEnum(other));
+        }
+        return switch (self) {
+            .integer => std.math.order(self.integer, other.integer),
+            .real => blk: {
+                if (self.real < other.real) break :blk .lt;
+                if (self.real > other.real) break :blk .gt;
+                break :blk .eq;
+            },
+            .text => std.mem.order(u8, self.text, other.text),
+            .boolean => std.math.order(@intFromBool(self.boolean), @intFromBool(other.boolean)),
+        };
+    }
+
     /// Writes this scalar value as MessagePack to the provided writer.
     pub fn writeMsgPack(self: ScalarValue, writer: anytype) !void {
         switch (self) {
@@ -257,6 +285,36 @@ pub const TypedValue = union(enum) {
         };
     }
 
+    pub fn sortedSet(self: *TypedValue, allocator: Allocator) void {
+        const arr = switch (self.*) {
+            .array => |a| a,
+            else => return,
+        };
+        if (arr.len <= 1) return;
+
+        std.sort.pdq(ScalarValue, arr, {}, scalarValueLessThan);
+
+        var write: usize = 1;
+        for (arr[1..]) |item| {
+            if (ScalarValue.order(arr[write - 1], item) != .eq) {
+                arr[write] = item;
+                write += 1;
+            } else {
+                item.deinit(allocator);
+            }
+        }
+
+        if (write < arr.len) {
+            const compact = allocator.alloc(ScalarValue, write) catch {
+                self.* = .{ .array = arr[0..write] };
+                return;
+            };
+            @memcpy(compact, arr[0..write]);
+            allocator.free(arr);
+            self.* = .{ .array = compact };
+        }
+    }
+
     pub fn deinit(self: TypedValue, allocator: Allocator) void {
         switch (self) {
             .scalar => |s| s.deinit(allocator),
@@ -341,7 +399,9 @@ pub const TypedValue = union(enum) {
                     if (arr[i] == .nil) return StorageError.NullNotAllowed;
                     items[i] = try ScalarValue.fromPayload(allocator, it, arr[i]);
                 }
-                return TypedValue{ .array = items };
+                var result = TypedValue{ .array = items };
+                result.sortedSet(allocator);
+                return result;
             },
             else => .{ .scalar = try ScalarValue.fromPayload(allocator, ft, value) },
         };
@@ -603,6 +663,10 @@ fn payloadAsInt(payload: msgpack.Payload) !i64 {
         .uint => |v| @intCast(v),
         else => StorageError.TypeMismatch,
     };
+}
+
+fn scalarValueLessThan(_: void, a: ScalarValue, b: ScalarValue) bool {
+    return a.lessThan(b);
 }
 
 fn payloadAsFloat(payload: msgpack.Payload) !f64 {

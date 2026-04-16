@@ -393,7 +393,9 @@ fn parseInOperand(
         }
     }
 
-    return .{ .array = items };
+    var result: TypedValue = .{ .array = items };
+    result.sortedSet(allocator);
+    return result;
 }
 
 fn parseConditionValueForOperator(

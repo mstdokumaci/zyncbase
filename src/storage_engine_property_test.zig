@@ -622,17 +622,17 @@ test "storage: write/read round-trip for array fields" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        const got_tags = try sth.expectFieldArray(doc, "tags", n);
-        for (elems, got_tags.array) |orig, got| {
-            const orig_val = switch (orig) {
-                .int => |v| v,
+        const got_tags = try sth.expectFieldArray(doc, "tags", tags_tv.array.len);
+        for (tags_tv.array, got_tags.array) |expected, got| {
+            const expected_val = switch (expected) {
+                .integer => |v| v,
                 else => unreachable,
             };
             const got_val = switch (got) {
                 .integer => |v| v,
                 else => unreachable,
             };
-            try testing.expectEqual(orig_val, got_val);
+            try testing.expectEqual(expected_val, got_val);
         }
     }
 }

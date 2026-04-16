@@ -294,31 +294,20 @@ pub const SubscriptionEngine = struct {
         return try matches.toOwnedSlice(allocator);
     }
 
-    fn scalarValueLessThan(_: void, a: types.ScalarValue, b: types.ScalarValue) bool {
-        if (@as(std.meta.Tag(types.ScalarValue), a) != @as(std.meta.Tag(types.ScalarValue), b)) {
-            return @intFromEnum(a) < @intFromEnum(b);
-        }
-        return switch (a) {
-            .integer => |iv| iv < b.integer,
-            .real => |rv| rv < b.real,
-            .text => |tv| std.mem.order(u8, tv, b.text) == .lt,
-            .boolean => |bv| @intFromBool(bv) < @intFromBool(b.boolean),
-        };
-    }
-
     fn typedValueLessThan(_: void, a: TypedValue, b: TypedValue) bool {
         if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) {
             return @intFromEnum(a) < @intFromEnum(b);
         }
         return switch (a) {
             .nil => false,
-            .scalar => |sa| scalarValueLessThan({}, sa, b.scalar),
+            .scalar => |sa| sa.order(b.scalar) == .lt,
             .array => |arr_a| blk: {
                 const arr_b = b.array;
                 const min_len = @min(arr_a.len, arr_b.len);
                 for (0..min_len) |i| {
-                    if (scalarValueLessThan({}, arr_a[i], arr_b[i])) break :blk true;
-                    if (scalarValueLessThan({}, arr_b[i], arr_a[i])) break :blk false;
+                    const ord = arr_a[i].order(arr_b[i]);
+                    if (ord == .lt) break :blk true;
+                    if (ord == .gt) break :blk false;
                 }
                 break :blk arr_a.len < arr_b.len;
             },
@@ -353,23 +342,8 @@ pub const SubscriptionEngine = struct {
                 .boolean => |bv| try writer.print("b:{}", .{@intFromBool(bv)}),
             },
             .array => |arr| {
-                const max_inline = 64;
-                var inline_buf: [max_inline]types.ScalarValue = undefined;
-                var heap_buf: ?[]types.ScalarValue = null;
-                defer if (heap_buf) |buf| allocator.free(buf);
-
-                const sorted = if (arr.len <= max_inline)
-                    inline_buf[0..arr.len]
-                else blk: {
-                    const buf = try allocator.alloc(types.ScalarValue, arr.len);
-                    heap_buf = buf;
-                    break :blk buf;
-                };
-                @memcpy(sorted, arr);
-                std.sort.pdq(types.ScalarValue, sorted, {}, scalarValueLessThan);
-
                 try writer.writeAll("a:[");
-                for (sorted, 0..) |item, i| {
+                for (arr, 0..) |item, i| {
                     if (i > 0) try list.append(allocator, ',');
                     try appendTypedValueKey(allocator, list, TypedValue{ .scalar = item });
                 }
@@ -507,10 +481,11 @@ pub const SubscriptionEngine = struct {
                     if (val != .array) break :blk false;
                     if (cond.value == null) break :blk false;
                     if (cond.value.? != .scalar) break :blk false;
-                    for (val.array) |item| {
-                        if (scalarValuesEqual(cond.value.?.scalar, item)) break :blk true;
-                    }
-                    break :blk false;
+                    break :blk std.sort.binarySearch(types.ScalarValue, val.array, cond.value.?.scalar, struct {
+                        fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
+                            return context.order(item);
+                        }
+                    }.compare) != null;
                 } else {
                     if (val != .scalar or val.scalar != .text) break :blk false;
                     if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
@@ -520,29 +495,21 @@ pub const SubscriptionEngine = struct {
             .in => blk: {
                 if (val != .scalar) break :blk false;
                 if (cond.value == null or cond.value.? != .array) break :blk false;
-                for (cond.value.?.array) |item| {
-                    if (scalarValuesEqual(val.scalar, item)) break :blk true;
-                }
-                break :blk false;
+                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, struct {
+                    fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
+                        return context.order(item);
+                    }
+                }.compare) != null;
             },
             .notIn => blk: {
                 if (val != .scalar) break :blk true;
                 if (cond.value == null or cond.value.? != .array) break :blk false;
-                for (cond.value.?.array) |item| {
-                    if (scalarValuesEqual(val.scalar, item)) break :blk false;
-                }
-                break :blk true;
+                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, struct {
+                    fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
+                        return context.order(item);
+                    }
+                }.compare) == null;
             },
-        };
-    }
-
-    fn scalarValuesEqual(a: types.ScalarValue, b: types.ScalarValue) bool {
-        if (@as(std.meta.Tag(types.ScalarValue), a) != @as(std.meta.Tag(types.ScalarValue), b)) return false;
-        return switch (a) {
-            .integer => a.integer == b.integer,
-            .real => a.real == b.real,
-            .text => std.mem.eql(u8, a.text, b.text),
-            .boolean => a.boolean == b.boolean,
         };
     }
 
@@ -550,11 +517,11 @@ pub const SubscriptionEngine = struct {
         if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return false;
         return switch (a) {
             .nil => true,
-            .scalar => scalarValuesEqual(a.scalar, b.scalar),
+            .scalar => a.scalar.order(b.scalar) == .eq,
             .array => |arr| blk: {
                 if (arr.len != b.array.len) break :blk false;
                 for (arr, 0..) |item, i| {
-                    if (!typedValuesEqual(TypedValue{ .scalar = item }, TypedValue{ .scalar = b.array[i] })) break :blk false;
+                    if (item.order(b.array[i]) != .eq) break :blk false;
                 }
                 break :blk true;
             },
@@ -565,16 +532,7 @@ pub const SubscriptionEngine = struct {
         if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return .lt;
 
         return switch (a) {
-            .scalar => |sa| switch (sa) {
-                .integer => std.math.order(sa.integer, b.scalar.integer),
-                .real => blk: {
-                    if (sa.real < b.scalar.real) break :blk .lt;
-                    if (sa.real > b.scalar.real) break :blk .gt;
-                    break :blk .eq;
-                },
-                .text => std.mem.order(u8, sa.text, b.scalar.text),
-                .boolean => std.math.order(@intFromBool(sa.boolean), @intFromBool(b.scalar.boolean)),
-            },
+            .scalar => |sa| sa.order(b.scalar),
             else => .eq, // Unsortable
         };
     }
