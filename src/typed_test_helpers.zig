@@ -38,7 +38,7 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
         };
     }
     var result: TypedValue = .{ .array = cloned };
-    result.canonicalize(allocator);
+    result.sortedSet(allocator);
     return result;
 }
 
