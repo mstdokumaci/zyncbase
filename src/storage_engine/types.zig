@@ -172,6 +172,22 @@ pub const ScalarValue = union(enum) {
         }
     }
 
+    /// Writes this scalar value as MessagePack to the provided writer.
+    pub fn writeMsgPack(self: ScalarValue, writer: anytype) !void {
+        switch (self) {
+            .integer => |iv| {
+                if (iv >= 0) {
+                    try msgpack.encode(msgpack.Payload{ .uint = @intCast(iv) }, writer);
+                } else {
+                    try msgpack.encode(msgpack.Payload{ .int = iv }, writer);
+                }
+            },
+            .real => |rv| try msgpack.encode(msgpack.Payload{ .float = rv }, writer),
+            .text => |tv| try msgpack.writeMsgPackStr(writer, tv),
+            .boolean => |bv| try msgpack.encode(msgpack.Payload{ .bool = bv }, writer),
+        }
+    }
+
     pub fn jsonStringify(self: ScalarValue, stream: anytype) !void {
         switch (self) {
             .integer => |v| try stream.write(v),
@@ -252,6 +268,20 @@ pub const TypedValue = union(enum) {
                 allocator.free(items);
             },
             .nil => {},
+        }
+    }
+
+    /// Writes this typed value as MessagePack to the provided writer.
+    pub fn writeMsgPack(self: TypedValue, writer: anytype) !void {
+        switch (self) {
+            .nil => try msgpack.encode(.nil, writer),
+            .scalar => |s| try s.writeMsgPack(writer),
+            .array => |arr| {
+                try msgpack.encodeArrayHeader(writer, arr.len);
+                for (arr) |item| {
+                    try item.writeMsgPack(writer);
+                }
+            },
         }
     }
 

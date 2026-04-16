@@ -371,7 +371,7 @@ pub fn encodeCursor(allocator: Allocator, cursor: storage_mod.TypedCursor) ![]co
     defer list.deinit(allocator);
     const writer = list.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
-    try encodeTypedValue(writer, cursor.sort_value);
+    try cursor.sort_value.writeMsgPack(writer);
     try msgpack.writeMsgPackStr(writer, cursor.id);
     const encoded_len = std.base64.standard.Encoder.calcSize(list.items.len);
     const dest = try allocator.alloc(u8, encoded_len);
@@ -418,7 +418,7 @@ pub fn encodeDeltaSuffix(
     try msgpack.writeMsgPackStr(writer, "path");
     try writer.writeByte(0x92); // fixarray(2)
     try msgpack.writeMsgPackStr(writer, collection);
-    try encodeTypedValue(writer, id_val);
+    try id_val.writeMsgPack(writer);
 
     if (!is_delete) {
         try msgpack.writeMsgPackStr(writer, "value");
@@ -432,35 +432,10 @@ pub fn encodeDeltaSuffix(
     return list.toOwnedSlice(allocator);
 }
 
-pub fn encodeTypedValue(writer: anytype, val: storage_mod.TypedValue) !void {
-    switch (val) {
-        .nil => try msgpack.encode(.nil, writer),
-        .scalar => |s| switch (s) {
-            .integer => |iv| {
-                if (iv >= 0) {
-                    try msgpack.encode(Payload{ .uint = @intCast(iv) }, writer);
-                } else {
-                    try msgpack.encode(Payload{ .int = iv }, writer);
-                }
-            },
-            .real => |rv| try msgpack.encode(Payload{ .float = rv }, writer),
-            .text => |tv| try msgpack.writeMsgPackStr(writer, tv),
-            .boolean => |bv| try msgpack.encode(Payload{ .bool = bv }, writer),
-        },
-        .array => |arr| {
-            try msgpack.encodeArrayHeader(writer, arr.len);
-            for (arr) |item| {
-                // Scalar in array is encoded recursively
-                try encodeTypedValue(writer, storage_mod.TypedValue{ .scalar = item });
-            }
-        },
-    }
-}
-
 pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow) !void {
     try msgpack.encodeMapHeader(writer, row.fields.len);
     for (row.fields) |field| {
         try msgpack.writeMsgPackStr(writer, field.name);
-        try encodeTypedValue(writer, field.value);
+        try field.value.writeMsgPack(writer);
     }
 }
