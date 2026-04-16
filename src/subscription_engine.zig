@@ -383,14 +383,6 @@ pub const SubscriptionEngine = struct {
         defer allocator.free(sorted);
         @memcpy(sorted, conds);
 
-        for (sorted) |*c| {
-            if (c.value) |*v| {
-                if (v.* == .array) {
-                    std.sort.pdq(types.ScalarValue, v.array, {}, scalarValueLessThan);
-                }
-            }
-        }
-
         std.sort.pdq(Condition, sorted, {}, conditionLessThan);
 
         const writer = list.writer(allocator);
