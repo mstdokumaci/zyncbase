@@ -353,7 +353,7 @@ pub const SubscriptionEngine = struct {
                 .boolean => |bv| try writer.print("b:{}", .{@intFromBool(bv)}),
             },
             .array => |arr| {
-                const max_inline = 16;
+                const max_inline = 64;
                 var inline_buf: [max_inline]types.ScalarValue = undefined;
                 var heap_buf: ?[]types.ScalarValue = null;
                 defer if (heap_buf) |buf| allocator.free(buf);
@@ -389,8 +389,18 @@ pub const SubscriptionEngine = struct {
 
         if (prefix) |p| try list.appendSlice(allocator, p);
 
-        const sorted = try allocator.alloc(Condition, conds.len);
-        defer allocator.free(sorted);
+        const max_inline = 16;
+        var inline_buf: [max_inline]Condition = undefined;
+        var heap_buf: ?[]Condition = null;
+        defer if (heap_buf) |buf| allocator.free(buf);
+
+        const sorted = if (conds.len <= max_inline)
+            inline_buf[0..conds.len]
+        else blk: {
+            const buf = try allocator.alloc(Condition, conds.len);
+            heap_buf = buf;
+            break :blk buf;
+        };
         @memcpy(sorted, conds);
 
         std.sort.pdq(Condition, sorted, {}, conditionLessThan);
@@ -493,24 +503,43 @@ pub const SubscriptionEngine = struct {
                 break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
             },
             .contains => blk: {
-                if (val != .scalar or val.scalar != .text) break :blk false;
-                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+                if (cond.field_type == .array) {
+                    if (val != .array) break :blk false;
+                    if (cond.value == null) break :blk false;
+                    if (cond.value.? != .scalar) break :blk false;
+                    for (val.array) |item| {
+                        if (scalarValuesEqual(cond.value.?.scalar, item)) break :blk true;
+                    }
+                    break :blk false;
+                } else {
+                    if (val != .scalar or val.scalar != .text) break :blk false;
+                    if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+                    break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+                }
             },
             .in => blk: {
-                if (cond.value == null or cond.value.? != .array) break :blk false;
+                if (val != .scalar) break :blk false;
                 for (cond.value.?.array) |item| {
-                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk true;
+                    if (scalarValuesEqual(val.scalar, item)) break :blk true;
                 }
                 break :blk false;
             },
             .notIn => blk: {
-                if (cond.value == null or cond.value.? != .array) break :blk true;
+                if (val != .scalar) break :blk true;
                 for (cond.value.?.array) |item| {
-                    if (typedValuesEqual(val, TypedValue{ .scalar = item })) break :blk false;
+                    if (scalarValuesEqual(val.scalar, item)) break :blk false;
                 }
                 break :blk true;
             },
+        };
+    }
+
+    fn scalarValuesEqual(a: types.ScalarValue, b: types.ScalarValue) bool {
+        return switch (a) {
+            .integer => a.integer == b.integer,
+            .real => a.real == b.real,
+            .text => std.mem.eql(u8, a.text, b.text),
+            .boolean => a.boolean == b.boolean,
         };
     }
 
@@ -518,12 +547,7 @@ pub const SubscriptionEngine = struct {
         if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return false;
         return switch (a) {
             .nil => true,
-            .scalar => |sa| switch (sa) {
-                .integer => sa.integer == b.scalar.integer,
-                .real => sa.real == b.scalar.real,
-                .text => std.mem.eql(u8, sa.text, b.scalar.text),
-                .boolean => sa.boolean == b.scalar.boolean,
-            },
+            .scalar => scalarValuesEqual(a.scalar, b.scalar),
             .array => |arr| blk: {
                 if (arr.len != b.array.len) break :blk false;
                 for (arr, 0..) |item, i| {
