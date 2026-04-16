@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const msgpack = @import("msgpack_utils.zig");
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -99,47 +98,27 @@ pub const Table = struct {
 pub const TableMetadata = struct {
     table: *const Table,
     field_map: std.StringHashMap(Field),
-    field_payloads: std.StringHashMap(msgpack.Payload),
 
     pub fn init(allocator: Allocator, table: *const Table) !TableMetadata {
         var field_map = std.StringHashMap(Field).init(allocator);
         errdefer field_map.deinit();
 
-        var field_payloads = std.StringHashMap(msgpack.Payload).init(allocator);
-        errdefer {
-            var it = field_payloads.valueIterator();
-            while (it.next()) |p| p.free(allocator);
-            field_payloads.deinit();
+        for (built_in_columns) |f| {
+            try field_map.put(f.name, f);
         }
 
         for (table.fields) |f| {
             try field_map.put(f.name, f);
-            const p = try msgpack.Payload.strToPayload(f.name, allocator);
-            errdefer p.free(allocator);
-            try field_payloads.put(f.name, p);
-        }
-
-        // Also cache system columns that aren't in the schema fields but appear in queries
-        for (built_in_columns) |sc| {
-            if (!field_payloads.contains(sc.name)) {
-                const p = try msgpack.Payload.strToPayload(sc.name, allocator);
-                errdefer p.free(allocator);
-                try field_payloads.put(sc.name, p);
-            }
         }
 
         return .{
             .table = table,
             .field_map = field_map,
-            .field_payloads = field_payloads,
         };
     }
 
-    pub fn deinit(self: *TableMetadata, allocator: Allocator) void {
+    pub fn deinit(self: *TableMetadata, _: Allocator) void {
         self.field_map.deinit();
-        var it = self.field_payloads.valueIterator();
-        while (it.next()) |p| p.free(allocator);
-        self.field_payloads.deinit();
     }
 
     pub fn getField(self: *const TableMetadata, name: []const u8) ?Field {

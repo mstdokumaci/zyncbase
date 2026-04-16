@@ -5,6 +5,30 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 /// Lock-free cache for parallel reads across all CPU cores.
 /// Generic over type T, allowing specialized storage for AuthResponses, MsgPack payloads, etc.
 pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-parameter
+    comptime {
+        if (!@hasDecl(t, "deinit")) {
+            @compileError("lockFreeCache(T) requires `pub fn deinit(self: T, allocator: std.mem.Allocator) void` on T");
+        }
+
+        const fn_info = switch (@typeInfo(@TypeOf(t.deinit))) {
+            .@"fn" => |f| f,
+            else => @compileError("lockFreeCache(T): T.deinit must be a function"),
+        };
+
+        if (fn_info.params.len != 2) {
+            @compileError("lockFreeCache(T): T.deinit must have signature `fn (T, std.mem.Allocator) void`");
+        }
+
+        const param0 = fn_info.params[0].type orelse
+            @compileError("lockFreeCache(T): first deinit parameter type must be concrete");
+        const param1 = fn_info.params[1].type orelse
+            @compileError("lockFreeCache(T): second deinit parameter type must be concrete");
+
+        if (param0 != t or param1 != Allocator or fn_info.return_type != void) {
+            @compileError("lockFreeCache(T): T.deinit must be `fn (T, std.mem.Allocator) void`");
+        }
+    }
+
     return struct {
         const Self = @This();
 
@@ -26,10 +50,8 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 return entry;
             }
 
-            pub fn deinit(self: *CacheEntry, allocator: Allocator, deinit_payload: ?*const fn (Allocator, *t) void) void {
-                if (deinit_payload) |hook| {
-                    hook(allocator, &self.data);
-                }
+            pub fn deinit(self: *CacheEntry, allocator: Allocator) void {
+                self.data.deinit(allocator);
                 allocator.destroy(self);
             }
         };
@@ -54,8 +76,6 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
         config: Config,
         reclaim_handle: ?std.Thread = null,
         reclaim_active: std.atomic.Value(bool),
-        /// Optional hook for deep-freeing complex types
-        deinit_payload: ?*const fn (Allocator, *t) void,
 
         pub const Config = struct {
             max_deferred_nodes: usize = 100_000,
@@ -125,7 +145,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
             }
         };
 
-        pub fn init(self: *Self, allocator: Allocator, config: Config, deinit_payload: ?*const fn (Allocator, *t) void) !void {
+        pub fn init(self: *Self, allocator: Allocator, config: Config) !void {
             const entries = try allocator.create(std.StringHashMap(*CacheEntry));
             entries.* = std.StringHashMap(*CacheEntry).init(allocator);
 
@@ -138,7 +158,6 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 .epoch_manager = EpochManager.init(),
                 .config = config,
                 .reclaim_active = std.atomic.Value(bool).init(true),
-                .deinit_payload = deinit_payload,
                 .reclaim_handle = null,
             };
 
@@ -162,7 +181,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                 // Free the namespace key (we own all keys in the map)
                 self.allocator.free(entry.key_ptr.*);
                 // Free the cache entry shell and its data
-                entry.value_ptr.*.deinit(self.allocator, self.deinit_payload);
+                entry.value_ptr.*.deinit(self.allocator);
             }
             entries.deinit();
             self.allocator.destroy(entries);
@@ -582,7 +601,7 @@ pub fn lockFreeCache(comptime t: type) type { // zwanzig-disable-line: unused-pa
                             self.allocator.destroy(m);
                         },
                         .entry => |e| {
-                            e.deinit(self.allocator, self.deinit_payload);
+                            e.deinit(self.allocator);
                         },
                         .key => |k| self.allocator.free(k),
                     }

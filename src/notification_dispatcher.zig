@@ -56,17 +56,17 @@ pub const NotificationDispatcher = struct {
             .old_row = change.old_row,
         };
 
-        const id_payload = if (change.new_row orelse change.old_row) |row|
-            (row.mapGet("id") catch null)
+        const id_val = if (change.new_row orelse change.old_row) |row|
+            row.getField("id")
         else
             null;
 
-        if (id_payload == null) {
+        if (id_val == null) {
             std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });
             return;
         }
 
-        const id_payload_value = id_payload.?;
+        const id_val_actual = id_val.?;
         const is_delete = change.operation == .delete;
 
         // === Phase 2: Match subscriptions ===
@@ -90,7 +90,7 @@ pub const NotificationDispatcher = struct {
         const suffix = protocol.encodeDeltaSuffix(
             alloc,
             change.collection,
-            id_payload_value,
+            id_val_actual,
             is_delete,
             change.new_row,
         ) catch |err| {

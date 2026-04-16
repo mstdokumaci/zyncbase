@@ -2,6 +2,8 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
+const types = @import("storage_engine/types.zig");
+const TypedValue = types.TypedValue;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -22,13 +24,13 @@ pub const Operator = enum(u8) {
 pub const Condition = struct {
     field: []const u8,
     op: Operator,
-    value: ?msgpack.Payload,
+    value: ?TypedValue,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         allocator.free(self.field);
-        if (self.value) |v| v.free(allocator);
+        if (self.value) |v| v.deinit(allocator);
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
@@ -37,7 +39,7 @@ pub const Condition = struct {
         return .{
             .field = field,
             .op = self.op,
-            .value = if (self.value) |v| try v.deepClone(allocator) else null,
+            .value = if (self.value) |v| try v.clone(allocator) else null,
             .field_type = self.field_type,
             .items_type = self.items_type,
         };
@@ -65,17 +67,17 @@ pub const SortDescriptor = struct {
 };
 
 pub const Cursor = struct {
-    sort_value: msgpack.Payload,
+    sort_value: TypedValue,
     id: []const u8,
 
     pub fn deinit(self: Cursor, allocator: std.mem.Allocator) void {
-        self.sort_value.free(allocator);
+        self.sort_value.deinit(allocator);
         allocator.free(self.id);
     }
 
     pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
-        const sort_value = try self.sort_value.deepClone(allocator);
-        errdefer sort_value.free(allocator);
+        const sort_value = try self.sort_value.clone(allocator);
+        errdefer sort_value.deinit(allocator);
         return .{
             .sort_value = sort_value,
             .id = try allocator.dupe(u8, self.id),
@@ -147,6 +149,8 @@ pub const ParserError = error{
 pub fn parseCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
+    field_type: schema_manager.FieldType,
+    items_type: ?schema_manager.FieldType,
 ) ParserError!Cursor {
     const cursor_payload = msgpack.decodeBase64(allocator, token) catch
         return error.InvalidMessageFormat;
@@ -155,12 +159,14 @@ pub fn parseCursorToken(
     if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
     if (cursor_payload.arr[1] != .str) return error.InvalidMessageFormat;
 
+    const sort_value = TypedValue.fromPayload(allocator, field_type, items_type, cursor_payload.arr[0]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidMessageFormat,
+    };
+    errdefer sort_value.deinit(allocator);
+
     return Cursor{
-        .sort_value = blk: {
-            const p = try cursor_payload.arr[0].deepClone(allocator);
-            errdefer p.free(allocator);
-            break :blk p;
-        },
+        .sort_value = sort_value,
         .id = try allocator.dupe(u8, cursor_payload.arr[1].str.value()),
     };
 }
@@ -240,7 +246,7 @@ pub fn parseQueryFilter(
             if (limit != null and limit.? == 0) return error.InvalidMessageFormat;
         } else if (std.mem.eql(u8, key, "after")) {
             if (value != .str) return error.InvalidMessageFormat;
-            const new_after = try parseCursorToken(allocator, value.str.value());
+            const new_after = try parseCursorToken(allocator, value.str.value(), order_by.field_type, order_by.items_type);
             if (after) |old| old.deinit(allocator);
             after = new_after;
         }
@@ -315,14 +321,17 @@ fn parseCondition(
     if (op_code > 12) return error.InvalidOperatorCode;
     const op: Operator = @enumFromInt(@as(u8, @intCast(op_code)));
 
-    var value: ?msgpack.Payload = null;
+    var value: ?TypedValue = null;
     if (arr.len == 3) {
-        value = try arr[2].deepClone(allocator);
+        value = TypedValue.fromPayload(allocator, resolved.field_type, resolved.items_type, arr[2]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.InvalidConditionFormat,
+        };
     } else {
         // isNull and isNotNull don't require value
         if (op != .isNull and op != .isNotNull) return error.InvalidConditionFormat;
     }
-    errdefer if (value) |v| v.free(allocator);
+    errdefer if (value) |v| v.deinit(allocator);
 
     return Condition{
         .field = try allocator.dupe(u8, field),

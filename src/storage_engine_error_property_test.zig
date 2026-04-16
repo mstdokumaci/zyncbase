@@ -3,6 +3,7 @@ const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
 const ColumnValue = sth.ColumnValue;
+const tth = @import("typed_test_helpers.zig");
 
 // This property test verifies that database operations handle errors gracefully:
 // 1. All database operation failures return descriptive errors
@@ -46,7 +47,7 @@ test "storage: error handling read-only filesystem" {
 
     // Try to set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -54,7 +55,7 @@ test "storage: error handling read-only filesystem" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
+        try testing.expect(managed.rows.len > 0);
     }
 }
 test "storage: error handling constraint violations" {
@@ -67,13 +68,13 @@ test "storage: error handling constraint violations" {
 
     // Set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value2" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value2"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -81,7 +82,7 @@ test "storage: error handling constraint violations" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        _ = try sth.expectFieldString(managed.value, "val", "value2");
+        _ = try sth.expectFieldString(managed.rows[0], "val", "value2");
     }
 }
 test "storage: error handling transaction rollback on error" {
@@ -94,14 +95,14 @@ test "storage: error handling transaction rollback on error" {
 
     try storage.beginTransaction();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.rollbackTransaction();
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        try testing.expect(managed.value == null);
+        try testing.expect(managed.rows.len == 0);
     }
 }
 test "storage: error handling concurrent access safety" {
@@ -113,7 +114,7 @@ test "storage: error handling concurrent access safety" {
     const storage = &ctx.engine;
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value1" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
     }
     try storage.flushPendingWrites();
@@ -125,7 +126,7 @@ test "storage: error handling concurrent access safety" {
         fn run(t_ctx: ThreadContext) void {
             var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
-            _ = managed.value;
+            _ = managed.rows;
         }
     }.run;
     var threads: [4]std.Thread = undefined;
@@ -143,14 +144,14 @@ test "storage: error handling empty paths" {
     const storage = &ctx.engine;
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = "value" } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value"), .field_type = .text }};
         try storage.insertOrReplace("data_table", "empty", "", &cols);
     }
     try storage.flushPendingWrites();
     {
         var managed = try storage.selectDocument(allocator, "data_table", "empty", "");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
+        try testing.expect(managed.rows.len > 0);
     }
 }
 test "storage: error handling large values" {
@@ -165,14 +166,14 @@ test "storage: error handling large values" {
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = .{ .scalar = .{ .text = large_value } }, .field_type = .text }};
+        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(large_value), .field_type = .text }};
         try storage.insertOrReplace("test", "large_key", "test", &cols);
     }
     try storage.flushPendingWrites();
     {
         var managed = try storage.selectDocument(allocator, "test", "large_key", "test");
         defer managed.deinit();
-        try testing.expect(managed.value != null);
+        try testing.expect(managed.rows.len > 0);
     }
 }
 test "storage: error handling delete non-existent key" {
@@ -188,6 +189,6 @@ test "storage: error handling delete non-existent key" {
     {
         var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");
         defer managed.deinit();
-        try testing.expect(managed.value == null);
+        try testing.expect(managed.rows.len == 0);
     }
 }

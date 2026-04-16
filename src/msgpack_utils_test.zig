@@ -34,44 +34,6 @@ test "encodeBase64 / decodeBase64: round-trip for complex payload" {
 }
 
 // ============================================================
-// jsonToPayload tests
-// ============================================================
-
-test "jsonToPayload: empty array []" {
-    const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[]", allocator, .text);
-    defer p.free(allocator);
-    try testing.expectEqual(@as(usize, 0), p.arr.len);
-}
-
-test "jsonToPayload: [null] (strings)" {
-    const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[null]", allocator, .text);
-    defer p.free(allocator);
-    try testing.expectEqual(@as(usize, 1), p.arr.len);
-    try testing.expectEqual(Payload.nil, p.arr[0]);
-}
-
-test "jsonToPayload: [1, 2, 3] (integers)" {
-    const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[1, 2, 3]", allocator, .integer);
-    defer p.free(allocator);
-    try testing.expectEqual(@as(usize, 3), p.arr.len);
-    try testing.expectEqual(@as(i64, 1), p.arr[0].int);
-    try testing.expectEqual(@as(i64, 2), p.arr[1].int);
-    try testing.expectEqual(@as(i64, 3), p.arr[2].int);
-}
-
-test "jsonToPayload: [\"a\", \"b\"] (strings)" {
-    const allocator = testing.allocator;
-    const p = try msgpack_utils.jsonToPayload("[\"a\", \"b\"]", allocator, .text);
-    defer p.free(allocator);
-    try testing.expectEqual(@as(usize, 2), p.arr.len);
-    try testing.expectEqualStrings("a", p.arr[0].str.value());
-    try testing.expectEqualStrings("b", p.arr[1].str.value());
-}
-
-// ============================================================
 // writeMsgPackStr tests
 // ============================================================
 

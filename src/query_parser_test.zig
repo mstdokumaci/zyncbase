@@ -42,12 +42,12 @@ test "basic query filter parsing" {
     try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
     try testing.expectEqualStrings("age", filter.conditions.?[0].field);
     try testing.expectEqual(query_parser.Operator.gte, filter.conditions.?[0].op);
-    try testing.expectEqual(@as(u64, 18), filter.conditions.?[0].value.?.uint);
+    try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].value.?.scalar.integer);
     try testing.expectEqual(schema_manager.FieldType.integer, filter.conditions.?[0].field_type);
 
     try testing.expectEqualStrings("status", filter.conditions.?[1].field);
     try testing.expectEqual(query_parser.Operator.eq, filter.conditions.?[1].op);
-    try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.str.value());
+    try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.scalar.text);
     try testing.expectEqual(schema_manager.FieldType.text, filter.conditions.?[1].field_type);
 
     try testing.expectEqual(@as(u32, 50), filter.limit.?);
@@ -88,7 +88,7 @@ test "query with orConditions" {
     try testing.expect(filter.or_conditions != null);
     try testing.expectEqual(@as(usize, 2), filter.or_conditions.?.len);
     try testing.expectEqualStrings("role", filter.or_conditions.?[0].field);
-    try testing.expectEqualStrings("admin", filter.or_conditions.?[0].value.?.str.value());
+    try testing.expectEqualStrings("admin", filter.or_conditions.?[0].value.?.scalar.text);
 }
 
 test "query with orderBy and after" {

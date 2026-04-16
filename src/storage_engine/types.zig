@@ -7,7 +7,7 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const sql = @import("sql.zig");
 
-pub const metadata_cache_type = lockFreeCache(msgpack.Payload);
+pub const typed_cache_type = lockFreeCache(TypedRow);
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -62,25 +62,89 @@ pub const ColumnValue = struct {
     field_type: schema_manager.FieldType,
 };
 
-/// A managed payload that might be backed by a cache handle.
-/// Caller MUST call deinit() to release any potential cache handles.
-pub const ManagedPayload = struct {
-    value: ?msgpack.Payload,
-    next_cursor_arr: ?msgpack.Payload = null,
-    handle: ?metadata_cache_type.Handle = null,
+/// A managed result that might be backed by a cache handle.
+/// Every result is exposed as a slice of TypedRows.
+/// Caller MUST call deinit() to release any potential cache handles and memory.
+pub const ManagedResult = struct {
+    rows: []TypedRow,
+    next_cursor: ?TypedCursor = null,
+    handle: ?typed_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
-    pub fn deinit(self: *ManagedPayload) void {
-        if (self.handle) |*h| {
+    pub fn deinit(self: *ManagedResult) void {
+        if (self.handle) |h| {
+            // CACHE HIT: 'rows' is just a 1-length slice pointing directly at the
+            // cached TypedRow memory via `handle.data()`. No wrapper array was
+            // dynamically allocated. We simply release the cache handle.
             h.release();
+        } else if (self.allocator) |alloc| {
+            // CACHE MISS / QUERY: We dynamically allocated the rows array
+            // and everything inside it. We must clean up.
+            for (self.rows) |r| r.deinit(alloc);
+            alloc.free(self.rows);
+            if (self.next_cursor) |*nc| nc.deinit(alloc);
         }
+    }
+};
 
-        if (self.allocator) |alloc| {
-            if (self.handle == null) {
-                if (self.value) |*p| p.free(alloc);
-            }
-            if (self.next_cursor_arr) |*cursor| cursor.free(alloc);
+pub const FieldEntry = struct {
+    name: []const u8, // Borrowed (schema metadata/static)
+    value: TypedValue,
+
+    pub fn deinit(self: FieldEntry, allocator: Allocator) void {
+        self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: FieldEntry, allocator: Allocator) !FieldEntry {
+        return .{ .name = self.name, .value = try self.value.clone(allocator) };
+    }
+};
+
+pub const TypedRow = struct {
+    fields: []FieldEntry, // Owned
+
+    pub fn deinit(self: TypedRow, allocator: Allocator) void {
+        for (self.fields) |f| f.deinit(allocator);
+        allocator.free(self.fields);
+    }
+
+    pub fn clone(self: TypedRow, allocator: Allocator) !TypedRow {
+        const cloned = try allocator.alloc(FieldEntry, self.fields.len);
+        var i: usize = 0;
+        errdefer {
+            for (cloned[0..i]) |f| f.deinit(allocator);
+            allocator.free(cloned);
         }
+        while (i < self.fields.len) : (i += 1) {
+            cloned[i] = try self.fields[i].clone(allocator);
+        }
+        return .{ .fields = cloned };
+    }
+
+    pub fn getField(self: TypedRow, name: []const u8) ?TypedValue {
+        for (self.fields) |f| {
+            if (std.mem.eql(u8, f.name, name)) return f.value;
+        }
+        return null;
+    }
+};
+
+pub const TypedCursor = struct {
+    sort_value: TypedValue,
+    id: []const u8, // Owned
+
+    pub fn deinit(self: *TypedCursor, allocator: Allocator) void {
+        self.sort_value.deinit(allocator);
+        allocator.free(self.id);
+    }
+
+    pub fn clone(self: TypedCursor, allocator: Allocator) !TypedCursor {
+        const id = try allocator.dupe(u8, self.id);
+        errdefer allocator.free(id);
+        return .{
+            .sort_value = try self.sort_value.clone(allocator),
+            .id = id,
+        };
     }
 };
 
@@ -102,6 +166,22 @@ pub const ScalarValue = union(enum) {
         switch (self) {
             .text => |s| allocator.free(s),
             else => {},
+        }
+    }
+
+    /// Writes this scalar value as MessagePack to the provided writer.
+    pub fn writeMsgPack(self: ScalarValue, writer: anytype) !void {
+        switch (self) {
+            .integer => |iv| {
+                if (iv >= 0) {
+                    try msgpack.encode(msgpack.Payload{ .uint = @intCast(iv) }, writer);
+                } else {
+                    try msgpack.encode(msgpack.Payload{ .int = iv }, writer);
+                }
+            },
+            .real => |rv| try msgpack.encode(msgpack.Payload{ .float = rv }, writer),
+            .text => |tv| try msgpack.writeMsgPackStr(writer, tv),
+            .boolean => |bv| try msgpack.encode(msgpack.Payload{ .bool = bv }, writer),
         }
     }
 
@@ -132,6 +212,20 @@ pub const ScalarValue = union(enum) {
             .integer => ScalarValue{ .integer = try payloadAsInt(value) },
             .real => ScalarValue{ .real = try payloadAsFloat(value) },
             .boolean => ScalarValue{ .boolean = try payloadAsBool(value) },
+            else => StorageError.InvalidArrayElement,
+        };
+    }
+
+    /// Converts a JSON value to a ScalarValue based on the schema's FieldType.
+    pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
+        return switch (ft) {
+            .text => switch (value) {
+                .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
+                else => StorageError.TypeMismatch,
+            },
+            .integer => ScalarValue{ .integer = try jsonAsInt(value) },
+            .real => ScalarValue{ .real = try jsonAsFloat(value) },
+            .boolean => ScalarValue{ .boolean = try jsonAsBool(value) },
             else => StorageError.InvalidArrayElement,
         };
     }
@@ -174,6 +268,50 @@ pub const TypedValue = union(enum) {
         }
     }
 
+    /// Writes this typed value as MessagePack to the provided writer.
+    pub fn writeMsgPack(self: TypedValue, writer: anytype) !void {
+        switch (self) {
+            .nil => try msgpack.encode(.nil, writer),
+            .scalar => |s| try s.writeMsgPack(writer),
+            .array => |arr| {
+                try msgpack.encodeArrayHeader(writer, arr.len);
+                for (arr) |item| {
+                    try item.writeMsgPack(writer);
+                }
+            },
+        }
+    }
+
+    /// Reads and converts a SQLite result column into a TypedValue.
+    pub fn fromSQLiteColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !TypedValue {
+        const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+        if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
+            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+            const s = if (ptr != null) ptr[0..len] else "[]";
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
+            defer parsed.deinit();
+            return TypedValue.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
+        }
+        return switch (col_type) {
+            sqlite.c.SQLITE_INTEGER => {
+                const val = sqlite.c.sqlite3_column_int64(stmt, i);
+                if (field != null and field.?.sql_type == .boolean) {
+                    return TypedValue{ .scalar = .{ .boolean = val != 0 } };
+                }
+                return TypedValue{ .scalar = .{ .integer = val } };
+            },
+            sqlite.c.SQLITE_FLOAT => TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+            sqlite.c.SQLITE_TEXT => blk: {
+                const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+                const s = if (ptr != null) ptr[0..len] else "";
+                break :blk TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+            },
+            else => .nil,
+        };
+    }
+
     /// Validates if a msgpack.Payload is compatible with a schema field type.
     pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
         if (value == .nil) return;
@@ -206,6 +344,30 @@ pub const TypedValue = union(enum) {
                 return TypedValue{ .array = items };
             },
             else => .{ .scalar = try ScalarValue.fromPayload(allocator, ft, value) },
+        };
+    }
+
+    /// Converts a JSON value to a TypedValue based on the schema's FieldType.
+    pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: std.json.Value) !TypedValue {
+        if (value == .null) return .nil;
+        return switch (ft) {
+            .array => {
+                if (value != .array) return StorageError.TypeMismatch;
+                const arr = value.array;
+                const items = try allocator.alloc(ScalarValue, arr.items.len);
+                var i: usize = 0;
+                errdefer {
+                    for (items[0..i]) |*item| item.deinit(allocator);
+                    allocator.free(items);
+                }
+                const it = items_type orelse return StorageError.TypeMismatch;
+                while (i < arr.items.len) : (i += 1) {
+                    if (arr.items[i] == .null) return StorageError.NullNotAllowed;
+                    items[i] = try ScalarValue.fromJson(allocator, it, arr.items[i]);
+                }
+                return TypedValue{ .array = items };
+            },
+            else => .{ .scalar = try ScalarValue.fromJson(allocator, ft, value) },
         };
     }
 
@@ -297,7 +459,6 @@ pub const ReconnectionConfig = struct {
 pub const ColumnContext = struct {
     index: c_int,
     name: []const u8,
-    key: msgpack.Payload,
     field: ?schema_manager.Field,
 };
 
@@ -455,6 +616,30 @@ fn payloadAsFloat(payload: msgpack.Payload) !f64 {
 
 fn payloadAsBool(payload: msgpack.Payload) !bool {
     return switch (payload) {
+        .bool => |v| v,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsInt(value: std.json.Value) !i64 {
+    return switch (value) {
+        .integer => |v| v,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch StorageError.TypeMismatch,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsFloat(value: std.json.Value) !f64 {
+    return switch (value) {
+        .float => |v| v,
+        .integer => |v| @floatFromInt(v),
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch StorageError.TypeMismatch,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsBool(value: std.json.Value) !bool {
+    return switch (value) {
         .bool => |v| v,
         else => StorageError.TypeMismatch,
     };

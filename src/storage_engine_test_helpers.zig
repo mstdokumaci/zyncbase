@@ -16,7 +16,6 @@ pub const TableMetadata = schema_manager.TableMetadata;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
-const mth = @import("msgpack_test_helpers.zig");
 
 fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
     if (options.in_memory) {
@@ -189,60 +188,47 @@ pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payl
     return try msgpack.Payload.strToPayload(s, allocator);
 }
 
-pub fn expectFieldString(payload: ?msgpack.Payload, key: []const u8, expected: []const u8) !msgpack.Payload {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    try testing.expect(val == .str);
-    try testing.expectEqualStrings(expected, val.str.value());
+pub fn expectFieldString(doc: storage_engine.TypedRow, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
+    const val = doc.getField(key) orelse return error.FieldNotFound;
+    try testing.expect(val == .scalar and val.scalar == .text);
+    try testing.expectEqualStrings(expected, val.scalar.text);
     return val;
 }
 
-pub fn expectFieldInt(payload: ?msgpack.Payload, key: []const u8, expected: i64) !i64 {
-    const actual = try getFieldInt(payload, key);
+pub fn expectFieldInt(doc: storage_engine.TypedRow, key: []const u8, expected: i64) !i64 {
+    const actual = try getFieldInt(doc, key);
     try testing.expectEqual(expected, actual);
     return actual;
 }
 
-pub fn getFieldInt(payload: ?msgpack.Payload, key: []const u8) !i64 {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    return switch (val) {
-        .int => |v| v,
-        .uint => |v| @as(i64, @intCast(v)),
-        else => return error.TypeMismatch,
-    };
+pub fn getFieldInt(doc: storage_engine.TypedRow, key: []const u8) !i64 {
+    const val = doc.getField(key) orelse return error.FieldNotFound;
+    if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
+    return error.TypeMismatch;
 }
 
-pub fn expectFieldReal(payload: ?msgpack.Payload, key: []const u8, expected: f64) !f64 {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    const actual = switch (val) {
-        .float => |v| v,
-        else => return error.TypeMismatch,
-    };
+pub fn expectFieldReal(doc: storage_engine.TypedRow, key: []const u8, expected: f64) !f64 {
+    const val = doc.getField(key) orelse return error.FieldNotFound;
+    if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
+    const actual = val.scalar.real;
     try testing.expectApproxEqAbs(expected, actual, 0.00001);
     return actual;
 }
 
-pub fn expectFieldBool(payload: ?msgpack.Payload, key: []const u8, expected: bool) !bool {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    try testing.expect(val == .bool);
-    try testing.expectEqual(expected, val.bool);
-    return val.bool;
+pub fn expectFieldBool(doc: storage_engine.TypedRow, key: []const u8, expected: bool) !bool {
+    const val = doc.getField(key) orelse return error.FieldNotFound;
+    try testing.expect(val == .scalar and val.scalar == .boolean);
+    try testing.expectEqual(expected, val.scalar.boolean);
+    return val.scalar.boolean;
 }
 
-pub fn expectFieldArray(payload: ?msgpack.Payload, key: []const u8, expected_len: usize) !msgpack.Payload {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    try testing.expect(val == .arr);
-    try testing.expectEqual(expected_len, val.arr.len);
+pub fn expectFieldArray(doc: storage_engine.TypedRow, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
+    const val = doc.getField(key) orelse return error.FieldNotFound;
+    try testing.expect(val == .array);
+    try testing.expectEqual(expected_len, val.array.len);
     return val;
 }
 
-pub fn expectFieldMap(payload: ?msgpack.Payload, key: []const u8) !msgpack.Payload {
-    const doc = payload orelse return error.TestDocumentMissing;
-    const val = (try mth.getMapValue(doc, key)) orelse return error.FieldNotFound;
-    try testing.expect(val == .map);
-    return val;
-}
+// Map does not exist in TypedRow API, so test may need alternative verification or removal.
+// pub fn expectFieldMap(doc: storage_engine.TypedRow, key: []const u8) !storage_engine.TypedValue {
+// }

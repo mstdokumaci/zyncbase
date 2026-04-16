@@ -3,6 +3,7 @@ const testing = std.testing;
 const protocol = @import("protocol.zig");
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
+const tth = @import("typed_test_helpers.zig");
 
 test "extractAs: Envelope from valid map" {
     const allocator = testing.allocator;
@@ -164,8 +165,8 @@ test "buildErrorResponse: produces valid MsgPack" {
 test "encodeDeltaSuffix: set operation" {
     const allocator = testing.allocator;
 
-    const id_payload = Payload.uintToPayload(12345);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_payload, false, null);
+    const id_val = tth.valInt(12345);
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_val, false, null);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -200,8 +201,8 @@ test "encodeDeltaSuffix: set operation" {
 test "encodeDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
-    const id_payload = Payload.uintToPayload(999);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_payload, true, null);
+    const id_val = tth.valInt(999);
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_val, true, null);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -266,10 +267,8 @@ test "store_delta_header: decodes to StoreDelta type" {
 test "encodeDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
-    const id_payload = try Payload.strToPayload("doc-abc-123", allocator);
-    defer id_payload.free(allocator);
-
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_payload, false, null);
+    const id_val = tth.valText("doc-abc-123");
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_val, false, null);
     defer allocator.free(suffix);
 
     // Decode and verify

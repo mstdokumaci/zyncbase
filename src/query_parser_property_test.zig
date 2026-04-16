@@ -19,7 +19,7 @@ test "property: random valid query filters" {
             const num_conds = random.intRangeAtMost(usize, 0, 10);
             const conds_arr = try allocator.alloc(msgpack.Payload, num_conds);
             for (conds_arr) |*c| {
-                c.* = try generateRandomCondition(allocator, random, false, "field");
+                c.* = try generateRandomCondition(allocator, random, false, "field", .text);
             }
             try root.mapPut("conditions", .{ .arr = conds_arr });
         }
@@ -28,7 +28,7 @@ test "property: random valid query filters" {
             const num_or_conds = random.intRangeAtMost(usize, 0, 5);
             const or_conds_arr = try allocator.alloc(msgpack.Payload, num_or_conds);
             for (or_conds_arr) |*c| {
-                c.* = try generateRandomCondition(allocator, random, false, "field");
+                c.* = try generateRandomCondition(allocator, random, false, "field", .text);
             }
             try root.mapPut("orConditions", .{ .arr = or_conds_arr });
         }
@@ -66,7 +66,7 @@ test "property: reject unknown field names" {
 
         // Add a condition with a name not in schema
         const conds_arr = try allocator.alloc(msgpack.Payload, 1);
-        conds_arr[0] = try generateRandomCondition(allocator, random, true, "unknown_field");
+        conds_arr[0] = try generateRandomCondition(allocator, random, true, "unknown_field", .text);
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
         const tables = [_]schema_manager.Table{
@@ -81,7 +81,7 @@ test "property: reject unknown field names" {
     }
 }
 
-fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_name: []const u8) !msgpack.Payload {
+fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_name: []const u8, field_type: schema_manager.FieldType) !msgpack.Payload {
     const field = if (force_unknown_field) "another_field" else field_name;
     const op_code = random.intRangeAtMost(u8, 0, 12);
 
@@ -95,7 +95,21 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
         var cond = try allocator.alloc(msgpack.Payload, 3);
         cond[0] = try msgpack.Payload.strToPayload(field, allocator);
         cond[1] = msgpack.Payload.uintToPayload(op_code);
-        cond[2] = msgpack.Payload.uintToPayload(42); // simple value for property test
+        cond[2] = try randomValueForType(allocator, random, field_type);
         return .{ .arr = cond };
     }
+}
+
+fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_manager.FieldType) !msgpack.Payload {
+    return switch (field_type) {
+        .text => msgpack.Payload.strToPayload("v", allocator),
+        .integer => msgpack.Payload.uintToPayload(random.int(u64)),
+        .real => .{ .float = @floatFromInt(random.int(u32)) },
+        .boolean => msgpack.Payload{ .bool = random.boolean() },
+        .array => blk: {
+            var arr = try allocator.alloc(msgpack.Payload, 1);
+            arr[0] = try msgpack.Payload.strToPayload("v", allocator);
+            break :blk .{ .arr = arr };
+        },
+    };
 }

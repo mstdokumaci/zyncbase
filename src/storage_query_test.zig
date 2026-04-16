@@ -4,10 +4,10 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "StorageEngine: selectQuery basic equality" {
     const allocator = testing.allocator;
@@ -36,7 +36,7 @@ test "StorageEngine: selectQuery basic equality" {
     conds[0] = .{
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
-        .value = try msgpack.Payload.strToPayload("Bob", allocator),
+        .value = try tth.valTextOwned(allocator, "Bob"),
         .field_type = .text,
         .items_type = null,
     };
@@ -44,10 +44,10 @@ test "StorageEngine: selectQuery basic equality" {
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
-    const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+    const res = managed.rows;
 
-    try testing.expectEqual(@as(usize, 1), results.arr.len);
-    try testing.expectEqualStrings("Bob", try getMapStr(results.arr[0], "name"));
+    try testing.expectEqual(@as(usize, 1), res.len);
+    try testing.expectEqualStrings("Bob", try getRowStr(res[0], "name"));
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -76,14 +76,14 @@ test "StorageEngine: selectQuery with OR and ordering" {
     or_conds[0] = .{
         .field = try allocator.dupe(u8, "age"),
         .op = .lt,
-        .value = msgpack.Payload.intToPayload(30),
+        .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
     or_conds[1] = .{
         .field = try allocator.dupe(u8, "age"),
         .op = .gt,
-        .value = msgpack.Payload.intToPayload(30),
+        .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
@@ -91,11 +91,11 @@ test "StorageEngine: selectQuery with OR and ordering" {
 
     var managed = try engine.selectQuery(allocator, "users", "ns", filter);
     defer managed.deinit();
-    const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
+    const res = managed.rows;
 
-    try testing.expectEqual(@as(usize, 2), results.arr.len);
-    try testing.expectEqualStrings("Charlie", try getMapStr(results.arr[0], "name")); // 35
-    try testing.expectEqualStrings("Bob", try getMapStr(results.arr[1], "name")); // 25
+    try testing.expectEqual(@as(usize, 2), res.len);
+    try testing.expectEqualStrings("Charlie", try getRowStr(res[0], "name")); // 35
+    try testing.expectEqualStrings("Bob", try getRowStr(res[1], "name")); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -124,77 +124,68 @@ test "StorageEngine: selectQuery pagination (after)" {
 
     var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
     defer managed1.deinit();
-    const res1 = managed1.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
-    try testing.expectEqual(@as(usize, 2), res1.arr.len);
-    try testing.expectEqualStrings("id1", try getMapStr(res1.arr[0], "id"));
-    try testing.expectEqualStrings("id2", try getMapStr(res1.arr[1], "id"));
+    const res1 = managed1.rows;
+    try testing.expectEqual(@as(usize, 2), res1.len);
+    try testing.expectEqualStrings("id1", try getRowStr(res1[0], "id"));
+    try testing.expectEqualStrings("id2", try getRowStr(res1[1], "id"));
 
     // Query 2: Same query but AFTER [100, "id2"]
     var filter2 = try qth.makeFilter(allocator, "score", false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
-        .sort_value = msgpack.Payload.intToPayload(100),
+        .sort_value = tth.valInt(100),
         .id = try allocator.dupe(u8, "id2"),
     };
 
     var managed2 = try engine.selectQuery(allocator, "scores", "ns", filter2);
     defer managed2.deinit();
-    const res2 = managed2.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
-    try testing.expectEqual(@as(usize, 2), res2.arr.len);
-    try testing.expectEqualStrings("id3", try getMapStr(res2.arr[0], "id")); // 200
-    try testing.expectEqualStrings("id4", try getMapStr(res2.arr[1], "id")); // 300
+    const res2 = managed2.rows;
+    try testing.expectEqual(@as(usize, 2), res2.len);
+    try testing.expectEqualStrings("id3", try getRowStr(res2[0], "id")); // 200
+    try testing.expectEqualStrings("id4", try getRowStr(res2[1], "id")); // 300
 }
 
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
-        .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
+        .{ .name = "name", .value = tth.valText(name), .field_type = .text },
+        .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
     };
     try engine.insertOrReplace("users", id, "ns", &cols);
 }
 
 fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     const cols = [_]ColumnValue{
-        .{ .name = "score", .value = .{ .scalar = .{ .integer = score } }, .field_type = .integer },
+        .{ .name = "score", .value = tth.valInt(score), .field_type = .integer },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
 
-fn getMapStr(payload: msgpack.Payload, key: []const u8) ![]const u8 {
-    var key_p = try msgpack.Payload.strToPayload(key, std.testing.allocator);
-    defer key_p.free(std.testing.allocator);
-    const val = payload.map.get(key_p) orelse return error.KeyNotFound;
-    return val.str.value();
+fn getRowStr(row: storage_engine.TypedRow, key: []const u8) ![]const u8 {
+    const val = row.getField(key) orelse return error.KeyNotFound;
+    return val.scalar.text;
 }
 
 fn expectArrayFieldEquals(
-    allocator: std.mem.Allocator,
-    row: msgpack.Payload,
+    row: storage_engine.TypedRow,
     field_name: []const u8,
     expected: []const []const u8,
 ) !void {
-    var field_key = try msgpack.Payload.strToPayload(field_name, allocator);
-    defer field_key.free(allocator);
+    const field_val = row.getField(field_name) orelse return error.KeyNotFound;
+    try testing.expect(field_val == .array);
+    try testing.expectEqual(expected.len, field_val.array.len);
 
-    const field_val = row.map.get(field_key) orelse return error.KeyNotFound;
-    try testing.expect(field_val == .arr);
-    try testing.expectEqual(expected.len, field_val.arr.len);
-
-    for (expected, field_val.arr) |exp, got| {
-        try testing.expectEqualStrings(exp, got.str.value());
+    for (expected, field_val.array) |exp, got| {
+        try testing.expectEqualStrings(exp, got.text);
     }
 }
 
-fn expectMissingMapKey(
-    allocator: std.mem.Allocator,
-    row: msgpack.Payload,
+fn expectMissingRowKey(
+    row: storage_engine.TypedRow,
     key_name: []const u8,
 ) !void {
-    var key = try msgpack.Payload.strToPayload(key_name, allocator);
-    defer key.free(allocator);
-    try testing.expect(row.map.get(key) == null);
+    try testing.expect(row.getField(key_name) == null);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -211,17 +202,13 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator, .text);
-    defer tags_payload.free(allocator);
-    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator, .text);
-    defer labels_payload.free(allocator);
-    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, tags_payload);
+    const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
     defer tags_tv.deinit(allocator);
-    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, labels_payload);
+    const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{
-        .{ .name = "name", .value = .{ .scalar = .{ .text = "Task 1" } }, .field_type = .text },
+        .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
         .{ .name = "tags", .value = tags_tv, .field_type = .array },
         .{ .name = "labels", .value = labels_tv, .field_type = .array },
     };
@@ -235,7 +222,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     conds[0] = .{
         .field = try allocator.dupe(u8, "name"),
         .op = .eq,
-        .value = try msgpack.Payload.strToPayload("Task 1", allocator),
+        .value = try tth.valTextOwned(allocator, "Task 1"),
         .field_type = .text,
         .items_type = null,
     };
@@ -244,18 +231,18 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     var managed = try engine.selectQuery(allocator, "items", "ns", filter);
     defer managed.deinit();
 
-    const results = managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} };
-    try testing.expectEqual(@as(usize, 1), results.arr.len);
+    const res = managed.rows;
+    try testing.expectEqual(@as(usize, 1), res.len);
 
-    const row = results.arr[0];
+    const row = res[0];
 
     // Positive contract: array fields are decoded under their schema field names.
-    try expectArrayFieldEquals(allocator, row, "tags", &.{ "urgent", "home" });
-    try expectArrayFieldEquals(allocator, row, "labels", &.{ "work", "p1" });
+    try expectArrayFieldEquals(row, "tags", &.{ "urgent", "home" });
+    try expectArrayFieldEquals(row, "labels", &.{ "work", "p1" });
 
     // Negative contract: raw expression names never leak into row keys.
-    try expectMissingMapKey(allocator, row, "json(tags)");
-    try expectMissingMapKey(allocator, row, "json(labels)");
+    try expectMissingRowKey(row, "json(tags)");
+    try expectMissingRowKey(row, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -286,16 +273,16 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = try msgpack.Payload.strToPayload("p%l", allocator),
+            .value = try tth.valTextOwned(allocator, "p%l"),
             .field_type = .text,
             .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getMapStr(results[0], "id"));
+        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -306,16 +293,16 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = try msgpack.Payload.strToPayload("p_l", allocator),
+            .value = try tth.valTextOwned(allocator, "p_l"),
             .field_type = .text,
             .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getMapStr(results[0], "id"));
+        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -326,16 +313,16 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .startsWith,
-            .value = try msgpack.Payload.strToPayload("ap_", allocator),
+            .value = try tth.valTextOwned(allocator, "ap_"),
             .field_type = .text,
             .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getMapStr(results[0], "id"));
+        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -346,16 +333,16 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .endsWith,
-            .value = try msgpack.Payload.strToPayload("%le", allocator),
+            .value = try tth.valTextOwned(allocator, "%le"),
             .field_type = .text,
             .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getMapStr(results[0], "id"));
+        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -366,16 +353,16 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = try msgpack.Payload.strToPayload("\\", allocator),
+            .value = try tth.valTextOwned(allocator, "\\"),
             .field_type = .text,
             .items_type = null,
         };
         filter.conditions = conds;
         var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("4", try getMapStr(results[0], "id"));
+        try testing.expectEqualStrings("4", try getRowStr(results[0], "id"));
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
@@ -394,7 +381,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         conds[0] = .{
             .field = try allocator.dupe(u8, "data"),
             .op = .contains,
-            .value = try msgpack.Payload.strToPayload(malicious, allocator),
+            .value = try tth.valTextOwned(allocator, malicious),
             .field_type = .text,
             .items_type = null,
         };
@@ -403,7 +390,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
         var managed = try engine.selectQuery(allocator, "wildcards", "ns", filter);
         defer managed.deinit();
-        const results = (managed.value orelse msgpack.Payload{ .arr = &[_]msgpack.Payload{} }).arr;
+        const results = managed.rows;
         try testing.expectEqual(@as(usize, 0), results.len);
     }
 }
@@ -415,7 +402,7 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
     const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = .{ .scalar = .{ .text = data } }, .field_type = .text },
+        .{ .name = "data", .value = tth.valText(data), .field_type = .text },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);
 }

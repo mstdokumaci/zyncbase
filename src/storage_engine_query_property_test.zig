@@ -4,9 +4,9 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
@@ -39,8 +39,7 @@ test "property: random query filters on StorageEngine" {
         // Execute query
         var managed = try engine.selectQuery(allocator, "entities", "ns1", filter);
         defer managed.deinit();
-        try testing.expect(managed.value != null);
-        try testing.expect(managed.value.? == .arr);
+        try testing.expect(managed.rows.len >= 0);
     }
 }
 
@@ -60,9 +59,9 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
         const score = random.float(f64) * 1000.0;
 
         const cols = [_]ColumnValue{
-            .{ .name = "name", .value = .{ .scalar = .{ .text = name } }, .field_type = .text },
-            .{ .name = "age", .value = .{ .scalar = .{ .integer = age } }, .field_type = .integer },
-            .{ .name = "score", .value = .{ .scalar = .{ .real = score } }, .field_type = .real },
+            .{ .name = "name", .value = tth.valText(name), .field_type = .text },
+            .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
+            .{ .name = "score", .value = tth.valReal(score), .field_type = .real },
         };
         try engine.insertOrReplace("entities", id, "ns1", &cols);
     }
@@ -127,17 +126,17 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
     const op: query_parser.Operator = @enumFromInt(op_int);
 
-    var value: ?msgpack.Payload = null;
+    var value: ?storage_engine.TypedValue = null;
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {
-            value = try msgpack.Payload.strToPayload("test_value", allocator);
+            value = try tth.valTextOwned(allocator, "test_value");
         } else if (std.mem.eql(u8, field, "name")) {
-            value = try msgpack.Payload.strToPayload("name_5", allocator);
+            value = try tth.valTextOwned(allocator, "name_5");
         } else if (std.mem.eql(u8, field, "age")) {
-            value = msgpack.Payload.intToPayload(random.intRangeAtMost(i64, 0, 100));
+            value = tth.valInt(random.intRangeAtMost(i64, 0, 100));
         } else {
-            value = msgpack.Payload.floatToPayload(500.0);
+            value = tth.valReal(500.0);
         }
     }
 

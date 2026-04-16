@@ -5,8 +5,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const msgpack = @import("msgpack_utils.zig");
-const Payload = msgpack.Payload;
+const tth = @import("typed_test_helpers.zig");
 // ============================================================
 // Full dispatch integration tests
 // ============================================================
@@ -50,15 +49,16 @@ test "NotificationDispatcher: poll processes items" {
     defer nd.deinit();
 
     // Create a row with an "id" field so dispatchChange doesn't skip it
-    var row = Payload.mapPayload(alloc);
-    try row.mapPut("id", Payload.uintToPayload(1));
+    const new_row = try tth.row(alloc, .{
+        .id = tth.valText("1"),
+    });
 
     try cb.push(.{
         .namespace = try alloc.dupe(u8, "ns"),
         .collection = try alloc.dupe(u8, "coll"),
         .operation = .insert,
         .old_row = null,
-        .new_row = row,
+        .new_row = new_row,
     });
 
     var cm: ConnectionManager = undefined;

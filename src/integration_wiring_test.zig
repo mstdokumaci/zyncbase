@@ -60,8 +60,8 @@ test "Integration: Error propagation through layers" {
     // Verify storage engine interaction through wiring
     var managed = try server.storage_engine.selectDocument(allocator, "test", "nonexistent_key", "test_namespace");
     defer managed.deinit();
-    const doc = managed.value;
-    try testing.expect(doc == null);
+    const doc = managed.rows;
+    try testing.expect(doc.len == 0);
 
     // Verify components have expected internal pointers
     try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);

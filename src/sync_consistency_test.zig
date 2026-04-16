@@ -2,7 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const msgpack = @import("msgpack_utils.zig");
+const tth = @import("typed_test_helpers.zig");
+
 const sub_eng = @import("subscription_engine.zig");
 const cb = @import("change_buffer.zig");
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
@@ -33,20 +34,17 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         "id1",
         "ns",
         &[_]sth.ColumnValue{
-            .{ .name = "val", .value = .{ .scalar = .{ .text = "task 1" } }, .field_type = .text },
+            .{ .name = "val", .value = tth.valText("task 1"), .field_type = .text },
         },
     );
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.
-    const val_to_match = try msgpack.Payload.strToPayload("task 1", allocator);
-    defer val_to_match.free(allocator);
-
     const conditions = try allocator.alloc(query_parser.Condition, 1);
     conditions[0] = query_parser.Condition{
         .field = try allocator.dupe(u8, "val"),
         .op = .eq,
-        .value = try val_to_match.deepClone(allocator),
+        .value = try tth.valTextOwned(allocator, "task 1"),
         .field_type = .text,
         .items_type = null,
     };

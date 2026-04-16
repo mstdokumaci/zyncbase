@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const storage_mod = @import("storage_engine.zig");
-const query_parser = @import("query_parser.zig");
 
 pub const Envelope = struct {
     type: []const u8,
@@ -272,7 +271,7 @@ pub fn buildQueryResponse(
     arena_allocator: std.mem.Allocator,
     msg_id: u64,
     sub_id: ?u64,
-    results: *storage_mod.ManagedPayload,
+    results: *storage_mod.ManagedResult,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(arena_allocator);
@@ -290,22 +289,21 @@ pub fn buildQueryResponse(
     }
 
     try list.appendSlice(arena_allocator, value_key);
-    if (results.value) |val| {
-        try msgpack.encode(val, writer);
-        results.value = null;
-    } else {
-        try msgpack.encode(msgpack.Payload{ .arr = &[_]msgpack.Payload{} }, writer);
+    // Write results array
+    try msgpack.encodeArrayHeader(writer, results.rows.len);
+    for (results.rows) |row| {
+        try encodeTypedRow(writer, row);
     }
 
     if (sub_id != null) {
-        const has_more = results.next_cursor_arr != null;
+        const has_more = results.next_cursor != null;
         try list.appendSlice(arena_allocator, has_more_key);
         try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
     }
 
     try list.appendSlice(arena_allocator, next_cursor_key);
-    if (results.next_cursor_arr) |cursor_tuple| {
-        const encoded_cursor = try encodeCursor(arena_allocator, cursor_tuple);
+    if (results.next_cursor) |cursor| {
+        const encoded_cursor = try encodeCursor(arena_allocator, cursor);
         defer arena_allocator.free(encoded_cursor);
         try msgpack.writeMsgPackStr(writer, encoded_cursor);
     } else {
@@ -368,12 +366,18 @@ pub fn mapErrorToMessage(err: anyerror) []const u8 {
     };
 }
 
-pub fn encodeCursor(allocator: Allocator, cursor: msgpack.Payload) ![]const u8 {
-    return try msgpack.encodeBase64(allocator, cursor);
-}
-
-pub fn decodeCursor(allocator: Allocator, token: []const u8) !query_parser.Cursor {
-    return try query_parser.parseCursorToken(allocator, token);
+pub fn encodeCursor(allocator: Allocator, cursor: storage_mod.TypedCursor) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    defer list.deinit(allocator);
+    const writer = list.writer(allocator);
+    try msgpack.encodeArrayHeader(writer, 2);
+    try cursor.sort_value.writeMsgPack(writer);
+    try msgpack.writeMsgPackStr(writer, cursor.id);
+    const encoded_len = std.base64.standard.Encoder.calcSize(list.items.len);
+    const dest = try allocator.alloc(u8, encoded_len);
+    errdefer allocator.free(dest);
+    _ = std.base64.standard.Encoder.encode(dest, list.items);
+    return dest;
 }
 
 // === StoreDelta encoder (moved from notification_dispatcher.zig) ===
@@ -395,9 +399,9 @@ pub const store_delta_header = blk: {
 pub fn encodeDeltaSuffix(
     allocator: Allocator,
     collection: []const u8,
-    id_payload: Payload,
+    id_val: storage_mod.TypedValue,
     is_delete: bool,
-    new_row: ?Payload,
+    new_row: ?storage_mod.TypedRow,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -414,12 +418,24 @@ pub fn encodeDeltaSuffix(
     try msgpack.writeMsgPackStr(writer, "path");
     try writer.writeByte(0x92); // fixarray(2)
     try msgpack.writeMsgPackStr(writer, collection);
-    try msgpack.encode(id_payload, writer);
+    try id_val.writeMsgPack(writer);
 
     if (!is_delete) {
         try msgpack.writeMsgPackStr(writer, "value");
-        try msgpack.encode(new_row orelse Payload.nil, writer);
+        if (new_row) |row| {
+            try encodeTypedRow(writer, row);
+        } else {
+            try msgpack.encode(.nil, writer);
+        }
     }
 
     return list.toOwnedSlice(allocator);
+}
+
+pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow) !void {
+    try msgpack.encodeMapHeader(writer, row.fields.len);
+    for (row.fields) |field| {
+        try msgpack.writeMsgPackStr(writer, field.name);
+        try field.value.writeMsgPack(writer);
+    }
 }

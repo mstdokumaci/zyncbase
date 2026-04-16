@@ -4,7 +4,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const msgpack = @import("msgpack_utils.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
     const allocator = testing.allocator;
@@ -21,7 +21,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
     const run_subscribe = struct {
         fn run(engine_ptr: *SubscriptionEngine, start_id: u32, sub_count: u32, alloc: std.mem.Allocator) void {
             const filter = qth.makeFilterWithConditions(alloc, &[_]query_parser.Condition{
-                .{ .field = "status", .op = .eq, .value = msgpack.Payload.boolToPayload(true), .field_type = .boolean, .items_type = null },
+                .{ .field = "status", .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
             }) catch @panic("OOM");
             defer filter.deinit(alloc);
 
@@ -50,15 +50,14 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
     // Concurrent handleRowChange
     const run_handle = struct {
         fn run(engine_ptr: *SubscriptionEngine, alloc: std.mem.Allocator) void {
-            var row = msgpack.Payload.mapPayload(alloc);
-            defer row.free(alloc);
-            row.map.putString("status", msgpack.Payload.boolToPayload(true)) catch return;
+            const r = tth.row(alloc, .{ .status = tth.valBool(true) }) catch return;
+            defer r.deinit(alloc);
 
             const change = RowChange{
                 .namespace = "ns",
                 .collection = "coll",
                 .operation = .update,
-                .new_row = row,
+                .new_row = r,
                 .old_row = null,
             };
 
@@ -82,7 +81,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
     defer engine.deinit();
 
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "active", .op = .eq, .value = msgpack.Payload.boolToPayload(true), .field_type = .boolean, .items_type = null },
+        .{ .field = "active", .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
     });
     defer filter.deinit(allocator);
 

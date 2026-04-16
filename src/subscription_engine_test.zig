@@ -4,17 +4,16 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const RowChange = @import("subscription_engine.zig").RowChange;
 const query_parser = @import("query_parser.zig");
 const qth = @import("query_parser_test_helpers.zig");
-const msgpack = @import("msgpack_utils.zig");
+const tth = @import("typed_test_helpers.zig");
+const types = @import("storage_engine/types.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const cond_val = try msgpack.Payload.strToPayload("active", allocator);
-    defer cond_val.free(allocator);
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "status", .op = .eq, .value = cond_val, .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
 
@@ -22,17 +21,17 @@ test "SubscriptionEngine: basic subscribe and match" {
     _ = try engine.subscribe("default", "items", filter, 1, 100);
 
     // Create a matching row change
-    var row = msgpack.Payload.mapPayload(allocator);
-    defer row.free(allocator);
-
-    try row.map.putString("id", try msgpack.Payload.strToPayload("1", allocator));
-    try row.map.putString("status", try msgpack.Payload.strToPayload("active", allocator));
+    const new_row = try tth.row(allocator, .{
+        .id = tth.valText("1"),
+        .status = tth.valText("active"),
+    });
+    defer new_row.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "items",
         .operation = .insert,
-        .new_row = row,
+        .new_row = new_row,
         .old_row = null,
     };
 
@@ -50,7 +49,7 @@ test "SubscriptionEngine: group sharing" {
     defer engine.deinit();
 
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "age", .op = .gt, .value = msgpack.Payload.intToPayload(18), .field_type = .integer, .items_type = null },
+        .{ .field = "age", .op = .gt, .value = tth.valInt(18), .field_type = .integer, .items_type = null },
     });
     defer filter.deinit(allocator);
 
@@ -85,20 +84,16 @@ test "SubscriptionEngine: unsubscribe clean up" {
 test "SubscriptionEngine: operator matching" {
     const allocator = testing.allocator;
 
-    const cond_val = try msgpack.Payload.strToPayload("Al", allocator);
-    defer cond_val.free(allocator);
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "name", .op = .startsWith, .value = cond_val, .field_type = .text, .items_type = null },
+        .{ .field = "name", .op = .startsWith, .value = tth.valText("Al"), .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
 
-    var row1 = msgpack.Payload.mapPayload(allocator);
-    defer row1.free(allocator);
-    try row1.map.putString("name", try msgpack.Payload.strToPayload("Alice", allocator));
+    const row1 = try tth.row(allocator, .{ .name = tth.valText("Alice") });
+    defer row1.deinit(allocator);
 
-    var row2 = msgpack.Payload.mapPayload(allocator);
-    defer row2.free(allocator);
-    try row2.map.putString("name", try msgpack.Payload.strToPayload("Bob", allocator));
+    const row2 = try tth.row(allocator, .{ .name = tth.valText("Bob") });
+    defer row2.deinit(allocator);
 
     try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1));
     try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2));
@@ -109,17 +104,13 @@ test "SubscriptionEngine: canonical filter key includes values" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const val1 = try msgpack.Payload.strToPayload("active", allocator);
-    defer val1.free(allocator);
     const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
-    const val2 = try msgpack.Payload.strToPayload("inactive", allocator);
-    defer val2.free(allocator);
     const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "status", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = tth.valText("inactive"), .field_type = .text, .items_type = null },
     });
     defer filter2.deinit(allocator);
 
@@ -129,6 +120,57 @@ test "SubscriptionEngine: canonical filter key includes values" {
 
     // If they share the same key, they will be in the same group.
     // They SHOULD be in different groups because the values are different.
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+}
+
+test "SubscriptionEngine: canonical key distinguishes same-length array contents" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const in_val_1 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "a" },
+    });
+    defer in_val_1.deinit(allocator);
+    const in_val_2 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "b" },
+    });
+    defer in_val_2.deinit(allocator);
+
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .in, .value = in_val_1, .field_type = .text, .items_type = null },
+    });
+    defer filter1.deinit(allocator);
+
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .in, .value = in_val_2, .field_type = .text, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
+
+    _ = try engine.subscribe("default", "users", filter1, 1, 101);
+    _ = try engine.subscribe("default", "users", filter2, 2, 102);
+
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+}
+
+test "SubscriptionEngine: canonical key keeps integer and real distinct" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const filter_int = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "score", .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+    });
+    defer filter_int.deinit(allocator);
+
+    const filter_real = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "score", .op = .eq, .value = tth.valReal(1.0), .field_type = .real, .items_type = null },
+    });
+    defer filter_real.deinit(allocator);
+
+    _ = try engine.subscribe("default", "scores", filter_int, 1, 201);
+    _ = try engine.subscribe("default", "scores", filter_real, 2, 202);
+
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
 
@@ -145,14 +187,14 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     defer filter.deinit(allocator);
     _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
 
-    var row = msgpack.Payload.mapPayload(allocator);
-    defer row.free(allocator);
+    const new_row = try tth.row(allocator, .{});
+    defer new_row.deinit(allocator);
 
     const change = RowChange{
         .namespace = long_ns,
         .collection = long_coll,
         .operation = .insert,
-        .new_row = row,
+        .new_row = new_row,
         .old_row = null,
     };
 
@@ -167,8 +209,7 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
 test "SubscriptionEngine: case-insensitive string matching" {
     const allocator = testing.allocator;
 
-    const val = try msgpack.Payload.strToPayload("Al", allocator);
-    defer val.free(allocator);
+    const val = tth.valText("Al");
 
     const filter_starts_with = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{ .field = "name", .op = .startsWith, .value = val, .field_type = .text, .items_type = null },
@@ -187,29 +228,23 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     // Case-insensitive startsWith
     {
-        var row = msgpack.Payload.mapPayload(allocator);
-        defer row.free(allocator);
-        const name_val = try msgpack.Payload.strToPayload("aLiCe", allocator);
-        try row.mapPut("name", name_val);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, row));
+        const r = try tth.row(allocator, .{ .name = tth.valText("aLiCe") });
+        defer r.deinit(allocator);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r));
     }
 
     // Case-insensitive endsWith
     {
-        var row = msgpack.Payload.mapPayload(allocator);
-        defer row.free(allocator);
-        const name_val = try msgpack.Payload.strToPayload("reAL", allocator);
-        try row.mapPut("name", name_val);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, row));
+        const r = try tth.row(allocator, .{ .name = tth.valText("reAL") });
+        defer r.deinit(allocator);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r));
     }
 
     // Case-insensitive contains
     {
-        var row = msgpack.Payload.mapPayload(allocator);
-        defer row.free(allocator);
-        const name_val = try msgpack.Payload.strToPayload("vALid", allocator);
-        try row.mapPut("name", name_val);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, row));
+        const r = try tth.row(allocator, .{ .name = tth.valText("vALid") });
+        defer r.deinit(allocator);
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r));
     }
 }
 
@@ -218,22 +253,17 @@ test "SubscriptionEngine: group sharing with different condition order" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const val1 = try msgpack.Payload.strToPayload("A", allocator);
-    defer val1.free(allocator);
-    const val2 = try msgpack.Payload.strToPayload("B", allocator);
-    defer val2.free(allocator);
-
     // Filter 1: status=A, type=B
     const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
-        .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = tth.valText("A"), .field_type = .text, .items_type = null },
+        .{ .field = "type", .op = .eq, .value = tth.valText("B"), .field_type = .text, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
     // Filter 2: type=B, status=A (different order)
     const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-        .{ .field = "type", .op = .eq, .value = val2, .field_type = .text, .items_type = null },
-        .{ .field = "status", .op = .eq, .value = val1, .field_type = .text, .items_type = null },
+        .{ .field = "type", .op = .eq, .value = tth.valText("B"), .field_type = .text, .items_type = null },
+        .{ .field = "status", .op = .eq, .value = tth.valText("A"), .field_type = .text, .items_type = null },
     });
     defer filter2.deinit(allocator);
 
@@ -251,10 +281,11 @@ test "SubscriptionEngine: in operator subscribe and match" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    var in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
-    in_val.arr[0] = try msgpack.Payload.strToPayload("admin", allocator);
-    in_val.arr[1] = try msgpack.Payload.strToPayload("editor", allocator);
-    defer in_val.free(allocator);
+    const in_val = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "admin" },
+        .{ .text = "editor" },
+    });
+    defer in_val.deinit(allocator);
 
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{ .field = "role", .op = .in, .value = in_val, .field_type = .text, .items_type = null },
@@ -263,15 +294,14 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var row = msgpack.Payload.mapPayload(allocator);
-    defer row.free(allocator);
-    try row.map.putString("role", try msgpack.Payload.strToPayload("admin", allocator));
+    const r = try tth.row(allocator, .{ .role = tth.valText("admin") });
+    defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = row,
+        .new_row = r,
         .old_row = null,
     };
 
@@ -285,10 +315,11 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    var not_in_val: msgpack.Payload = .{ .arr = try allocator.alloc(msgpack.Payload, 2) };
-    not_in_val.arr[0] = try msgpack.Payload.strToPayload("guest", allocator);
-    not_in_val.arr[1] = try msgpack.Payload.strToPayload("banned", allocator);
-    defer not_in_val.free(allocator);
+    const not_in_val = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "guest" },
+        .{ .text = "banned" },
+    });
+    defer not_in_val.deinit(allocator);
 
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{ .field = "role", .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
@@ -297,15 +328,14 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var row = msgpack.Payload.mapPayload(allocator);
-    defer row.free(allocator);
-    try row.map.putString("role", try msgpack.Payload.strToPayload("member", allocator));
+    const r = try tth.row(allocator, .{ .role = tth.valText("member") });
+    defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = row,
+        .new_row = r,
         .old_row = null,
     };
 

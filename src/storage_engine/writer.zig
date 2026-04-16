@@ -5,7 +5,6 @@ const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const types = @import("types.zig");
 const schema_manager = @import("../schema_manager.zig");
-const msgpack = @import("../msgpack_utils.zig");
 const sql = @import("sql.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
@@ -22,7 +21,7 @@ fn getDocumentHelper(
     id: []const u8,
     sql_cache: *std.StringHashMap([]const u8),
     stmt_cache: *sql.StatementCache,
-) !?msgpack.Payload {
+) !?types.TypedRow {
     const table_metadata = sm.getTable(table) orelse return null;
     const sql_str = if (sql_cache.get(table)) |s| s else blk: {
         const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
@@ -31,7 +30,7 @@ fn getDocumentHelper(
     };
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
-    return reader.execSelectDocument(allocator, conn, mstmt.stmt, id, namespace, table_metadata);
+    return reader.execSelectDocumentTyped(allocator, conn, mstmt.stmt, id, namespace, table_metadata);
 }
 
 fn pushOwnedChange(
@@ -40,8 +39,8 @@ fn pushOwnedChange(
     namespace: []const u8,
     collection: []const u8,
     op: OwnedRowChange.Operation,
-    old_row: ?msgpack.Payload,
-    new_row: ?msgpack.Payload,
+    old_row: ?types.TypedRow,
+    new_row: ?types.TypedRow,
 ) !void {
     const ns = try allocator.dupe(u8, namespace);
     errdefer allocator.free(ns);
@@ -97,7 +96,7 @@ pub fn executeBatch(
         switch (op) {
             .upsert => |iop| {
                 const table_metadata = sm.getTable(iop.table) orelse return StorageError.UnknownTable;
-                var old_row: ?msgpack.Payload = null;
+                var old_row: ?types.TypedRow = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
@@ -105,7 +104,7 @@ pub fn executeBatch(
                     std.log.err("Failed to capture old state (pre-UPSERT) for {s}: {}", .{ iop.table, err });
                 }
                 const maybe_new_row = executeUpsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
-                    if (old_row) |*r| r.free(allocator);
+                    if (old_row) |r| r.deinit(allocator);
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch UPSERT", classified_err, iop.table);
                     return classified_err;
@@ -115,14 +114,14 @@ pub fn executeBatch(
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
                     pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
-                        if (old_row) |*r| r.free(allocator);
+                        if (old_row) |r| r.deinit(allocator);
                         var r = new_row;
-                        r.free(allocator);
+                        r.deinit(allocator);
                     };
                 } else {
                     // This is unexpected for an INSERT OR REPLACE.
                     std.log.err("UPSERT for {s}/{s} returned no row via RETURNING", .{ iop.table, iop.id });
-                    if (old_row) |*r| r.free(allocator);
+                    if (old_row) |r| r.deinit(allocator);
                     continue;
                 }
             },
@@ -139,7 +138,7 @@ pub fn executeBatch(
                     pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table, .delete, old_row, null) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         var r = old_row;
-                        r.free(allocator);
+                        r.deinit(allocator);
                     };
                 } else {
                     // If RETURNING * is empty, the row did not exist or was already deleted.
@@ -461,7 +460,7 @@ pub fn executeUpsert(
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
-) !?msgpack.Payload {
+) !?types.TypedRow {
     const sql_str = op.sql;
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
@@ -485,7 +484,7 @@ pub fn executeUpsert(
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
+        return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
     if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;
@@ -497,7 +496,7 @@ pub fn executeDelete(
     op: anytype,
     table_metadata: schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
-) !?msgpack.Payload {
+) !?types.TypedRow {
     const sql_str = op.sql;
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
@@ -508,7 +507,7 @@ pub fn executeDelete(
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
-        return try reader.decodeRow(allocator, conn, stmt, table_metadata);
+        return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
     if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
     return null;

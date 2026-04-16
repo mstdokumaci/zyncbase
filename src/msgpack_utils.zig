@@ -1,6 +1,5 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
-const FieldType = @import("schema_parser.zig").FieldType;
 
 /// Security-appropriate parse limits for WebSocket message handling.
 /// These align with the ZyncBase Wire Protocol Specification.
@@ -105,6 +104,30 @@ pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
     try writer.writeAll(s);
 }
 
+pub fn encodeArrayHeader(writer: anytype, len: usize) !void {
+    if (len <= 15) {
+        try writer.writeByte(0x90 | @as(u8, @intCast(len)));
+    } else if (len <= 0xffff) {
+        try writer.writeByte(0xdc);
+        try writer.writeInt(u16, @as(u16, @intCast(len)), .big);
+    } else {
+        try writer.writeByte(0xdd);
+        try writer.writeInt(u32, @as(u32, @intCast(len)), .big);
+    }
+}
+
+pub fn encodeMapHeader(writer: anytype, len: usize) !void {
+    if (len <= 15) {
+        try writer.writeByte(0x80 | @as(u8, @intCast(len)));
+    } else if (len <= 0xffff) {
+        try writer.writeByte(0xde);
+        try writer.writeInt(u16, @as(u16, @intCast(len)), .big);
+    } else {
+        try writer.writeByte(0xdf);
+        try writer.writeInt(u32, @as(u32, @intCast(len)), .big);
+    }
+}
+
 pub const Payload = msgpack.Payload;
 pub const Map = msgpack.Map;
 
@@ -134,47 +157,4 @@ pub fn decodeBase64(allocator: std.mem.Allocator, token: []const u8) !Payload {
 
     var reader: std.Io.Reader = .fixed(final_decoded);
     return decodeTrusted(allocator, &reader) catch return error.InvalidBase64Token;
-}
-
-/// Parses a JSON array string and returns a Literal_Array Payload of items_type.
-/// The caller owns the returned Payload and must call payload.free(allocator).
-pub fn jsonToPayload(json: []const u8, allocator: std.mem.Allocator, items_type: FieldType) !Payload {
-    return switch (items_type) {
-        .text => jsonArrayToPayload([]const u8, allocator, json, mapStr),
-        .integer => jsonArrayToPayload(i64, allocator, json, mapInt),
-        .real => jsonArrayToPayload(f64, allocator, json, mapFloat),
-        .boolean => jsonArrayToPayload(bool, allocator, json, mapBool),
-        .array => error.UnsupportedArrayItemsType,
-    };
-}
-
-// ─── Internal JSON Helpers ───────────────────────────────────────────────────
-
-fn mapStr(v: []const u8, alloc: std.mem.Allocator) !Payload {
-    return try Payload.strToPayload(v, alloc);
-}
-fn mapInt(v: i64, _: std.mem.Allocator) !Payload {
-    return .{ .int = v };
-}
-fn mapFloat(v: f64, _: std.mem.Allocator) !Payload {
-    return .{ .float = v };
-}
-fn mapBool(v: bool, _: std.mem.Allocator) !Payload {
-    return .{ .bool = v };
-}
-
-fn jsonArrayToPayload(
-    comptime T: type, // zwanzig-disable-line: unused-parameter
-    allocator: std.mem.Allocator,
-    json: []const u8,
-    mapper: anytype,
-) !Payload {
-    const parsed = try std.json.parseFromSlice([]const ?T, allocator, json, .{});
-    defer parsed.deinit();
-    const arr = try allocator.alloc(Payload, parsed.value.len);
-    errdefer allocator.free(arr);
-    for (parsed.value, 0..) |v, i| {
-        arr[i] = if (v) |val| try mapper(val, allocator) else .nil;
-    }
-    return .{ .arr = arr };
 }

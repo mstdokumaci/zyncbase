@@ -16,6 +16,7 @@ const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
+const query_parser = @import("query_parser.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -344,7 +345,7 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const cursor = try protocol.decodeCursor(arena_allocator, req.nextCursor);
+        const cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor, sub_query.filter.order_by.field_type, sub_query.filter.order_by.items_type);
 
         var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();
