@@ -302,7 +302,7 @@ pub const SubscriptionEngine = struct {
             .integer => |iv| iv < b.integer,
             .real => |rv| rv < b.real,
             .text => |tv| std.mem.order(u8, tv, b.text) == .lt,
-            .boolean => @intFromBool(a.boolean) < @intFromBool(b.boolean),
+            .boolean => |bv| @intFromBool(bv) < @intFromBool(b.boolean),
         };
     }
 
