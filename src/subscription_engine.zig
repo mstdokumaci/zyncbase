@@ -353,8 +353,18 @@ pub const SubscriptionEngine = struct {
                 .boolean => |bv| try writer.print("b:{}", .{@intFromBool(bv)}),
             },
             .array => |arr| {
-                const sorted = try allocator.alloc(types.ScalarValue, arr.len);
-                defer allocator.free(sorted);
+                const max_inline = 16;
+                var inline_buf: [max_inline]types.ScalarValue = undefined;
+                var heap_buf: ?[]types.ScalarValue = null;
+                defer if (heap_buf) |buf| allocator.free(buf);
+
+                const sorted = if (arr.len <= max_inline)
+                    inline_buf[0..arr.len]
+                else blk: {
+                    const buf = try allocator.alloc(types.ScalarValue, arr.len);
+                    heap_buf = buf;
+                    break :blk buf;
+                };
                 @memcpy(sorted, arr);
                 std.sort.pdq(types.ScalarValue, sorted, {}, scalarValueLessThan);
 
