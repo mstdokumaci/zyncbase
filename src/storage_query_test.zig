@@ -4,10 +4,10 @@ const storage_engine = @import("storage_engine.zig");
 const StorageEngine = storage_engine.StorageEngine;
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const msgpack = @import("msgpack_utils.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 test "StorageEngine: selectQuery basic equality" {
     const allocator = testing.allocator;
@@ -202,13 +202,9 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    const tags_payload = try msgpack.jsonToPayload("[\"urgent\", \"home\"]", allocator, .text);
-    defer tags_payload.free(allocator);
-    const labels_payload = try msgpack.jsonToPayload("[\"work\", \"p1\"]", allocator, .text);
-    defer labels_payload.free(allocator);
-    const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, tags_payload);
+    const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
     defer tags_tv.deinit(allocator);
-    const labels_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .text, labels_payload);
+    const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
     const cols = [_]ColumnValue{

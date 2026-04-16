@@ -175,35 +175,7 @@ pub fn readColumnTypedValue(allocator: Allocator, db: *sqlite.Db, stmt: *sqlite.
         const s = if (ptr != null) ptr[0..len] else "[]";
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
         defer parsed.deinit();
-
-        if (parsed.value != .array) return error.UnexpectedToken;
-        const arr = parsed.value.array;
-
-        const items = try allocator.alloc(types.ScalarValue, arr.items.len);
-        var j: usize = 0;
-        errdefer {
-            for (items[0..j]) |*item| item.deinit(allocator);
-            allocator.free(items);
-        }
-        while (j < arr.items.len) : (j += 1) {
-            const v = arr.items[j];
-            items[j] = switch (v) {
-                .integer => |i_val| .{ .integer = i_val },
-                .float => |f_val| .{ .real = f_val },
-                .number_string => |str| blk: {
-                    if (std.fmt.parseInt(i64, str, 10)) |i_val| {
-                        break :blk .{ .integer = i_val };
-                    } else |_| {
-                        const f_val = try std.fmt.parseFloat(f64, str);
-                        break :blk .{ .real = f_val };
-                    }
-                },
-                .string => |str| .{ .text = try allocator.dupe(u8, str) },
-                .bool => |b_val| .{ .boolean = b_val },
-                else => return error.UnexpectedToken,
-            };
-        }
-        return types.TypedValue{ .array = items };
+        return types.TypedValue.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
     }
     return switch (col_type) {
         sqlite.c.SQLITE_INTEGER => {

@@ -206,6 +206,20 @@ pub const ScalarValue = union(enum) {
             else => StorageError.InvalidArrayElement,
         };
     }
+
+    /// Converts a JSON value to a ScalarValue based on the schema's FieldType.
+    pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
+        return switch (ft) {
+            .text => switch (value) {
+                .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
+                else => StorageError.TypeMismatch,
+            },
+            .integer => ScalarValue{ .integer = try jsonAsInt(value) },
+            .real => ScalarValue{ .real = try jsonAsFloat(value) },
+            .boolean => ScalarValue{ .boolean = try jsonAsBool(value) },
+            else => StorageError.InvalidArrayElement,
+        };
+    }
 };
 
 /// A typed value for asynchronous storage binding.
@@ -277,6 +291,30 @@ pub const TypedValue = union(enum) {
                 return TypedValue{ .array = items };
             },
             else => .{ .scalar = try ScalarValue.fromPayload(allocator, ft, value) },
+        };
+    }
+
+    /// Converts a JSON value to a TypedValue based on the schema's FieldType.
+    pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: std.json.Value) !TypedValue {
+        if (value == .null) return .nil;
+        return switch (ft) {
+            .array => {
+                if (value != .array) return StorageError.TypeMismatch;
+                const arr = value.array;
+                const items = try allocator.alloc(ScalarValue, arr.items.len);
+                var i: usize = 0;
+                errdefer {
+                    for (items[0..i]) |*item| item.deinit(allocator);
+                    allocator.free(items);
+                }
+                const it = items_type orelse return StorageError.TypeMismatch;
+                while (i < arr.items.len) : (i += 1) {
+                    if (arr.items[i] == .null) return StorageError.NullNotAllowed;
+                    items[i] = try ScalarValue.fromJson(allocator, it, arr.items[i]);
+                }
+                return TypedValue{ .array = items };
+            },
+            else => .{ .scalar = try ScalarValue.fromJson(allocator, ft, value) },
         };
     }
 
@@ -525,6 +563,30 @@ fn payloadAsFloat(payload: msgpack.Payload) !f64 {
 
 fn payloadAsBool(payload: msgpack.Payload) !bool {
     return switch (payload) {
+        .bool => |v| v,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsInt(value: std.json.Value) !i64 {
+    return switch (value) {
+        .integer => |v| v,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch StorageError.TypeMismatch,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsFloat(value: std.json.Value) !f64 {
+    return switch (value) {
+        .float => |v| v,
+        .integer => |v| @floatFromInt(v),
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch StorageError.TypeMismatch,
+        else => StorageError.TypeMismatch,
+    };
+}
+
+fn jsonAsBool(value: std.json.Value) !bool {
+    return switch (value) {
         .bool => |v| v,
         else => StorageError.TypeMismatch,
     };
