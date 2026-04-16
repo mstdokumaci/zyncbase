@@ -132,10 +132,6 @@ pub const TypedRow = struct {
     }
 };
 
-pub fn deinitTypedRow(allocator: std.mem.Allocator, row: *TypedRow) void {
-    row.deinit(allocator);
-}
-
 pub const TypedCursor = struct {
     sort_value: TypedValue,
     id: []const u8, // Owned

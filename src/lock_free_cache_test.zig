@@ -2,16 +2,33 @@ const std = @import("std");
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const testing = std.testing;
 
+const U32Value = struct {
+    value: u32,
+
+    pub fn deinit(self: U32Value, allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
+
+const OwnedString = struct {
+    value: []const u8,
+
+    pub fn deinit(self: OwnedString, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+    }
+};
+
 test "cache: concurrent reads never block" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{}, null);
+    try cache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
-    try cache.update(namespace, 42);
+    try cache.update(namespace, .{ .value = 42 });
 
     const num_threads = 8;
     const reads_per_thread = 1000;
@@ -30,7 +47,7 @@ test "cache: concurrent reads never block" {
                     std.log.debug("Read failed: {}", .{err});
                     continue;
                 };
-                if (handle.data().* != 42) unreachable;
+                if (handle.data().value != 42) unreachable;
                 handle.release();
                 _ = ctx.counter.fetchAdd(1, .monotonic);
             }
@@ -54,14 +71,14 @@ test "cache: concurrent reads never block" {
 
 test "cache: ref_count lifecycle" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{}, null);
+    try cache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test-namespace";
-    try cache.update(namespace, 100);
+    try cache.update(namespace, .{ .value = 100 });
 
     const handle = try cache.get(namespace);
     const entries = cache.entries.load(.acquire);
@@ -74,54 +91,48 @@ test "cache: ref_count lifecycle" {
 
 test "cache: update increments version" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{}, null);
+    try cache.init(allocator, .{});
     defer cache.deinit();
 
     const namespace = "test";
-    try cache.update(namespace, 1);
-    try cache.update(namespace, 2);
+    try cache.update(namespace, .{ .value = 1 });
+    try cache.update(namespace, .{ .value = 2 });
 
     const handle = try cache.get(namespace);
     defer handle.release();
-    try testing.expectEqual(@as(u32, 2), handle.data().*);
+    try testing.expectEqual(@as(u32, 2), handle.data().value);
 }
 
 test "cache: eviction" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, .{}, null);
+    try cache.init(allocator, .{});
     defer cache.deinit();
 
-    try cache.update("to-evict", 99);
+    try cache.update("to-evict", .{ .value = 99 });
     _ = cache.evict("to-evict");
 
     const result = cache.get("to-evict");
     try testing.expectError(error.NotFound, result);
 }
 
-test "cache: deep free via hook" {
+test "cache: deep free via value deinit" {
     const allocator = testing.allocator;
-    const string_cache = lockFreeCache([]const u8);
-
-    const context = struct {
-        fn deinitString(alloc: std.mem.Allocator, s: *[]const u8) void {
-            alloc.free(s.*);
-        }
-    };
+    const string_cache = lockFreeCache(OwnedString);
 
     var cache: string_cache = undefined;
-    try cache.init(allocator, .{}, context.deinitString);
+    try cache.init(allocator, .{});
     defer cache.deinit();
 
     const val = try allocator.dupe(u8, "hello world");
-    try cache.update("key", val);
+    try cache.update("key", .{ .value = val });
 
-    // Evict should trigger the hook eventually (during reclaim)
+    // Evict should trigger deinit eventually (during reclaim).
     _ = cache.evict("key");
-    cache.reclaim(true); // Force reclaim to run the hook
+    cache.reclaim(true); // Force reclaim to run deinit.
 }

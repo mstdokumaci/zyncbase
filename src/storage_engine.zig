@@ -75,10 +75,6 @@ pub const StorageEngine = struct {
     event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
 
-    fn deinitTypedRow(allocator: Allocator, row: *types.TypedRow) void {
-        row.deinit(allocator);
-    }
-
     pub fn init(
         self: *StorageEngine,
         allocator: Allocator,
@@ -205,7 +201,7 @@ pub const StorageEngine = struct {
         self.writer_stmt_cache.init(allocator, self.performance_config.statement_cache_size);
         errdefer self.writer_stmt_cache.deinit(allocator);
 
-        try self.metadata_cache.init(allocator, .{}, deinitTypedRow);
+        try self.metadata_cache.init(allocator, .{});
         errdefer self.metadata_cache.deinit();
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
@@ -385,7 +381,7 @@ pub const StorageEngine = struct {
         self.writer_stmt_cache.deinit(self.allocator);
         self.writer_stmt_cache.init(self.allocator, self.performance_config.statement_cache_size);
         self.metadata_cache.deinit();
-        try self.metadata_cache.init(self.allocator, .{}, types.deinitTypedRow);
+        try self.metadata_cache.init(self.allocator, .{});
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         _ = self.write_seq.fetchAdd(1, .release);
     }

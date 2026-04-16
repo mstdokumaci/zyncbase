@@ -2,25 +2,34 @@ const std = @import("std");
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 const testing = std.testing;
 
+const U32Value = struct {
+    value: u32,
+
+    pub fn deinit(self: U32Value, allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
+
 test "LockFreeCache: pool stability and leak test" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
     const config = u32_cache.Config{
         .max_deferred_nodes = 4096,
         .reclamation_interval_ms = 10,
     };
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, config, null);
+    try cache.init(allocator, config);
     defer cache.deinit();
 
     const namespace = "test-leak";
-    try cache.update(namespace, 1);
+    try cache.update(namespace, .{ .value = 1 });
 
     const num_updates = 1000;
     var i: usize = 0;
     while (i < num_updates) : (i += 1) {
-        try cache.update(namespace, @intCast(i));
+        try cache.update(namespace, .{ .value = @intCast(i) });
         if (i % 100 == 0) {
             std.Thread.sleep(10 * std.time.ns_per_ms);
         }
@@ -41,18 +50,18 @@ test "LockFreeCache: pool stability and leak test" {
 
 test "LockFreeCache: pool exhaustion behavior" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(u32);
+    const u32_cache = lockFreeCache(U32Value);
     const config = u32_cache.Config{
         .max_deferred_nodes = 10,
         .reclamation_interval_ms = 10,
     };
 
     var cache: u32_cache = undefined;
-    try cache.init(allocator, config, null);
+    try cache.init(allocator, config);
     defer cache.deinit();
 
     const namespace = "test-exhaustion";
-    try cache.update(namespace, 0);
+    try cache.update(namespace, .{ .value = 0 });
 
     // Mock a slow reader by pinning an epoch
     const handle = try cache.get(namespace);
@@ -62,7 +71,7 @@ test "LockFreeCache: pool exhaustion behavior" {
     const updates_until_exhaustion = config.max_deferred_nodes + 2;
     var i: usize = 0;
     while (i < updates_until_exhaustion) : (i += 1) {
-        try cache.update(namespace, @intCast(i));
+        try cache.update(namespace, .{ .value = @intCast(i) });
     }
 
     // With current internalDefer, it just skips if pool is empty after force reclaim.

@@ -365,16 +365,12 @@ const CachedAuth = struct {
     response: AuthResponse,
     expires_at: i64,
 
-    pub fn deinit(self: *CachedAuth, allocator: Allocator) void {
+    pub fn deinit(self: CachedAuth, allocator: Allocator) void {
         if (self.response.reason) |r| {
             allocator.free(r);
         }
     }
 };
-
-fn deinitCachedAuth(allocator: Allocator, auth: *CachedAuth) void {
-    auth.deinit(allocator);
-}
 
 /// Authorization cache with TTL support
 pub const AuthCache = struct {
@@ -392,7 +388,7 @@ pub const AuthCache = struct {
         errdefer allocator.destroy(self);
 
         self.allocator = allocator;
-        try self.lfc.init(allocator, .{}, deinitCachedAuth);
+        try self.lfc.init(allocator, .{});
         self.max_size = max_size;
         self.cleanup_thread = null;
         self.cleanup_mutex = .{};
