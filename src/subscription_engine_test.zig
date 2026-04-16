@@ -123,6 +123,57 @@ test "SubscriptionEngine: canonical filter key includes values" {
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
 
+test "SubscriptionEngine: canonical key distinguishes same-length array contents" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const in_val_1 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "a" },
+    });
+    defer in_val_1.deinit(allocator);
+    const in_val_2 = try tth.valArray(allocator, &[_]types.ScalarValue{
+        .{ .text = "b" },
+    });
+    defer in_val_2.deinit(allocator);
+
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .in, .value = in_val_1, .field_type = .text, .items_type = null },
+    });
+    defer filter1.deinit(allocator);
+
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "role", .op = .in, .value = in_val_2, .field_type = .text, .items_type = null },
+    });
+    defer filter2.deinit(allocator);
+
+    _ = try engine.subscribe("default", "users", filter1, 1, 101);
+    _ = try engine.subscribe("default", "users", filter2, 2, 102);
+
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+}
+
+test "SubscriptionEngine: canonical key keeps integer and real distinct" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    const filter_int = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "score", .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
+    });
+    defer filter_int.deinit(allocator);
+
+    const filter_real = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field = "score", .op = .eq, .value = tth.valReal(1.0), .field_type = .real, .items_type = null },
+    });
+    defer filter_real.deinit(allocator);
+
+    _ = try engine.subscribe("default", "scores", filter_int, 1, 201);
+    _ = try engine.subscribe("default", "scores", filter_real, 2, 202);
+
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+}
+
 test "SubscriptionEngine: handleRowChange with long namespace/collection (heap key)" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);

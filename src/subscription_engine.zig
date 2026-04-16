@@ -307,6 +307,34 @@ pub const SubscriptionEngine = struct {
         }
     };
 
+    fn appendTypedValueKey(
+        allocator: Allocator,
+        list: *std.ArrayListUnmanaged(u8),
+        value: TypedValue,
+    ) !void {
+        const writer = list.writer(allocator);
+        switch (value) {
+            .nil => try list.append(allocator, 'n'),
+            .scalar => |s| switch (s) {
+                .integer => |iv| try writer.print("i:{}", .{iv}),
+                .real => |rv| try writer.print("f:{}", .{rv}),
+                .text => |tv| {
+                    try writer.print("t:{}:", .{tv.len});
+                    try list.appendSlice(allocator, tv);
+                },
+                .boolean => |bv| try writer.print("b:{}", .{@intFromBool(bv)}),
+            },
+            .array => |arr| {
+                try writer.writeAll("a:[");
+                for (arr, 0..) |item, i| {
+                    if (i > 0) try list.append(allocator, ',');
+                    try appendTypedValueKey(allocator, list, TypedValue{ .scalar = item });
+                }
+                try list.append(allocator, ']');
+            },
+        }
+    }
+
     fn appendSortedConditions(
         allocator: Allocator,
         list: *std.ArrayListUnmanaged(u8),
@@ -327,19 +355,14 @@ pub const SubscriptionEngine = struct {
         }
 
         for (conds) |c| {
-            const val_str = if (c.value) |v| blk: {
-                // Approximate canonical string for TypedValue
-                switch (v) {
-                    .scalar => |s| switch (s) {
-                        .integer => |iv| break :blk try std.fmt.allocPrint(allocator, "i:{}", .{iv}),
-                        .real => |rv| break :blk try std.fmt.allocPrint(allocator, "f:{}", .{rv}),
-                        .text => |tv| break :blk try allocator.dupe(u8, tv),
-                        .boolean => |bv| break :blk try allocator.dupe(u8, if (bv) "true" else "false"),
-                    },
-                    .array => |arr| break :blk try std.fmt.allocPrint(allocator, "a:{}", .{arr.len}),
-                    .nil => break :blk try allocator.dupe(u8, "nil"),
-                }
-            } else try allocator.dupe(u8, "null");
+            var val_buf = std.ArrayListUnmanaged(u8).empty;
+            errdefer val_buf.deinit(allocator);
+            if (c.value) |v| {
+                try appendTypedValueKey(allocator, &val_buf, v);
+            } else {
+                try val_buf.appendSlice(allocator, "null");
+            }
+            const val_str = try val_buf.toOwnedSlice(allocator);
             sortable[count] = .{ .cond = c, .val_str = val_str };
             count += 1;
         }
