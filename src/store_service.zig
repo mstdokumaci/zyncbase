@@ -167,9 +167,7 @@ pub const StoreService = struct {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
         errdefer filter.deinit(allocator);
 
-        const table_metadata = self.schema_manager.getTable(collection) orelse return StorageError.UnknownTable;
-        const id_index = table_metadata.field_index_map.get("id") orelse return StorageError.UnknownField;
-        if (isIdEqualsFilter(filter, id_index)) |id| {
+        if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
             // Fast path: use selectDocument with cache
             const result = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
             return QueryResult{

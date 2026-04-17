@@ -191,12 +191,12 @@ pub fn parseQueryFilter(
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
-    const resolved_id = try resolveFieldMetadata(table_metadata, "id");
+    const id_field = table_metadata.fields[schema_manager.id_field_index];
     var order_by: SortDescriptor = .{
-        .field_index = resolved_id.field_index,
+        .field_index = schema_manager.id_field_index,
         .desc = false,
-        .field_type = resolved_id.field_type,
-        .items_type = resolved_id.items_type,
+        .field_type = id_field.sql_type,
+        .items_type = id_field.items_type,
     };
     var limit: ?u32 = null;
     var after: ?Cursor = null;

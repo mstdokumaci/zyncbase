@@ -1,5 +1,4 @@
 const std = @import("std");
-const schema_manager = @import("schema_manager.zig");
 const types = @import("storage_engine/types.zig");
 const TypedValue = types.TypedValue;
 const TypedRow = types.TypedRow;
@@ -42,99 +41,43 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
     return result;
 }
 
-fn fieldTypeForValue(value: TypedValue) schema_manager.FieldType {
-    return switch (value) {
-        .nil => .text,
-        .scalar => |scalar| switch (scalar) {
-            .integer => .integer,
-            .real => .real,
-            .text => .text,
-            .boolean => .boolean,
-        },
-        .array => .array,
-    };
-}
-
-pub const OwnedRow = struct {
-    metadata: *schema_manager.TableMetadata,
-    row: TypedRow,
-
-    pub fn getField(self: OwnedRow, name: []const u8) ?TypedValue {
-        return self.row.getField(self.metadata, name);
-    }
-
-    pub fn deinit(self: *OwnedRow, allocator: std.mem.Allocator) void {
-        self.row.deinit(allocator);
-        self.metadata.deinit(allocator);
-        allocator.destroy(self.metadata);
-    }
+pub const IndexedValue = struct {
+    index: usize,
+    value: TypedValue,
 };
 
-pub fn row(allocator: std.mem.Allocator, fields: anytype) !OwnedRow {
-    const T = @TypeOf(fields);
-    const info = @typeInfo(T);
-    if (info != .@"struct") @compileError("row fields must be a struct");
-
-    var non_system_count: usize = 0;
-    inline for (info.@"struct".fields) |f| {
-        if (comptime !schema_manager.isSystemColumn(f.name)) non_system_count += 1;
+/// Creates a TypedRow without schema metadata.
+/// Initializes all slots to nil, sets canonical trailing system timestamps
+/// (`created_at`, `updated_at`) to 0 when present, then applies overrides.
+pub fn rowFromIndexedValues(
+    allocator: std.mem.Allocator,
+    overrides: []const IndexedValue,
+) !TypedRow {
+    // Canonical minimum shape:
+    // [id, namespace_id, created_at, updated_at]
+    var value_count: usize = 4;
+    for (overrides) |override| {
+        const needed = override.index + 3;
+        if (needed > value_count) value_count = needed;
     }
 
-    const schema_fields = try allocator.alloc(schema_manager.Field, non_system_count);
-    errdefer allocator.free(schema_fields);
-
-    var write_idx: usize = 0;
-    inline for (info.@"struct".fields) |f| {
-        if (comptime !schema_manager.isSystemColumn(f.name)) {
-            const val = @field(fields, f.name);
-            const ft = fieldTypeForValue(val);
-            schema_fields[write_idx] = .{
-                .name = f.name,
-                .sql_type = ft,
-                .items_type = if (ft == .array) .text else null,
-                .required = false,
-                .indexed = false,
-                .references = null,
-                .on_delete = null,
-            };
-            write_idx += 1;
-        }
-    }
-
-    const table = schema_manager.Table{
-        .name = "_typed_test",
-        .fields = schema_fields,
-    };
-
-    const metadata = try allocator.create(schema_manager.TableMetadata);
-    errdefer allocator.destroy(metadata);
-    metadata.* = try schema_manager.TableMetadata.init(allocator, &table);
-    errdefer metadata.deinit(allocator);
-
-    allocator.free(schema_fields);
-
-    const values = try allocator.alloc(TypedValue, metadata.fields.len);
+    const values = try allocator.alloc(TypedValue, value_count);
     errdefer allocator.free(values);
 
-    for (values, 0..) |*value, i| {
-        const field = metadata.fields[i];
-        if (field.sql_type == .integer) {
-            value.* = .{ .scalar = .{ .integer = 0 } };
-        } else {
-            value.* = .nil;
-        }
+    for (values) |*value| value.* = valNil();
+
+    // Canonical layout is:
+    // [id, namespace_id, user fields..., created_at, updated_at]
+    // In metadata-free tests, treat the trailing two slots as timestamps.
+    if (values.len >= 2) {
+        values[values.len - 2] = valInt(0);
+        values[values.len - 1] = valInt(0);
     }
 
-    inline for (info.@"struct".fields) |f| {
-        const val = @field(fields, f.name);
-        const idx = metadata.field_index_map.get(f.name) orelse @panic("unknown typed test field");
-        values[idx] = try val.clone(allocator);
+    for (overrides) |override| {
+        if (override.index >= values.len) return error.IndexOutOfBounds;
+        values[override.index] = try override.value.clone(allocator);
     }
 
-    return .{
-        .metadata = metadata,
-        .row = .{
-            .values = values,
-        },
-    };
+    return .{ .values = values };
 }

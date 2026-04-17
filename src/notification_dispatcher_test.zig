@@ -69,7 +69,7 @@ test "NotificationDispatcher: poll processes items" {
         }
     }
 
-    const id_index = tbl_md.field_index_map.get("id") orelse return error.TestExpectedValue;
+    const id_index = schema_manager.id_field_index;
     values[id_index] = .{ .scalar = .{ .text = try alloc.dupe(u8, "1") } };
 
     const new_row = storage_types.TypedRow{

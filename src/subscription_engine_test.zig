@@ -21,9 +21,9 @@ test "SubscriptionEngine: basic subscribe and match" {
     _ = try engine.subscribe("default", "items", filter, 1, 100);
 
     // Create a matching row change
-    var new_row = try tth.row(allocator, .{
-        .id = tth.valText("1"),
-        .status = tth.valText("active"),
+    var new_row = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 0, .value = tth.valText("1") },
+        .{ .index = 2, .value = tth.valText("active") },
     });
     defer new_row.deinit(allocator);
 
@@ -31,11 +31,11 @@ test "SubscriptionEngine: basic subscribe and match" {
         .namespace = "default",
         .collection = "items",
         .operation = .insert,
-        .new_row = new_row.row,
+        .new_row = new_row,
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
+    const matches = try engine.handleRowChange(change, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);
@@ -89,14 +89,18 @@ test "SubscriptionEngine: operator matching" {
     });
     defer filter.deinit(allocator);
 
-    var row1 = try tth.row(allocator, .{ .name = tth.valText("Alice") });
+    var row1 = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 2, .value = tth.valText("Alice") },
+    });
     defer row1.deinit(allocator);
 
-    var row2 = try tth.row(allocator, .{ .name = tth.valText("Bob") });
+    var row2 = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 2, .value = tth.valText("Bob") },
+    });
     defer row2.deinit(allocator);
 
-    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1.row, row1.metadata));
-    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2.row, row2.metadata));
+    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1));
+    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2));
 }
 
 test "SubscriptionEngine: canonical filter key includes values" {
@@ -187,18 +191,18 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     defer filter.deinit(allocator);
     _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
 
-    var new_row = try tth.row(allocator, .{});
+    var new_row = try tth.rowFromIndexedValues(allocator, &.{});
     defer new_row.deinit(allocator);
 
     const change = RowChange{
         .namespace = long_ns,
         .collection = long_coll,
         .operation = .insert,
-        .new_row = new_row.row,
+        .new_row = new_row,
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
+    const matches = try engine.handleRowChange(change, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);
@@ -228,23 +232,29 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     // Case-insensitive startsWith
     {
-        var r = try tth.row(allocator, .{ .name = tth.valText("aLiCe") });
+        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+            .{ .index = 2, .value = tth.valText("aLiCe") },
+        });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r.row, r.metadata));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r));
     }
 
     // Case-insensitive endsWith
     {
-        var r = try tth.row(allocator, .{ .name = tth.valText("reAL") });
+        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+            .{ .index = 2, .value = tth.valText("reAL") },
+        });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r.row, r.metadata));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r));
     }
 
     // Case-insensitive contains
     {
-        var r = try tth.row(allocator, .{ .name = tth.valText("vALid") });
+        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+            .{ .index = 2, .value = tth.valText("vALid") },
+        });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r.row, r.metadata));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r));
     }
 }
 
@@ -294,18 +304,20 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var r = try tth.row(allocator, .{ .role = tth.valText("admin") });
+    var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 2, .value = tth.valText("admin") },
+    });
     defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = r.row,
+        .new_row = r,
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, r.metadata, allocator);
+    const matches = try engine.handleRowChange(change, allocator);
     defer allocator.free(matches);
     try testing.expectEqual(@as(usize, 1), matches.len);
 }
@@ -364,18 +376,20 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var r = try tth.row(allocator, .{ .role = tth.valText("member") });
+    var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 2, .value = tth.valText("member") },
+    });
     defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = r.row,
+        .new_row = r,
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, r.metadata, allocator);
+    const matches = try engine.handleRowChange(change, allocator);
     defer allocator.free(matches);
     try testing.expectEqual(@as(usize, 1), matches.len);
 }

@@ -65,7 +65,7 @@ pub const NotificationDispatcher = struct {
         };
 
         const id_val = if (change.new_row orelse change.old_row) |row|
-            row.getField(table_metadata, "id")
+            if (row.values.len > schema_manager.id_field_index) row.values[schema_manager.id_field_index] else null
         else
             null;
 
@@ -85,7 +85,7 @@ pub const NotificationDispatcher = struct {
         defer self.memory_strategy.releaseArena(arena);
         const alloc = arena.allocator();
 
-        const matches = self.subscription_engine.handleRowChange(row_change, table_metadata, alloc) catch |err| {
+        const matches = self.subscription_engine.handleRowChange(row_change, alloc) catch |err| {
             std.log.err("NotificationDispatcher handleRowChange failed: {}", .{err});
             return;
         };

@@ -6,7 +6,6 @@ const Condition = query_parser.Condition;
 const types = @import("storage_engine/types.zig");
 const TypedRow = types.TypedRow;
 const TypedValue = types.TypedValue;
-const schema_manager = @import("schema_manager.zig");
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -254,7 +253,7 @@ pub const SubscriptionEngine = struct {
         subscription_id: SubscriptionId,
     };
 
-    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, table_metadata: *const schema_manager.TableMetadata, allocator: Allocator) ![]Match {
+    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
@@ -277,8 +276,8 @@ pub const SubscriptionEngine = struct {
             const group = self.groups.get(gid) orelse continue;
 
             // ADR-023: Notify if row entered, left, or changed within filter
-            const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old, table_metadata) else false;
-            const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new, table_metadata) else false;
+            const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
+            const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
 
             if (matched_before or matches_after) {
                 // All subscribers in this group match
@@ -424,11 +423,11 @@ pub const SubscriptionEngine = struct {
     }
 
     /// Evaluates a row against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow, table_metadata: *const schema_manager.TableMetadata) !bool {
+    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
         // 1. Evaluate AND conditions (all must match)
         if (filter.conditions) |conds| {
             for (conds) |cond| {
-                if (!try evaluateCondition(cond, row, table_metadata)) return false;
+                if (!try evaluateCondition(cond, row)) return false;
             }
         }
 
@@ -437,7 +436,7 @@ pub const SubscriptionEngine = struct {
             if (or_conds.len > 0) {
                 var matched_any = false;
                 for (or_conds) |cond| {
-                    if (try evaluateCondition(cond, row, table_metadata)) {
+                    if (try evaluateCondition(cond, row)) {
                         matched_any = true;
                         break;
                     }
@@ -449,8 +448,7 @@ pub const SubscriptionEngine = struct {
         return true;
     }
 
-    fn evaluateCondition(cond: Condition, row: TypedRow, table_metadata: *const schema_manager.TableMetadata) !bool {
-        _ = table_metadata;
+    fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
         if (cond.field_index >= row.values.len) return cond.op == .isNull;
         const val = row.values[cond.field_index];
 

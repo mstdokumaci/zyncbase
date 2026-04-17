@@ -28,10 +28,10 @@ test "SubscriptionEngine: handleRowChange performance" {
         }
     }
 
-    var new_row = try tth.row(allocator, .{
-        .field_0 = tth.valInt(0),
-        .field_1 = tth.valInt(1),
-        .field_2 = tth.valInt(2),
+    var new_row = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
+        .{ .index = 2, .value = tth.valInt(0) }, // field_0
+        .{ .index = 3, .value = tth.valInt(1) }, // field_1
+        .{ .index = 4, .value = tth.valInt(2) }, // field_2
     });
     defer new_row.deinit(allocator);
 
@@ -39,7 +39,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         .namespace = "ns",
         .collection = "coll",
         .operation = .insert,
-        .new_row = new_row.row,
+        .new_row = new_row,
         .old_row = null,
     };
 
@@ -48,7 +48,7 @@ test "SubscriptionEngine: handleRowChange performance" {
     var total_matches: usize = 0;
 
     for (0..iterations) |_| {
-        const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
+        const matches = try engine.handleRowChange(change, allocator);
         total_matches += matches.len;
         allocator.free(matches);
     }

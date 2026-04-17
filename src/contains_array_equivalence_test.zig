@@ -113,7 +113,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row, items_md)) {
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
             const id_val = row.getField(items_md, "id") orelse continue;
             try mem_ids.put(id_val.scalar.text, {});
         }
@@ -215,7 +215,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row, players_md)) {
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
             const id_val = row.getField(players_md, "id") orelse continue;
             try mem_ids.put(id_val.scalar.text, {});
         }

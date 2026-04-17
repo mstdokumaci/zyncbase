@@ -30,6 +30,10 @@ pub const built_in_columns = [_]Field{
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
 
+/// Fixed positions of leading system columns in TableMetadata.fields.
+pub const id_field_index: usize = 0;
+pub const namespace_id_field_index: usize = 1;
+
 pub fn getSystemColumn(name: []const u8) ?Field {
     for (built_in_columns) |col| {
         if (std.mem.eql(u8, name, col.name)) return col;
@@ -107,8 +111,8 @@ pub const TableMetadata = struct {
         var fields = try allocator.alloc(Field, total);
         errdefer allocator.free(fields);
 
-        fields[0] = built_in_columns[0];
-        fields[1] = built_in_columns[1];
+        fields[id_field_index] = built_in_columns[id_field_index];
+        fields[namespace_id_field_index] = built_in_columns[namespace_id_field_index];
         @memcpy(fields[2 .. 2 + table.fields.len], table.fields);
         fields[2 + table.fields.len] = built_in_columns[2];
         fields[2 + table.fields.len + 1] = built_in_columns[3];
