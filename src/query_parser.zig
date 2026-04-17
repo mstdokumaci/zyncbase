@@ -55,21 +55,6 @@ pub const SortDescriptor = struct {
     desc: bool,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
-
-    pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
-
-    pub fn clone(self: SortDescriptor, allocator: std.mem.Allocator) !SortDescriptor {
-        _ = allocator;
-        return .{
-            .field_index = self.field_index,
-            .desc = self.desc,
-            .field_type = self.field_type,
-            .items_type = self.items_type,
-        };
-    }
 };
 
 pub const Cursor = struct {
@@ -107,7 +92,6 @@ pub const QueryFilter = struct {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        self.order_by.deinit(allocator);
         if (self.after) |a| a.deinit(allocator);
     }
 
@@ -129,7 +113,7 @@ pub const QueryFilter = struct {
             }
             copy.or_conditions = new_or;
         }
-        copy.order_by = try self.order_by.clone(allocator);
+        copy.order_by = self.order_by;
         if (self.after) |a| {
             copy.after = try a.clone(allocator);
         }
@@ -234,7 +218,6 @@ pub fn parseQueryFilter(
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        order_by.deinit(allocator);
         if (after) |a| a.deinit(allocator);
         if (after_token) |token| allocator.free(token);
     }
@@ -260,9 +243,7 @@ pub fn parseQueryFilter(
             }
             or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            const new_order_by = try parseSortDescriptor(allocator, table_metadata, value);
-            order_by.deinit(allocator);
-            order_by = new_order_by;
+            order_by = try parseSortDescriptor(table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
                 limit = @intCast(value.uint);
@@ -495,11 +476,9 @@ fn parseCondition(
 }
 
 fn parseSortDescriptor(
-    allocator: std.mem.Allocator,
     table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
-    _ = allocator;
     if (payload != .arr) return error.InvalidSortFormat;
     const arr = payload.arr;
     if (arr.len != 2) return error.InvalidSortFormat;
