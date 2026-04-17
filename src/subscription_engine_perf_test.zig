@@ -29,7 +29,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         }
     }
 
-    const new_row = try tth.row(allocator, .{
+    var new_row = try tth.row(allocator, .{
         .field_0 = tth.valInt(0),
         .field_1 = tth.valInt(1),
         .field_2 = tth.valInt(2),
@@ -40,7 +40,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         .namespace = "ns",
         .collection = "coll",
         .operation = .insert,
-        .new_row = new_row,
+        .new_row = new_row.row,
         .old_row = null,
     };
 

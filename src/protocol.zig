@@ -460,9 +460,9 @@ pub fn encodeDeltaSuffix(
 }
 
 pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow) !void {
-    try msgpack.encodeMapHeader(writer, row.fields.len);
-    for (row.fields) |field| {
-        try msgpack.writeMsgPackStr(writer, field.name);
-        try field.value.writeMsgPack(writer);
+    try msgpack.encodeMapHeader(writer, row.values.len);
+    for (row.values, 0..) |value, idx| {
+        try msgpack.writeMsgPackStr(writer, row.table_metadata.fields[idx].name);
+        try value.writeMsgPack(writer);
     }
 }

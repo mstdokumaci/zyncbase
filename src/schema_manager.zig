@@ -51,7 +51,7 @@ pub const SchemaManager = struct {
     }
 
     /// Find a table metadata by name. Returns null if not found.
-    pub fn getTable(self: *const SchemaManager, name: []const u8) ?TableMetadata {
+    pub fn getTable(self: *const SchemaManager, name: []const u8) ?*const TableMetadata {
         return self.metadata.getTable(name);
     }
 

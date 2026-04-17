@@ -21,7 +21,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     _ = try engine.subscribe("default", "items", filter, 1, 100);
 
     // Create a matching row change
-    const new_row = try tth.row(allocator, .{
+    var new_row = try tth.row(allocator, .{
         .id = tth.valText("1"),
         .status = tth.valText("active"),
     });
@@ -31,7 +31,7 @@ test "SubscriptionEngine: basic subscribe and match" {
         .namespace = "default",
         .collection = "items",
         .operation = .insert,
-        .new_row = new_row,
+        .new_row = new_row.row,
         .old_row = null,
     };
 
@@ -89,14 +89,14 @@ test "SubscriptionEngine: operator matching" {
     });
     defer filter.deinit(allocator);
 
-    const row1 = try tth.row(allocator, .{ .name = tth.valText("Alice") });
+    var row1 = try tth.row(allocator, .{ .name = tth.valText("Alice") });
     defer row1.deinit(allocator);
 
-    const row2 = try tth.row(allocator, .{ .name = tth.valText("Bob") });
+    var row2 = try tth.row(allocator, .{ .name = tth.valText("Bob") });
     defer row2.deinit(allocator);
 
-    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1));
-    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2));
+    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1.row));
+    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2.row));
 }
 
 test "SubscriptionEngine: canonical filter key includes values" {
@@ -187,14 +187,14 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     defer filter.deinit(allocator);
     _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
 
-    const new_row = try tth.row(allocator, .{});
+    var new_row = try tth.row(allocator, .{});
     defer new_row.deinit(allocator);
 
     const change = RowChange{
         .namespace = long_ns,
         .collection = long_coll,
         .operation = .insert,
-        .new_row = new_row,
+        .new_row = new_row.row,
         .old_row = null,
     };
 
@@ -228,23 +228,23 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     // Case-insensitive startsWith
     {
-        const r = try tth.row(allocator, .{ .name = tth.valText("aLiCe") });
+        var r = try tth.row(allocator, .{ .name = tth.valText("aLiCe") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r.row));
     }
 
     // Case-insensitive endsWith
     {
-        const r = try tth.row(allocator, .{ .name = tth.valText("reAL") });
+        var r = try tth.row(allocator, .{ .name = tth.valText("reAL") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r.row));
     }
 
     // Case-insensitive contains
     {
-        const r = try tth.row(allocator, .{ .name = tth.valText("vALid") });
+        var r = try tth.row(allocator, .{ .name = tth.valText("vALid") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r.row));
     }
 }
 
@@ -294,14 +294,14 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    const r = try tth.row(allocator, .{ .role = tth.valText("admin") });
+    var r = try tth.row(allocator, .{ .role = tth.valText("admin") });
     defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = r,
+        .new_row = r.row,
         .old_row = null,
     };
 
@@ -364,14 +364,14 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    const r = try tth.row(allocator, .{ .role = tth.valText("member") });
+    var r = try tth.row(allocator, .{ .role = tth.valText("member") });
     defer r.deinit(allocator);
 
     const change = RowChange{
         .namespace = "default",
         .collection = "users",
         .operation = .insert,
-        .new_row = r,
+        .new_row = r.row,
         .old_row = null,
     };
 

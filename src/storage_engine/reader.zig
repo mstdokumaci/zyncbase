@@ -8,7 +8,7 @@ const sql = @import("sql.zig");
 
 const TypedValue = types.TypedValue;
 
-pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
+pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: *const schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
@@ -33,7 +33,7 @@ pub const QueryResult = struct {
 
 pub fn buildSelectQuery(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     namespace: []const u8,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
@@ -269,30 +269,28 @@ pub fn appendConditionSql(
 pub fn decodeTypedRow(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !types.TypedRow {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    var fields = try allocator.alloc(types.FieldEntry, col_count);
+    if (col_count != table_metadata.fields.len) return error.InvalidMessageFormat;
+
+    var values = try allocator.alloc(types.TypedValue, col_count);
     var i: usize = 0;
     errdefer {
-        for (fields[0..i]) |f| f.deinit(allocator);
-        allocator.free(fields);
+        for (values[0..i]) |value| value.deinit(allocator);
+        allocator.free(values);
     }
 
     while (i < col_count) : (i += 1) {
-        const col_name_c = sqlite.c.sqlite3_column_name(stmt, @intCast(i)) orelse return error.InternalError;
-        const col_name = std.mem.span(col_name_c);
-        const field = table_metadata.getField(col_name) orelse return types.StorageError.UnknownField;
-
+        const field = table_metadata.fields[i];
         const val = try types.TypedValue.fromSQLiteColumn(allocator, stmt, @intCast(i), field);
         errdefer val.deinit(allocator);
-
-        fields[i] = types.FieldEntry{
-            .name = field.name,
-            .value = val,
-        };
+        values[i] = val;
     }
-    return types.TypedRow{ .fields = fields };
+    return types.TypedRow{
+        .table_metadata = table_metadata,
+        .values = values,
+    };
 }
 
 pub fn execSelectDocumentTyped(
@@ -301,7 +299,7 @@ pub fn execSelectDocumentTyped(
     stmt: *sqlite.c.sqlite3_stmt,
     id: []const u8,
     namespace: []const u8,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !?types.TypedRow {
     if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
     if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
@@ -318,7 +316,7 @@ pub fn execQueryTyped(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     values: []const TypedValue,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     requested_limit: ?u32,
     sort_field: []const u8,
 ) !struct { rows: []types.TypedRow, next_cursor: ?types.TypedCursor } {
@@ -347,6 +345,7 @@ pub fn execQueryTyped(
             const last_row = rows.items[limit - 1];
             const sort_val = last_row.getField(sort_field) orelse return error.InvalidMessageFormat;
             const id_val = last_row.getField("id") orelse return error.InvalidMessageFormat;
+            if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
             next_cursor = types.TypedCursor{
                 .sort_value = try sort_val.clone(allocator),
                 .id = try allocator.dupe(u8, id_val.scalar.text),

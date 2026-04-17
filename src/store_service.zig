@@ -28,7 +28,7 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
-    tbl_md: schema_manager.TableMetadata,
+    tbl_md: *const schema_manager.TableMetadata,
     field_name: []const u8,
     value: msgpack.Payload,
 ) !schema_manager.Field {

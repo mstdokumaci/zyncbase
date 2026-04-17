@@ -458,7 +458,7 @@ pub fn executeUpsert(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
     const sql_str = op.sql;
@@ -494,7 +494,7 @@ pub fn executeDelete(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
     const sql_str = op.sql;

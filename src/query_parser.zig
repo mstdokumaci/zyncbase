@@ -294,7 +294,7 @@ pub const ResolvedField = struct {
 /// Resolves the metadata (FieldType and items_type) for a given field.
 /// Handles both schema-defined fields and built-in system columns.
 pub fn resolveFieldMetadata(
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     field: []const u8,
 ) ParserError!ResolvedField {
     if (table_metadata.getField(field)) |f| {
@@ -441,7 +441,7 @@ fn parseConditionValueForOperator(
 
 fn parseConditions(
     allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -462,7 +462,7 @@ fn parseConditions(
 
 fn parseCondition(
     allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -489,7 +489,7 @@ fn parseCondition(
 
 fn parseSortDescriptor(
     allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
     if (payload != .arr) return error.InvalidSortFormat;

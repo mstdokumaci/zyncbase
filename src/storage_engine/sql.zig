@@ -136,11 +136,10 @@ pub const ManagedStmt = struct {
 pub fn appendProjectedColumnsSql(
     allocator: Allocator,
     buf: *std.ArrayListUnmanaged(u8),
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !void {
-    try buf.appendSlice(allocator, "id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        try buf.appendSlice(allocator, ", ");
+    for (table_metadata.fields, 0..) |f, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
         if (f.sql_type == .array) {
             try buf.appendSlice(allocator, "json(");
             try buf.appendSlice(allocator, f.name);
@@ -150,7 +149,6 @@ pub fn appendProjectedColumnsSql(
             try buf.appendSlice(allocator, f.name);
         }
     }
-    try buf.appendSlice(allocator, ", created_at, updated_at");
 }
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
@@ -164,7 +162,7 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
 
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     columns: []const types.ColumnValue,
 ) ![]const u8 {
     const table = table_metadata.table.name;
@@ -211,7 +209,7 @@ pub fn buildInsertOrReplaceSql(
 
 pub fn buildDeleteDocumentSql(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) ![]const u8 {
     const table = table_metadata.table.name;
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
