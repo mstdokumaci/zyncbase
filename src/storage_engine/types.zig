@@ -170,15 +170,7 @@ pub const ScalarValue = union(enum) {
     }
 
     pub fn lessThan(self: ScalarValue, other: ScalarValue) bool {
-        if (@as(std.meta.Tag(ScalarValue), self) != @as(std.meta.Tag(ScalarValue), other)) {
-            return @intFromEnum(self) < @intFromEnum(other);
-        }
-        return switch (self) {
-            .integer => |iv| iv < other.integer,
-            .real => |rv| rv < other.real,
-            .text => |tv| std.mem.order(u8, tv, other.text) == .lt,
-            .boolean => |bv| @intFromBool(bv) < @intFromBool(other.boolean),
-        };
+        return self.order(other) == .lt;
     }
 
     pub fn order(self: ScalarValue, other: ScalarValue) std.math.Order {
@@ -187,11 +179,7 @@ pub const ScalarValue = union(enum) {
         }
         return switch (self) {
             .integer => std.math.order(self.integer, other.integer),
-            .real => blk: {
-                if (self.real < other.real) break :blk .lt;
-                if (self.real > other.real) break :blk .gt;
-                break :blk .eq;
-            },
+            .real => std.math.order(self.real, other.real),
             .text => std.mem.order(u8, self.text, other.text),
             .boolean => std.math.order(@intFromBool(self.boolean), @intFromBool(other.boolean)),
         };
@@ -285,7 +273,7 @@ pub const TypedValue = union(enum) {
         };
     }
 
-    pub fn sortedSet(self: *TypedValue, allocator: Allocator) void {
+    pub fn sortedSet(self: *TypedValue, allocator: Allocator) !void {
         const arr = switch (self.*) {
             .array => |a| a,
             else => return,
@@ -305,13 +293,7 @@ pub const TypedValue = union(enum) {
         }
 
         if (write < arr.len) {
-            const compact = allocator.alloc(ScalarValue, write) catch {
-                self.* = .{ .array = arr[0..write] };
-                return;
-            };
-            @memcpy(compact, arr[0..write]);
-            allocator.free(arr);
-            self.* = .{ .array = compact };
+            self.* = .{ .array = try allocator.realloc(arr, write) };
         }
     }
 
@@ -400,7 +382,7 @@ pub const TypedValue = union(enum) {
                     items[i] = try ScalarValue.fromPayload(allocator, it, arr[i]);
                 }
                 var result = TypedValue{ .array = items };
-                result.sortedSet(allocator);
+                try result.sortedSet(allocator);
                 return result;
             },
             else => .{ .scalar = try ScalarValue.fromPayload(allocator, ft, value) },

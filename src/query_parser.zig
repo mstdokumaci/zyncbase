@@ -394,7 +394,7 @@ fn parseInOperand(
     }
 
     var result: TypedValue = .{ .array = items };
-    result.sortedSet(allocator);
+    try result.sortedSet(allocator);
     return result;
 }
 

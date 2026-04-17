@@ -481,11 +481,7 @@ pub const SubscriptionEngine = struct {
                     if (val != .array) break :blk false;
                     if (cond.value == null) break :blk false;
                     if (cond.value.? != .scalar) break :blk false;
-                    break :blk std.sort.binarySearch(types.ScalarValue, val.array, cond.value.?.scalar, struct {
-                        fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
-                            return context.order(item);
-                        }
-                    }.compare) != null;
+                    break :blk std.sort.binarySearch(types.ScalarValue, val.array, cond.value.?.scalar, types.ScalarValue.order) != null;
                 } else {
                     if (val != .scalar or val.scalar != .text) break :blk false;
                     if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
@@ -495,20 +491,12 @@ pub const SubscriptionEngine = struct {
             .in => blk: {
                 if (val != .scalar) break :blk false;
                 if (cond.value == null or cond.value.? != .array) break :blk false;
-                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, struct {
-                    fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
-                        return context.order(item);
-                    }
-                }.compare) != null;
+                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) != null;
             },
             .notIn => blk: {
                 if (val != .scalar) break :blk true;
                 if (cond.value == null or cond.value.? != .array) break :blk false;
-                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, struct {
-                    fn compare(context: types.ScalarValue, item: types.ScalarValue) std.math.Order {
-                        return context.order(item);
-                    }
-                }.compare) == null;
+                break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) == null;
             },
         };
     }
