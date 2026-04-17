@@ -63,14 +63,17 @@ test "basic query filter parsing" {
 
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "users", root);
     defer filter.deinit(allocator);
+    const users_md = sm.getTable("users") orelse return error.UnknownTable;
+    const age_index = users_md.field_index_map.get("age") orelse return error.UnknownField;
+    const status_index = users_md.field_index_map.get("status") orelse return error.UnknownField;
 
     try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
-    try testing.expectEqualStrings("age", filter.conditions.?[0].field);
+    try testing.expectEqual(age_index, filter.conditions.?[0].field_index);
     try testing.expectEqual(query_parser.Operator.gte, filter.conditions.?[0].op);
     try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].value.?.scalar.integer);
     try testing.expectEqual(schema_manager.FieldType.integer, filter.conditions.?[0].field_type);
 
-    try testing.expectEqualStrings("status", filter.conditions.?[1].field);
+    try testing.expectEqual(status_index, filter.conditions.?[1].field_index);
     try testing.expectEqual(query_parser.Operator.eq, filter.conditions.?[1].op);
     try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.scalar.text);
     try testing.expectEqual(schema_manager.FieldType.text, filter.conditions.?[1].field_type);
@@ -109,10 +112,12 @@ test "query with orConditions" {
 
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "users", root);
     defer filter.deinit(allocator);
+    const users_md = sm.getTable("users") orelse return error.UnknownTable;
+    const role_index = users_md.field_index_map.get("role") orelse return error.UnknownField;
 
     try testing.expect(filter.or_conditions != null);
     try testing.expectEqual(@as(usize, 2), filter.or_conditions.?.len);
-    try testing.expectEqualStrings("role", filter.or_conditions.?[0].field);
+    try testing.expectEqual(role_index, filter.or_conditions.?[0].field_index);
     try testing.expectEqualStrings("admin", filter.or_conditions.?[0].value.?.scalar.text);
 }
 

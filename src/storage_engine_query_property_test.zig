@@ -148,9 +148,15 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     }
 
     const ft: schema_manager.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
+    const field_index: usize = if (std.mem.eql(u8, field, "name"))
+        2
+    else if (std.mem.eql(u8, field, "age"))
+        3
+    else
+        4;
 
     return .{
-        .field = try allocator.dupe(u8, field),
+        .field_index = field_index,
         .op = op,
         .value = value,
         .field_type = ft,

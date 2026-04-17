@@ -18,7 +18,7 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?[]const 
 
     const cond = conds[0];
     if (cond.op != .eq) return null;
-    if (!(cond.field_index == id_index or std.mem.eql(u8, cond.field, "id"))) return null;
+    if (cond.field_index != id_index) return null;
 
     // Extract string value
     const val = cond.value orelse return null;
@@ -168,7 +168,7 @@ pub const StoreService = struct {
         errdefer filter.deinit(allocator);
 
         const table_metadata = self.schema_manager.getTable(collection) orelse return StorageError.UnknownTable;
-        const id_index = table_metadata.field_index_map.get("id") orelse query_parser.Condition.invalid_field_index;
+        const id_index = table_metadata.field_index_map.get("id") orelse return StorageError.UnknownField;
         if (isIdEqualsFilter(filter, id_index)) |id| {
             // Fast path: use selectDocument with cache
             const result = try self.storage_engine.selectDocument(allocator, collection, id, namespace);

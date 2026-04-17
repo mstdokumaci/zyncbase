@@ -27,6 +27,8 @@ test "StorageEngine: selectQuery basic equality" {
     try seedUser(allocator, engine, "2", "Bob", 25);
     try seedUser(allocator, engine, "3", "Charlie", 35);
     try engine.flushPendingWrites();
+    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
+    const name_index = users_md.field_index_map.get("name") orelse return error.UnknownField;
 
     // Query: name == "Bob"
     var filter = try qth.makeDefaultFilter(allocator);
@@ -34,7 +36,7 @@ test "StorageEngine: selectQuery basic equality" {
 
     var conds = try allocator.alloc(query_parser.Condition, 1);
     conds[0] = .{
-        .field = try allocator.dupe(u8, "name"),
+        .field_index = name_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "Bob"),
         .field_type = .text,
@@ -47,7 +49,6 @@ test "StorageEngine: selectQuery basic equality" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
     try testing.expectEqualStrings("Bob", try getRowStr(res[0], users_md, "name"));
 }
 
@@ -68,6 +69,8 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try seedUser(allocator, engine, "2", "Bob", 25);
     try seedUser(allocator, engine, "3", "Charlie", 35);
     try engine.flushPendingWrites();
+    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
+    const age_index = users_md.field_index_map.get("age") orelse return error.UnknownField;
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
     var filter = try qth.makeFilter(allocator, 3, true, .integer, null);
@@ -75,14 +78,14 @@ test "StorageEngine: selectQuery with OR and ordering" {
 
     var or_conds = try allocator.alloc(query_parser.Condition, 2);
     or_conds[0] = .{
-        .field = try allocator.dupe(u8, "age"),
+        .field_index = age_index,
         .op = .lt,
         .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
     or_conds[1] = .{
-        .field = try allocator.dupe(u8, "age"),
+        .field_index = age_index,
         .op = .gt,
         .value = tth.valInt(30),
         .field_type = .integer,
@@ -95,7 +98,6 @@ test "StorageEngine: selectQuery with OR and ordering" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
     try testing.expectEqualStrings("Charlie", try getRowStr(res[0], users_md, "name")); // 35
     try testing.expectEqualStrings("Bob", try getRowStr(res[1], users_md, "name")); // 25
 }
@@ -219,13 +221,15 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     };
     try engine.insertOrReplace("items", "id1", "ns", &cols);
     try engine.flushPendingWrites();
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
+    const name_index = items_md.field_index_map.get("name") orelse return error.UnknownField;
 
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
     const conds = try allocator.alloc(query_parser.Condition, 1);
     conds[0] = .{
-        .field = try allocator.dupe(u8, "name"),
+        .field_index = name_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "Task 1"),
         .field_type = .text,
@@ -240,7 +244,6 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     try testing.expectEqual(@as(usize, 1), res.len);
 
     const row = res[0];
-    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     // Positive contract: array fields are decoded under their schema field names.
     try expectArrayFieldEquals(row, items_md, "tags", &.{ "home", "urgent" });
@@ -263,6 +266,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     defer ctx.deinit();
     const engine = &ctx.engine;
     const wildcards_md = ctx.sm.getTable("wildcards") orelse return error.UnknownTable;
+    const data_index = wildcards_md.field_index_map.get("data") orelse return error.UnknownField;
 
     // Seed data
     const ns = "ns";
@@ -278,7 +282,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "p%l"),
             .field_type = .text,
@@ -298,7 +302,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "p_l"),
             .field_type = .text,
@@ -318,7 +322,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .startsWith,
             .value = try tth.valTextOwned(allocator, "ap_"),
             .field_type = .text,
@@ -338,7 +342,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .endsWith,
             .value = try tth.valTextOwned(allocator, "%le"),
             .field_type = .text,
@@ -358,7 +362,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "\\"),
             .field_type = .text,
@@ -386,7 +390,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         const malicious = "' OR namespace_id = 'other_ns' --";
 
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, malicious),
             .field_type = .text,

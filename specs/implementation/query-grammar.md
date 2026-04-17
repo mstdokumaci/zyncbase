@@ -177,24 +177,24 @@ The resulting condition tuple field must literally be: `"address__city"`.
 
 ## Abstract Syntax Tree (AST)
 
-The wire tuples map directly to the Zig AST with minimal transformation — the server reads positional array elements into struct fields.
+The wire tuples map to the Zig AST after schema resolution. The parser converts wire field names into schema-backed field indexes.
 
 ```zig
 pub const QueryFilter = struct {
     conditions: []const Condition,
     or_conditions: ?[]const Condition = null,
-    sorts: []const SortDescriptor,
+    order_by: SortDescriptor,
 };
 
 pub const SortDescriptor = struct {
-    field: []const u8,
+    field_index: usize,
     desc: bool,
 };
 
 pub const Condition = struct {
-    field: []const u8,
+    field_index: usize,
     op: Operator,
-    value: Condition.Value,
+    value: ?TypedValue,
 };
 
 pub const Operator = enum {
@@ -208,7 +208,7 @@ The server deserializes each condition tuple into a `Condition` struct:
 
 | Tuple position | AST field | Notes |
 |----------------|-----------|-------|
-| `[0]` | `Condition.field` | String, already flattened by SDK |
+| `[0]` | `Condition.field_index` | String field name from wire is resolved against table metadata |
 | `[1]` | `Condition.op` | Integer cast to `Operator` enum |
 | `[2]` | `Condition.value` | Any MessagePack value. Absent for `isNull`/`isNotNull` |
 
@@ -216,7 +216,7 @@ Sort tuples map to `SortDescriptor`:
 
 | Tuple position | AST field | Notes |
 |----------------|-----------|-------|
-| `[0]` | `SortDescriptor.field` | String |
+| `[0]` | `SortDescriptor.field_index` | String field name from wire is resolved against table metadata |
 | `[1]` | `SortDescriptor.desc` | `1` → `true`, `0` → `false` |
 
 ---

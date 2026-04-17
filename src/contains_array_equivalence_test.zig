@@ -3,7 +3,6 @@ const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
 const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const query_parser = @import("query_parser.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -75,7 +74,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try engine.flushPendingWrites();
 
     // --- SQL path: tags contains "urgent" ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
         .{
             .field = "tags",
             .op = .contains,
@@ -93,7 +92,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
         .{
             .field = "tags",
             .op = .contains,
@@ -177,7 +176,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try engine.flushPendingWrites();
 
     // --- SQL path: scores contains 20 ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
         .{
             .field = "scores",
             .op = .contains,
@@ -195,7 +194,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
         .{
             .field = "scores",
             .op = .contains,

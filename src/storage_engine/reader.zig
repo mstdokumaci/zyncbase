@@ -173,10 +173,8 @@ pub fn appendConditionSql(
     table_metadata: *const schema_manager.TableMetadata,
     cond: query_parser.Condition,
 ) !void {
-    const sql_field = if (cond.field_index != query_parser.Condition.invalid_field_index and cond.field_index < table_metadata.fields.len)
-        table_metadata.fields[cond.field_index].name
-    else
-        cond.field;
+    if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
+    const sql_field = table_metadata.fields[cond.field_index].name;
     try sql_buf.appendSlice(allocator, sql_field);
 
     switch (cond.op) {

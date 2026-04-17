@@ -22,25 +22,18 @@ pub const Operator = enum(u8) {
 };
 
 pub const Condition = struct {
-    pub const invalid_field_index: usize = std.math.maxInt(usize);
-
-    field: []const u8,
-    field_index: usize = invalid_field_index,
+    field_index: usize,
     op: Operator,
     value: ?TypedValue,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
-        allocator.free(self.field);
         if (self.value) |v| v.deinit(allocator);
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
-        const field = try allocator.dupe(u8, self.field);
-        errdefer allocator.free(field);
         return .{
-            .field = field,
             .field_index = self.field_index,
             .op = self.op,
             .value = if (self.value) |v| try v.clone(allocator) else null,
@@ -466,7 +459,6 @@ fn parseCondition(
     errdefer if (value) |v| v.deinit(allocator);
 
     return Condition{
-        .field = try allocator.dupe(u8, field),
         .field_index = resolved.field_index,
         .op = op,
         .value = value,
