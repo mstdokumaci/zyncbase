@@ -108,7 +108,18 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 | `number` | `REAL` | 64-bit float |
 | `boolean` | `INTEGER` | Stored as 0 or 1 |
 | `object` (nested) | Flattened columns | `address.city` → `address_city TEXT` |
-| `array` (primitives) | `TEXT` | Stored as JSON blob |
+| `array` (primitives) | `BLOB` | Stored as canonical JSONB value (sorted, unique) |
+
+### Array Canonicalization Pipeline
+
+For schema-defined array fields, write-path processing is:
+
+1. Validate each element against the field `items` primitive type.
+2. Reject invalid elements (`null`, nested arrays, objects).
+3. Normalize to sorted unique form.
+4. Persist the canonicalized array value.
+
+This guarantees deterministic on-disk representation and deterministic read/query semantics for typed arrays.
 
 ### Implementation Logic
 

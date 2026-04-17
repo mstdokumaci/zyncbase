@@ -237,8 +237,8 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const row = res[0];
 
     // Positive contract: array fields are decoded under their schema field names.
-    try expectArrayFieldEquals(row, "tags", &.{ "urgent", "home" });
-    try expectArrayFieldEquals(row, "labels", &.{ "work", "p1" });
+    try expectArrayFieldEquals(row, "tags", &.{ "home", "urgent" });
+    try expectArrayFieldEquals(row, "labels", &.{ "p1", "work" });
 
     // Negative contract: raw expression names never leak into row keys.
     try expectMissingRowKey(row, "json(tags)");

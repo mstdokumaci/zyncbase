@@ -487,6 +487,12 @@ await zyncbase.set(tasks.task-1', {
 })
 ```
 
+**Typed array behavior (canonical sorted-set):**
+- Elements must match the schema `items` primitive type.
+- `null`, nested arrays, and objects are rejected.
+- Arrays are normalized to sorted unique form on write.
+- Reads and query equality observe this canonical sorted unique representation.
+
 **❌ Arrays of objects (not supported):**
 ```json
 {

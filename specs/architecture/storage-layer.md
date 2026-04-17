@@ -119,7 +119,8 @@ The first segment of a path (e.g., `tasks`) maps to a database table. This simpl
 - **References**: Document-style references are enforced via SQLite foreign keys with configurable actions.
     - **Actions**: `cascade`, `restrict`, `set_null`.
 - **Arrays**: 
-    - **Simple arrays** (primitives) are stored as JSON blobs.
+    - **Simple arrays** (primitives) are normalized as canonical sorted sets on write.
+    - Canonical arrays are persisted and returned in sorted, unique form.
     - **Object arrays** are forbidden; developers must use separate store paths and references.
 
 ### Schema Example: Tasks and Projects

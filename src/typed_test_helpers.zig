@@ -37,7 +37,9 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
             else => s,
         };
     }
-    return .{ .array = cloned };
+    var result: TypedValue = .{ .array = cloned };
+    try result.sortedSet(allocator);
+    return result;
 }
 
 pub fn row(allocator: std.mem.Allocator, fields: anytype) !TypedRow {

@@ -52,15 +52,15 @@ export async function run(port: number = 3000) {
 		console.log("Client A setting task 1...");
 		await clientA.set(namespace, ["tasks", "1"], {
 			title: "A's Task",
-			tags: ["urgent", "home"],
+			tags: ["home", "urgent"],
 		});
 
 		// 2. Client B listens for task 1 via store.listen (bi-directional sync: A sets → B fires)
 		console.log("Client B waiting for task 1 via store.listen...");
 		const task1 = await waitForListen(clientB, ["tasks", "1"], (val) =>
 			val?.title === "A's Task" &&
-			Array.isArray(val.tags) &&
-			val.tags.includes("urgent")
+				Array.isArray(val.tags) &&
+				val.tags.includes("urgent")
 				? val
 				: null,
 		);
@@ -77,8 +77,8 @@ export async function run(port: number = 3000) {
 		console.log("Client A waiting for task 2 via store.listen...");
 		const task2 = await waitForListen(clientA, ["tasks", "2"], (val) =>
 			val?.title === "B's Task" &&
-			Array.isArray(val.tags) &&
-			val.tags.includes("work")
+				Array.isArray(val.tags) &&
+				val.tags.includes("work")
 				? val
 				: null,
 		);
@@ -95,7 +95,7 @@ export async function run(port: number = 3000) {
 
 		const task3 = await waitForListen(clientB, ["tasks", "3"], (val) =>
 			val?.must_be_complete?.before === beforeTs &&
-			val?.must_be_complete?.after === afterTs
+				val?.must_be_complete?.after === afterTs
 				? val
 				: null,
 		);
@@ -138,7 +138,7 @@ export async function run(port: number = 3000) {
 			{
 				id: "1",
 				title: "A's Task",
-				tags: ["urgent", "home"],
+				tags: ["home", "urgent"],
 				must_be_complete: { before: null, after: null },
 			},
 			{

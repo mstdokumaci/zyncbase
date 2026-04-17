@@ -255,18 +255,22 @@ ZyncBase MUST strictly separate the query layout and data injection via paramete
 | `isNull`     | `column_name IS NULL` (Or `column_name = NULL` safely translated) |
 | `isNotNull`  | `column_name IS NOT NULL` |
 
-### JSONB Array Fields
+### JSONB Array Fields (Canonical Sorted Sets)
 
-Due to SQLite storing arrays as serialized MessagePack/JSON bytes, array properties cannot be queried natively using operators like `>` or `LIKE`. To avoid inventing new operators, ZyncBase restricts array fields to a tight subset:
+Array fields are persisted in canonical sorted unique form. Query operands for array equality (`eq`, `ne`) are canonicalized before SQL binding, so equality semantics are deterministic and order-insensitive for valid typed arrays.
+
+Because arrays are stored as JSONB values, array properties cannot be queried natively with scalar operators like `>` or `LIKE`. ZyncBase therefore restricts array fields to a tight subset:
 
 | Operator | Action on Array Field | SQLite Subquery Mapping |
 |----------|-----------------------|--------------------------|
-| `contains`| Array contains element| `EXISTS (SELECT 1 FROM json_each(column_name) WHERE value = ?)` |
-| `eq`     | Exact array equality  | `column_name = ?` (Binary match on MessagePack bytes) |
+| `contains`| Array contains element (membership) | `EXISTS (SELECT 1 FROM json_each(column_name) WHERE value = ?)` |
+| `eq`     | Canonical array equality | `column_name = ?` (comparison against canonicalized value) |
 | `isNull` | Undefined/Missing     | `column_name IS NULL` |
 | `isNotNull`| Exists              | `column_name IS NOT NULL` |
 
 Attempting to run `startsWith` or `gt` on an array field results in a `SCHEMA_VALIDATION_FAILED` error.
+
+For scalar-field `in` / `notIn`, the operand array is canonicalized (sorted + deduped) during parsing. Result semantics are order-insensitive and duplicate-insensitive.
 
 ---
 

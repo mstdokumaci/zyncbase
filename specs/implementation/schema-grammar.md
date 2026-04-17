@@ -38,7 +38,7 @@ A field definition MUST contain a `type` property.
 | `integer` | `INTEGER` | 64-bit signed integer. |
 | `number` | `REAL` | 64-bit floating point number. |
 | `boolean` | `INTEGER` | Boolean (0 or 1). |
-| `array` | `BLOB` | Stored as a JSON blob. |
+| `array` | `BLOB` | Stored as a canonical JSON array (sorted, unique, primitive-typed via `items`). |
 | `object` | (Flattened) | Logical grouping of fields. |
 
 ### Shared Properties
@@ -57,6 +57,16 @@ A field with `type: "array"` MUST contain an `items` property.
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `items` | `string` | - | Type of items within the array (must be a primitive type). |
+
+### Array Semantics (Canonical Sorted Set)
+
+For any field with `type: "array"`, ZyncBase enforces canonical sorted-set behavior:
+
+- Elements MUST match the primitive type declared by `items`.
+- `null` array elements are rejected.
+- Nested arrays and objects are rejected (`INVALID_ARRAY_ELEMENT`).
+- On write, arrays are normalized to sorted unique form.
+- Reads return this canonical sorted unique representation.
 
 ---
 
