@@ -48,6 +48,7 @@ Write a value or upsert a document. **Optimistic by default**: applied locally f
 
 **Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
 **Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required.
+**Typed Arrays**: For schema fields with `type: "array"`, values are normalized to canonical sorted unique form before persistence and returned in canonical form on reads.
 
 ```typescript
 // Upsert a full document. ID is extracted from path if needed.
@@ -58,6 +59,10 @@ client.store.set('users.u1.status', 'offline')
 
 // Clear an optional field (instead of remove)
 client.store.set('users.u1.address', null)
+
+// Typed array field is canonicalized as sorted set
+client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
+// Stored/read as: ['backend', 'urgent']
 ```
 
 **Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the Path level.

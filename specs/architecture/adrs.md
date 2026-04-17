@@ -576,3 +576,46 @@ Subscription engine replaces the lock-free cache for application data reads. Loc
 - ⚠️ First subscribe to cold collection incurs SQLite read.
 - ⚠️ `loadMore` always hits disk.
 - ⚠️ Subscription engine is significant implementation effort.
+
+---
+
+## ADR-024: Canonical Sorted-Set Semantics for Typed Array Fields
+
+**Date**: 2026-04-17  
+**Status**: Accepted  
+
+**Context**:  
+Typed array fields are commonly used for tags, labels, and roles. During implementation, ZyncBase introduced canonicalization (sort + dedupe) for typed arrays to improve developer experience, determinism, and runtime performance. This behavior is now a formal architectural contract.
+
+**Decision**:  
+ZyncBase treats schema-defined typed arrays (`type: "array"` + primitive `items`) as canonical sorted sets.
+
+1. **Write-path normalization**
+   - Validate each element against `items` type.
+   - Reject `null`, nested arrays, and objects.
+   - Sort elements with a type-aware comparator.
+   - Remove duplicates.
+
+2. **Persistence contract**
+   - Persist only the canonicalized representation to SQLite.
+
+3. **Read contract**
+   - Return canonicalized arrays (sorted, unique) on reads.
+
+4. **Query contract**
+   - `contains` on array fields is membership over canonical set content.
+   - `eq` / `ne` on array fields use canonical equality semantics (set-equivalent for valid typed arrays).
+   - `in` / `notIn` operand arrays are canonicalized during parsing (order-insensitive, duplicate-insensitive semantics).
+
+5. **Scope**
+   - Arrays of objects remain unsupported.
+   - Unsupported operators for array fields remain invalid (e.g., `gt`, `startsWith`).
+
+**Rationale**:
+- Better DX for tag-like fields.
+- Deterministic storage and comparisons.
+- Faster membership/equality behavior in SQL and in-memory evaluation.
+
+**Principles Alignment**:  
+- #5 TypeScript-First  
+- #8 Predictable Performance

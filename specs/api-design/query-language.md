@@ -143,6 +143,14 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 - `in` - Value is in the provided array
 - `notIn` - Value is not in the provided array
 
+**Array operand semantics:**
+- `in` / `notIn` treat operand arrays as sets (order-insensitive, duplicate-insensitive).
+- Example: `['admin', 'editor']`, `['editor', 'admin']`, and `['admin', 'editor', 'admin']` are equivalent.
+
+**Typed array field semantics:**
+- For fields declared as `type: "array"`, `eq` / `ne` compare canonical sorted unique values.
+- Element order and duplicate count are not treated as meaningful differences.
+
 ---
 
 ### Null Operators
@@ -473,8 +481,8 @@ const tasks = await client.store.query('tasks', {
 | `contains` | String | Contains substring | `{ name: { contains: 'john' } }` |
 | `startsWith` | String | Starts with prefix | `{ name: { startsWith: 'J' } }` |
 | `endsWith` | String | Ends with suffix | `{ name: { endsWith: 'son' } }` |
-| `in` | Any | Value in array | `{ role: { in: ['admin', 'editor'] } }` |
-| `notIn` | Any | Value not in array | `{ role: { notIn: ['guest'] } }` |
+| `in` | Any | Value in array (operand treated as set) | `{ role: { in: ['admin', 'editor'] } }` |
+| `notIn` | Any | Value not in array (operand treated as set) | `{ role: { notIn: ['guest'] } }` |
 | `isNull` | Any | Is null/undefined | `{ deleted_at: { isNull: true } }` |
 | `isNotNull` | Any | Has a value | `{ verified_at: { isNotNull: true } }` |
 
