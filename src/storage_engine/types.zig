@@ -283,13 +283,21 @@ pub const TypedValue = union(enum) {
         std.sort.pdq(ScalarValue, arr, {}, scalarValueLessThan);
 
         var write: usize = 1;
-        for (arr[1..]) |item| {
-            if (ScalarValue.order(arr[write - 1], item) != .eq) {
-                arr[write] = item;
+        for (1..arr.len) |read| {
+            if (ScalarValue.order(arr[write - 1], arr[read]) != .eq) {
+                if (write != read) {
+                    arr[write] = arr[read];
+                }
                 write += 1;
             } else {
-                item.deinit(allocator);
+                arr[read].deinit(allocator);
             }
+        }
+
+        // Clear moved-from/deinitialized tail entries so a later full deinit remains safe,
+        // including error paths where realloc can fail.
+        for (arr[write..]) |*item| {
+            item.* = .{ .integer = 0 };
         }
 
         if (write < arr.len) {
