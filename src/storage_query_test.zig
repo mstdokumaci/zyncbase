@@ -1,8 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
+const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const ColumnValue = @import("storage_engine.zig").ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -49,7 +48,7 @@ test "StorageEngine: selectQuery basic equality" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    try testing.expectEqualStrings("Bob", try getRowStr(res[0], users_md, "name"));
+    _ = try sth.expectFieldString(res[0], users_md, "name", "Bob");
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -98,8 +97,8 @@ test "StorageEngine: selectQuery with OR and ordering" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    try testing.expectEqualStrings("Charlie", try getRowStr(res[0], users_md, "name")); // 35
-    try testing.expectEqualStrings("Bob", try getRowStr(res[1], users_md, "name")); // 25
+    _ = try sth.expectFieldString(res[0], users_md, "name", "Charlie"); // 35
+    _ = try sth.expectFieldString(res[1], users_md, "name", "Bob"); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -131,8 +130,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
     const scores_md = ctx.sm.getTable("scores") orelse return error.UnknownTable;
-    try testing.expectEqualStrings("id1", try getRowStr(res1[0], scores_md, "id"));
-    try testing.expectEqualStrings("id2", try getRowStr(res1[1], scores_md, "id"));
+    _ = try sth.expectFieldString(res1[0], scores_md, "id", "id1");
+    _ = try sth.expectFieldString(res1[1], scores_md, "id", "id2");
 
     // Query 2: Same query but AFTER [100, "id2"]
     var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
@@ -147,8 +146,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
-    try testing.expectEqualStrings("id3", try getRowStr(res2[0], scores_md, "id")); // 200
-    try testing.expectEqualStrings("id4", try getRowStr(res2[1], scores_md, "id")); // 300
+    _ = try sth.expectFieldString(res2[0], scores_md, "id", "id3"); // 200
+    _ = try sth.expectFieldString(res2[1], scores_md, "id", "id4"); // 300
 }
 
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
@@ -165,34 +164,6 @@ fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
         .{ .name = "score", .value = tth.valInt(score), .field_type = .integer },
     };
     try engine.insertOrReplace("scores", id, "ns", &cols);
-}
-
-fn getRowStr(row: storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata, key: []const u8) ![]const u8 {
-    const val = row.getField(metadata, key) orelse return error.KeyNotFound;
-    return val.scalar.text;
-}
-
-fn expectArrayFieldEquals(
-    row: storage_engine.TypedRow,
-    metadata: *const schema_manager.TableMetadata,
-    field_name: []const u8,
-    expected: []const []const u8,
-) !void {
-    const field_val = row.getField(metadata, field_name) orelse return error.KeyNotFound;
-    try testing.expect(field_val == .array);
-    try testing.expectEqual(expected.len, field_val.array.len);
-
-    for (expected, field_val.array) |exp, got| {
-        try testing.expectEqualStrings(exp, got.text);
-    }
-}
-
-fn expectMissingRowKey(
-    row: storage_engine.TypedRow,
-    metadata: *const schema_manager.TableMetadata,
-    key_name: []const u8,
-) !void {
-    try testing.expect(row.getField(metadata, key_name) == null);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -246,12 +217,12 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const row = res[0];
 
     // Positive contract: array fields are decoded under their schema field names.
-    try expectArrayFieldEquals(row, items_md, "tags", &.{ "home", "urgent" });
-    try expectArrayFieldEquals(row, items_md, "labels", &.{ "p1", "work" });
+    try sth.expectFieldTextArray(row, items_md, "tags", &.{ "home", "urgent" });
+    try sth.expectFieldTextArray(row, items_md, "labels", &.{ "p1", "work" });
 
     // Negative contract: raw expression names never leak into row keys.
-    try expectMissingRowKey(row, items_md, "json(tags)");
-    try expectMissingRowKey(row, items_md, "json(labels)");
+    try sth.expectMissingField(row, items_md, "json(tags)");
+    try sth.expectMissingField(row, items_md, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -293,7 +264,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], wildcards_md, "id"));
+        _ = try sth.expectFieldString(results[0], wildcards_md, "id", "2");
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -313,7 +284,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], wildcards_md, "id"));
+        _ = try sth.expectFieldString(results[0], wildcards_md, "id", "3");
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -333,7 +304,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], wildcards_md, "id"));
+        _ = try sth.expectFieldString(results[0], wildcards_md, "id", "3");
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -353,7 +324,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], wildcards_md, "id"));
+        _ = try sth.expectFieldString(results[0], wildcards_md, "id", "2");
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -373,7 +344,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("4", try getRowStr(results[0], wildcards_md, "id"));
+        _ = try sth.expectFieldString(results[0], wildcards_md, "id", "4");
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
@@ -412,7 +383,7 @@ fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8
 
 fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
-    const cols = [_]storage_engine.ColumnValue{
+    const cols = [_]ColumnValue{
         .{ .name = "data", .value = tth.valText(data), .field_type = .text },
     };
     try engine.insertOrReplace("wildcards", id, namespace, &cols);

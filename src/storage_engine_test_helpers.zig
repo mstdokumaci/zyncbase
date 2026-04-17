@@ -188,8 +188,40 @@ pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payl
     return try msgpack.Payload.strToPayload(s, allocator);
 }
 
+pub fn getRowField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?storage_engine.TypedValue {
+    const idx = metadata.field_index_map.get(key) orelse return null;
+    if (idx >= doc.values.len) return null;
+    return doc.values[idx];
+}
+
+pub fn getFieldText(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ![]const u8 {
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+    if (val != .scalar or val.scalar != .text) return error.TypeMismatch;
+    return val.scalar.text;
+}
+
+pub fn getFieldTextOrNull(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?[]const u8 {
+    const val = getRowField(doc, metadata, key) orelse return null;
+    if (val != .scalar or val.scalar != .text) return null;
+    return val.scalar.text;
+}
+
+pub fn expectMissingField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !void {
+    try testing.expect(getRowField(doc, metadata, key) == null);
+}
+
+pub fn expectFieldTextArray(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: []const []const u8) !void {
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+    if (val != .array) return error.TypeMismatch;
+    try testing.expectEqual(expected.len, val.array.len);
+    for (expected, val.array) |exp, got| {
+        if (got != .text) return error.TypeMismatch;
+        try testing.expectEqualStrings(exp, got.text);
+    }
+}
+
 pub fn expectFieldString(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
-    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .scalar and val.scalar == .text);
     try testing.expectEqualStrings(expected, val.scalar.text);
     return val;
@@ -202,13 +234,13 @@ pub fn expectFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetada
 }
 
 pub fn getFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !i64 {
-    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
     return error.TypeMismatch;
 }
 
 pub fn expectFieldReal(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
-    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
     const actual = val.scalar.real;
     try testing.expectApproxEqAbs(expected, actual, 0.00001);
@@ -216,14 +248,14 @@ pub fn expectFieldReal(doc: storage_engine.TypedRow, metadata: *const TableMetad
 }
 
 pub fn expectFieldBool(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
-    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .scalar and val.scalar == .boolean);
     try testing.expectEqual(expected, val.scalar.boolean);
     return val.scalar.boolean;
 }
 
 pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
-    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
+    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .array);
     try testing.expectEqual(expected_len, val.array.len);
     return val;

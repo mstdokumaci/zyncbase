@@ -12,8 +12,8 @@ fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.Type
     var ids = std.StringHashMap(void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
-        const id_val = row.getField(metadata, "id") orelse continue;
-        try ids.put(id_val.scalar.text, {});
+        const id_text = sth.getFieldTextOrNull(row, metadata, "id") orelse continue;
+        try ids.put(id_text, {});
     }
     return ids;
 }
@@ -114,8 +114,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField(items_md, "id") orelse continue;
-            try mem_ids.put(id_val.scalar.text, {});
+            const id_text = sth.getFieldTextOrNull(row, items_md, "id") orelse continue;
+            try mem_ids.put(id_text, {});
         }
     }
 
@@ -216,8 +216,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField(players_md, "id") orelse continue;
-            try mem_ids.put(id_val.scalar.text, {});
+            const id_text = sth.getFieldTextOrNull(row, players_md, "id") orelse continue;
+            try mem_ids.put(id_text, {});
         }
     }
 

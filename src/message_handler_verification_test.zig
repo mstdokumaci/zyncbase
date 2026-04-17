@@ -9,6 +9,7 @@ const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -117,8 +118,7 @@ test "Verification: StoreSet message processing" {
     const doc = managed.rows[0];
 
     const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.ValueNotFound;
-    const val_payload = doc.getField(data_table_md, "val") orelse return error.ValueNotFound;
-    try testing.expectEqualStrings("test_value", val_payload.scalar.text);
+    _ = try sth.expectFieldString(doc, data_table_md, "val", "test_value");
 }
 
 // Task 14 Verification: StoreQuery message processing
@@ -511,8 +511,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
         const doc = managed.rows[0];
 
         const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.MissingValue;
-        const got_val = doc.getField(data_table_md, "val") orelse return error.MissingValue;
-        try testing.expectEqualStrings(td.value, got_val.scalar.text);
+        _ = try sth.expectFieldString(doc, data_table_md, "val", td.value);
     }
 }
 

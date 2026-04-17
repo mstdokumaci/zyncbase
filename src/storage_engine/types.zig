@@ -112,11 +112,6 @@ pub const TypedRow = struct {
             .values = cloned,
         };
     }
-
-    pub fn getField(self: TypedRow, table_metadata: *const schema_manager.TableMetadata, name: []const u8) ?TypedValue {
-        const idx = table_metadata.field_index_map.get(name) orelse return null;
-        return self.values[idx];
-    }
 };
 
 pub const TypedCursor = struct {

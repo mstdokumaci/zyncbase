@@ -347,7 +347,7 @@ pub fn execQueryTyped(
         if (rows.items.len > limit) {
             const last_row = rows.items[limit - 1];
             const sort_val = last_row.values[sort_field_index];
-            const id_val = last_row.values[0];
+            const id_val = last_row.values[schema_manager.id_field_index];
             if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
             next_cursor = types.TypedCursor{
                 .sort_value = try sort_val.clone(allocator),

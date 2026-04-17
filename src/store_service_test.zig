@@ -8,6 +8,7 @@ const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
 const tth = @import("typed_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
 
 test "StoreService: set - full document replacement" {
@@ -41,11 +42,10 @@ test "StoreService: set - full document replacement" {
         try testing.expect(managed.rows.len > 0);
         const doc = managed.rows[0];
         const users_md = app.store_service.schema_manager.getTable("users") orelse return error.UnexpectedNull;
-        const name_val = doc.getField(users_md, "name") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("Alice", name_val.scalar.text);
+        _ = try sth.expectFieldString(doc, users_md, "name", "Alice");
 
-        const age_val = doc.getField(users_md, "age") orelse return error.UnexpectedNull;
-        try testing.expectEqual(@as(i64, 30), age_val.scalar.integer);
+        const age = try sth.getFieldInt(doc, users_md, "age");
+        try testing.expectEqual(@as(i64, 30), age);
     }
 
     // 5. Negative path: Unknown table
@@ -86,8 +86,7 @@ test "StoreService: set - field level update" {
         if (managed.rows.len == 0) return error.UnexpectedNull;
         const doc = managed.rows[0];
         const items_md = app.store_service.schema_manager.getTable("items") orelse return error.UnexpectedNull;
-        const status_val = doc.getField(items_md, "status") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("active", status_val.scalar.text);
+        _ = try sth.expectFieldString(doc, items_md, "status", "active");
     }
 }
 
@@ -235,8 +234,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
         const stored_doc = managed.rows[0];
-        const stored_val = stored_doc.getField(test_md, "val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", stored_val.scalar.text);
+        _ = try sth.expectFieldString(stored_doc, test_md, "val", "value1");
     }
 
     // 2. Namespace Isolation
@@ -253,16 +251,14 @@ test "StoreService: persistence and namespace isolation" {
         defer managed_a.deinit();
         try testing.expect(managed_a.rows.len > 0);
         const doc_a = managed_a.rows[0];
-        const v_a = doc_a.getField(test_md, "val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", v_a.scalar.text);
+        _ = try sth.expectFieldString(doc_a, test_md, "val", "value1");
 
         // Verify ns-b has value2
         var managed_b = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-b");
         defer managed_b.deinit();
         try testing.expect(managed_b.rows.len > 0);
         const doc_b = managed_b.rows[0];
-        const v_b = doc_b.getField(test_md, "val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value2", v_b.scalar.text);
+        _ = try sth.expectFieldString(doc_b, test_md, "val", "value2");
     }
 
     // 3. Updates
@@ -280,8 +276,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
         const doc = managed.rows[0];
-        const stored_val = doc.getField(test_md, "val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("updated", stored_val.scalar.text);
+        _ = try sth.expectFieldString(doc, test_md, "val", "updated");
     }
 }
 
@@ -320,8 +315,7 @@ test "StoreService: query - basic search" {
     try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
     const doc = qr.results.rows[0];
     const users_md = app.store_service.schema_manager.getTable("users") orelse return error.TestExpectedValue;
-    const name_val = doc.getField(users_md, "name") orelse return error.TestExpectedValue;
-    try testing.expectEqualStrings("Alice", name_val.scalar.text);
+    _ = try sth.expectFieldString(doc, users_md, "name", "Alice");
 }
 
 test "StoreService: query - orderBy and limit" {
@@ -441,12 +435,10 @@ test "StoreService: queryWithCursor - pagination" {
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     const data_md = app.store_service.schema_manager.getTable("data") orelse return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
-    const first_id_payload = first_doc.getField(data_md, "id") orelse return error.TestExpectedValue;
-    const first_page_id = first_id_payload.scalar.text;
+    const first_page_id = try sth.getFieldText(first_doc, data_md, "id");
 
     const second_doc = next_results.rows[0];
-    const second_id_payload = second_doc.getField(data_md, "id") orelse return error.TestExpectedValue;
-    const second_page_id = second_id_payload.scalar.text;
+    const second_page_id = try sth.getFieldText(second_doc, data_md, "id");
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
 }
