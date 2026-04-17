@@ -300,7 +300,7 @@ const users = await zyncbase.query('users', {
 await zyncbase.set(tasks.task-1', {
   tags: ["urgent", "backend"]
 })
-```Arrays objects supported):**```json
+```array behavior sorted Elements match schema `items type `null nested arrays objects Arrays normalized sorted unique form write Reads query equality observe unique representation Arrays objects```json
 {
   "store": {
     "projects": {

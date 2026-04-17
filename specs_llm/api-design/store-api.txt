@@ -3,7 +3,7 @@ Store API Reference handles synchronized data validated against [Schema.md persi
 const id = client.store.create('elements', { type: 'rect', x: 10 })
 ````string generated ID `store.get(path value state tree```typescript
 const element = client.store.get('elements.rect-1')
-```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar value** specific field `string `undefined path not found `store.set(path, value) Write value or upsert document **Optimistic applied locally synced Reverted if server rejects **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null triggers schema validation field required```typescript
+```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar specific field `undefined path not found `store.set(path, value) Write value or upsert document **Optimistic applied locally synced Reverted if server rejects **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null triggers schema validation required **Typed Arrays** fields "array values normalized to canonical form before persistence returned canonical form on reads```typescript
 // Upsert a full document. ID is extracted from path if needed.
 client.store.set('users.u1', { name: 'Alice', status: 'active' })
 
@@ -12,6 +12,10 @@ client.store.set('users.u1.status', 'offline')
 
 // Clear an optional field (instead of remove)
 client.store.set('users.u1.address', null)
+
+// Typed array field is canonicalized as sorted set
+client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
+// Stored/read as: ['backend', 'urgent']
 ```Server-Time Last-Write-Wins (LWW) Path level `set() fire-and-forget errors reported via `client.on('error) [Error Handling `void `store.remove(path) Deletes document target 2) Targeting collection 1) field 3+) throws error remove field use `store.set(path, null)```typescript
 client.store.remove('elements.rect-1')
 ````remove() fire-and-forget errors reported via `client.on('error [Error Handling-propagation). `void` `store.listen(path callback)` updates specific path```typescript

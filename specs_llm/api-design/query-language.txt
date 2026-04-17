@@ -42,7 +42,7 @@ ZyncBase Query Language Reference 2026-03-09 Prisma-inspired query language.stor
     role: { notIn: ['guest', 'banned'] }    // Not in array
   }
 }
-```**Operators `in` Value array `notIn` Value not in array Null Operators```typescript
+````in` Value array `notIn` not operand semantics `in` / `notIn` treat arrays as sets (order-insensitive duplicate-insensitive).['admin', 'editor equivalent array field semantics fields `type: "array"` `eq` / `ne` compare canonical sorted values Element order duplicate count not meaningful differences Null Operators```typescript
 {
   where: {
     deleted_at: { isNull: true },           // Is null
@@ -203,7 +203,7 @@ const tasks = await client.store.query('tasks', {
   orderBy: { created_at: 'desc' },
   limit: 100
 })
-```Operator Reference Table Operator Type Description Example `eq` Equal to `{ status eq 'active' `ne` Not equal to `{ status 'deleted' `gt` Number/Date Greater than `{ age: gt: 18 `gte` Number Greater or equal `{ age gte 18 `lt` Number/Date than `{ age: lt: 65 } `lte` Number Less than or equal `{ age: lte: 65 } `contains` substring `{ name contains 'john' } `startsWith` Starts with prefix `{ name startsWith 'J' `endsWith` Ends with suffix `{ name endsWith 'son' `in` Value in array `{ role'admin 'editor' `notIn` Value not in array `{ role notIn'guest' `isNull` null/undefined `{ deleted_at isNull: true } `isNotNull` value `{ verified_at isNotNull: true } Best Practices Use implicit simplicity```typescript
+```Operator Reference Table Operator Type Description Example `eq` Equal to `{ status eq 'active' } `ne` Not equal to `{ status 'deleted' `gt` Number/Date Greater than `{ age: gt: 18 `gte` Number Greater or equal `{ age gte 18 `lt` Number/Date Less than `{ age: lt: 65 } `lte` Number Less than or equal `{ age: lte: 65 } `contains` substring `{ name contains 'john' } `startsWith` Starts with prefix `{ name startsWith 'J' `endsWith` Ends with suffix `{ name endsWith 'son' } `in` Value in array set `{ role'admin 'editor' `notIn` Value not in array `{ role notIn'guest'] `isNull` null/undefined `{ deleted_at isNull: true } `isNotNull` value `{ verified_at isNotNull: true } Best Practices Use implicit for simplicity```typescript
 // Good - clean and readable
 {
   where: {
