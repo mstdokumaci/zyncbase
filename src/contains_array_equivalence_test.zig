@@ -9,11 +9,11 @@ const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow) !std.StringHashMap(void) {
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.StringHashMap(void) {
     var ids = std.StringHashMap(void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
-        const id_val = row.getField("id") orelse continue;
+        const id_val = row.getField(metadata, "id") orelse continue;
         try ids.put(id_val.scalar.text, {});
     }
     return ids;
@@ -31,6 +31,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     const ns = "ns";
 
@@ -88,7 +89,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var sql_managed = try engine.selectQuery(allocator, "items", ns, sql_filter);
     defer sql_managed.deinit();
 
-    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, items_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
@@ -113,8 +114,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField("id") orelse continue;
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row, items_md)) {
+            const id_val = row.getField(items_md, "id") orelse continue;
             try mem_ids.put(id_val.scalar.text, {});
         }
     }
@@ -139,6 +140,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const players_md = ctx.sm.getTable("players") orelse return error.UnknownTable;
 
     const ns = "ns";
 
@@ -189,7 +191,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var sql_managed = try engine.selectQuery(allocator, "players", ns, sql_filter);
     defer sql_managed.deinit();
 
-    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, players_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
@@ -214,8 +216,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField("id") orelse continue;
+        if (try SubscriptionEngine.evaluateFilter(mem_filter, row, players_md)) {
+            const id_val = row.getField(players_md, "id") orelse continue;
             try mem_ids.put(id_val.scalar.text, {});
         }
     }

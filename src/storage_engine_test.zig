@@ -32,6 +32,7 @@ test "StorageEngine: insert and select basic" {
     try sth.setupEngine(&ctx, allocator, "crud-basic", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
 
     // Insert
     const cols = [_]sth.ColumnValue{
@@ -47,8 +48,8 @@ test "StorageEngine: insert and select basic" {
     if (managed.rows.len == 0) return error.NotFound;
     const doc = managed.rows[0];
 
-    _ = try sth.expectFieldString(doc, "name", "Alice");
-    _ = try sth.expectFieldInt(doc, "age", 30);
+    _ = try sth.expectFieldString(doc, tbl_md, "name", "Alice");
+    _ = try sth.expectFieldInt(doc, tbl_md, "age", 30);
 }
 test "StorageEngine: update document" {
     const allocator = testing.allocator;
@@ -62,6 +63,7 @@ test "StorageEngine: update document" {
     try sth.setupEngine(&ctx, allocator, "crud-update", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
 
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("v1"), .field_type = .text }};
     try engine.insertOrReplace("test", "id1", "ns", &cols1);
@@ -75,7 +77,7 @@ test "StorageEngine: update document" {
     defer managed.deinit();
     if (managed.rows.len == 0) return error.TestValueMissing;
     const doc = managed.rows[0];
-    _ = try sth.expectFieldString(doc, "val", "v2");
+    _ = try sth.expectFieldString(doc, tbl_md, "val", "v2");
 }
 test "StorageEngine: delete document" {
     const allocator = testing.allocator;
@@ -108,6 +110,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     try sth.setupEngine(&ctx, allocator, "engine-crud", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     // Set a value
     const cols = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("test"), .field_type = .text }};
@@ -119,7 +122,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     defer managed.deinit();
     try testing.expect(managed.rows.len > 0);
     const result = managed.rows[0];
-    _ = try sth.expectFieldString(result, "val", "test");
+    _ = try sth.expectFieldString(result, tbl_md, "val", "test");
 }
 test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
@@ -142,6 +145,7 @@ test "StorageEngine: update existing document" {
     try sth.setupEngine(&ctx, allocator, "engine-update", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     // Set initial value
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("initial"), .field_type = .text }};
@@ -156,7 +160,7 @@ test "StorageEngine: update existing document" {
     defer managed.deinit();
     try testing.expect(managed.rows.len > 0);
     const result = managed.rows[0];
-    _ = try sth.expectFieldString(result, "val", "updated");
+    _ = try sth.expectFieldString(result, tbl_md, "val", "updated");
 }
 test "StorageEngine: query collection" {
     const allocator = testing.allocator;
@@ -188,6 +192,7 @@ test "StorageEngine: multiple namespaces" {
     try sth.setupEngine(&ctx, allocator, "engine-namespaces", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     // Set values in different namespaces
     const cols1 = [_]sth.ColumnValue{.{ .name = "val", .value = tth.valText("ns1"), .field_type = .text }};
@@ -205,8 +210,8 @@ test "StorageEngine: multiple namespaces" {
     defer managed2.deinit();
     try testing.expect(managed2.rows.len > 0);
     const result2 = managed2.rows[0];
-    _ = try sth.expectFieldString(result1, "val", "ns1");
-    _ = try sth.expectFieldString(result2, "val", "ns2");
+    _ = try sth.expectFieldString(result1, tbl_md, "val", "ns1");
+    _ = try sth.expectFieldString(result2, tbl_md, "val", "ns2");
 }
 test "StorageEngine: transaction support" {
     const allocator = testing.allocator;

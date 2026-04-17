@@ -56,15 +56,17 @@ fn fieldTypeForValue(value: TypedValue) schema_manager.FieldType {
 }
 
 pub const OwnedRow = struct {
-    table: schema_manager.Table,
     metadata: *schema_manager.TableMetadata,
     row: TypedRow,
+
+    pub fn getField(self: OwnedRow, name: []const u8) ?TypedValue {
+        return self.row.getField(self.metadata, name);
+    }
 
     pub fn deinit(self: *OwnedRow, allocator: std.mem.Allocator) void {
         self.row.deinit(allocator);
         self.metadata.deinit(allocator);
         allocator.destroy(self.metadata);
-        allocator.free(self.table.fields);
     }
 };
 
@@ -109,6 +111,8 @@ pub fn row(allocator: std.mem.Allocator, fields: anytype) !OwnedRow {
     metadata.* = try schema_manager.TableMetadata.init(allocator, &table);
     errdefer metadata.deinit(allocator);
 
+    allocator.free(schema_fields);
+
     const values = try allocator.alloc(TypedValue, metadata.fields.len);
     errdefer allocator.free(values);
 
@@ -128,10 +132,8 @@ pub fn row(allocator: std.mem.Allocator, fields: anytype) !OwnedRow {
     }
 
     return .{
-        .table = table,
         .metadata = metadata,
         .row = .{
-            .table_metadata = metadata,
             .values = values,
         },
     };

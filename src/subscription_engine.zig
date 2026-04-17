@@ -6,6 +6,7 @@ const Condition = query_parser.Condition;
 const types = @import("storage_engine/types.zig");
 const TypedRow = types.TypedRow;
 const TypedValue = types.TypedValue;
+const schema_manager = @import("schema_manager.zig");
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -253,7 +254,7 @@ pub const SubscriptionEngine = struct {
         subscription_id: SubscriptionId,
     };
 
-    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
+    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, table_metadata: *const schema_manager.TableMetadata, allocator: Allocator) ![]Match {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
@@ -276,8 +277,8 @@ pub const SubscriptionEngine = struct {
             const group = self.groups.get(gid) orelse continue;
 
             // ADR-023: Notify if row entered, left, or changed within filter
-            const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
-            const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
+            const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old, table_metadata) else false;
+            const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new, table_metadata) else false;
 
             if (matched_before or matches_after) {
                 // All subscribers in this group match
@@ -414,7 +415,7 @@ pub const SubscriptionEngine = struct {
         }
         {
             const ob = filter.order_by;
-            const s = try std.fmt.allocPrint(allocator, ":O:{s}:{}", .{ ob.field, ob.desc });
+            const s = try std.fmt.allocPrint(allocator, ":O:{}:{}", .{ ob.field_index, ob.desc });
             defer allocator.free(s);
             try list.appendSlice(allocator, s);
         }
@@ -423,11 +424,11 @@ pub const SubscriptionEngine = struct {
     }
 
     /// Evaluates a row against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
+    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow, table_metadata: *const schema_manager.TableMetadata) !bool {
         // 1. Evaluate AND conditions (all must match)
         if (filter.conditions) |conds| {
             for (conds) |cond| {
-                if (!try evaluateCondition(cond, row)) return false;
+                if (!try evaluateCondition(cond, row, table_metadata)) return false;
             }
         }
 
@@ -436,7 +437,7 @@ pub const SubscriptionEngine = struct {
             if (or_conds.len > 0) {
                 var matched_any = false;
                 for (or_conds) |cond| {
-                    if (try evaluateCondition(cond, row)) {
+                    if (try evaluateCondition(cond, row, table_metadata)) {
                         matched_any = true;
                         break;
                     }
@@ -448,8 +449,14 @@ pub const SubscriptionEngine = struct {
         return true;
     }
 
-    fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
-        const val = row.getField(cond.field) orelse return cond.op == .isNull;
+    fn evaluateCondition(cond: Condition, row: TypedRow, table_metadata: *const schema_manager.TableMetadata) !bool {
+        const val = blk: {
+            if (cond.field_index != Condition.invalid_field_index and cond.field_index < row.values.len) {
+                break :blk row.values[cond.field_index];
+            }
+            const idx = table_metadata.field_index_map.get(cond.field) orelse return cond.op == .isNull;
+            break :blk row.values[idx];
+        };
 
         return switch (cond.op) {
             .eq => typedValuesEqual(val, cond.value orelse return false),

@@ -188,42 +188,42 @@ pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payl
     return try msgpack.Payload.strToPayload(s, allocator);
 }
 
-pub fn expectFieldString(doc: storage_engine.TypedRow, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
-    const val = doc.getField(key) orelse return error.FieldNotFound;
+pub fn expectFieldString(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
+    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .scalar and val.scalar == .text);
     try testing.expectEqualStrings(expected, val.scalar.text);
     return val;
 }
 
-pub fn expectFieldInt(doc: storage_engine.TypedRow, key: []const u8, expected: i64) !i64 {
-    const actual = try getFieldInt(doc, key);
+pub fn expectFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: i64) !i64 {
+    const actual = try getFieldInt(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
 }
 
-pub fn getFieldInt(doc: storage_engine.TypedRow, key: []const u8) !i64 {
-    const val = doc.getField(key) orelse return error.FieldNotFound;
+pub fn getFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !i64 {
+    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
     if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
     return error.TypeMismatch;
 }
 
-pub fn expectFieldReal(doc: storage_engine.TypedRow, key: []const u8, expected: f64) !f64 {
-    const val = doc.getField(key) orelse return error.FieldNotFound;
+pub fn expectFieldReal(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
+    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
     const actual = val.scalar.real;
     try testing.expectApproxEqAbs(expected, actual, 0.00001);
     return actual;
 }
 
-pub fn expectFieldBool(doc: storage_engine.TypedRow, key: []const u8, expected: bool) !bool {
-    const val = doc.getField(key) orelse return error.FieldNotFound;
+pub fn expectFieldBool(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
+    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .scalar and val.scalar == .boolean);
     try testing.expectEqual(expected, val.scalar.boolean);
     return val.scalar.boolean;
 }
 
-pub fn expectFieldArray(doc: storage_engine.TypedRow, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
-    const val = doc.getField(key) orelse return error.FieldNotFound;
+pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
+    const val = doc.getField(metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .array);
     try testing.expectEqual(expected_len, val.array.len);
     return val;

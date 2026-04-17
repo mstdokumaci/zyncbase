@@ -147,7 +147,9 @@ test "query with orderBy and after" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqualStrings("created_at", filter.order_by.field);
+    const items_md = sm.getTable("items") orelse return error.UnknownTable;
+    const created_at_index = items_md.field_index_map.get("created_at") orelse return error.UnknownField;
+    try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
     try testing.expectEqual(schema_manager.FieldType.integer, filter.order_by.field_type);
     try testing.expectEqualStrings("cursor_token", filter.after.?.id);
@@ -446,7 +448,9 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, "items", root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqualStrings("created_at", filter.order_by.field);
+    const items_md = sm.getTable("items") orelse return error.UnknownTable;
+    const created_at_index = items_md.field_index_map.get("created_at") orelse return error.UnknownField;
+    try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(@as(i64, 42), filter.after.?.sort_value.scalar.integer);
 }
 

@@ -65,6 +65,7 @@ test "storage: error handling constraint violations" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("data_table") orelse return error.UnknownTable;
 
     // Set a value
     {
@@ -82,7 +83,7 @@ test "storage: error handling constraint violations" {
     {
         var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
         defer managed.deinit();
-        _ = try sth.expectFieldString(managed.rows[0], "val", "value2");
+        _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value2");
     }
 }
 test "storage: error handling transaction rollback on error" {

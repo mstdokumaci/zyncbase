@@ -83,6 +83,7 @@ test "storage: stability continues after transaction errors" {
     try sth.setupEngine(&ctx, allocator, "stability-txn-err", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Server should continue operating after transaction errors
     // Cause a transaction error by trying to commit without beginning
     _ = storage.commitTransaction() catch |err| {
@@ -94,7 +95,7 @@ test "storage: stability continues after transaction errors" {
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
-    _ = try sth.expectFieldString(managed.rows[0], "val", "value1");
+    _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value1");
     // Cause another transaction error
     _ = storage.rollbackTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
@@ -105,7 +106,7 @@ test "storage: stability continues after transaction errors" {
     try storage.flushPendingWrites();
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
-    _ = try sth.expectFieldString(managed2.rows[0], "val", "value2");
+    _ = try sth.expectFieldString(managed2.rows[0], tbl_md, "val", "value2");
 }
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
@@ -117,6 +118,7 @@ test "storage: stability handles rapid error conditions" {
     try sth.setupEngine(&ctx, allocator, "stability-rapid-err", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Server should handle rapid succession of errors without crashing
     // Rapidly trigger transaction errors
     var i: usize = 0;
@@ -131,8 +133,9 @@ test "storage: stability handles rapid error conditions" {
     try storage.flushPendingWrites();
     var managed = try storage.selectDocument(allocator, "test", "key", "test");
     defer managed.deinit();
-    _ = try sth.expectFieldString(managed.rows[0], "val", "value");
+    _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value");
 }
+
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
 
@@ -143,6 +146,7 @@ test "storage: stability error recovery with valid operations" {
     try sth.setupEngine(&ctx, allocator, "stability-recovery", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Server should recover from errors and continue with valid operations
     // Interleave errors with valid operations
     var i: usize = 0;
@@ -166,8 +170,9 @@ test "storage: stability error recovery with valid operations" {
     // Verify some data was persisted
     var managed = try storage.selectDocument(allocator, "test", "key0", "test");
     defer managed.deinit();
-    _ = try sth.expectFieldString(managed.rows[0], "val", "value");
+    _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value");
 }
+
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
 
@@ -178,6 +183,7 @@ test "storage: stability resource cleanup after errors" {
     try sth.setupEngine(&ctx, allocator, "stability-resource-cleanup", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Resources should be properly cleaned up after errors
     // Begin a transaction
     try storage.beginTransaction();
@@ -198,8 +204,9 @@ test "storage: stability resource cleanup after errors" {
     // Verify the committed data is there
     var managed = try storage.selectDocument(allocator, "test", "key3", "test");
     defer managed.deinit();
-    _ = try sth.expectFieldString(managed.rows[0], "val", "value3");
+    _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value3");
 }
+
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
 
@@ -210,6 +217,7 @@ test "storage: stability mixed error and success scenarios" {
     try sth.setupEngine(&ctx, allocator, "stability-mixed", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Server should handle mixed scenarios of errors and successes
     // Successful transaction
     try storage.beginTransaction();
@@ -232,7 +240,7 @@ test "storage: stability mixed error and success scenarios" {
     // Verify first transaction succeeded
     var managed1 = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed1.deinit();
-    _ = try sth.expectFieldString(managed1.rows[0], "val", "value1");
+    _ = try sth.expectFieldString(managed1.rows[0], tbl_md, "val", "value1");
     // Verify second transaction was rolled back
     var managed2 = try storage.selectDocument(allocator, "test", "key2", "test");
     defer managed2.deinit();
@@ -241,7 +249,7 @@ test "storage: stability mixed error and success scenarios" {
     // Verify third operation succeeded
     var managed3 = try storage.selectDocument(allocator, "test", "key3", "test");
     defer managed3.deinit();
-    _ = try sth.expectFieldString(managed3.rows[0], "val", "value3");
+    _ = try sth.expectFieldString(managed3.rows[0], tbl_md, "val", "value3");
 }
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
@@ -253,6 +261,7 @@ test "storage: stability concurrent reads during write errors" {
     try sth.setupEngine(&ctx, allocator, "stability-concurrent-reads", table);
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     // Property: Reads should continue working even when writes encounter errors
     // Set up some initial data
     const cols1 = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
@@ -304,5 +313,5 @@ test "storage: stability concurrent reads during write errors" {
     // Verify data is still intact
     var managed = try storage.selectDocument(allocator, "test", "key1", "test");
     defer managed.deinit();
-    _ = try sth.expectFieldString(managed.rows[0], "val", "value1");
+    _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value1");
 }

@@ -40,10 +40,11 @@ test "StoreService: set - full document replacement" {
 
         try testing.expect(managed.rows.len > 0);
         const doc = managed.rows[0];
-        const name_val = doc.getField("name") orelse return error.UnexpectedNull;
+        const users_md = app.store_service.schema_manager.getTable("users") orelse return error.UnexpectedNull;
+        const name_val = doc.getField(users_md, "name") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("Alice", name_val.scalar.text);
 
-        const age_val = doc.getField("age") orelse return error.UnexpectedNull;
+        const age_val = doc.getField(users_md, "age") orelse return error.UnexpectedNull;
         try testing.expectEqual(@as(i64, 30), age_val.scalar.integer);
     }
 
@@ -84,7 +85,8 @@ test "StoreService: set - field level update" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.UnexpectedNull;
         const doc = managed.rows[0];
-        const status_val = doc.getField("status") orelse return error.UnexpectedNull;
+        const items_md = app.store_service.schema_manager.getTable("items") orelse return error.UnexpectedNull;
+        const status_val = doc.getField(items_md, "status") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("active", status_val.scalar.text);
     }
 }
@@ -219,6 +221,7 @@ test "StoreService: persistence and namespace isolation" {
     defer app.deinit();
 
     const service = &app.store_service;
+    const test_md = app.store_service.schema_manager.getTable("test") orelse return error.UnexpectedNull;
 
     // 1. Basic Persistence
     {
@@ -232,7 +235,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
         const stored_doc = managed.rows[0];
-        const stored_val = stored_doc.getField("val") orelse return error.UnexpectedNull;
+        const stored_val = stored_doc.getField(test_md, "val") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("value1", stored_val.scalar.text);
     }
 
@@ -250,7 +253,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed_a.deinit();
         try testing.expect(managed_a.rows.len > 0);
         const doc_a = managed_a.rows[0];
-        const v_a = doc_a.getField("val") orelse return error.UnexpectedNull;
+        const v_a = doc_a.getField(test_md, "val") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("value1", v_a.scalar.text);
 
         // Verify ns-b has value2
@@ -258,7 +261,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed_b.deinit();
         try testing.expect(managed_b.rows.len > 0);
         const doc_b = managed_b.rows[0];
-        const v_b = doc_b.getField("val") orelse return error.UnexpectedNull;
+        const v_b = doc_b.getField(test_md, "val") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("value2", v_b.scalar.text);
     }
 
@@ -277,7 +280,7 @@ test "StoreService: persistence and namespace isolation" {
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
         const doc = managed.rows[0];
-        const stored_val = doc.getField("val") orelse return error.UnexpectedNull;
+        const stored_val = doc.getField(test_md, "val") orelse return error.UnexpectedNull;
         try testing.expectEqualStrings("updated", stored_val.scalar.text);
     }
 }
@@ -316,7 +319,8 @@ test "StoreService: query - basic search" {
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
     const doc = qr.results.rows[0];
-    const name_val = doc.getField("name") orelse return error.TestExpectedValue;
+    const users_md = app.store_service.schema_manager.getTable("users") orelse return error.TestExpectedValue;
+    const name_val = doc.getField(users_md, "name") orelse return error.TestExpectedValue;
     try testing.expectEqualStrings("Alice", name_val.scalar.text);
 }
 
@@ -435,12 +439,13 @@ test "StoreService: queryWithCursor - pagination" {
 
     // Verify results are different (pagination worked)
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
+    const data_md = app.store_service.schema_manager.getTable("data") orelse return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
-    const first_id_payload = first_doc.getField("id") orelse return error.TestExpectedValue;
+    const first_id_payload = first_doc.getField(data_md, "id") orelse return error.TestExpectedValue;
     const first_page_id = first_id_payload.scalar.text;
 
     const second_doc = next_results.rows[0];
-    const second_id_payload = second_doc.getField("id") orelse return error.TestExpectedValue;
+    const second_id_payload = second_doc.getField(data_md, "id") orelse return error.TestExpectedValue;
     const second_page_id = second_id_payload.scalar.text;
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));

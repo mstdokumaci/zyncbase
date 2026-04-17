@@ -47,7 +47,8 @@ test "StorageEngine: selectQuery basic equality" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    try testing.expectEqualStrings("Bob", try getRowStr(res[0], "name"));
+    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
+    try testing.expectEqualStrings("Bob", try getRowStr(res[0], users_md, "name"));
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -69,7 +70,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try engine.flushPendingWrites();
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
-    var filter = try qth.makeFilter(allocator, "age", true, .integer, null);
+    var filter = try qth.makeFilter(allocator, 3, true, .integer, null);
     defer filter.deinit(allocator);
 
     var or_conds = try allocator.alloc(query_parser.Condition, 2);
@@ -94,8 +95,9 @@ test "StorageEngine: selectQuery with OR and ordering" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    try testing.expectEqualStrings("Charlie", try getRowStr(res[0], "name")); // 35
-    try testing.expectEqualStrings("Bob", try getRowStr(res[1], "name")); // 25
+    const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
+    try testing.expectEqualStrings("Charlie", try getRowStr(res[0], users_md, "name")); // 35
+    try testing.expectEqualStrings("Bob", try getRowStr(res[1], users_md, "name")); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -118,7 +120,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     try engine.flushPendingWrites();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = try qth.makeFilter(allocator, "score", false, .integer, null);
+    var filter1 = try qth.makeFilter(allocator, 2, false, .integer, null);
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
@@ -126,11 +128,12 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
-    try testing.expectEqualStrings("id1", try getRowStr(res1[0], "id"));
-    try testing.expectEqualStrings("id2", try getRowStr(res1[1], "id"));
+    const scores_md = ctx.sm.getTable("scores") orelse return error.UnknownTable;
+    try testing.expectEqualStrings("id1", try getRowStr(res1[0], scores_md, "id"));
+    try testing.expectEqualStrings("id2", try getRowStr(res1[1], scores_md, "id"));
 
     // Query 2: Same query but AFTER [100, "id2"]
-    var filter2 = try qth.makeFilter(allocator, "score", false, .integer, null);
+    var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
@@ -142,8 +145,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
-    try testing.expectEqualStrings("id3", try getRowStr(res2[0], "id")); // 200
-    try testing.expectEqualStrings("id4", try getRowStr(res2[1], "id")); // 300
+    try testing.expectEqualStrings("id3", try getRowStr(res2[0], scores_md, "id")); // 200
+    try testing.expectEqualStrings("id4", try getRowStr(res2[1], scores_md, "id")); // 300
 }
 
 fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
@@ -162,17 +165,18 @@ fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
     try engine.insertOrReplace("scores", id, "ns", &cols);
 }
 
-fn getRowStr(row: storage_engine.TypedRow, key: []const u8) ![]const u8 {
-    const val = row.getField(key) orelse return error.KeyNotFound;
+fn getRowStr(row: storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata, key: []const u8) ![]const u8 {
+    const val = row.getField(metadata, key) orelse return error.KeyNotFound;
     return val.scalar.text;
 }
 
 fn expectArrayFieldEquals(
     row: storage_engine.TypedRow,
+    metadata: *const schema_manager.TableMetadata,
     field_name: []const u8,
     expected: []const []const u8,
 ) !void {
-    const field_val = row.getField(field_name) orelse return error.KeyNotFound;
+    const field_val = row.getField(metadata, field_name) orelse return error.KeyNotFound;
     try testing.expect(field_val == .array);
     try testing.expectEqual(expected.len, field_val.array.len);
 
@@ -183,9 +187,10 @@ fn expectArrayFieldEquals(
 
 fn expectMissingRowKey(
     row: storage_engine.TypedRow,
+    metadata: *const schema_manager.TableMetadata,
     key_name: []const u8,
 ) !void {
-    try testing.expect(row.getField(key_name) == null);
+    try testing.expect(row.getField(metadata, key_name) == null);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -235,14 +240,15 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     try testing.expectEqual(@as(usize, 1), res.len);
 
     const row = res[0];
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     // Positive contract: array fields are decoded under their schema field names.
-    try expectArrayFieldEquals(row, "tags", &.{ "home", "urgent" });
-    try expectArrayFieldEquals(row, "labels", &.{ "p1", "work" });
+    try expectArrayFieldEquals(row, items_md, "tags", &.{ "home", "urgent" });
+    try expectArrayFieldEquals(row, items_md, "labels", &.{ "p1", "work" });
 
     // Negative contract: raw expression names never leak into row keys.
-    try expectMissingRowKey(row, "json(tags)");
-    try expectMissingRowKey(row, "json(labels)");
+    try expectMissingRowKey(row, items_md, "json(tags)");
+    try expectMissingRowKey(row, items_md, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -256,6 +262,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     try sth.setupEngine(&ctx, allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const wildcards_md = ctx.sm.getTable("wildcards") orelse return error.UnknownTable;
 
     // Seed data
     const ns = "ns";
@@ -282,7 +289,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
+        try testing.expectEqualStrings("2", try getRowStr(results[0], wildcards_md, "id"));
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -302,7 +309,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
+        try testing.expectEqualStrings("3", try getRowStr(results[0], wildcards_md, "id"));
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -322,7 +329,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
+        try testing.expectEqualStrings("3", try getRowStr(results[0], wildcards_md, "id"));
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -342,7 +349,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
+        try testing.expectEqualStrings("2", try getRowStr(results[0], wildcards_md, "id"));
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -362,7 +369,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("4", try getRowStr(results[0], "id"));
+        try testing.expectEqualStrings("4", try getRowStr(results[0], wildcards_md, "id"));
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding

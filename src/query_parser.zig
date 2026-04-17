@@ -22,7 +22,10 @@ pub const Operator = enum(u8) {
 };
 
 pub const Condition = struct {
+    pub const invalid_field_index: usize = std.math.maxInt(usize);
+
     field: []const u8,
+    field_index: usize = invalid_field_index,
     op: Operator,
     value: ?TypedValue,
     field_type: schema_manager.FieldType,
@@ -38,6 +41,7 @@ pub const Condition = struct {
         errdefer allocator.free(field);
         return .{
             .field = field,
+            .field_index = self.field_index,
             .op = self.op,
             .value = if (self.value) |v| try v.clone(allocator) else null,
             .field_type = self.field_type,
@@ -47,18 +51,20 @@ pub const Condition = struct {
 };
 
 pub const SortDescriptor = struct {
-    field: []const u8,
+    field_index: usize,
     desc: bool,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
-        allocator.free(self.field);
+        _ = self;
+        _ = allocator;
     }
 
     pub fn clone(self: SortDescriptor, allocator: std.mem.Allocator) !SortDescriptor {
+        _ = allocator;
         return .{
-            .field = try allocator.dupe(u8, self.field),
+            .field_index = self.field_index,
             .desc = self.desc,
             .field_type = self.field_type,
             .items_type = self.items_type,
@@ -210,7 +216,7 @@ pub fn parseQueryFilter(
     var or_conditions: ?[]Condition = null;
     const resolved_id = try resolveFieldMetadata(table_metadata, "id");
     var order_by: SortDescriptor = .{
-        .field = try allocator.dupe(u8, "id"),
+        .field_index = resolved_id.field_index,
         .desc = false,
         .field_type = resolved_id.field_type,
         .items_type = resolved_id.items_type,
@@ -287,6 +293,7 @@ pub fn parseQueryFilter(
 }
 
 pub const ResolvedField = struct {
+    field_index: usize,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 };
@@ -297,14 +304,13 @@ pub fn resolveFieldMetadata(
     table_metadata: *const schema_manager.TableMetadata,
     field: []const u8,
 ) ParserError!ResolvedField {
-    if (table_metadata.getField(field)) |f| {
-        return .{ .field_type = f.sql_type, .items_type = f.items_type };
-    }
-    // Built-in columns
-    if (schema_manager.getSystemColumn(field)) |col| {
-        return .{ .field_type = col.sql_type, .items_type = col.items_type };
-    }
-    return error.UnknownField;
+    const idx = table_metadata.field_index_map.get(field) orelse return error.UnknownField;
+    const f = table_metadata.fields[idx];
+    return .{
+        .field_index = idx,
+        .field_type = f.sql_type,
+        .items_type = f.items_type,
+    };
 }
 
 fn parseOperator(payload: msgpack.Payload) ParserError!Operator {
@@ -480,6 +486,7 @@ fn parseCondition(
 
     return Condition{
         .field = try allocator.dupe(u8, field),
+        .field_index = resolved.field_index,
         .op = op,
         .value = value,
         .field_type = resolved.field_type,
@@ -492,6 +499,7 @@ fn parseSortDescriptor(
     table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
+    _ = allocator;
     if (payload != .arr) return error.InvalidSortFormat;
     const arr = payload.arr;
     if (arr.len != 2) return error.InvalidSortFormat;
@@ -502,7 +510,7 @@ fn parseSortDescriptor(
     const desc = try parseSortDirection(arr[1]);
 
     return SortDescriptor{
-        .field = try allocator.dupe(u8, field),
+        .field_index = resolved.field_index,
         .desc = desc,
         .field_type = resolved.field_type,
         .items_type = resolved.items_type,

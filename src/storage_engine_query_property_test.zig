@@ -81,7 +81,14 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
 
     var filter = query_parser.QueryFilter{
         .order_by = .{
-            .field = try allocator.dupe(u8, field_name),
+            .field_index = switch (field_idx) {
+                0 => 2, // name
+                1 => 3, // age
+                2 => 4, // score
+                3 => 0, // id
+                4 => 5, // created_at
+                else => unreachable,
+            },
             .desc = random.boolean(),
             .field_type = ft,
             .items_type = null,

@@ -230,6 +230,7 @@ pub const ZyncBaseServer = struct {
             &self.storage_engine.change_buffer,
             &self.subscription_engine,
             &self.memory_strategy,
+            &self.schema_manager,
         );
         errdefer self.notification_dispatcher.deinit();
         // Wire Notification Dispatcher hook into WebSocket Server

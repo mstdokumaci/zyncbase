@@ -8,17 +8,17 @@ const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
-fn isIdEqualsFilter(filter: query_parser.QueryFilter) ?[]const u8 {
+fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?[]const u8 {
     // Must have: exactly 1 AND condition, no OR, no order, no cursor
     const conds = filter.conditions orelse return null;
     if (conds.len != 1) return null;
     if (filter.or_conditions != null) return null;
-    if (!std.mem.eql(u8, filter.order_by.field, "id") or filter.order_by.desc) return null;
+    if (filter.order_by.field_index != id_index or filter.order_by.desc) return null;
     if (filter.after != null) return null;
 
     const cond = conds[0];
     if (cond.op != .eq) return null;
-    if (!std.mem.eql(u8, cond.field, "id")) return null;
+    if (!(cond.field_index == id_index or std.mem.eql(u8, cond.field, "id"))) return null;
 
     // Extract string value
     const val = cond.value orelse return null;
@@ -103,9 +103,11 @@ pub const StoreService = struct {
 
                 const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
                 const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
+                const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
                 try columns.append(self.allocator, .{
                     .name = fn_inner,
+                    .index = field_index,
                     .value = typed,
                     .field_type = field.sql_type,
                 });
@@ -118,9 +120,11 @@ pub const StoreService = struct {
             const field = try validateFieldWrite(tbl_md, fn_inner, value);
             const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
+            const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
             const col = [_]storage_mod.ColumnValue{.{
                 .name = fn_inner,
+                .index = field_index,
                 .value = typed,
                 .field_type = field.sql_type,
             }};
@@ -163,7 +167,9 @@ pub const StoreService = struct {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
         errdefer filter.deinit(allocator);
 
-        if (isIdEqualsFilter(filter)) |id| {
+        const table_metadata = self.schema_manager.getTable(collection) orelse return StorageError.UnknownTable;
+        const id_index = table_metadata.field_index_map.get("id") orelse query_parser.Condition.invalid_field_index;
+        if (isIdEqualsFilter(filter, id_index)) |id| {
             // Fast path: use selectDocument with cache
             const result = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
             return QueryResult{

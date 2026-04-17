@@ -20,6 +20,7 @@ pub const ColumnValue = types.ColumnValue;
 pub const ManagedResult = types.ManagedResult;
 pub const TypedValue = types.TypedValue;
 pub const TypedRow = types.TypedRow;
+pub const TableMetadata = schema_manager.TableMetadata;
 pub const TypedCursor = types.TypedCursor;
 pub const CheckpointMode = types.CheckpointMode;
 pub const ReaderNode = types.ReaderNode;
@@ -568,7 +569,7 @@ pub const StorageEngine = struct {
         const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
         defer query_res.deinit(allocator);
 
-        const sort_field = filter.order_by.field;
+        const sort_field_index = filter.order_by.field_index;
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
         defer mstmt.release();
         const stmt = mstmt.stmt;
@@ -579,7 +580,7 @@ pub const StorageEngine = struct {
             query_res.values,
             table_metadata,
             filter.limit,
-            sort_field,
+            sort_field_index,
         );
 
         return ManagedResult{

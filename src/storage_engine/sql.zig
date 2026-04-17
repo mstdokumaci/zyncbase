@@ -178,12 +178,20 @@ pub fn buildInsertOrReplaceSql(
     try sql_buf.appendSlice(allocator, table);
     try sql_buf.appendSlice(allocator, " (id, namespace_id");
     for (columns) |col| {
+        const col_name = if (col.index != types.ColumnValue.invalid_index and col.index < table_metadata.fields.len)
+            table_metadata.fields[col.index].name
+        else
+            col.name;
         try sql_buf.append(allocator, ',');
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, col_name);
     }
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
     for (columns) |col| {
-        if (col.field_type == .array) {
+        const col_type = if (col.index != types.ColumnValue.invalid_index and col.index < table_metadata.fields.len)
+            table_metadata.fields[col.index].sql_type
+        else
+            col.field_type;
+        if (col_type == .array) {
             try sql_buf.appendSlice(allocator, ", jsonb(?)");
         } else {
             try sql_buf.appendSlice(allocator, ", ?");
@@ -194,10 +202,14 @@ pub fn buildInsertOrReplaceSql(
 
     // Update each column provided
     for (columns, 0..) |col, i| {
+        const col_name = if (col.index != types.ColumnValue.invalid_index and col.index < table_metadata.fields.len)
+            table_metadata.fields[col.index].name
+        else
+            col.name;
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, col_name);
         try sql_buf.appendSlice(allocator, " = excluded.");
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, col_name);
     }
     // Always update updated_at
     if (columns.len > 0) try sql_buf.appendSlice(allocator, ", ");

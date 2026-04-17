@@ -7,21 +7,22 @@ const FieldType = @import("schema_manager.zig").FieldType;
 /// Creates a QueryFilter with a default order_by = "id" ASC.
 /// Caller owns the memory and must call deinit(allocator).
 pub fn makeDefaultFilter(allocator: std.mem.Allocator) !QueryFilter {
-    return makeFilter(allocator, "id", false, .text, null);
+    return makeFilter(allocator, 0, false, .text, null);
 }
 
-/// Creates a QueryFilter with a custom order_by field.
+/// Creates a QueryFilter with a custom order_by field index.
 /// Caller owns the memory and must call deinit(allocator).
 pub fn makeFilter(
     allocator: std.mem.Allocator,
-    order_by: []const u8,
+    order_by_field_index: usize,
     desc: bool,
     field_type: FieldType,
     items_type: ?FieldType,
 ) !QueryFilter {
+    _ = allocator;
     return QueryFilter{
         .order_by = .{
-            .field = try allocator.dupe(u8, order_by),
+            .field_index = order_by_field_index,
             .desc = desc,
             .field_type = field_type,
             .items_type = items_type,

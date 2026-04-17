@@ -35,7 +35,7 @@ test "SubscriptionEngine: basic subscribe and match" {
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, allocator);
+    const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);
@@ -95,8 +95,8 @@ test "SubscriptionEngine: operator matching" {
     var row2 = try tth.row(allocator, .{ .name = tth.valText("Bob") });
     defer row2.deinit(allocator);
 
-    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1.row));
-    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2.row));
+    try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1.row, row1.metadata));
+    try testing.expect(!try SubscriptionEngine.evaluateFilter(filter, row2.row, row2.metadata));
 }
 
 test "SubscriptionEngine: canonical filter key includes values" {
@@ -198,7 +198,7 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, allocator);
+    const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);
@@ -230,21 +230,21 @@ test "SubscriptionEngine: case-insensitive string matching" {
     {
         var r = try tth.row(allocator, .{ .name = tth.valText("aLiCe") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r.row));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r.row, r.metadata));
     }
 
     // Case-insensitive endsWith
     {
         var r = try tth.row(allocator, .{ .name = tth.valText("reAL") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r.row));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r.row, r.metadata));
     }
 
     // Case-insensitive contains
     {
         var r = try tth.row(allocator, .{ .name = tth.valText("vALid") });
         defer r.deinit(allocator);
-        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r.row));
+        try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r.row, r.metadata));
     }
 }
 
@@ -305,7 +305,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, allocator);
+    const matches = try engine.handleRowChange(change, r.metadata, allocator);
     defer allocator.free(matches);
     try testing.expectEqual(@as(usize, 1), matches.len);
 }
@@ -375,7 +375,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
         .old_row = null,
     };
 
-    const matches = try engine.handleRowChange(change, allocator);
+    const matches = try engine.handleRowChange(change, r.metadata, allocator);
     defer allocator.free(matches);
     try testing.expectEqual(@as(usize, 1), matches.len);
 }

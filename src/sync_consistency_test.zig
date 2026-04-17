@@ -78,7 +78,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         .old_row = captured.old_row,
     };
 
-    const matches = try sub_engine.handleRowChange(row_change, allocator);
+    const matches = try sub_engine.handleRowChange(row_change, ctx.sm.getTable("items") orelse return error.UnknownTable, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);

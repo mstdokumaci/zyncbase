@@ -279,6 +279,7 @@ pub fn buildQueryResponse(
     msg_id: u64,
     sub_id: ?u64,
     results: *storage_mod.ManagedResult,
+    table_metadata: *const storage_mod.TableMetadata,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(arena_allocator);
@@ -299,7 +300,7 @@ pub fn buildQueryResponse(
     // Write results array
     try msgpack.encodeArrayHeader(writer, results.rows.len);
     for (results.rows) |row| {
-        try encodeTypedRow(writer, row);
+        try encodeTypedRow(writer, row, table_metadata);
     }
 
     if (sub_id != null) {
@@ -429,6 +430,7 @@ pub fn encodeDeltaSuffix(
     id_val: storage_mod.TypedValue,
     is_delete: bool,
     new_row: ?storage_mod.TypedRow,
+    table_metadata: ?*const storage_mod.TableMetadata,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -450,7 +452,7 @@ pub fn encodeDeltaSuffix(
     if (!is_delete) {
         try msgpack.writeMsgPackStr(writer, "value");
         if (new_row) |row| {
-            try encodeTypedRow(writer, row);
+            try encodeTypedRow(writer, row, table_metadata orelse unreachable);
         } else {
             try msgpack.encode(.nil, writer);
         }
@@ -459,10 +461,10 @@ pub fn encodeDeltaSuffix(
     return list.toOwnedSlice(allocator);
 }
 
-pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow) !void {
+pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
     try msgpack.encodeMapHeader(writer, row.values.len);
     for (row.values, 0..) |value, idx| {
-        try msgpack.writeMsgPackStr(writer, row.table_metadata.fields[idx].name);
+        try msgpack.writeMsgPackStr(writer, table_metadata.fields[idx].name);
         try value.writeMsgPack(writer);
     }
 }

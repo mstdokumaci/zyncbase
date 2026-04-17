@@ -166,7 +166,7 @@ test "encodeDeltaSuffix: set operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(12345);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_val, false, null);
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_val, false, null, null);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -202,7 +202,7 @@ test "encodeDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(999);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_val, true, null);
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_val, true, null, null);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -277,7 +277,7 @@ test "encodeDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
     const id_val = tth.valText("doc-abc-123");
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_val, false, null);
+    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_val, false, null, null);
     defer allocator.free(suffix);
 
     // Decode and verify

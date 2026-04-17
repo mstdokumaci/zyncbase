@@ -116,7 +116,8 @@ test "Verification: StoreSet message processing" {
     if (managed.rows.len == 0) return error.DocumentNotFound;
     const doc = managed.rows[0];
 
-    const val_payload = doc.getField("val") orelse return error.ValueNotFound;
+    const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.ValueNotFound;
+    const val_payload = doc.getField(data_table_md, "val") orelse return error.ValueNotFound;
     try testing.expectEqualStrings("test_value", val_payload.scalar.text);
 }
 
@@ -509,7 +510,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
         try testing.expect(managed.rows.len > 0);
         const doc = managed.rows[0];
 
-        const got_val = doc.getField("val") orelse return error.MissingValue;
+        const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.MissingValue;
+        const got_val = doc.getField(data_table_md, "val") orelse return error.MissingValue;
         try testing.expectEqualStrings(td.value, got_val.scalar.text);
     }
 }

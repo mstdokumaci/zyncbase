@@ -9,19 +9,22 @@ const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const protocol = @import("protocol.zig");
+const schema_manager = @import("schema_manager.zig");
 
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
+    schema_manager: *const schema_manager.SchemaManager,
     allocator: Allocator,
     drain_buf: std.ArrayListUnmanaged(OwnedRowChange) = .empty,
 
-    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy) !void {
+    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema_manager.SchemaManager) !void {
         self.* = .{
             .change_buffer = change_buffer,
             .subscription_engine = subscription_engine,
             .memory_strategy = memory_strategy,
+            .schema_manager = sm,
             .allocator = allocator,
             .drain_buf = .empty,
         };
@@ -47,6 +50,11 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
+        const table_metadata = self.schema_manager.getTable(change.collection) orelse {
+            std.log.err("NotificationDispatcher skipping delta for unknown collection {s}", .{change.collection});
+            return;
+        };
+
         // === Phase 1: Extract row metadata ===
         const row_change = RowChange{
             .namespace = change.namespace,
@@ -57,7 +65,7 @@ pub const NotificationDispatcher = struct {
         };
 
         const id_val = if (change.new_row orelse change.old_row) |row|
-            row.getField("id")
+            row.getField(table_metadata, "id")
         else
             null;
 
@@ -77,7 +85,7 @@ pub const NotificationDispatcher = struct {
         defer self.memory_strategy.releaseArena(arena);
         const alloc = arena.allocator();
 
-        const matches = self.subscription_engine.handleRowChange(row_change, alloc) catch |err| {
+        const matches = self.subscription_engine.handleRowChange(row_change, table_metadata, alloc) catch |err| {
             std.log.err("NotificationDispatcher handleRowChange failed: {}", .{err});
             return;
         };
@@ -93,6 +101,7 @@ pub const NotificationDispatcher = struct {
             id_val_actual,
             is_delete,
             change.new_row,
+            table_metadata,
         ) catch |err| {
             std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{s}: {}", .{ change.namespace, change.collection, err });
             return;

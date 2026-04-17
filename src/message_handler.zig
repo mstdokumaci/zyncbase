@@ -294,7 +294,8 @@ pub const MessageHandler = struct {
         _ = try self.subscription_engine.subscribe(req.namespace, req.collection, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results);
+        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
     }
 
     fn handleStoreUnsubscribe(
@@ -325,7 +326,8 @@ pub const MessageHandler = struct {
         var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
         defer qr.deinit(arena_allocator);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results);
+        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
     }
 
     fn handleStoreLoadMore(
@@ -350,7 +352,8 @@ pub const MessageHandler = struct {
         var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results);
+        const tbl_md = self.schema_manager.getTable(sub_query.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

@@ -420,6 +420,7 @@ test "storage: document set/get round-trip" {
     try sth.setupEngine(&ctx, allocator, "prop-reopen", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
@@ -437,8 +438,8 @@ test "storage: document set/get round-trip" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldString(doc, "title", title_str);
-        _ = try sth.expectFieldInt(doc, "score", score_val);
+        _ = try sth.expectFieldString(doc, tbl_md, "title", title_str);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", score_val);
     }
 }
 test "storage: field set/get round-trip" {
@@ -454,6 +455,7 @@ test "storage: field set/get round-trip" {
     try sth.setupEngine(&ctx, allocator, "storage-p14", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
@@ -473,7 +475,7 @@ test "storage: field set/get round-trip" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldInt(doc, "score", new_score);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", new_score);
     }
 }
 test "storage: query is namespace-scoped" {
@@ -557,6 +559,7 @@ test "storage: updated_at is always refreshed on write" {
     try sth.setupEngine(&ctx, allocator, "storage-p18", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -570,7 +573,7 @@ test "storage: updated_at is always refreshed on write" {
         defer managed1.deinit();
         if (managed1.rows.len == 0) return error.MissingDoc;
         const doc1 = managed1.rows[0];
-        const updated_at_1 = try sth.getFieldInt(doc1, "updated_at");
+        const updated_at_1 = try sth.getFieldInt(doc1, items_md, "updated_at");
         try testing.expect(updated_at_1 >= t_before_insert);
 
         try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = tth.valInt(2), .field_type = .integer }});
@@ -580,7 +583,7 @@ test "storage: updated_at is always refreshed on write" {
         defer managed2.deinit();
         if (managed2.rows.len == 0) return error.MissingDoc;
         const doc2 = managed2.rows[0];
-        const updated_at_2 = try sth.getFieldInt(doc2, "updated_at");
+        const updated_at_2 = try sth.getFieldInt(doc2, items_md, "updated_at");
         try testing.expect(updated_at_2 >= updated_at_1);
     }
 }
@@ -597,6 +600,7 @@ test "storage: write/read round-trip for array fields" {
     try sth.setupEngine(&ctx, allocator, "storage-p10", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -622,7 +626,7 @@ test "storage: write/read round-trip for array fields" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        const got_tags = try sth.expectFieldArray(doc, "tags", tags_tv.array.len);
+        const got_tags = try sth.expectFieldArray(doc, tbl_md, "tags", tags_tv.array.len);
         for (tags_tv.array, got_tags.array) |expected, got| {
             const expected_val = switch (expected) {
                 .integer => |v| v,
@@ -651,6 +655,7 @@ test "storage: non-array fields are unaffected" {
     try sth.setupEngine(&ctx, allocator, "storage-p11", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -672,9 +677,9 @@ test "storage: non-array fields are unaffected" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldString(doc, "title", title_str);
-        _ = try sth.expectFieldInt(doc, "score", score_val);
-        _ = try sth.expectFieldReal(doc, "rating", rating_val);
-        _ = try sth.expectFieldBool(doc, "active", active_val);
+        _ = try sth.expectFieldString(doc, tbl_md, "title", title_str);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", score_val);
+        _ = try sth.expectFieldReal(doc, tbl_md, "rating", rating_val);
+        _ = try sth.expectFieldBool(doc, tbl_md, "active", active_val);
     }
 }

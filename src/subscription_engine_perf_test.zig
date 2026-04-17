@@ -49,7 +49,7 @@ test "SubscriptionEngine: handleRowChange performance" {
     var total_matches: usize = 0;
 
     for (0..iterations) |_| {
-        const matches = try engine.handleRowChange(change, allocator);
+        const matches = try engine.handleRowChange(change, new_row.metadata, allocator);
         total_matches += matches.len;
         allocator.free(matches);
     }

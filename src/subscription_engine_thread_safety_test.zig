@@ -62,7 +62,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
             };
 
             for (0..100) |_| {
-                const matches = engine_ptr.handleRowChange(change, alloc) catch @panic("handleRowChange failed");
+                const matches = engine_ptr.handleRowChange(change, r.metadata, alloc) catch @panic("handleRowChange failed");
                 alloc.free(matches);
             }
         }

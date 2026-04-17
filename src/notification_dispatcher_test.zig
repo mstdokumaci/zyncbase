@@ -7,9 +7,7 @@ const NotificationDispatcher = @import("notification_dispatcher.zig").Notificati
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const schema_manager = @import("schema_manager.zig");
 const storage_types = @import("storage_engine/types.zig");
-// ============================================================
-// Full dispatch integration tests
-// ============================================================
+const sth = @import("storage_engine_test_helpers.zig");
 
 test "NotificationDispatcher: empty poll" {
     const alloc = testing.allocator;
@@ -24,8 +22,13 @@ test "NotificationDispatcher: empty poll" {
     try memory.init(alloc);
     defer memory.deinit();
 
+    const empty_fields = [_]schema_manager.Field{};
+    const table = schema_manager.Table{ .name = "_test", .fields = &empty_fields };
+    var sm = try sth.createSchemaManager(alloc, &[_]schema_manager.Table{table});
+    defer sm.deinit();
+
     var nd: NotificationDispatcher = undefined;
-    try nd.init(alloc, &cb, &sub_engine, &memory);
+    try nd.init(alloc, &cb, &sub_engine, &memory, &sm);
     defer nd.deinit();
 
     var cm: ConnectionManager = undefined;
@@ -45,25 +48,20 @@ test "NotificationDispatcher: poll processes items" {
     try memory.init(alloc);
     defer memory.deinit();
 
+    const empty_fields = [_]schema_manager.Field{};
+    const table = schema_manager.Table{ .name = "coll", .fields = &empty_fields };
+    var sm = try sth.createSchemaManager(alloc, &[_]schema_manager.Table{table});
+    defer sm.deinit();
+
     var nd: NotificationDispatcher = undefined;
-    try nd.init(alloc, &cb, &sub_engine, &memory);
+    try nd.init(alloc, &cb, &sub_engine, &memory, &sm);
     defer nd.deinit();
 
-    // Create a row with an "id" field so dispatchChange doesn't skip it.
-    // Build metadata explicitly to avoid helper-owned metadata leaks when the row
-    // is moved into ChangeBuffer ownership.
-    const empty_fields = [_]schema_manager.Field{};
-    const table = schema_manager.Table{
-        .name = "_test",
-        .fields = &empty_fields,
-    };
-    var metadata = try schema_manager.TableMetadata.init(alloc, &table);
-    defer metadata.deinit(alloc);
-
-    const values = try alloc.alloc(storage_types.TypedValue, metadata.fields.len);
+    const tbl_md = sm.getTable("coll") orelse return error.TestExpectedValue;
+    const values = try alloc.alloc(storage_types.TypedValue, tbl_md.fields.len);
     errdefer alloc.free(values);
     for (values, 0..) |*value, i| {
-        const field = metadata.fields[i];
+        const field = tbl_md.fields[i];
         if (field.sql_type == .integer) {
             value.* = .{ .scalar = .{ .integer = 0 } };
         } else {
@@ -71,11 +69,10 @@ test "NotificationDispatcher: poll processes items" {
         }
     }
 
-    const id_index = metadata.field_index_map.get("id") orelse return error.TestExpectedValue;
+    const id_index = tbl_md.field_index_map.get("id") orelse return error.TestExpectedValue;
     values[id_index] = .{ .scalar = .{ .text = try alloc.dupe(u8, "1") } };
 
     const new_row = storage_types.TypedRow{
-        .table_metadata = &metadata,
         .values = values,
     };
 

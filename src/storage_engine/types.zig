@@ -57,7 +57,10 @@ pub const StorageError = error{
 
 /// A column name + msgpack value pair for storage inserts/updates.
 pub const ColumnValue = struct {
+    pub const invalid_index: usize = std.math.maxInt(usize);
+
     name: []const u8,
+    index: usize = invalid_index,
     value: TypedValue,
     field_type: schema_manager.FieldType,
 };
@@ -88,8 +91,7 @@ pub const ManagedResult = struct {
 };
 
 pub const TypedRow = struct {
-    table_metadata: *const schema_manager.TableMetadata,
-    values: []TypedValue, // Owned
+    values: []TypedValue,
 
     pub fn deinit(self: TypedRow, allocator: Allocator) void {
         for (self.values) |value| value.deinit(allocator);
@@ -107,13 +109,12 @@ pub const TypedRow = struct {
             cloned[i] = try self.values[i].clone(allocator);
         }
         return .{
-            .table_metadata = self.table_metadata,
             .values = cloned,
         };
     }
 
-    pub fn getField(self: TypedRow, name: []const u8) ?TypedValue {
-        const idx = self.table_metadata.field_index_map.get(name) orelse return null;
+    pub fn getField(self: TypedRow, table_metadata: *const schema_manager.TableMetadata, name: []const u8) ?TypedValue {
+        const idx = table_metadata.field_index_map.get(name) orelse return null;
         return self.values[idx];
     }
 };
