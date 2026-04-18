@@ -29,7 +29,6 @@ pub const ReconnectionConfig = types.ReconnectionConfig;
 pub const WriteOp = types.WriteOp;
 pub const WriteQueue = types.WriteQueue;
 pub const typed_cache_type = types.typed_cache_type;
-pub const ColumnContext = types.ColumnContext;
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
 

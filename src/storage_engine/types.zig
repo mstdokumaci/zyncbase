@@ -491,12 +491,6 @@ pub const ReconnectionConfig = struct {
     backoff_multiplier: f64 = 2.0,
 };
 
-pub const ColumnContext = struct {
-    index: c_int,
-    name: []const u8,
-    field: ?schema_manager.Field,
-};
-
 pub const WriteOp = union(enum) {
     begin_transaction: struct { completion_signal: ?*CompletionSignal },
     commit_transaction: struct { completion_signal: ?*CompletionSignal },
