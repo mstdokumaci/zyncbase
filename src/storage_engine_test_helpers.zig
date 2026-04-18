@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
-const tth = @import("typed_test_Helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
@@ -15,7 +15,7 @@ pub const Field = schema_manager.Field;
 pub const FieldType = schema_manager.FieldType;
 pub const TableMetadata = schema_manager.TableMetadata;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const schema_helpers = @import("schema_test_Helpers.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
