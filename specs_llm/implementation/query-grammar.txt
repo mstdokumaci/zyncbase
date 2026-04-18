@@ -74,28 +74,28 @@ Query Language Grammar SQL Translation v1 Implementation Specification specifies
   "limit":   50,
   "after":   "eyJpZCI6..."
 }
-```Encoding Rules SDK field Wire key Encoding `where` conditions `conditions` Array[field op value` tuples `where.or` `orConditions` tuples `orderBy`[field desc]` tuple `limit` Integer (unchanged `after` String (unchanged Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure"address SDK flattens field path joining keys with `__` condition tuple field `"address__city"` SQLite JSON Extractors `json_extract()->>` operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map Zig AST minimal transformation server reads positional array elements into fields```zig
+```Encoding Rules SDK field Wire key Encoding `where` conditions `conditions`[field op value tuples `where.or` `orConditions` `orderBy`[field desc` tuple `limit` Integer (unchanged `after` String (unchanged Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure"address SDK flattens field path keys with `__` condition tuple field `"address__city" SQLite JSON Extractors `json_extract()->> operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map to Zig AST after schema resolution parser converts wire field names into schema-backed field indexes```zig
 pub const QueryFilter = struct {
     conditions: []const Condition,
     or_conditions: ?[]const Condition = null,
-    sorts: []const SortDescriptor,
+    order_by: SortDescriptor,
 };
 
 pub const SortDescriptor = struct {
-    field: []const u8,
+    field_index: usize,
     desc: bool,
 };
 
 pub const Condition = struct {
-    field: []const u8,
+    field_index: usize,
     op: Operator,
-    value: Condition.Value,
+    value: ?TypedValue,
 };
 
 pub const Operator = enum {
     eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
 };
-```Wire AST Mapping server deserializes condition tuple into `Condition struct Tuple AST field[0]` `Condition.field String flattened SDK `[1]` `Condition.op` Integer `Operator enum `[2]` `Condition.value` Absent Sort tuples map `SortDescriptor Tuple AST field `[0]` `SortDescriptor.field` String `[1]` `SortDescriptor.desc` `1` `true `0 `false` SQLite Translation Rules Core Selection collection queries operate `namespace boundaries```sql
+```Wire AST Mapping server deserializes condition tuple into `Condition struct Tuple AST field[0] `Condition.field_index` String resolved against table metadata `[1] `Condition.op` Integer `Operator enum `[2]` `Condition.value` Absent Sort tuples map `SortDescriptor` Tuple AST field[0]` `SortDescriptor.field_index` String field name resolved against table metadata `[1]` `SortDescriptor.desc` `1` `true `0 `false` SQLite Translation Rules Core Selection collection queries operate `namespace boundaries```sql
 SELECT value_msgpack 
 FROM "collection_name" 
 WHERE _namespace = ? 
