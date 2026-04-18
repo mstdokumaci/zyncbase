@@ -450,6 +450,7 @@ const users = await zyncbase.query('users', {
 - Nested fields are recursively flattened to columns using a double underscore separator: `address__location__lat`, etc.
 - Base field names in the schema are forbidden from containing `__` to prevent collisions.
 - The server reconstructs the nested structure for the client automatically on `get` and `query` operations.
+- *Note: On the wire, these string identifiers are entirely replaced by numeric index mappings transparently by the SDK.*
 
 **Benefits:**
 - Efficient querying (standard SQLite indexes work on flattened columns)

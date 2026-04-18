@@ -89,6 +89,8 @@ Example:
 ```
 Flattens to SQLite column: `profile__userId TEXT`.
 
+> *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
+
 ---
 
 ## Validation Constraints (`[PLANNED]`)

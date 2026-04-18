@@ -207,14 +207,14 @@ All methods accept both dot-notation strings and Arrays of strings. **The Array 
 
 ### Logical vs. Wire-Format Paths
 
-Paths follow a logical progression from collections to documents to specific fields. While the SDK supports variadic segments for developer convenience, the **wire protocol** (socket) enforces a flattened structure for nested fields using the `__` separator. The SDK handles this transformation automatically.
+Paths follow a logical progression from collections to documents to specific fields. While the SDK supports variadic segments for developer convenience, the **wire protocol** (socket) enforces a compact structure using schema index dictionaries. The SDK automatically resolves nested strings and translates them into mapped `table_index` and `field_index` integers internally.
 
-| Target | Logical Path (SDK) | Wire-Format Path (Socket) | Pattern |
-| :--- | :--- | :--- | :--- |
-| **Collection** | `['users']` | `['users']` | `[collection]` |
-| **Document** | `['users', 'u1']` | `['users', 'u1']` | `[collection, id]` |
-| **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[collection, id, field]` |
-| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[collection, id, flattened__nested]` |
+| Target | Logical Path (SDK) | Flattened (SDK Internal) | Wire-Format Path (Socket) | Pattern |
+| :--- | :--- | :--- | :--- | :--- |
+| **Collection** | `['users']` | `['users']` | `[0]` | `[table_index]` |
+| **Document** | `['users', 'u1']` | `['users', 'u1']` | `[0, 'u1']` | `[table_index, id]` |
+| **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[0, 'u1', 2]` | `[table_index, id, field_index]` |
+| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[0, 'u1', 5]` | `[table_index, id, field_index]` |
 
 ### Why use Arrays?
 Arrays are preferred when dealing with variables or IDs that might contain dots:
