@@ -345,20 +345,23 @@ pub fn execQueryTyped(
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
         if (rows.items.len > limit) {
-            const last_row = rows.items[limit - 1];
-            const sort_val = last_row.values[sort_field_index];
-            const id_val = last_row.values[schema_manager.id_field_index];
-            if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
-            next_cursor = types.TypedCursor{
-                .sort_value = try sort_val.clone(allocator),
-                .id = try allocator.dupe(u8, id_val.scalar.text),
-            };
-
-            var i: usize = limit;
-            while (i < rows.items.len) : (i += 1) {
-                rows.items[i].deinit(allocator);
+            if (limit > 0) {
+                const last_row = rows.items[limit - 1];
+                const sort_val = last_row.values[sort_field_index];
+                const id_val = last_row.values[schema_manager.id_field_index];
+                if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
+                next_cursor = types.TypedCursor{
+                    .sort_value = try sort_val.clone(allocator),
+                    .id = try allocator.dupe(u8, id_val.scalar.text),
+                };
             }
-            rows.items.len = limit;
+
+            while (rows.items.len > limit) {
+                if (rows.pop()) |extra_row| {
+                    var row = extra_row;
+                    row.deinit(allocator);
+                } else unreachable;
+            }
         }
     }
 

@@ -475,6 +475,7 @@ pub fn encodeSetDeltaSuffix(
 }
 
 pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
+    if (row.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeMapHeader(writer, row.values.len);
     for (row.values, 0..) |value, idx| {
         try msgpack.writeMsgPackStr(writer, table_metadata.fields[idx].name);
