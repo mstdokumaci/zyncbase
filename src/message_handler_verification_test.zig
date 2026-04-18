@@ -28,7 +28,7 @@ test "Verification: WebSocket connection lifecycle" {
     try app.manager.onOpen(&ws);
     // Explicit close for middle-test state verification, plus defer for early failures
     var closed = false;
-    defer if (!closed) app.manager.onClose(&ws, 1000, "Cleanup");
+    defer if (!closed) app.manager.onClose(&ws);
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
@@ -40,7 +40,7 @@ test "Verification: WebSocket connection lifecycle" {
     try testing.expectEqualStrings("default", state.namespace);
 
     // Test connection close
-    app.manager.onClose(&ws, 1000, "Normal closure");
+    app.manager.onClose(&ws);
     closed = true;
 
     // Verify connection was removed
@@ -325,7 +325,7 @@ test "Verification: Error handling for invalid messages" {
     {
         var ws = createMockWebSocket();
         try app.manager.onOpen(&ws);
-        defer app.manager.onClose(&ws, 1000, "Normal closure");
+        defer app.manager.onClose(&ws);
 
         const text_message = "text message";
 

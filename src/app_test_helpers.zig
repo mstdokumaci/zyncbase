@@ -195,7 +195,7 @@ pub const AppTestContext = struct {
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
-            self.app.manager.onClose(self.ws, 1000, "normal");
+            self.app.manager.onClose(self.ws);
 
             // 2. Test drops its reference (may return to pool)
             if (self.conn.release()) {
@@ -248,7 +248,7 @@ pub const AppTestContext = struct {
 
             if (maybe_conn) |ws| {
                 var local_ws = ws; // Mutability for callback
-                self.manager.onClose(&local_ws, 1000, "shutdown");
+                self.manager.onClose(&local_ws);
             } else {
                 break;
             }

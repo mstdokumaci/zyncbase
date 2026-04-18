@@ -142,9 +142,7 @@ pub const StoreService = struct {
         doc_id: []const u8,
         namespace: []const u8,
         segments_len: usize,
-        field_name: ?[]const u8,
     ) !void {
-        _ = field_name;
         try self.schema_manager.validateTable(table);
 
         if (segments_len == 2) {

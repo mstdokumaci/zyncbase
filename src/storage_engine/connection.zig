@@ -89,8 +89,10 @@ pub fn internalExecuteCheckpoint(conn: *sqlite.Db, allocator: Allocator, db_path
     };
 
     if (result) |res| {
-        frames_checkpointed = @intCast(res.checkpointed);
-        frames_in_wal = @intCast(res.log);
+        // SQLite may return negative values in edge conditions (e.g. no WAL pages).
+        // Clamp to zero to keep stats unsigned and avoid cast panics.
+        frames_checkpointed = if (res.checkpointed > 0) @intCast(res.checkpointed) else 0;
+        frames_in_wal = if (res.log > 0) @intCast(res.log) else 0;
     }
 
     const wal_size_after = try getWalSize(allocator, db_path, in_memory);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
+const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
 
 // 1. No data loss occurs during checkpoint
 // 2. WAL size decreases or stays same after successful checkpoint
@@ -11,18 +12,15 @@ const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 test "checkpoint: integrity - no data loss occurs during checkpoint" {
     const allocator = testing.allocator;
 
-    // Create mock storage layer
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    // Initialize checkpoint manager with low thresholds for testing
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1024, // 1KB for testing
         .time_threshold_sec = 1, // 1 second for testing
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: Checkpoint should not lose data
     // We verify this by checking that metrics are consistent before and after
@@ -43,24 +41,21 @@ test "checkpoint: integrity - no data loss occurs during checkpoint" {
     // Verify metrics were updated
     const metrics_after = manager.getMetrics();
     try testing.expect(metrics_after.checkpoint_count == metrics_before.checkpoint_count + 1);
-    // Note: In mock implementation, timestamp may not change if operation is instant
-    // In real implementation with SQLite, this would always increase
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 }
 
 test "checkpoint: WAL size management - size decreases or stays same after success" {
     const allocator = testing.allocator;
 
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: WAL size should decrease or stay same after successful checkpoint
     const initial_wal_size: usize = 5000;
@@ -78,16 +73,15 @@ test "checkpoint: WAL size management - size decreases or stays same after succe
 test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
     const allocator = testing.allocator;
 
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1000,
         .time_threshold_sec = 60,
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: shouldCheckpoint returns true when size threshold exceeded
     manager.wal_size.store(1500, .release);
@@ -106,16 +100,15 @@ test "checkpoint: threshold detection - shouldCheckpoint respects thresholds" {
 test "checkpoint: failure handling - failed checkpoints increment counter" {
     const allocator = testing.allocator;
 
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: Failed checkpoints increment failure counter
     const initial_failures = manager.failed_checkpoint_count.load(.acquire);
@@ -128,16 +121,15 @@ test "checkpoint: failure handling - failed checkpoints increment counter" {
 test "checkpoint: metrics accuracy - metrics reflect operations accurately" {
     const allocator = testing.allocator;
 
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: Metrics accurately reflect checkpoint operations
     const metrics_before = manager.getMetrics();
@@ -153,25 +145,22 @@ test "checkpoint: metrics accuracy - metrics reflect operations accurately" {
     // Verify timestamp updated
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
 
-    // Note: Duration may be 0 in mock implementation since operations are instant
-    // In real implementation with SQLite, duration would always be > 0
-    // We just verify it's a valid value (>= 0)
+    // Duration may be 0 for very fast runs; verify value is valid.
     try testing.expect(metrics_after.last_checkpoint_duration_ms >= 0);
 }
 
 test "checkpoint: escalation logic - works correctly when needed" {
     const allocator = testing.allocator;
 
-    var storage = try CheckpointManager.StorageLayer.init(allocator, ":memory:");
-    defer storage.deinit();
-
-    var manager: CheckpointManager = undefined;
-    try manager.init(allocator, &storage, .{
+    var ctx: checkpoint_helpers.Context = undefined;
+    try ctx.init(allocator, .{
         .wal_size_threshold = 1024,
         .time_threshold_sec = 300,
         .checkpoint_mode = .passive,
     });
-    defer manager.deinit();
+    defer ctx.deinit();
+
+    const manager = &ctx.manager;
 
     // Property: Escalation logic works correctly
     // Set up scenario where passive checkpoint doesn't reduce WAL much
@@ -181,7 +170,7 @@ test "checkpoint: escalation logic - works correctly when needed" {
 
     // Verify checkpoint was attempted (success flag should be set)
     try testing.expect(result.success);
-    // Duration may be 0 in mock, but should be >= 0
+    // Duration may be 0 in fast runs, but should be >= 0
     try testing.expect(result.duration_ms >= 0);
 }
 

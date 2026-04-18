@@ -253,15 +253,6 @@ pub const StorageEngine = struct {
         self.change_buffer.deinit();
     }
 
-    /// Initialize a StorageLayer interface for the CheckpointManager in-place
-    pub fn initStorageLayer(self: *StorageEngine, layer: *@import("checkpoint_manager.zig").CheckpointManager.StorageLayer) !void {
-        const checkpoint_manager_mod = @import("checkpoint_manager.zig");
-        layer.* = try checkpoint_manager_mod.CheckpointManager.StorageLayer.init(self.allocator, self.db_path);
-
-        // Store a reference to self for checkpoint execution
-        layer.storage_engine = self;
-    }
-
     /// Returns statistics about the checkpoint operation
     pub fn executeCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
         try self.ensureRunning();

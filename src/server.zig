@@ -32,7 +32,6 @@ pub const ZyncBaseServer = struct {
     violation_tracker: ViolationTracker,
     subscription_engine: SubscriptionEngine,
     checkpoint_manager: CheckpointManager,
-    storage_layer: CheckpointManager.StorageLayer,
     storage_engine: StorageEngine,
     notification_dispatcher: NotificationDispatcher,
     websocket_server: WebSocketServer,
@@ -172,16 +171,11 @@ pub const ZyncBaseServer = struct {
             try self.storage_engine.start();
         }
 
-        // Initialize storage layer for checkpoint manager
-        std.log.debug("Initializing storage layer", .{});
-        try self.storage_engine.initStorageLayer(&self.storage_layer);
-        errdefer self.storage_layer.deinit();
-
         // Initialize checkpoint manager
         std.log.debug("Initializing checkpoint manager", .{});
         try self.checkpoint_manager.init(
             self.memory_strategy.generalAllocator(),
-            &self.storage_layer,
+            &self.storage_engine,
             .{}, // Use default config
         );
         errdefer self.checkpoint_manager.deinit();
@@ -362,9 +356,6 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
 
-        std.log.debug("Deinitializing storage_layer", .{});
-        self.storage_layer.deinit();
-
         std.log.debug("Deinitializing storage_engine", .{});
         self.storage_engine.deinit();
 
@@ -400,8 +391,7 @@ pub const ZyncBaseServer = struct {
 
 /// Signal handler for SIGTERM and SIGINT
 /// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
-fn handleSignal(sig: c_int) callconv(.c) void {
-    _ = sig;
+fn handleSignal(_: c_int) callconv(.c) void {
     if (global_server) |server| {
         server.shutdown_requested.store(true, .release);
         server.websocket_server.close();
@@ -435,10 +425,10 @@ fn onWebSocketMessage(
 
 fn onWebSocketClose(
     ws: *WebSocket,
-    code: i32,
-    message: []const u8,
+    _: i32,
+    _: []const u8,
     user_data: ?*anyopaque,
 ) void {
     const server: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
-    server.connection_manager.onClose(ws, code, message);
+    server.connection_manager.onClose(ws);
 }

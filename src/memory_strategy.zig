@@ -141,8 +141,7 @@ pub const MemoryStrategy = struct {
         arena.deinit();
     }
 
-    fn deinitMessage(msg: *Message, allocator: Allocator) void {
-        _ = allocator;
+    fn deinitMessage(msg: *Message, _: Allocator) void {
         msg.reset();
     }
 

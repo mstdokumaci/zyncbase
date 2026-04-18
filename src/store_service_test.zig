@@ -117,13 +117,13 @@ test "StoreService: remove" {
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
-        const result = service.remove("users", "user-1", "public", 3, "name");
+        const result = service.remove("users", "user-1", "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
     // 2. Success: Remove document (segments_len == 2)
     {
-        try service.remove("users", "user-1", "public", 2, null);
+        try service.remove("users", "user-1", "public", 2);
         try app.storage_engine.flushPendingWrites();
 
         var managed = try app.storage_engine.selectDocument(allocator, "users", "user-1", "public");
@@ -133,13 +133,13 @@ test "StoreService: remove" {
 
     // 3. Negative: Unknown table
     {
-        const result = service.remove("invalid", "id", "ns", 2, null);
+        const result = service.remove("invalid", "id", "ns", 2);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
-        const result = service.remove("users", "user-1", "public", 3, "unknown_field");
+        const result = service.remove("users", "user-1", "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }

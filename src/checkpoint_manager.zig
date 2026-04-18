@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 /// checkpoints based on configurable thresholds.
 pub const CheckpointManager = struct {
     allocator: Allocator,
-    storage: *StorageLayer,
+    storage_engine: *storage_mod.StorageEngine,
     config: Config,
     last_checkpoint: std.atomic.Value(i64),
     wal_size: std.atomic.Value(usize),
@@ -97,62 +97,13 @@ pub const CheckpointManager = struct {
         }
     };
 
-    /// Placeholder for storage layer - will be implemented separately
-    pub const StorageLayer = struct {
-        allocator: Allocator,
-        db_path: []const u8,
-        storage_engine: ?*storage_mod.StorageEngine = null,
-
-        pub fn init(allocator: Allocator, db_path: []const u8) !StorageLayer {
-            return .{
-                .allocator = allocator,
-                .db_path = db_path,
-                .storage_engine = null,
-            };
-        }
-
-        pub fn deinit(self: *StorageLayer) void {
-            _ = self;
-        }
-
-        /// Execute a SQL statement (placeholder)
-        pub fn exec(self: *StorageLayer, sql: []const u8) !void {
-            if (self.storage_engine) |engine| {
-                // Parse the checkpoint mode from the SQL
-                const mode = if (std.mem.indexOf(u8, sql, "PASSIVE") != null)
-                    storage_mod.CheckpointMode.passive
-                else if (std.mem.indexOf(u8, sql, "FULL") != null)
-                    storage_mod.CheckpointMode.full
-                else if (std.mem.indexOf(u8, sql, "RESTART") != null)
-                    storage_mod.CheckpointMode.restart
-                else if (std.mem.indexOf(u8, sql, "TRUNCATE") != null)
-                    storage_mod.CheckpointMode.truncate
-                else
-                    storage_mod.CheckpointMode.passive;
-
-                // Execute checkpoint through storage engine
-                _ = try engine.executeCheckpoint(mode);
-            }
-            // If storage engine not set, this is a no-op (for tests)
-        }
-
-        /// Query WAL file size (placeholder)
-        pub fn queryWalSize(self: *StorageLayer) !usize {
-            if (self.storage_engine) |engine| {
-                return try engine.getWalSize();
-            }
-            // Fallback for tests
-            return 0;
-        }
-    };
-
     /// Initialize a new CheckpointManager
-    pub fn init(self: *CheckpointManager, allocator: Allocator, storage: *StorageLayer, config: Config) !void {
+    pub fn init(self: *CheckpointManager, allocator: Allocator, storage_engine: *storage_mod.StorageEngine, config: Config) !void {
         const now = std.time.timestamp();
 
         self.* = .{
             .allocator = allocator,
-            .storage = storage,
+            .storage_engine = storage_engine,
             .config = config,
             .last_checkpoint = std.atomic.Value(i64).init(now),
             .wal_size = std.atomic.Value(usize).init(0),
@@ -166,7 +117,7 @@ pub const CheckpointManager = struct {
         };
 
         // Query initial WAL size
-        const initial_wal_size = try storage.queryWalSize();
+        const initial_wal_size = try storage_engine.getWalSize();
         self.wal_size.store(initial_wal_size, .release);
     }
 
@@ -231,11 +182,15 @@ pub const CheckpointManager = struct {
         const start_time = std.time.milliTimestamp();
         const wal_size_before = self.wal_size.load(.acquire);
 
-        // Build PRAGMA command based on mode
-        const pragma = mode.toPragma();
+        const storage_mode: storage_mod.CheckpointMode = switch (mode) {
+            .passive => .passive,
+            .full => .full,
+            .restart => .restart,
+            .truncate => .truncate,
+        };
 
         // Execute checkpoint
-        self.storage.exec(pragma) catch |err| {
+        _ = self.storage_engine.executeCheckpoint(storage_mode) catch |err| {
             // Increment failure counter
             _ = self.failed_checkpoint_count.fetchAdd(1, .acq_rel);
 
@@ -260,7 +215,7 @@ pub const CheckpointManager = struct {
         self.last_checkpoint_duration_ms.store(duration, .release);
 
         // Query new WAL size
-        const new_wal_size = try self.storage.queryWalSize();
+        const new_wal_size = try self.storage_engine.getWalSize();
         self.wal_size.store(new_wal_size, .release);
 
         std.log.info("Checkpoint completed: mode={s}, duration={}ms, wal_before={}, wal_after={}", .{
