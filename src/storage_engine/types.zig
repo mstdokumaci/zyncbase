@@ -55,14 +55,10 @@ pub const StorageError = error{
     SQLiteError,
 };
 
-/// A column name + msgpack value pair for storage inserts/updates.
+/// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
-    pub const invalid_index: usize = std.math.maxInt(usize);
-
-    name: []const u8,
-    index: usize = invalid_index,
+    index: usize,
     value: TypedValue,
-    field_type: schema_manager.FieldType,
 };
 
 /// A managed result that might be backed by a cache handle.

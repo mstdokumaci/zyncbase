@@ -1,14 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 
-const storage_mod = @import("storage_engine.zig");
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
-const tth = @import("typed_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
 const table_defs = [_]helpers.TableDef{
@@ -130,8 +128,7 @@ test "Verification: StoreQuery message processing" {
     defer app.deinit();
 
     // First, store a value (typed storage)
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("stored_value"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
+    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
@@ -211,11 +208,8 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer app.deinit();
 
     // Insert two rows so a limited query must return nextCursor
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_a"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
-
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_b"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
+    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
+    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
@@ -524,8 +518,7 @@ test "Verification: StoreSubscribe message processing" {
     defer app.deinit();
 
     // 1. Store a value
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("stored_value"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
+    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
@@ -606,11 +599,8 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer app.deinit();
 
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_a"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
-
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_b"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
+    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
+    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 

@@ -16,6 +16,8 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
+const sth = @import("storage_engine_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -166,6 +168,55 @@ pub const AppTestContext = struct {
         self.test_context.deinit();
         self.violation_tracker.deinit();
         self.memory_strategy.deinit();
+    }
+
+    pub fn tableMetadata(self: *const AppTestContext, table: []const u8) !*const schema_manager.TableMetadata {
+        return self.schema_manager.getTable(table) orelse error.UnknownTable;
+    }
+
+    pub fn insertNamed(
+        self: *AppTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        columns: anytype,
+    ) !void {
+        const table_metadata = try self.tableMetadata(table);
+        try sth.insertNamedWithMetadata(&self.storage_engine, table_metadata, id, namespace, columns);
+    }
+
+    pub fn insertField(
+        self: *AppTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: @import("storage_engine.zig").TypedValue,
+    ) !void {
+        const table_metadata = try self.tableMetadata(table);
+        try sth.insertFieldWithMetadata(&self.storage_engine, table_metadata, id, namespace, field, value);
+    }
+
+    pub fn insertText(
+        self: *AppTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: []const u8,
+    ) !void {
+        try self.insertField(table, id, namespace, field, tth.valText(value));
+    }
+
+    pub fn insertInt(
+        self: *AppTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: i64,
+    ) !void {
+        try self.insertField(table, id, namespace, field, tth.valInt(value));
     }
 
     /// Helper to open a test connection and return a scoped wrapper.

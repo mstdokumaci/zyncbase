@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
-const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
@@ -37,38 +36,32 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "1", ns, &cols);
+        try ctx.insertNamed("items", "1", ns, .{
+            sth.named("name", tth.valText("Task 1")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 2"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "2", ns, &cols);
+        try ctx.insertNamed("items", "2", ns, .{
+            sth.named("name", tth.valText("Task 2")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "work" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 3"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "3", ns, &cols);
+        try ctx.insertNamed("items", "3", ns, .{
+            sth.named("name", tth.valText("Task 3")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 4"), .field_type = .text },
-        };
-        try engine.insertOrReplace("items", "4", ns, &cols);
+        try ctx.insertField("items", "4", ns, "name", tth.valText("Task 4"));
     }
 
     try engine.flushPendingWrites();
@@ -146,31 +139,28 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Alice"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "1", ns, &cols);
+        try ctx.insertNamed("players", "1", ns, .{
+            sth.named("name", tth.valText("Alice")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 5 }, .{ .integer = 15 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Bob"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "2", ns, &cols);
+        try ctx.insertNamed("players", "2", ns, .{
+            sth.named("name", tth.valText("Bob")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 20 }, .{ .integer = 40 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Carol"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "3", ns, &cols);
+        try ctx.insertNamed("players", "3", ns, .{
+            sth.named("name", tth.valText("Carol")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     try engine.flushPendingWrites();

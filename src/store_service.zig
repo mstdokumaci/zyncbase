@@ -106,10 +106,8 @@ pub const StoreService = struct {
                 const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
                 try columns.append(self.allocator, .{
-                    .name = fn_inner,
                     .index = field_index,
                     .value = typed,
-                    .field_type = field.sql_type,
                 });
             }
 
@@ -123,10 +121,8 @@ pub const StoreService = struct {
             const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
             const col = [_]storage_mod.ColumnValue{.{
-                .name = fn_inner,
                 .index = field_index,
                 .value = typed,
-                .field_type = field.sql_type,
             }};
             try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
         } else {

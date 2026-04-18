@@ -1,7 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const ColumnValue = @import("storage_engine.zig").ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -22,9 +20,9 @@ test "StorageEngine: selectQuery basic equality" {
     const engine = &ctx.engine;
 
     // Seed data
-    try seedUser(allocator, engine, "1", "Alice", 30);
-    try seedUser(allocator, engine, "2", "Bob", 25);
-    try seedUser(allocator, engine, "3", "Charlie", 35);
+    try seedUser(allocator, &ctx, "1", "Alice", 30);
+    try seedUser(allocator, &ctx, "2", "Bob", 25);
+    try seedUser(allocator, &ctx, "3", "Charlie", 35);
     try engine.flushPendingWrites();
     const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
     const name_index = users_md.field_index_map.get("name") orelse return error.UnknownField;
@@ -64,9 +62,9 @@ test "StorageEngine: selectQuery with OR and ordering" {
     defer ctx.deinit();
     const engine = &ctx.engine;
 
-    try seedUser(allocator, engine, "1", "Alice", 30);
-    try seedUser(allocator, engine, "2", "Bob", 25);
-    try seedUser(allocator, engine, "3", "Charlie", 35);
+    try seedUser(allocator, &ctx, "1", "Alice", 30);
+    try seedUser(allocator, &ctx, "2", "Bob", 25);
+    try seedUser(allocator, &ctx, "3", "Charlie", 35);
     try engine.flushPendingWrites();
     const users_md = ctx.sm.getTable("users") orelse return error.UnknownTable;
     const age_index = users_md.field_index_map.get("age") orelse return error.UnknownField;
@@ -114,10 +112,10 @@ test "StorageEngine: selectQuery pagination (after)" {
     const engine = &ctx.engine;
 
     // IDs are used as secondary sort key
-    try seedScore(engine, "id1", 100);
-    try seedScore(engine, "id2", 100);
-    try seedScore(engine, "id3", 200);
-    try seedScore(engine, "id4", 300);
+    try seedScore(&ctx, "id1", 100);
+    try seedScore(&ctx, "id2", 100);
+    try seedScore(&ctx, "id3", 200);
+    try seedScore(&ctx, "id4", 300);
     try engine.flushPendingWrites();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
@@ -150,20 +148,16 @@ test "StorageEngine: selectQuery pagination (after)" {
     _ = try sth.expectFieldString(res2[1], scores_md, "id", "id4"); // 300
 }
 
-fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
+fn seedUser(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = tth.valText(name), .field_type = .text },
-        .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
-    };
-    try engine.insertOrReplace("users", id, "ns", &cols);
+    try ctx.insertNamed("users", id, "ns", .{
+        sth.named("name", tth.valText(name)),
+        sth.named("age", tth.valInt(age)),
+    });
 }
 
-fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
-    const cols = [_]ColumnValue{
-        .{ .name = "score", .value = tth.valInt(score), .field_type = .integer },
-    };
-    try engine.insertOrReplace("scores", id, "ns", &cols);
+fn seedScore(ctx: *sth.EngineTestContext, id: []const u8, score: i64) !void {
+    try ctx.insertInt("scores", id, "ns", "score", score);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -185,14 +179,13 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
-        .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        .{ .name = "labels", .value = labels_tv, .field_type = .array },
-    };
-    try engine.insertOrReplace("items", "id1", "ns", &cols);
-    try engine.flushPendingWrites();
     const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
+    try ctx.insertNamed("items", "id1", "ns", .{
+        sth.named("name", tth.valText("Task 1")),
+        sth.named("tags", tags_tv),
+        sth.named("labels", labels_tv),
+    });
+    try engine.flushPendingWrites();
     const name_index = items_md.field_index_map.get("name") orelse return error.UnknownField;
 
     var filter = try qth.makeDefaultFilter(allocator);
@@ -241,10 +234,10 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // Seed data
     const ns = "ns";
-    try seedData(allocator, engine, "1", "apple");
-    try seedData(allocator, engine, "2", "app%le");
-    try seedData(allocator, engine, "3", "ap_le");
-    try seedData(allocator, engine, "4", "a\\le");
+    try seedData(allocator, &ctx, "1", "apple");
+    try seedData(allocator, &ctx, "2", "app%le");
+    try seedData(allocator, &ctx, "3", "ap_le");
+    try seedData(allocator, &ctx, "4", "a\\le");
     try engine.flushPendingWrites();
 
     // 1. Contains '%' - should only match "app%le", not "apple"
@@ -350,7 +343,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
     {
         // Add a document in a different namespace that we'll try to reach
-        try seedDataInNs(allocator, engine, "5", "secret", "other_ns");
+        try seedDataInNs(allocator, &ctx, "5", "secret", "other_ns");
         try engine.flushPendingWrites();
 
         var filter = try qth.makeDefaultFilter(allocator);
@@ -377,14 +370,11 @@ test "StorageEngine: LIKE wildcard escaping" {
     }
 }
 
-fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8) !void {
-    try seedDataInNs(allocator, engine, id, data, "ns");
+fn seedData(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, id: []const u8, data: []const u8) !void {
+    try seedDataInNs(allocator, ctx, id, data, "ns");
 }
 
-fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
+fn seedDataInNs(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
-    const cols = [_]ColumnValue{
-        .{ .name = "data", .value = tth.valText(data), .field_type = .text },
-    };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols);
+    try ctx.insertText("wildcards", id, namespace, "data", data);
 }

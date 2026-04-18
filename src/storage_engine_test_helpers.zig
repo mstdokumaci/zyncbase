@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const msgpack = @import("msgpack_utils.zig");
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
+const tth = @import("typed_test_helpers.zig");
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
@@ -16,6 +16,11 @@ pub const TableMetadata = schema_manager.TableMetadata;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TestContext = schema_helpers.TestContext;
+
+pub const NamedColumn = struct {
+    field: []const u8,
+    value: storage_engine.TypedValue,
+};
 
 fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
     if (options.in_memory) {
@@ -58,6 +63,54 @@ pub const EngineTestContext = struct {
 
     pub fn deinitNoCleanup(self: *EngineTestContext) void {
         self.deinitInternal(false);
+    }
+
+    pub fn tableMetadata(self: *const EngineTestContext, table: []const u8) !*const TableMetadata {
+        return self.sm.getTable(table) orelse StorageError.UnknownTable;
+    }
+
+    pub fn insertNamed(
+        self: *EngineTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        columns: anytype,
+    ) !void {
+        const table_metadata = try self.tableMetadata(table);
+        try insertNamedWithMetadata(&self.engine, table_metadata, id, namespace, columns);
+    }
+
+    pub fn insertField(
+        self: *EngineTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: storage_engine.TypedValue,
+    ) !void {
+        try self.insertNamed(table, id, namespace, .{named(field, value)});
+    }
+
+    pub fn insertText(
+        self: *EngineTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: []const u8,
+    ) !void {
+        try self.insertField(table, id, namespace, field, tth.valText(value));
+    }
+
+    pub fn insertInt(
+        self: *EngineTestContext,
+        table: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: i64,
+    ) !void {
+        try self.insertField(table, id, namespace, field, tth.valInt(value));
     }
 
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
@@ -184,8 +237,48 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     errdefer ctx.engine.deinit();
 }
 
-pub fn makePayloadStr(s: []const u8, allocator: std.mem.Allocator) !msgpack.Payload {
-    return try msgpack.Payload.strToPayload(s, allocator);
+pub fn named(field: []const u8, value: storage_engine.TypedValue) NamedColumn {
+    return .{
+        .field = field,
+        .value = value,
+    };
+}
+
+fn fillNamedColumns(
+    table_metadata: *const TableMetadata,
+    resolved: []ColumnValue,
+    columns: anytype,
+) !void {
+    inline for (columns, 0..) |column, i| {
+        const index = table_metadata.field_index_map.get(column.field) orelse return StorageError.UnknownField;
+        resolved[i] = .{
+            .index = index,
+            .value = column.value,
+        };
+    }
+}
+
+pub fn insertNamedWithMetadata(
+    engine: *StorageEngine,
+    table_metadata: *const TableMetadata,
+    id: []const u8,
+    namespace: []const u8,
+    columns: anytype,
+) !void {
+    var resolved: [columns.len]ColumnValue = undefined;
+    try fillNamedColumns(table_metadata, &resolved, columns);
+    try engine.insertOrReplace(table_metadata.table.name, id, namespace, &resolved);
+}
+
+pub fn insertFieldWithMetadata(
+    engine: *StorageEngine,
+    table_metadata: *const TableMetadata,
+    id: []const u8,
+    namespace: []const u8,
+    field: []const u8,
+    value: storage_engine.TypedValue,
+) !void {
+    try insertNamedWithMetadata(engine, table_metadata, id, namespace, .{named(field, value)});
 }
 
 pub fn getRowField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?storage_engine.TypedValue {
@@ -260,7 +353,3 @@ pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMeta
     try testing.expectEqual(expected_len, val.array.len);
     return val;
 }
-
-// Map does not exist in TypedRow API, so test may need alternative verification or removal.
-// pub fn expectFieldMap(doc: storage_engine.TypedRow, key: []const u8) !storage_engine.TypedValue {
-// }
