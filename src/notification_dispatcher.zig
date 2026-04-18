@@ -9,19 +9,22 @@ const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const protocol = @import("protocol.zig");
+const schema_manager = @import("schema_manager.zig");
 
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
+    schema_manager: *const schema_manager.SchemaManager,
     allocator: Allocator,
     drain_buf: std.ArrayListUnmanaged(OwnedRowChange) = .empty,
 
-    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy) !void {
+    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema_manager.SchemaManager) !void {
         self.* = .{
             .change_buffer = change_buffer,
             .subscription_engine = subscription_engine,
             .memory_strategy = memory_strategy,
+            .schema_manager = sm,
             .allocator = allocator,
             .drain_buf = .empty,
         };
@@ -47,6 +50,11 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
+        const table_metadata = self.schema_manager.getTable(change.collection) orelse {
+            std.log.err("NotificationDispatcher skipping delta for unknown collection {s}", .{change.collection});
+            return;
+        };
+
         // === Phase 1: Extract row metadata ===
         const row_change = RowChange{
             .namespace = change.namespace,
@@ -57,7 +65,7 @@ pub const NotificationDispatcher = struct {
         };
 
         const id_val = if (change.new_row orelse change.old_row) |row|
-            row.getField("id")
+            if (row.values.len > schema_manager.id_field_index) row.values[schema_manager.id_field_index] else null
         else
             null;
 
@@ -67,7 +75,6 @@ pub const NotificationDispatcher = struct {
         }
 
         const id_val_actual = id_val.?;
-        const is_delete = change.operation == .delete;
 
         // === Phase 2: Match subscriptions ===
         const arena = self.memory_strategy.acquireArena() catch |err| {
@@ -85,15 +92,31 @@ pub const NotificationDispatcher = struct {
         if (matches.len == 0) return;
 
         // === Phase 3: Pre-encode suffix template (once per change) ===
-        // This encodes: "ops": [{"op": "set"/"remove", "path": [collection, id], "value": <row>}]
+        // This encodes either:
+        //   "ops": [{"op": "remove", "path": [collection, id]}]
+        // or:
+        //   "ops": [{"op": "set", "path": [collection, id], "value": <row>}]
         // The expensive part (msgpack.encode(new_row)) happens exactly once here.
-        const suffix = protocol.encodeDeltaSuffix(
-            alloc,
-            change.collection,
-            id_val_actual,
-            is_delete,
-            change.new_row,
-        ) catch |err| {
+        const suffix = switch (change.operation) {
+            .delete => protocol.encodeDeleteDeltaSuffix(
+                alloc,
+                change.collection,
+                id_val_actual,
+            ),
+            .insert, .update => blk: {
+                const new_row = change.new_row orelse {
+                    std.log.err("NotificationDispatcher skipping non-delete delta for {s}:{s} because new_row is missing", .{ change.namespace, change.collection });
+                    return;
+                };
+                break :blk protocol.encodeSetDeltaSuffix(
+                    alloc,
+                    change.collection,
+                    id_val_actual,
+                    new_row,
+                    table_metadata,
+                );
+            },
+        } catch |err| {
             std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{s}: {}", .{ change.namespace, change.collection, err });
             return;
         };

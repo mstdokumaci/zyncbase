@@ -315,7 +315,7 @@ pub const SubscriptionEngine = struct {
     }
 
     fn conditionLessThan(_: void, a: Condition, b: Condition) bool {
-        const f = std.mem.order(u8, a.field, b.field);
+        const f = std.math.order(a.field_index, b.field_index);
         if (f != .eq) return f == .lt;
         const o = std.math.order(@intFromEnum(a.op), @intFromEnum(b.op));
         if (o != .eq) return o == .lt;
@@ -382,7 +382,7 @@ pub const SubscriptionEngine = struct {
         const writer = list.writer(allocator);
         for (sorted) |c| {
             try writer.writeAll("(");
-            try writer.writeAll(c.field);
+            try writer.print("{}", .{c.field_index});
             try writer.writeAll(":");
             try writer.writeAll(@tagName(c.op));
             try writer.writeAll(":");
@@ -414,7 +414,7 @@ pub const SubscriptionEngine = struct {
         }
         {
             const ob = filter.order_by;
-            const s = try std.fmt.allocPrint(allocator, ":O:{s}:{}", .{ ob.field, ob.desc });
+            const s = try std.fmt.allocPrint(allocator, ":O:{}:{}", .{ ob.field_index, ob.desc });
             defer allocator.free(s);
             try list.appendSlice(allocator, s);
         }
@@ -449,7 +449,8 @@ pub const SubscriptionEngine = struct {
     }
 
     fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
-        const val = row.getField(cond.field) orelse return cond.op == .isNull;
+        if (cond.field_index >= row.values.len) return cond.op == .isNull;
+        const val = row.values[cond.field_index];
 
         return switch (cond.op) {
             .eq => typedValuesEqual(val, cond.value orelse return false),

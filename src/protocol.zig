@@ -279,6 +279,7 @@ pub fn buildQueryResponse(
     msg_id: u64,
     sub_id: ?u64,
     results: *storage_mod.ManagedResult,
+    table_metadata: *const storage_mod.TableMetadata,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(arena_allocator);
@@ -299,7 +300,7 @@ pub fn buildQueryResponse(
     // Write results array
     try msgpack.encodeArrayHeader(writer, results.rows.len);
     for (results.rows) |row| {
-        try encodeTypedRow(writer, row);
+        try encodeTypedRow(writer, row, table_metadata);
     }
 
     if (sub_id != null) {
@@ -420,15 +421,19 @@ pub const store_delta_header = blk: {
     break :blk buf[0..stream.pos].*;
 };
 
-/// Encodes the suffix of a StoreDelta message (everything after subId).
-/// This includes: "ops", the operation array, path, and optional value.
+fn encodeDeltaPath(writer: anytype, collection: []const u8, id_val: storage_mod.TypedValue) !void {
+    try msgpack.writeMsgPackStr(writer, "path");
+    try writer.writeByte(0x92); // fixarray(2)
+    try msgpack.writeMsgPackStr(writer, collection);
+    try id_val.writeMsgPack(writer);
+}
+
+/// Encodes the suffix of a StoreDelta "remove" message (everything after subId).
 /// Caller owns the returned slice (allocated from the arena).
-pub fn encodeDeltaSuffix(
+pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
     collection: []const u8,
     id_val: storage_mod.TypedValue,
-    is_delete: bool,
-    new_row: ?storage_mod.TypedRow,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -436,33 +441,44 @@ pub fn encodeDeltaSuffix(
 
     try msgpack.writeMsgPackStr(writer, "ops");
     try writer.writeByte(0x91); // fixarray(1)
-
-    try writer.writeByte(if (is_delete) 0x82 else 0x83);
-
+    try writer.writeByte(0x82);
     try msgpack.writeMsgPackStr(writer, "op");
-    try msgpack.writeMsgPackStr(writer, if (is_delete) "remove" else "set");
-
-    try msgpack.writeMsgPackStr(writer, "path");
-    try writer.writeByte(0x92); // fixarray(2)
-    try msgpack.writeMsgPackStr(writer, collection);
-    try id_val.writeMsgPack(writer);
-
-    if (!is_delete) {
-        try msgpack.writeMsgPackStr(writer, "value");
-        if (new_row) |row| {
-            try encodeTypedRow(writer, row);
-        } else {
-            try msgpack.encode(.nil, writer);
-        }
-    }
+    try msgpack.writeMsgPackStr(writer, "remove");
+    try encodeDeltaPath(writer, collection, id_val);
 
     return list.toOwnedSlice(allocator);
 }
 
-pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow) !void {
-    try msgpack.encodeMapHeader(writer, row.fields.len);
-    for (row.fields) |field| {
-        try msgpack.writeMsgPackStr(writer, field.name);
-        try field.value.writeMsgPack(writer);
+/// Encodes the suffix of a StoreDelta "set" message (everything after subId).
+/// Caller owns the returned slice (allocated from the arena).
+pub fn encodeSetDeltaSuffix(
+    allocator: Allocator,
+    collection: []const u8,
+    id_val: storage_mod.TypedValue,
+    new_row: storage_mod.TypedRow,
+    table_metadata: *const storage_mod.TableMetadata,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.writeMsgPackStr(writer, "ops");
+    try writer.writeByte(0x91); // fixarray(1)
+    try writer.writeByte(0x83);
+    try msgpack.writeMsgPackStr(writer, "op");
+    try msgpack.writeMsgPackStr(writer, "set");
+    try encodeDeltaPath(writer, collection, id_val);
+    try msgpack.writeMsgPackStr(writer, "value");
+    try encodeTypedRow(writer, new_row, table_metadata);
+
+    return list.toOwnedSlice(allocator);
+}
+
+pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
+    if (row.values.len != table_metadata.fields.len) return error.InternalError;
+    try msgpack.encodeMapHeader(writer, row.values.len);
+    for (row.values, 0..) |value, idx| {
+        try msgpack.writeMsgPackStr(writer, table_metadata.fields[idx].name);
+        try value.writeMsgPack(writer);
     }
 }

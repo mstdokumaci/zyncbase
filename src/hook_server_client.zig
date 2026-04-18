@@ -125,11 +125,10 @@ pub const WebSocketConnection = struct {
     }
 
     /// Send data over WebSocket
-    pub fn send(self: *WebSocketConnection, data: []const u8) !void {
+    pub fn send(self: *WebSocketConnection, _: []const u8) !void {
         if (!self.connected) {
             return error.NotConnected;
         }
-        _ = data;
     }
 
     /// Try to receive data (non-blocking)
@@ -305,7 +304,7 @@ pub const HookServerClient = struct {
             };
         }
 
-        const result = self.authorizeWithTimeout(req) catch |err| {
+        const result = self.authorizeWithTimeout() catch |err| {
             if (self.circuit_breaker.recordFailure(self.config.circuit_breaker_threshold)) {
                 self.state.store(.circuit_open, .release);
                 self.circuit_breaker.open();
@@ -326,9 +325,8 @@ pub const HookServerClient = struct {
         return result;
     }
 
-    fn authorizeWithTimeout(self: *HookServerClient, req: AuthRequest) !AuthResponse {
+    fn authorizeWithTimeout(self: *HookServerClient) !AuthResponse {
         const start_time = std.time.milliTimestamp();
-        _ = req;
         const elapsed = std.time.milliTimestamp() - start_time;
         if (elapsed >= self.config.timeout_ms) return error.Timeout;
         return AuthResponse{

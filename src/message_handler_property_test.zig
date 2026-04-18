@@ -34,7 +34,7 @@ test "connection: open/close is inverse operation" {
         try testing.expectEqual(conn_id, state.id);
 
         // Close connection
-        manager.onClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws);
 
         // Verify connection was removed (inverse operation)
         const result = manager.acquireConnection(conn_id);
@@ -58,7 +58,7 @@ test "connection: open/close is inverse operation" {
 
         // Close all connections
         for (&websockets) |*ws| {
-            manager.onClose(ws, 1000, "Normal closure");
+            manager.onClose(ws);
         }
 
         // Verify all connections were removed (inverse operation)
@@ -85,7 +85,7 @@ test "connection: open/close is inverse operation" {
         try testing.expectEqual(@as(usize, 3), state.subscription_ids.items.len);
 
         // Close connection
-        manager.onClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws);
 
         // Verify connection and all associated state was removed (inverse operation)
         const result = manager.acquireConnection(conn_id);
@@ -155,7 +155,7 @@ fn concurrentManagerOps(
         }
 
         // Remove connection
-        manager.onClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws);
     }
 }
 
@@ -281,7 +281,7 @@ fn concurrentMixedOps(
             },
             2 => {
                 // Remove operation
-                manager.onClose(&ws, 1000, "Normal closure");
+                manager.onClose(&ws);
             },
             else => unreachable,
         }
@@ -383,7 +383,7 @@ test "connection: unique IDs" {
 
         // Clean up
         for (&websockets) |*ws| {
-            manager.onClose(ws, 1000, "Normal closure");
+            manager.onClose(ws);
         }
     }
 
@@ -436,7 +436,7 @@ test "connection: unique IDs" {
             try ids.put(conn_id, {});
 
             // Clean up immediately to avoid memory issues
-            manager.onClose(&ws, 1000, "Normal closure");
+            manager.onClose(&ws);
         }
 
         try testing.expectEqual(@as(usize, num_connections), ids.count());
@@ -467,8 +467,8 @@ test "connection: unique IDs" {
         _ = id2;
 
         // Clean up
-        manager.onClose(&ws1, 1000, "Normal closure");
-        manager2.onClose(&ws2, 1000, "Normal closure");
+        manager.onClose(&ws1);
+        manager2.onClose(&ws2);
     }
 }
 
@@ -499,7 +499,7 @@ fn openConnectionsConcurrently(
         mutex.unlock();
 
         // Clean up connection
-        manager.onClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws);
     }
 }
 
@@ -518,7 +518,7 @@ test "message: all valid frames are parsed" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 1)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         // Create a valid MessagePack message
         const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "data_table", "key1", "val" }, "value1");
@@ -533,7 +533,7 @@ test "message: all valid frames are parsed" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 2)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
@@ -549,7 +549,7 @@ test "message: all valid frames are parsed" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 3)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "data_table", "p", "val" }, "v");
         defer allocator.free(message);
@@ -562,7 +562,7 @@ test "message: all valid frames are parsed" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 4)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         const messages = [_]struct { ns: []const u8, p: []const u8, v: []const u8 }{
             .{ .ns = "a", .p = "/b", .v = "c" },
@@ -910,7 +910,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 1)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         // 0xc1 is never used in MessagePack
         const invalid_message = "\xc1\xc1\xc1";
@@ -925,7 +925,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 2)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         // Create map with 2 elements: type and id
         var buf = std.ArrayListUnmanaged(u8).empty;
@@ -947,7 +947,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 3)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         const message = "some text message";
 
@@ -962,7 +962,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 4)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);
@@ -987,7 +987,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 5)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         const message = "";
 
@@ -999,7 +999,7 @@ test "message: error responses for invalid types/fields" {
         var ws = createMockWebSocket();
         ws.setUserData(@ptrFromInt(@as(usize, 6)));
         try manager.onOpen(&ws);
-        defer manager.onClose(&ws, 1000, "Normal closure");
+        defer manager.onClose(&ws);
 
         var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(allocator);

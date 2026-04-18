@@ -1,8 +1,5 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -21,12 +18,14 @@ test "StorageEngine: selectQuery basic equality" {
     try sth.setupEngine(&ctx, allocator, "query-basic", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const users = try ctx.table("users");
 
     // Seed data
-    try seedUser(allocator, engine, "1", "Alice", 30);
-    try seedUser(allocator, engine, "2", "Bob", 25);
-    try seedUser(allocator, engine, "3", "Charlie", 35);
-    try engine.flushPendingWrites();
+    try seedUser(allocator, users, "1", "Alice", 30);
+    try seedUser(allocator, users, "2", "Bob", 25);
+    try seedUser(allocator, users, "3", "Charlie", 35);
+    try users.flush();
+    const name_index = try users.fieldIndex("name");
 
     // Query: name == "Bob"
     var filter = try qth.makeDefaultFilter(allocator);
@@ -34,7 +33,7 @@ test "StorageEngine: selectQuery basic equality" {
 
     var conds = try allocator.alloc(query_parser.Condition, 1);
     conds[0] = .{
-        .field = try allocator.dupe(u8, "name"),
+        .field_index = name_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "Bob"),
         .field_type = .text,
@@ -47,7 +46,7 @@ test "StorageEngine: selectQuery basic equality" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    try testing.expectEqualStrings("Bob", try getRowStr(res[0], "name"));
+    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Bob");
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -62,26 +61,28 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try sth.setupEngine(&ctx, allocator, "query-complex", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const users = try ctx.table("users");
 
-    try seedUser(allocator, engine, "1", "Alice", 30);
-    try seedUser(allocator, engine, "2", "Bob", 25);
-    try seedUser(allocator, engine, "3", "Charlie", 35);
-    try engine.flushPendingWrites();
+    try seedUser(allocator, users, "1", "Alice", 30);
+    try seedUser(allocator, users, "2", "Bob", 25);
+    try seedUser(allocator, users, "3", "Charlie", 35);
+    try users.flush();
+    const age_index = try users.fieldIndex("age");
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
-    var filter = try qth.makeFilter(allocator, "age", true, .integer, null);
+    var filter = try qth.makeFilter(allocator, 3, true, .integer, null);
     defer filter.deinit(allocator);
 
     var or_conds = try allocator.alloc(query_parser.Condition, 2);
     or_conds[0] = .{
-        .field = try allocator.dupe(u8, "age"),
+        .field_index = age_index,
         .op = .lt,
         .value = tth.valInt(30),
         .field_type = .integer,
         .items_type = null,
     };
     or_conds[1] = .{
-        .field = try allocator.dupe(u8, "age"),
+        .field_index = age_index,
         .op = .gt,
         .value = tth.valInt(30),
         .field_type = .integer,
@@ -94,8 +95,8 @@ test "StorageEngine: selectQuery with OR and ordering" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    try testing.expectEqualStrings("Charlie", try getRowStr(res[0], "name")); // 35
-    try testing.expectEqualStrings("Bob", try getRowStr(res[1], "name")); // 25
+    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Charlie"); // 35
+    _ = try sth.expectFieldString(res[1], users.metadata, "name", "Bob"); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -109,16 +110,17 @@ test "StorageEngine: selectQuery pagination (after)" {
     try sth.setupEngine(&ctx, allocator, "query-index", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const scores = try ctx.table("scores");
 
     // IDs are used as secondary sort key
-    try seedScore(engine, "id1", 100);
-    try seedScore(engine, "id2", 100);
-    try seedScore(engine, "id3", 200);
-    try seedScore(engine, "id4", 300);
-    try engine.flushPendingWrites();
+    try seedScore(scores, "id1", 100);
+    try seedScore(scores, "id2", 100);
+    try seedScore(scores, "id3", 200);
+    try seedScore(scores, "id4", 300);
+    try scores.flush();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = try qth.makeFilter(allocator, "score", false, .integer, null);
+    var filter1 = try qth.makeFilter(allocator, 2, false, .integer, null);
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
@@ -126,11 +128,11 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
-    try testing.expectEqualStrings("id1", try getRowStr(res1[0], "id"));
-    try testing.expectEqualStrings("id2", try getRowStr(res1[1], "id"));
+    _ = try sth.expectFieldString(res1[0], scores.metadata, "id", "id1");
+    _ = try sth.expectFieldString(res1[1], scores.metadata, "id", "id2");
 
     // Query 2: Same query but AFTER [100, "id2"]
-    var filter2 = try qth.makeFilter(allocator, "score", false, .integer, null);
+    var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
@@ -142,50 +144,20 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
-    try testing.expectEqualStrings("id3", try getRowStr(res2[0], "id")); // 200
-    try testing.expectEqualStrings("id4", try getRowStr(res2[1], "id")); // 300
+    _ = try sth.expectFieldString(res2[0], scores.metadata, "id", "id3"); // 200
+    _ = try sth.expectFieldString(res2[1], scores.metadata, "id", "id4"); // 300
 }
 
-fn seedUser(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, name: []const u8, age: i64) !void {
+fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: []const u8, name: []const u8, age: i64) !void {
     _ = allocator;
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = tth.valText(name), .field_type = .text },
-        .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
-    };
-    try engine.insertOrReplace("users", id, "ns", &cols);
+    try users.insertNamed(id, "ns", .{
+        sth.named("name", tth.valText(name)),
+        sth.named("age", tth.valInt(age)),
+    });
 }
 
-fn seedScore(engine: *StorageEngine, id: []const u8, score: i64) !void {
-    const cols = [_]ColumnValue{
-        .{ .name = "score", .value = tth.valInt(score), .field_type = .integer },
-    };
-    try engine.insertOrReplace("scores", id, "ns", &cols);
-}
-
-fn getRowStr(row: storage_engine.TypedRow, key: []const u8) ![]const u8 {
-    const val = row.getField(key) orelse return error.KeyNotFound;
-    return val.scalar.text;
-}
-
-fn expectArrayFieldEquals(
-    row: storage_engine.TypedRow,
-    field_name: []const u8,
-    expected: []const []const u8,
-) !void {
-    const field_val = row.getField(field_name) orelse return error.KeyNotFound;
-    try testing.expect(field_val == .array);
-    try testing.expectEqual(expected.len, field_val.array.len);
-
-    for (expected, field_val.array) |exp, got| {
-        try testing.expectEqualStrings(exp, got.text);
-    }
-}
-
-fn expectMissingRowKey(
-    row: storage_engine.TypedRow,
-    key_name: []const u8,
-) !void {
-    try testing.expect(row.getField(key_name) == null);
+fn seedScore(scores: sth.TableFixture, id: []const u8, score: i64) !void {
+    try scores.insertInt(id, "ns", "score", score);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -201,26 +173,27 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     try sth.setupEngine(&ctx, allocator, "query-array-projection-aliased-multi-field", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const items = try ctx.table("items");
 
     const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
     defer tags_tv.deinit(allocator);
     const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
-    const cols = [_]ColumnValue{
-        .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
-        .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        .{ .name = "labels", .value = labels_tv, .field_type = .array },
-    };
-    try engine.insertOrReplace("items", "id1", "ns", &cols);
-    try engine.flushPendingWrites();
+    try items.insertNamed("id1", "ns", .{
+        sth.named("name", tth.valText("Task 1")),
+        sth.named("tags", tags_tv),
+        sth.named("labels", labels_tv),
+    });
+    try items.flush();
+    const name_index = try items.fieldIndex("name");
 
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
     const conds = try allocator.alloc(query_parser.Condition, 1);
     conds[0] = .{
-        .field = try allocator.dupe(u8, "name"),
+        .field_index = name_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "Task 1"),
         .field_type = .text,
@@ -237,12 +210,12 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const row = res[0];
 
     // Positive contract: array fields are decoded under their schema field names.
-    try expectArrayFieldEquals(row, "tags", &.{ "home", "urgent" });
-    try expectArrayFieldEquals(row, "labels", &.{ "p1", "work" });
+    try sth.expectFieldTextArray(row, items.metadata, "tags", &.{ "home", "urgent" });
+    try sth.expectFieldTextArray(row, items.metadata, "labels", &.{ "p1", "work" });
 
     // Negative contract: raw expression names never leak into row keys.
-    try expectMissingRowKey(row, "json(tags)");
-    try expectMissingRowKey(row, "json(labels)");
+    try sth.expectMissingField(row, items.metadata, "json(tags)");
+    try sth.expectMissingField(row, items.metadata, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -256,14 +229,16 @@ test "StorageEngine: LIKE wildcard escaping" {
     try sth.setupEngine(&ctx, allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const wildcards = try ctx.table("wildcards");
+    const data_index = try wildcards.fieldIndex("data");
 
     // Seed data
     const ns = "ns";
-    try seedData(allocator, engine, "1", "apple");
-    try seedData(allocator, engine, "2", "app%le");
-    try seedData(allocator, engine, "3", "ap_le");
-    try seedData(allocator, engine, "4", "a\\le");
-    try engine.flushPendingWrites();
+    try seedData(allocator, wildcards, "1", "apple");
+    try seedData(allocator, wildcards, "2", "app%le");
+    try seedData(allocator, wildcards, "3", "ap_le");
+    try seedData(allocator, wildcards, "4", "a\\le");
+    try wildcards.flush();
 
     // 1. Contains '%' - should only match "app%le", not "apple"
     {
@@ -271,7 +246,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "p%l"),
             .field_type = .text,
@@ -282,7 +257,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -291,7 +266,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "p_l"),
             .field_type = .text,
@@ -302,7 +277,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -311,7 +286,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .startsWith,
             .value = try tth.valTextOwned(allocator, "ap_"),
             .field_type = .text,
@@ -322,7 +297,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("3", try getRowStr(results[0], "id"));
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -331,7 +306,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .endsWith,
             .value = try tth.valTextOwned(allocator, "%le"),
             .field_type = .text,
@@ -342,7 +317,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("2", try getRowStr(results[0], "id"));
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -351,7 +326,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer filter.deinit(allocator);
         var conds = try allocator.alloc(query_parser.Condition, 1);
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, "\\"),
             .field_type = .text,
@@ -362,14 +337,14 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        try testing.expectEqualStrings("4", try getRowStr(results[0], "id"));
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "4");
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
     {
         // Add a document in a different namespace that we'll try to reach
-        try seedDataInNs(allocator, engine, "5", "secret", "other_ns");
-        try engine.flushPendingWrites();
+        try seedDataInNs(allocator, wildcards, "5", "secret", "other_ns");
+        try wildcards.flush();
 
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
@@ -379,7 +354,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         const malicious = "' OR namespace_id = 'other_ns' --";
 
         conds[0] = .{
-            .field = try allocator.dupe(u8, "data"),
+            .field_index = data_index,
             .op = .contains,
             .value = try tth.valTextOwned(allocator, malicious),
             .field_type = .text,
@@ -395,14 +370,11 @@ test "StorageEngine: LIKE wildcard escaping" {
     }
 }
 
-fn seedData(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8) !void {
-    try seedDataInNs(allocator, engine, id, data, "ns");
+fn seedData(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: []const u8, data: []const u8) !void {
+    try seedDataInNs(allocator, wildcards, id, data, "ns");
 }
 
-fn seedDataInNs(allocator: std.mem.Allocator, engine: *StorageEngine, id: []const u8, data: []const u8, namespace: []const u8) !void {
+fn seedDataInNs(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: []const u8, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
-    const cols = [_]storage_engine.ColumnValue{
-        .{ .name = "data", .value = tth.valText(data), .field_type = .text },
-    };
-    try engine.insertOrReplace("wildcards", id, namespace, &cols);
+    try wildcards.insertText(id, namespace, "data", data);
 }

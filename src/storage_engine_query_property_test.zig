@@ -1,10 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const storage_engine = @import("storage_engine.zig");
-const StorageEngine = storage_engine.StorageEngine;
-const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
+const TypedValue = @import("storage_engine.zig").TypedValue;
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
@@ -27,7 +25,7 @@ test "property: random query filters on StorageEngine" {
     const engine = &ctx.engine;
 
     // Seed some data
-    try seedEntities(allocator, engine, seeded_entity_count);
+    try seedEntities(allocator, &ctx, seeded_entity_count);
 
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -43,7 +41,7 @@ test "property: random query filters on StorageEngine" {
     }
 }
 
-fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usize) !void {
+fn seedEntities(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, count: usize) !void {
     _ = allocator;
     var prng = std.Random.DefaultPrng.init(42);
     const random = prng.random();
@@ -58,14 +56,13 @@ fn seedEntities(allocator: std.mem.Allocator, engine: *StorageEngine, count: usi
         const age = random.intRangeAtMost(i64, 0, 100);
         const score = random.float(f64) * 1000.0;
 
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText(name), .field_type = .text },
-            .{ .name = "age", .value = tth.valInt(age), .field_type = .integer },
-            .{ .name = "score", .value = tth.valReal(score), .field_type = .real },
-        };
-        try engine.insertOrReplace("entities", id, "ns1", &cols);
+        try ctx.insertNamed("entities", id, "ns1", .{
+            sth.named("name", tth.valText(name)),
+            sth.named("age", tth.valInt(age)),
+            sth.named("score", tth.valReal(score)),
+        });
     }
-    try engine.flushPendingWrites();
+    try ctx.engine.flushPendingWrites();
 }
 
 fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query_parser.QueryFilter {
@@ -81,7 +78,14 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
 
     var filter = query_parser.QueryFilter{
         .order_by = .{
-            .field = try allocator.dupe(u8, field_name),
+            .field_index = switch (field_idx) {
+                0 => 2, // name
+                1 => 3, // age
+                2 => 4, // score
+                3 => 0, // id
+                4 => 5, // created_at
+                else => unreachable,
+            },
             .desc = random.boolean(),
             .field_type = ft,
             .items_type = null,
@@ -126,7 +130,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
     const op: query_parser.Operator = @enumFromInt(op_int);
 
-    var value: ?storage_engine.TypedValue = null;
+    var value: ?TypedValue = null;
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {
@@ -141,9 +145,15 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     }
 
     const ft: schema_manager.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
+    const field_index: usize = if (std.mem.eql(u8, field, "name"))
+        2
+    else if (std.mem.eql(u8, field, "age"))
+        3
+    else
+        4;
 
     return .{
-        .field = try allocator.dupe(u8, field),
+        .field_index = field_index,
         .op = op,
         .value = value,
         .field_type = ft,

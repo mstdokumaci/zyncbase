@@ -1,20 +1,18 @@
 const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
-const ColumnValue = storage_engine.ColumnValue;
 const schema_manager = @import("schema_manager.zig");
-const query_parser = @import("query_parser.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow) !std.StringHashMap(void) {
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.StringHashMap(void) {
     var ids = std.StringHashMap(void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
-        const id_val = row.getField("id") orelse continue;
-        try ids.put(id_val.scalar.text, {});
+        const id_text = sth.getFieldTextOrNull(row, metadata, "id") orelse continue;
+        try ids.put(id_text, {});
     }
     return ids;
 }
@@ -31,50 +29,45 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     const ns = "ns";
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 1"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "1", ns, &cols);
+        try ctx.insertNamed("items", "1", ns, .{
+            sth.named("name", tth.valText("Task 1")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 2"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "2", ns, &cols);
+        try ctx.insertNamed("items", "2", ns, .{
+            sth.named("name", tth.valText("Task 2")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "work" } });
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 3"), .field_type = .text },
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("items", "3", ns, &cols);
+        try ctx.insertNamed("items", "3", ns, .{
+            sth.named("name", tth.valText("Task 3")),
+            sth.named("tags", tags_tv),
+        });
     }
 
     {
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Task 4"), .field_type = .text },
-        };
-        try engine.insertOrReplace("items", "4", ns, &cols);
+        try ctx.insertField("items", "4", ns, "name", tth.valText("Task 4"));
     }
 
     try engine.flushPendingWrites();
 
     // --- SQL path: tags contains "urgent" ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
         .{
             .field = "tags",
             .op = .contains,
@@ -88,11 +81,11 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var sql_managed = try engine.selectQuery(allocator, "items", ns, sql_filter);
     defer sql_managed.deinit();
 
-    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, items_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
         .{
             .field = "tags",
             .op = .contains,
@@ -114,8 +107,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField("id") orelse continue;
-            try mem_ids.put(id_val.scalar.text, {});
+            const id_text = sth.getFieldTextOrNull(row, items_md, "id") orelse continue;
+            try mem_ids.put(id_text, {});
         }
     }
 
@@ -139,43 +132,41 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const players_md = ctx.sm.getTable("players") orelse return error.UnknownTable;
 
     const ns = "ns";
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Alice"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "1", ns, &cols);
+        try ctx.insertNamed("players", "1", ns, .{
+            sth.named("name", tth.valText("Alice")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 5 }, .{ .integer = 15 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Bob"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "2", ns, &cols);
+        try ctx.insertNamed("players", "2", ns, .{
+            sth.named("name", tth.valText("Bob")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 20 }, .{ .integer = 40 } });
         defer arr_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "name", .value = tth.valText("Carol"), .field_type = .text },
-            .{ .name = "scores", .value = arr_tv, .field_type = .array },
-        };
-        try engine.insertOrReplace("players", "3", ns, &cols);
+        try ctx.insertNamed("players", "3", ns, .{
+            sth.named("name", tth.valText("Carol")),
+            sth.named("scores", arr_tv),
+        });
     }
 
     try engine.flushPendingWrites();
 
     // --- SQL path: scores contains 20 ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
         .{
             .field = "scores",
             .op = .contains,
@@ -189,11 +180,11 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var sql_managed = try engine.selectQuery(allocator, "players", ns, sql_filter);
     defer sql_managed.deinit();
 
-    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows);
+    var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, players_md);
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
         .{
             .field = "scores",
             .op = .contains,
@@ -215,8 +206,8 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_val = row.getField("id") orelse continue;
-            try mem_ids.put(id_val.scalar.text, {});
+            const id_text = sth.getFieldTextOrNull(row, players_md, "id") orelse continue;
+            try mem_ids.put(id_text, {});
         }
     }
 

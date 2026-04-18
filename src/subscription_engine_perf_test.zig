@@ -16,11 +16,10 @@ test "SubscriptionEngine: handleRowChange performance" {
 
     // Create filters with different conditions
     for (0..group_count) |i| {
-        var buf: [32]u8 = undefined;
-        const field_name = try std.fmt.bufPrint(&buf, "field_{d}", .{i % 10});
+        const field_index: usize = 2 + (i % 10);
 
         const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-            .{ .field = field_name, .op = .eq, .value = tth.valInt(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
+            .{ .field_index = field_index, .op = .eq, .value = tth.valInt(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
         });
         defer filter.deinit(allocator);
 
@@ -29,10 +28,10 @@ test "SubscriptionEngine: handleRowChange performance" {
         }
     }
 
-    const new_row = try tth.row(allocator, .{
-        .field_0 = tth.valInt(0),
-        .field_1 = tth.valInt(1),
-        .field_2 = tth.valInt(2),
+    var new_row = try tth.rowFromTypedValues(allocator, &.{
+        tth.valInt(0), // field_0
+        tth.valInt(1), // field_1
+        tth.valInt(2), // field_2
     });
     defer new_row.deinit(allocator);
 

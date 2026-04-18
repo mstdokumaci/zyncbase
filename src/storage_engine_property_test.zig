@@ -5,7 +5,6 @@ const msgpack = @import("msgpack_utils.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
-const ColumnValue = sth.ColumnValue;
 
 test "storage: engine initialization errors" {
     const allocator = testing.allocator;
@@ -68,8 +67,11 @@ test "storage: thread-safe engine access" {
     // Concurrent writes and reads
     const num_threads = 10;
     const ops_per_thread = 50;
+    const ThreadContext = struct {
+        ctx: *sth.EngineTestContext,
+    };
     const WriteThread = struct {
-        fn run(eng: *StorageEngine, thread_id: usize) !void {
+        fn run(t_ctx: ThreadContext, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key = try std.fmt.allocPrint(
@@ -84,8 +86,7 @@ test "storage: thread-safe engine access" {
                     .{ thread_id, i },
                 );
                 defer testing.allocator.free(value);
-                const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(value), .field_type = .text }};
-                try eng.insertOrReplace("test", key, "test", &cols);
+                try t_ctx.ctx.insertField("test", key, "test", "val", tth.valText(value));
             }
         }
     };
@@ -108,7 +109,7 @@ test "storage: thread-safe engine access" {
     // Spawn write threads
     var write_threads: [num_threads / 2]std.Thread = undefined;
     for (&write_threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, WriteThread.run, .{ engine, i });
+        thread.* = try std.Thread.spawn(.{}, WriteThread.run, .{ ThreadContext{ .ctx = &ctx }, i });
     }
     // Spawn read threads
     var read_threads: [num_threads / 2]std.Thread = undefined;
@@ -141,8 +142,8 @@ test "storage: connection pool reuse and release" {
 
     // Set some initial data
     {
-        try engine.insertOrReplace("test", "key1", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("test1"), .field_type = .text }});
-        try engine.insertOrReplace("test", "key2", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("test2"), .field_type = .text }});
+        try ctx.insertText("test", "key1", "test", "val", "test1");
+        try ctx.insertText("test", "key2", "test", "val", "test2");
     }
     try engine.flushPendingWrites();
     // Perform many read operations to ensure connections are being reused
@@ -182,8 +183,7 @@ test "storage: persistence round-trip (various types)" {
     };
     // Insert all test cases
     for (test_cases) |tc| {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(tc.value), .field_type = .text }};
-        try engine.insertOrReplace("test", tc.path, "test", &cols);
+        try ctx.insertText("test", tc.path, "test", "val", tc.value);
     }
     // Flush writes
     try engine.flushPendingWrites();
@@ -215,8 +215,7 @@ test "storage: insert/delete inverse consistency" {
     };
     for (test_cases) |tc| {
         // Insert
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(tc.value), .field_type = .text }};
-        try engine.insertOrReplace("test", tc.path, "test", &cols);
+        try ctx.insertText("test", tc.path, "test", "val", tc.value);
         try engine.flushPendingWrites();
         // Verify it exists
         var managed1 = try engine.selectDocument(allocator, "test", tc.path, "test");
@@ -246,8 +245,8 @@ test "storage: transaction isolation and consistency" {
     // The write thread uses transactions internally to ensure atomicity
     // Set up initial state
     {
-        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("initial1"), .field_type = .text }});
-        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("initial2"), .field_type = .text }});
+        try ctx.insertText("test", "/key1", "test", "val", "initial1");
+        try ctx.insertText("test", "/key2", "test", "val", "initial2");
     }
     try engine.flushPendingWrites();
     // Verify initial state
@@ -261,9 +260,9 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(doc2.len > 0);
     // Queue multiple operations that should execute atomically in a batch
     {
-        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("updated1"), .field_type = .text }});
-        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("updated2"), .field_type = .text }});
-        try engine.insertOrReplace("test", "/key3", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("new3"), .field_type = .text }});
+        try ctx.insertText("test", "/key1", "test", "val", "updated1");
+        try ctx.insertText("test", "/key2", "test", "val", "updated2");
+        try ctx.insertText("test", "/key3", "test", "val", "new3");
     }
     // Flush to ensure operations are processed
     try engine.flushPendingWrites();
@@ -284,8 +283,7 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(n3.len > 0);
     // Test concurrent reads during batch processing see consistent state
     // This tests that the write thread's transaction provides isolation
-    const cols_c = [_]ColumnValue{.{ .name = "val", .value = tth.valText("before"), .field_type = .text }};
-    try engine.insertOrReplace("test", "/concurrent_key", "test", &cols_c);
+    try ctx.insertText("test", "/concurrent_key", "test", "val", "before");
     try engine.flushPendingWrites();
     // Start a batch by queuing many operations
     const num_ops = 100;
@@ -295,8 +293,7 @@ test "storage: transaction isolation and consistency" {
         defer allocator.free(key);
         const value = try std.fmt.allocPrint(allocator, "{{\"batch\":{d}}}", .{i});
         defer allocator.free(value);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(value), .field_type = .text }};
-        try engine.insertOrReplace("test", key, "test", &cols);
+        try ctx.insertText("test", key, "test", "val", value);
     }
     // While the batch is being processed, concurrent reads should work
     var managed_conc = try engine.selectDocument(allocator, "test", "/concurrent_key", "test");
@@ -327,8 +324,7 @@ test "storage: automatic transaction rollback on failure" {
 
     // Set up initial state
     {
-        const c1 = [_]ColumnValue{.{ .name = "val", .value = tth.valText("initial"), .field_type = .text }};
-        try engine.insertOrReplace("test", "/key1", "test", &c1);
+        try ctx.insertText("test", "/key1", "test", "val", "initial");
     }
     try engine.flushPendingWrites();
     // Verify initial state
@@ -341,8 +337,8 @@ test "storage: automatic transaction rollback on failure" {
     try testing.expect(engine.isTransactionActive());
     // Make changes within transaction
     {
-        try engine.insertOrReplace("test", "/key1", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("modified"), .field_type = .text }});
-        try engine.insertOrReplace("test", "/key2", "test", &[_]ColumnValue{.{ .name = "val", .value = tth.valText("new"), .field_type = .text }});
+        try ctx.insertText("test", "/key1", "test", "val", "modified");
+        try ctx.insertText("test", "/key2", "test", "val", "new");
     }
     // Rollback the transaction
     try engine.rollbackTransaction();
@@ -364,8 +360,7 @@ test "storage: automatic transaction rollback on failure" {
     // First, set up a successful transaction
     try engine.beginTransaction();
     {
-        const c3 = [_]ColumnValue{.{ .name = "val", .value = tth.valText("test3"), .field_type = .text }};
-        try engine.insertOrReplace("test", "/key3", "test", &c3);
+        try ctx.insertText("test", "/key3", "test", "val", "test3");
     }
     try engine.commitTransaction();
     try engine.flushPendingWrites();
@@ -391,8 +386,7 @@ test "storage: automatic transaction rollback on failure" {
         defer allocator.free(key);
         const value = try std.fmt.allocPrint(allocator, "{{\"index\":{d}}}", .{j});
         defer allocator.free(value);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(value), .field_type = .text }};
-        try engine.insertOrReplace("test", key, "test", &cols);
+        try ctx.insertText("test", key, "test", "val", value);
     }
     // Flush and verify all operations succeeded atomically
     try engine.flushPendingWrites();
@@ -420,6 +414,7 @@ test "storage: document set/get round-trip" {
     try sth.setupEngine(&ctx, allocator, "prop-reopen", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
@@ -427,18 +422,17 @@ test "storage: document set/get round-trip" {
         const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
         const title_str = scalar_values[title_idx];
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
-        const cols = [_]ColumnValue{
-            .{ .name = "title", .value = tth.valText(title_str), .field_type = .text },
-            .{ .name = "score", .value = tth.valInt(score_val), .field_type = .integer },
-        };
-        try engine.insertOrReplace("items", id, "ns-test", &cols);
+        try ctx.insertNamed("items", id, "ns-test", .{
+            sth.named("title", tth.valText(title_str)),
+            sth.named("score", tth.valInt(score_val)),
+        });
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldString(doc, "title", title_str);
-        _ = try sth.expectFieldInt(doc, "score", score_val);
+        _ = try sth.expectFieldString(doc, tbl_md, "title", title_str);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", score_val);
     }
 }
 test "storage: field set/get round-trip" {
@@ -454,18 +448,18 @@ test "storage: field set/get round-trip" {
     try sth.setupEngine(&ctx, allocator, "storage-p14", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
-        const initial_cols = [_]ColumnValue{
-            .{ .name = "title", .value = tth.valText("initial"), .field_type = .text },
-            .{ .name = "score", .value = tth.valInt(0), .field_type = .integer },
-        };
-        try engine.insertOrReplace("items", id, "ns-test", &initial_cols);
+        try ctx.insertNamed("items", id, "ns-test", .{
+            sth.named("title", tth.valText("initial")),
+            sth.named("score", tth.valInt(0)),
+        });
         try engine.flushPendingWrites();
         const new_score: i64 = rand.intRangeAtMost(i64, 1, 9999);
-        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "score", .value = tth.valInt(new_score), .field_type = .integer }});
+        try ctx.insertInt("items", id, "ns-test", "score", new_score);
         try engine.flushPendingWrites();
 
         // Use selectDocument to verify the field update
@@ -473,7 +467,7 @@ test "storage: field set/get round-trip" {
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldInt(doc, "score", new_score);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", new_score);
     }
 }
 test "storage: query is namespace-scoped" {
@@ -499,15 +493,13 @@ test "storage: query is namespace-scoped" {
         while (i < count_a) : (i += 1) {
             const id = try std.fmt.allocPrint(allocator, "a-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
-            const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valInt(@intCast(i)), .field_type = .integer }};
-            try engine.insertOrReplace("items", id, ns_a, &cols);
+            try ctx.insertInt("items", id, ns_a, "val", @intCast(i));
         }
         i = 0;
         while (i < count_b) : (i += 1) {
             const id = try std.fmt.allocPrint(allocator, "b-{d}-{d}", .{ iter, i });
             defer allocator.free(id);
-            const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valInt(@intCast(i + 100)), .field_type = .integer }};
-            try engine.insertOrReplace("items", id, ns_b, &cols);
+            try ctx.insertInt("items", id, ns_b, "val", @intCast(i + 100));
         }
         try engine.flushPendingWrites();
 
@@ -538,8 +530,7 @@ test "storage: remove then get returns null" {
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valInt(42), .field_type = .integer }};
-        try engine.insertOrReplace("items", id, "ns-test", &cols);
+        try ctx.insertInt("items", id, "ns-test", "val", 42);
         try engine.flushPendingWrites();
         try engine.deleteDocument("items", id, "ns-test");
         try engine.flushPendingWrites();
@@ -557,30 +548,30 @@ test "storage: updated_at is always refreshed on write" {
     try sth.setupEngine(&ctx, allocator, "storage-p18", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
         const t_before_insert = std.time.timestamp();
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valInt(1), .field_type = .integer }};
-        try engine.insertOrReplace("items", id, "ns-test", &cols);
+        try ctx.insertInt("items", id, "ns-test", "val", 1);
         try engine.flushPendingWrites();
         var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed1.deinit();
         if (managed1.rows.len == 0) return error.MissingDoc;
         const doc1 = managed1.rows[0];
-        const updated_at_1 = try sth.getFieldInt(doc1, "updated_at");
+        const updated_at_1 = try sth.getFieldInt(doc1, items_md, "updated_at");
         try testing.expect(updated_at_1 >= t_before_insert);
 
-        try engine.insertOrReplace("items", id, "ns-test", &[_]ColumnValue{.{ .name = "val", .value = tth.valInt(2), .field_type = .integer }});
+        try ctx.insertInt("items", id, "ns-test", "val", 2);
         try engine.flushPendingWrites();
 
         var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed2.deinit();
         if (managed2.rows.len == 0) return error.MissingDoc;
         const doc2 = managed2.rows[0];
-        const updated_at_2 = try sth.getFieldInt(doc2, "updated_at");
+        const updated_at_2 = try sth.getFieldInt(doc2, items_md, "updated_at");
         try testing.expect(updated_at_2 >= updated_at_1);
     }
 }
@@ -597,6 +588,7 @@ test "storage: write/read round-trip for array fields" {
     try sth.setupEngine(&ctx, allocator, "storage-p10", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -612,17 +604,16 @@ test "storage: write/read round-trip for array fields" {
         const storage_engine = @import("storage_engine.zig");
         const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .integer, array_payload);
         defer tags_tv.deinit(allocator);
-        const cols = [_]ColumnValue{
-            .{ .name = "tags", .value = tags_tv, .field_type = .array },
-            .{ .name = "name", .value = tth.valText("test-item"), .field_type = .text },
-        };
-        try engine.insertOrReplace("items", id, "ns-test", &cols);
+        try ctx.insertNamed("items", id, "ns-test", .{
+            sth.named("tags", tags_tv),
+            sth.named("name", tth.valText("test-item")),
+        });
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        const got_tags = try sth.expectFieldArray(doc, "tags", tags_tv.array.len);
+        const got_tags = try sth.expectFieldArray(doc, tbl_md, "tags", tags_tv.array.len);
         for (tags_tv.array, got_tags.array) |expected, got| {
             const expected_val = switch (expected) {
                 .integer => |v| v,
@@ -651,6 +642,7 @@ test "storage: non-array fields are unaffected" {
     try sth.setupEngine(&ctx, allocator, "storage-p11", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
+    const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
@@ -660,21 +652,20 @@ test "storage: non-array fields are unaffected" {
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
         const active_val = rand.boolean();
-        const cols = [_]ColumnValue{
-            .{ .name = "title", .value = tth.valText(title_str), .field_type = .text },
-            .{ .name = "score", .value = tth.valInt(score_val), .field_type = .integer },
-            .{ .name = "rating", .value = tth.valReal(rating_val), .field_type = .real },
-            .{ .name = "active", .value = tth.valBool(active_val), .field_type = .boolean },
-        };
-        try engine.insertOrReplace("items", id, "ns-test", &cols);
+        try ctx.insertNamed("items", id, "ns-test", .{
+            sth.named("title", tth.valText(title_str)),
+            sth.named("score", tth.valInt(score_val)),
+            sth.named("rating", tth.valReal(rating_val)),
+            sth.named("active", tth.valBool(active_val)),
+        });
         try engine.flushPendingWrites();
         var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
-        _ = try sth.expectFieldString(doc, "title", title_str);
-        _ = try sth.expectFieldInt(doc, "score", score_val);
-        _ = try sth.expectFieldReal(doc, "rating", rating_val);
-        _ = try sth.expectFieldBool(doc, "active", active_val);
+        _ = try sth.expectFieldString(doc, tbl_md, "title", title_str);
+        _ = try sth.expectFieldInt(doc, tbl_md, "score", score_val);
+        _ = try sth.expectFieldReal(doc, tbl_md, "rating", rating_val);
+        _ = try sth.expectFieldBool(doc, tbl_md, "active", active_val);
     }
 }

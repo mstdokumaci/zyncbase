@@ -3,11 +3,11 @@ const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine.zig");
 const helpers = @import("app_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const protocol = @import("protocol.zig");
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
-const tth = @import("typed_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
 
 test "StoreService: set - full document replacement" {
@@ -23,6 +23,7 @@ test "StoreService: set - full document replacement" {
     defer app.deinit();
 
     const service = &app.store_service;
+    const users = try app.table("users");
 
     // 1. Success path: Valid document
     {
@@ -35,16 +36,11 @@ test "StoreService: set - full document replacement" {
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
-        var managed = try app.storage_engine.selectDocument(allocator, "users", "user-1", "public");
-        defer managed.deinit();
-
-        try testing.expect(managed.rows.len > 0);
-        const doc = managed.rows[0];
-        const name_val = doc.getField("name") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("Alice", name_val.scalar.text);
-
-        const age_val = doc.getField("age") orelse return error.UnexpectedNull;
-        try testing.expectEqual(@as(i64, 30), age_val.scalar.integer);
+        var doc = try users.getOne(allocator, "user-1", "public");
+        defer doc.deinit();
+        _ = try doc.expectFieldString("name", "Alice");
+        const age = try doc.getFieldInt("age");
+        try testing.expectEqual(@as(i64, 30), age);
     }
 
     // 5. Negative path: Unknown table
@@ -70,6 +66,7 @@ test "StoreService: set - field level update" {
     defer app.deinit();
 
     const service = &app.store_service;
+    const items = try app.table("items");
 
     // 1. Success path: Update single field
     {
@@ -80,12 +77,9 @@ test "StoreService: set - field level update" {
         try app.storage_engine.flushPendingWrites();
 
         // Verify
-        var managed = try app.storage_engine.selectDocument(allocator, "items", "item-1", "public");
-        defer managed.deinit();
-        if (managed.rows.len == 0) return error.UnexpectedNull;
-        const doc = managed.rows[0];
-        const status_val = doc.getField("status") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("active", status_val.scalar.text);
+        var doc = try items.getOne(allocator, "item-1", "public");
+        defer doc.deinit();
+        _ = try doc.expectFieldString("status", "active");
     }
 }
 
@@ -116,13 +110,13 @@ test "StoreService: remove" {
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
-        const result = service.remove("users", "user-1", "public", 3, "name");
+        const result = service.remove("users", "user-1", "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
     // 2. Success: Remove document (segments_len == 2)
     {
-        try service.remove("users", "user-1", "public", 2, null);
+        try service.remove("users", "user-1", "public", 2);
         try app.storage_engine.flushPendingWrites();
 
         var managed = try app.storage_engine.selectDocument(allocator, "users", "user-1", "public");
@@ -132,13 +126,13 @@ test "StoreService: remove" {
 
     // 3. Negative: Unknown table
     {
-        const result = service.remove("invalid", "id", "ns", 2, null);
+        const result = service.remove("invalid", "id", "ns", 2);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
-        const result = service.remove("users", "user-1", "public", 3, "unknown_field");
+        const result = service.remove("users", "user-1", "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }
@@ -219,6 +213,7 @@ test "StoreService: persistence and namespace isolation" {
     defer app.deinit();
 
     const service = &app.store_service;
+    const test_table = try app.table("test");
 
     // 1. Basic Persistence
     {
@@ -228,12 +223,9 @@ test "StoreService: persistence and namespace isolation" {
         try service.set("test", "key1", "ns-a", 3, "val", val);
         try app.storage_engine.flushPendingWrites();
 
-        var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
-        defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
-        const stored_doc = managed.rows[0];
-        const stored_val = stored_doc.getField("val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", stored_val.scalar.text);
+        var stored_doc = try test_table.getOne(allocator, "key1", "ns-a");
+        defer stored_doc.deinit();
+        _ = try stored_doc.expectFieldString("val", "value1");
     }
 
     // 2. Namespace Isolation
@@ -246,20 +238,14 @@ test "StoreService: persistence and namespace isolation" {
         try app.storage_engine.flushPendingWrites();
 
         // Verify ns-a still has value1
-        var managed_a = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
-        defer managed_a.deinit();
-        try testing.expect(managed_a.rows.len > 0);
-        const doc_a = managed_a.rows[0];
-        const v_a = doc_a.getField("val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value1", v_a.scalar.text);
+        var doc_a = try test_table.getOne(allocator, "key1", "ns-a");
+        defer doc_a.deinit();
+        _ = try doc_a.expectFieldString("val", "value1");
 
         // Verify ns-b has value2
-        var managed_b = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-b");
-        defer managed_b.deinit();
-        try testing.expect(managed_b.rows.len > 0);
-        const doc_b = managed_b.rows[0];
-        const v_b = doc_b.getField("val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("value2", v_b.scalar.text);
+        var doc_b = try test_table.getOne(allocator, "key1", "ns-b");
+        defer doc_b.deinit();
+        _ = try doc_b.expectFieldString("val", "value2");
     }
 
     // 3. Updates
@@ -270,15 +256,9 @@ test "StoreService: persistence and namespace isolation" {
         try service.set("test", "key1", "ns-a", 3, "val", val);
         try app.storage_engine.flushPendingWrites();
 
-        const val_key = try msgpack.Payload.strToPayload("val", allocator);
-        defer val_key.free(allocator);
-
-        var managed = try app.storage_engine.selectDocument(allocator, "test", "key1", "ns-a");
-        defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
-        const doc = managed.rows[0];
-        const stored_val = doc.getField("val") orelse return error.UnexpectedNull;
-        try testing.expectEqualStrings("updated", stored_val.scalar.text);
+        var doc = try test_table.getOne(allocator, "key1", "ns-a");
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", "updated");
     }
 }
 
@@ -289,14 +269,12 @@ test "StoreService: query - basic search" {
         .{ .name = "users", .fields = &.{"name"} },
     });
     defer app.deinit();
+    const users = try app.table("users");
 
     // Seed data
-    const cols_1 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = tth.valText("Alice"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("users", "user-1", "ns", &cols_1);
-
-    const cols_2 = [_]storage_mod.ColumnValue{.{ .name = "name", .value = tth.valText("Bob"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("users", "user-2", "ns", &cols_2);
-    try app.storage_engine.flushPendingWrites();
+    try users.insertText("user-1", "ns", "name", "Alice");
+    try users.insertText("user-2", "ns", "name", "Bob");
+    try users.flush();
 
     // Build filter: { "conditions": [ ["id", 0, "user-1"] ] }
     var filter_map = msgpack.Payload.mapPayload(allocator);
@@ -316,8 +294,7 @@ test "StoreService: query - basic search" {
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
     const doc = qr.results.rows[0];
-    const name_val = doc.getField("name") orelse return error.TestExpectedValue;
-    try testing.expectEqualStrings("Alice", name_val.scalar.text);
+    _ = try sth.expectFieldString(doc, users.metadata, "name", "Alice");
 }
 
 test "StoreService: query - orderBy and limit" {
@@ -330,10 +307,9 @@ test "StoreService: query - orderBy and limit" {
 
     const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
     for (tasks, 0..) |t, i| {
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "title", .value = tth.valText(t), .field_type = .text }};
         const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
         defer allocator.free(id);
-        try app.storage_engine.insertOrReplace("tasks", id, "ns", &cols);
+        try app.insertText("tasks", id, "ns", "title", t);
     }
     try app.storage_engine.flushPendingWrites();
 
@@ -394,18 +370,18 @@ test "StoreService: queryWithCursor - pagination" {
         .{ .name = "data", .fields = &.{"val"} },
     });
     defer app.deinit();
+    const data_table = try app.table("data");
 
     // Seed 5 items
     var i: usize = 0;
     while (i < 5) : (i += 1) {
         const str = try std.fmt.allocPrint(allocator, "item-{}", .{i});
         defer allocator.free(str);
-        const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText(str), .field_type = .text }};
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
-        try app.storage_engine.insertOrReplace("data", id, "ns", &cols);
+        try data_table.insertText(id, "ns", "val", str);
     }
-    try app.storage_engine.flushPendingWrites();
+    try data_table.flush();
 
     // 1. Initial query: limit 2
     var filter_map = msgpack.Payload.mapPayload(allocator);
@@ -436,12 +412,10 @@ test "StoreService: queryWithCursor - pagination" {
     // Verify results are different (pagination worked)
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
-    const first_id_payload = first_doc.getField("id") orelse return error.TestExpectedValue;
-    const first_page_id = first_id_payload.scalar.text;
+    const first_page_id = try sth.getFieldText(first_doc, data_table.metadata, "id");
 
     const second_doc = next_results.rows[0];
-    const second_id_payload = second_doc.getField("id") orelse return error.TestExpectedValue;
-    const second_page_id = second_id_payload.scalar.text;
+    const second_page_id = try sth.getFieldText(second_doc, data_table.metadata, "id");
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
 }

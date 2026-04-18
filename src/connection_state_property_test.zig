@@ -28,7 +28,7 @@ test "connection: state deallocation on close" {
         try testing.expectEqual(conn_id, retrieved.id);
 
         // Remove connection - should deallocate state once all refs are gone
-        app.manager.onClose(&dummy_ws, 1000, "normal");
+        app.manager.onClose(&dummy_ws);
 
         // Verify connection is no longer in manager
         const result = app.manager.acquireConnection(conn_id);
@@ -50,7 +50,7 @@ test "connection: state deallocation on close" {
 
         // Close all connections
         for (&websockets) |*ws| {
-            app.manager.onClose(ws, 1000, "normal");
+            app.manager.onClose(ws);
         }
 
         // Verify all connections are removed
@@ -79,7 +79,7 @@ test "connection: state deallocation on close" {
         try state.subscription_ids.append(state.allocator, 300);
 
         // Remove connection - should deallocate state including subscription list
-        app.manager.onClose(&dummy_ws, 1000, "normal");
+        app.manager.onClose(&dummy_ws);
 
         // Verify connection is removed
         const result = app.manager.acquireConnection(conn_id);
@@ -130,7 +130,7 @@ test "connection: state deallocation on close" {
             try state.subscription_ids.append(state.allocator, conn_id * 10 + 1);
 
             // Immediately remove
-            app.manager.onClose(&dummy_ws, 1000, "normal");
+            app.manager.onClose(&dummy_ws);
         }
     }
 
@@ -155,7 +155,7 @@ test "connection: state deallocation on close" {
                     if (state.release()) ctx.releaseConnection(state);
 
                     // Remove immediately
-                    ctx.manager.onClose(&dummy_ws, 1000, "normal");
+                    ctx.manager.onClose(&dummy_ws);
                 }
             }
         }.run;
@@ -203,7 +203,7 @@ test "connection: state deallocation edge cases" {
 
         // Try to remove a connection that doesn't exist
         var dummy_ws = createMockWebSocket();
-        app.manager.onClose(&dummy_ws, 1000, "normal");
+        app.manager.onClose(&dummy_ws);
     }
 
     // Test: Connection with empty subscription list
@@ -215,7 +215,7 @@ test "connection: state deallocation edge cases" {
         var dummy_ws = createMockWebSocket();
         try app.manager.onOpen(&dummy_ws);
         // Don't add any subscriptions
-        app.manager.onClose(&dummy_ws, 1000, "normal");
+        app.manager.onClose(&dummy_ws);
     }
 
     // Test: Connection with large subscription list
@@ -235,6 +235,6 @@ test "connection: state deallocation edge cases" {
         while (i < 128) : (i += 1) {
             try state.subscription_ids.append(state.allocator, i);
         }
-        app.manager.onClose(&dummy_ws, 1000, "normal");
+        app.manager.onClose(&dummy_ws);
     }
 }

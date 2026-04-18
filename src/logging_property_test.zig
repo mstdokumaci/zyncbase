@@ -99,7 +99,7 @@ test "logging: connection events" {
         try testing.expectEqual(conn_id, conn_state.id);
 
         // Clean up
-        manager.onClose(&ws, 1000, "normal");
+        manager.onClose(&ws);
     }
 
     // Test 2: Connection close logs connection ID
@@ -111,7 +111,7 @@ test "logging: connection events" {
         const conn_id = ws.getConnId();
 
         // Close connection - this should log "WebSocket connection closed: id={}, code={}, message={s}"
-        manager.onClose(&ws, 1000, "Normal closure");
+        manager.onClose(&ws);
 
         // Verify connection was removed
         const result = manager.acquireConnection(conn_id);
@@ -141,7 +141,7 @@ test "logging: connection events" {
 
         // Close all connections
         for (&connections) |*ws| {
-            manager.onClose(ws, 1000, "Test close");
+            manager.onClose(ws);
         }
     }
 
@@ -154,7 +154,7 @@ test "logging: connection events" {
         const conn_id = ws.getConnId();
 
         // Handle error - this should log "WebSocket error on connection: id={}"
-        manager.onClose(&ws, 1006, "Abnormal closure");
+        manager.onClose(&ws);
 
         // Verify connection was cleaned up
         const result = manager.acquireConnection(conn_id);
@@ -176,7 +176,7 @@ test "logging: connection events" {
 
                     // Open and close connection
                     ctx.manager.onOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
-                    ctx.manager.onClose(&ws, 1000, "Test");
+                    ctx.manager.onClose(&ws);
                 }
             }
         }.run;
@@ -239,7 +239,7 @@ test "logging: error details" {
         manager.onMessage(&ws, invalid_msg, .binary);
 
         // Clean up
-        manager.onClose(&ws, 1000, "Test");
+        manager.onClose(&ws);
     }
 
     // Test 2: Missing required fields logs error
@@ -266,7 +266,7 @@ test "logging: error details" {
         // This should log: "Failed to extract message info from connection {}: {}"
         manager.onMessage(&ws, incomplete_msg, .binary);
 
-        manager.onClose(&ws, 1000, "Test");
+        manager.onClose(&ws);
     }
 
     // Test 3: Database errors are logged
@@ -304,7 +304,7 @@ test "logging: error details" {
         const empty_map = &[_]u8{0x80};
         manager.onMessage(&ws, empty_map, .binary);
 
-        manager.onClose(&ws, 1000, "Test");
+        manager.onClose(&ws);
     }
 }
 
@@ -377,7 +377,7 @@ test "logging: level filtering" {
         manager.onMessage(&ws, "invalid", .binary);
 
         // Error level: error handling
-        manager.onClose(&ws, 1006, "Abnormal closure");
+        manager.onClose(&ws);
     }
 
     // Test 2: Verify log levels are consistent across components
@@ -464,7 +464,7 @@ test "logging: message formatting" {
         manager.onMessage(&ws, "invalid", .binary);
 
         // Close logging includes connection ID and close code
-        manager.onClose(&ws, 1000, "Normal");
+        manager.onClose(&ws);
     }
 
     // Test 2: Verify log format consistency
@@ -536,9 +536,8 @@ test "logging: message formatting" {
         }
 
         // Close all with different codes
-        for (&connections, 0..) |*ws, i| {
-            const code: i32 = @intCast(1000 + i);
-            manager.onClose(ws, code, "Test close");
+        for (&connections) |*ws| {
+            manager.onClose(ws);
         }
     }
 }

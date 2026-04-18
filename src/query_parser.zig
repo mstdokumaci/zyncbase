@@ -22,22 +22,19 @@ pub const Operator = enum(u8) {
 };
 
 pub const Condition = struct {
-    field: []const u8,
+    field_index: usize,
     op: Operator,
     value: ?TypedValue,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
-        allocator.free(self.field);
         if (self.value) |v| v.deinit(allocator);
     }
 
     pub fn clone(self: Condition, allocator: std.mem.Allocator) !Condition {
-        const field = try allocator.dupe(u8, self.field);
-        errdefer allocator.free(field);
         return .{
-            .field = field,
+            .field_index = self.field_index,
             .op = self.op,
             .value = if (self.value) |v| try v.clone(allocator) else null,
             .field_type = self.field_type,
@@ -47,23 +44,10 @@ pub const Condition = struct {
 };
 
 pub const SortDescriptor = struct {
-    field: []const u8,
+    field_index: usize,
     desc: bool,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
-
-    pub fn deinit(self: SortDescriptor, allocator: std.mem.Allocator) void {
-        allocator.free(self.field);
-    }
-
-    pub fn clone(self: SortDescriptor, allocator: std.mem.Allocator) !SortDescriptor {
-        return .{
-            .field = try allocator.dupe(u8, self.field),
-            .desc = self.desc,
-            .field_type = self.field_type,
-            .items_type = self.items_type,
-        };
-    }
 };
 
 pub const Cursor = struct {
@@ -101,7 +85,6 @@ pub const QueryFilter = struct {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        self.order_by.deinit(allocator);
         if (self.after) |a| a.deinit(allocator);
     }
 
@@ -123,7 +106,7 @@ pub const QueryFilter = struct {
             }
             copy.or_conditions = new_or;
         }
-        copy.order_by = try self.order_by.clone(allocator);
+        copy.order_by = self.order_by;
         if (self.after) |a| {
             copy.after = try a.clone(allocator);
         }
@@ -208,12 +191,12 @@ pub fn parseQueryFilter(
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
-    const resolved_id = try resolveFieldMetadata(table_metadata, "id");
+    const id_field = table_metadata.fields[schema_manager.id_field_index];
     var order_by: SortDescriptor = .{
-        .field = try allocator.dupe(u8, "id"),
+        .field_index = schema_manager.id_field_index,
         .desc = false,
-        .field_type = resolved_id.field_type,
-        .items_type = resolved_id.items_type,
+        .field_type = id_field.sql_type,
+        .items_type = id_field.items_type,
     };
     var limit: ?u32 = null;
     var after: ?Cursor = null;
@@ -228,7 +211,6 @@ pub fn parseQueryFilter(
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        order_by.deinit(allocator);
         if (after) |a| a.deinit(allocator);
         if (after_token) |token| allocator.free(token);
     }
@@ -254,9 +236,7 @@ pub fn parseQueryFilter(
             }
             or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
-            const new_order_by = try parseSortDescriptor(allocator, table_metadata, value);
-            order_by.deinit(allocator);
-            order_by = new_order_by;
+            order_by = try parseSortDescriptor(table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
             if (value == .uint) {
                 limit = @intCast(value.uint);
@@ -287,6 +267,7 @@ pub fn parseQueryFilter(
 }
 
 pub const ResolvedField = struct {
+    field_index: usize,
     field_type: schema_manager.FieldType,
     items_type: ?schema_manager.FieldType,
 };
@@ -294,17 +275,16 @@ pub const ResolvedField = struct {
 /// Resolves the metadata (FieldType and items_type) for a given field.
 /// Handles both schema-defined fields and built-in system columns.
 pub fn resolveFieldMetadata(
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     field: []const u8,
 ) ParserError!ResolvedField {
-    if (table_metadata.getField(field)) |f| {
-        return .{ .field_type = f.sql_type, .items_type = f.items_type };
-    }
-    // Built-in columns
-    if (schema_manager.getSystemColumn(field)) |col| {
-        return .{ .field_type = col.sql_type, .items_type = col.items_type };
-    }
-    return error.UnknownField;
+    const idx = table_metadata.field_index_map.get(field) orelse return error.UnknownField;
+    const f = table_metadata.fields[idx];
+    return .{
+        .field_index = idx,
+        .field_type = f.sql_type,
+        .items_type = f.items_type,
+    };
 }
 
 fn parseOperator(payload: msgpack.Payload) ParserError!Operator {
@@ -441,7 +421,7 @@ fn parseConditionValueForOperator(
 
 fn parseConditions(
     allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -462,7 +442,7 @@ fn parseConditions(
 
 fn parseCondition(
     allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -479,7 +459,7 @@ fn parseCondition(
     errdefer if (value) |v| v.deinit(allocator);
 
     return Condition{
-        .field = try allocator.dupe(u8, field),
+        .field_index = resolved.field_index,
         .op = op,
         .value = value,
         .field_type = resolved.field_type,
@@ -488,8 +468,7 @@ fn parseCondition(
 }
 
 fn parseSortDescriptor(
-    allocator: std.mem.Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
     if (payload != .arr) return error.InvalidSortFormat;
@@ -502,7 +481,7 @@ fn parseSortDescriptor(
     const desc = try parseSortDirection(arr[1]);
 
     return SortDescriptor{
-        .field = try allocator.dupe(u8, field),
+        .field_index = resolved.field_index,
         .desc = desc,
         .field_type = resolved.field_type,
         .items_type = resolved.items_type,

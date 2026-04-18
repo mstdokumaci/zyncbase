@@ -55,9 +55,7 @@ pub const MessageHandler = struct {
     }
 
     /// Clean up message handler resources
-    pub fn deinit(self: *MessageHandler) void {
-        _ = self;
-    }
+    pub fn deinit(_: *MessageHandler) void {}
 
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
@@ -182,13 +180,13 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(arena_allocator, conn.id, msg_info.id, parsed);
+            return try self.handleStoreSet(arena_allocator, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
             return try self.handleStoreSubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreUnsubscribe")) {
             return try self.handleStoreUnsubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreQuery")) {
-            return try self.handleStoreQuery(arena_allocator, conn, msg_info.id, parsed);
+            return try self.handleStoreQuery(arena_allocator, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreLoadMore")) {
             return try self.handleStoreLoadMore(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
@@ -237,11 +235,9 @@ pub const MessageHandler = struct {
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
-        conn_id: u64,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        _ = conn_id;
         const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
         if (req.path.len < 2) return error.InvalidPath;
         const value = req.value orelse return error.MissingRequiredFields;
@@ -272,7 +268,6 @@ pub const MessageHandler = struct {
             req.path[1],
             req.namespace,
             req.path.len,
-            if (req.path.len == 3) req.path[2] else null,
         );
 
         return try protocol.buildSuccessResponse(arena_allocator, msg_id);
@@ -294,7 +289,8 @@ pub const MessageHandler = struct {
         _ = try self.subscription_engine.subscribe(req.namespace, req.collection, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results);
+        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
     }
 
     fn handleStoreUnsubscribe(
@@ -315,17 +311,16 @@ pub const MessageHandler = struct {
     fn handleStoreQuery(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
-        conn: *Connection,
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        _ = conn;
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
 
         var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
         defer qr.deinit(arena_allocator);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results);
+        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
     }
 
     fn handleStoreLoadMore(
@@ -350,7 +345,8 @@ pub const MessageHandler = struct {
         var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results);
+        const tbl_md = self.schema_manager.getTable(sub_query.collection) orelse return error.UnknownTable;
+        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

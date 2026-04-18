@@ -136,11 +136,10 @@ pub const ManagedStmt = struct {
 pub fn appendProjectedColumnsSql(
     allocator: Allocator,
     buf: *std.ArrayListUnmanaged(u8),
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !void {
-    try buf.appendSlice(allocator, "id, namespace_id");
-    for (table_metadata.table.fields) |f| {
-        try buf.appendSlice(allocator, ", ");
+    for (table_metadata.fields, 0..) |f, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
         if (f.sql_type == .array) {
             try buf.appendSlice(allocator, "json(");
             try buf.appendSlice(allocator, f.name);
@@ -150,7 +149,6 @@ pub fn appendProjectedColumnsSql(
             try buf.appendSlice(allocator, f.name);
         }
     }
-    try buf.appendSlice(allocator, ", created_at, updated_at");
 }
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
@@ -164,7 +162,7 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
 
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     columns: []const types.ColumnValue,
 ) ![]const u8 {
     const table = table_metadata.table.name;
@@ -180,12 +178,14 @@ pub fn buildInsertOrReplaceSql(
     try sql_buf.appendSlice(allocator, table);
     try sql_buf.appendSlice(allocator, " (id, namespace_id");
     for (columns) |col| {
+        const field = try getColumnField(table_metadata, col);
         try sql_buf.append(allocator, ',');
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, field.name);
     }
     try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
     for (columns) |col| {
-        if (col.field_type == .array) {
+        const field = try getColumnField(table_metadata, col);
+        if (field.sql_type == .array) {
             try sql_buf.appendSlice(allocator, ", jsonb(?)");
         } else {
             try sql_buf.appendSlice(allocator, ", ?");
@@ -196,10 +196,11 @@ pub fn buildInsertOrReplaceSql(
 
     // Update each column provided
     for (columns, 0..) |col, i| {
+        const field = try getColumnField(table_metadata, col);
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, field.name);
         try sql_buf.appendSlice(allocator, " = excluded.");
-        try sql_buf.appendSlice(allocator, col.name);
+        try sql_buf.appendSlice(allocator, field.name);
     }
     // Always update updated_at
     if (columns.len > 0) try sql_buf.appendSlice(allocator, ", ");
@@ -209,9 +210,17 @@ pub fn buildInsertOrReplaceSql(
     return sql_buf.toOwnedSlice(allocator);
 }
 
+fn getColumnField(
+    table_metadata: *const schema_manager.TableMetadata,
+    col: types.ColumnValue,
+) !schema_manager.Field {
+    if (col.index >= table_metadata.fields.len) return types.StorageError.UnknownField;
+    return table_metadata.fields[col.index];
+}
+
 pub fn buildDeleteDocumentSql(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) ![]const u8 {
     const table = table_metadata.table.name;
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;

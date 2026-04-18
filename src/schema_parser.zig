@@ -30,6 +30,10 @@ pub const built_in_columns = [_]Field{
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
 
+/// Fixed positions of leading system columns in TableMetadata.fields.
+pub const id_field_index: usize = 0;
+pub const namespace_id_field_index: usize = 1;
+
 pub fn getSystemColumn(name: []const u8) ?Field {
     for (built_in_columns) |col| {
         if (std.mem.eql(u8, name, col.name)) return col;
@@ -97,32 +101,43 @@ pub const Table = struct {
 
 pub const TableMetadata = struct {
     table: *const Table,
-    field_map: std.StringHashMap(Field),
+    fields: []Field,
+    field_index_map: std.StringHashMap(usize),
 
     pub fn init(allocator: Allocator, table: *const Table) !TableMetadata {
-        var field_map = std.StringHashMap(Field).init(allocator);
-        errdefer field_map.deinit();
+        // Canonical order:
+        // id, namespace_id, <declared schema fields>, created_at, updated_at
+        const total = table.fields.len + 4;
+        var fields = try allocator.alloc(Field, total);
+        errdefer allocator.free(fields);
 
-        for (built_in_columns) |f| {
-            try field_map.put(f.name, f);
-        }
+        fields[id_field_index] = built_in_columns[id_field_index];
+        fields[namespace_id_field_index] = built_in_columns[namespace_id_field_index];
+        @memcpy(fields[2 .. 2 + table.fields.len], table.fields);
+        fields[2 + table.fields.len] = built_in_columns[2];
+        fields[2 + table.fields.len + 1] = built_in_columns[3];
 
-        for (table.fields) |f| {
-            try field_map.put(f.name, f);
+        var field_index_map = std.StringHashMap(usize).init(allocator);
+        errdefer field_index_map.deinit();
+        for (fields, 0..) |field, idx| {
+            try field_index_map.put(field.name, idx);
         }
 
         return .{
             .table = table,
-            .field_map = field_map,
+            .fields = fields,
+            .field_index_map = field_index_map,
         };
     }
 
-    pub fn deinit(self: *TableMetadata, _: Allocator) void {
-        self.field_map.deinit();
+    pub fn deinit(self: *TableMetadata, allocator: Allocator) void {
+        self.field_index_map.deinit();
+        allocator.free(self.fields);
     }
 
     pub fn getField(self: *const TableMetadata, name: []const u8) ?Field {
-        return self.field_map.get(name);
+        const idx = self.field_index_map.get(name) orelse return null;
+        return self.fields[idx];
     }
 };
 
@@ -173,8 +188,9 @@ pub const SchemaMetadata = struct {
         self.table_metadata.deinit();
     }
 
-    pub fn getTable(self: *const SchemaMetadata, name: []const u8) ?TableMetadata {
-        return self.table_metadata.get(name);
+    pub fn getTable(self: *const SchemaMetadata, name: []const u8) ?*const TableMetadata {
+        const ptr = self.table_metadata.getPtr(name) orelse return null;
+        return ptr;
     }
 };
 

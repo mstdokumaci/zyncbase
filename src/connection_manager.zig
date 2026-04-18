@@ -123,10 +123,8 @@ pub const ConnectionManager = struct {
     }
 
     /// Entry point for WebSocket close events
-    pub fn onClose(self: *ConnectionManager, ws: *WebSocket, code: i32, reason: []const u8) void {
+    pub fn onClose(self: *ConnectionManager, ws: *WebSocket) void {
         const conn_id = ws.getConnId();
-        _ = code;
-        _ = reason;
 
         const maybe_conn = blk: {
             self.mutex.lock();

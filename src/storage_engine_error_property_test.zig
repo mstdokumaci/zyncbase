@@ -2,8 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
-const ColumnValue = sth.ColumnValue;
-const tth = @import("typed_test_helpers.zig");
 
 // This property test verifies that database operations handle errors gracefully:
 // 1. All database operation failures return descriptive errors
@@ -44,16 +42,16 @@ test "storage: error handling read-only filesystem" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     // Try to set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try ctx.insertText("data_table", "key1", "data_table", "val", "value1");
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        var managed = try tbl.selectDocument(allocator, "key1", "data_table");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -65,24 +63,23 @@ test "storage: error handling constraint violations" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     // Set a value
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try ctx.insertText("data_table", "key1", "data_table", "val", "value1");
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value2"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try ctx.insertText("data_table", "key1", "data_table", "val", "value2");
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
-        defer managed.deinit();
-        _ = try sth.expectFieldString(managed.rows[0], "val", "value2");
+        var doc = try tbl.getOne(allocator, "key1", "data_table");
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", "value2");
     }
 }
 test "storage: error handling transaction rollback on error" {
@@ -92,15 +89,15 @@ test "storage: error handling transaction rollback on error" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-rollback", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     try storage.beginTransaction();
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try ctx.insertText("data_table", "key1", "data_table", "val", "value1");
     }
     try storage.rollbackTransaction();
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        var managed = try tbl.selectDocument(allocator, "key1", "data_table");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -114,8 +111,7 @@ test "storage: error handling concurrent access safety" {
     const storage = &ctx.engine;
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value1"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "key1", "data_table", &cols);
+        try ctx.insertText("data_table", "key1", "data_table", "val", "value1");
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -142,14 +138,14 @@ test "storage: error handling empty paths" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText("value"), .field_type = .text }};
-        try storage.insertOrReplace("data_table", "empty", "", &cols);
+        try ctx.insertText("data_table", "empty", "", "val", "value");
     }
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "empty", "");
+        var managed = try tbl.selectDocument(allocator, "empty", "");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -161,17 +157,17 @@ test "storage: error handling large values" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("test");
 
     const large_value = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        const cols = [_]ColumnValue{.{ .name = "val", .value = tth.valText(large_value), .field_type = .text }};
-        try storage.insertOrReplace("test", "large_key", "test", &cols);
+        try ctx.insertText("test", "large_key", "test", "val", large_value);
     }
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "test", "large_key", "test");
+        var managed = try tbl.selectDocument(allocator, "large_key", "test");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -183,11 +179,12 @@ test "storage: error handling delete non-existent key" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("test");
 
     try storage.deleteDocument("test", "nonexistent", "test");
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");
+        var managed = try tbl.selectDocument(allocator, "nonexistent", "test");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }

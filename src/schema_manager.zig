@@ -15,6 +15,8 @@ pub const freeSchema = schema_parser.freeSchema;
 pub const freeTable = schema_parser.freeTable;
 pub const freeField = schema_parser.freeField;
 pub const built_in_columns = schema_parser.built_in_columns;
+pub const id_field_index = schema_parser.id_field_index;
+pub const namespace_id_field_index = schema_parser.namespace_id_field_index;
 pub const getSystemColumn = schema_parser.getSystemColumn;
 pub const isSystemColumn = schema_parser.isSystemColumn;
 
@@ -51,7 +53,7 @@ pub const SchemaManager = struct {
     }
 
     /// Find a table metadata by name. Returns null if not found.
-    pub fn getTable(self: *const SchemaManager, name: []const u8) ?TableMetadata {
+    pub fn getTable(self: *const SchemaManager, name: []const u8) ?*const TableMetadata {
         return self.metadata.getTable(name);
     }
 

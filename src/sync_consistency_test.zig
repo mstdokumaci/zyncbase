@@ -29,20 +29,15 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 2) Queue a write BEFORE any subscription exists.
     //    This is the behavior that used to be dropped when capture was optional.
-    try engine.insertOrReplace(
-        "items",
-        "id1",
-        "ns",
-        &[_]sth.ColumnValue{
-            .{ .name = "val", .value = tth.valText("task 1"), .field_type = .text },
-        },
-    );
+    try ctx.insertText("items", "id1", "ns", "val", "task 1");
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.
+    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
+    const val_index = items_md.field_index_map.get("val") orelse return error.UnknownField;
     const conditions = try allocator.alloc(query_parser.Condition, 1);
     conditions[0] = query_parser.Condition{
-        .field = try allocator.dupe(u8, "val"),
+        .field_index = val_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "task 1"),
         .field_type = .text,

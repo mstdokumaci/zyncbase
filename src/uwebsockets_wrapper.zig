@@ -285,15 +285,10 @@ fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, l
     onClose(ws, code, msg, len, true);
 }
 
-fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
-    _ = ws;
-}
-fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
-    _ = ws;
-}
+fn onDrainCallbackNoSSL(_: ?*c.uws_websocket_t) callconv(.c) void {}
+fn onDrainCallbackSSL(_: ?*c.uws_websocket_t) callconv(.c) void {}
 
-fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, id: usize) callconv(.c) void {
-    _ = id;
+fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, _: usize) callconv(.c) void {
     if (upgrade_context == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(upgrade_context.?));
     const ssl: c_int = if (server.ssl) 1 else 0;

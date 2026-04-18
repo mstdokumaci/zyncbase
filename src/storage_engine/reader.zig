@@ -8,7 +8,7 @@ const sql = @import("sql.zig");
 
 const TypedValue = types.TypedValue;
 
-pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: schema_manager.TableMetadata) ![]const u8 {
+pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: *const schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
@@ -33,7 +33,7 @@ pub const QueryResult = struct {
 
 pub fn buildSelectQuery(
     allocator: Allocator,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     namespace: []const u8,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
@@ -44,6 +44,8 @@ pub fn buildSelectQuery(
         for (values.items) |v| v.deinit(allocator);
         values.deinit(allocator);
     }
+    if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
+    const sort_field_name = table_metadata.fields[filter.order_by.field_index].name;
 
     // 1.. SELECT clause
     try sql_buf.appendSlice(allocator, "SELECT ");
@@ -71,7 +73,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
-                try appendConditionSql(allocator, &sql_buf, &values, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -83,7 +85,7 @@ pub fn buildSelectQuery(
             try sql_buf.appendSlice(allocator, "(");
             for (or_conds, 0..) |cond, i| {
                 if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-                try appendConditionSql(allocator, &sql_buf, &values, cond);
+                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
             }
             try sql_buf.appendSlice(allocator, ")");
             added_where = true;
@@ -93,24 +95,23 @@ pub fn buildSelectQuery(
         if (filter.after) |cursor| {
             if (added_where) try sql_buf.appendSlice(allocator, " AND ");
 
-            const sql_field = filter.order_by.field;
             const op = if (filter.order_by.desc) "<" else ">";
 
             // SQLite row-value comparison (requires SQLite 3.15.0+):
             // (sql_field, id) > (?, ?)
-            if (std.mem.eql(u8, sql_field, "id")) {
+            if (filter.order_by.field_index == 0) {
                 try sql_buf.appendSlice(allocator, "id ");
                 try sql_buf.appendSlice(allocator, op);
                 try sql_buf.appendSlice(allocator, " ?");
             } else {
                 try sql_buf.appendSlice(allocator, "(");
-                try sql_buf.appendSlice(allocator, sql_field);
+                try sql_buf.appendSlice(allocator, sort_field_name);
                 try sql_buf.appendSlice(allocator, ", id) ");
                 try sql_buf.appendSlice(allocator, op);
                 try sql_buf.appendSlice(allocator, " (?, ?)");
             }
 
-            if (std.mem.eql(u8, sql_field, "id")) {
+            if (filter.order_by.field_index == 0) {
                 const ci = try allocator.dupe(u8, cursor.id);
                 errdefer allocator.free(ci);
                 try values.append(allocator, TypedValue{ .scalar = .{ .text = ci } });
@@ -131,8 +132,7 @@ pub fn buildSelectQuery(
     // 3.. ORDER BY
     try sql_buf.appendSlice(allocator, " ORDER BY ");
     const o = filter.order_by;
-    const sql_field = o.field;
-    try sql_buf.appendSlice(allocator, sql_field);
+    try sql_buf.appendSlice(allocator, sort_field_name);
     try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
     try sql_buf.appendSlice(allocator, ", id ");
     try sql_buf.appendSlice(allocator, if (o.desc) " DESC" else " ASC");
@@ -170,9 +170,11 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
+    table_metadata: *const schema_manager.TableMetadata,
     cond: query_parser.Condition,
 ) !void {
-    const sql_field = cond.field;
+    if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
+    const sql_field = table_metadata.fields[cond.field_index].name;
     try sql_buf.appendSlice(allocator, sql_field);
 
     switch (cond.op) {
@@ -269,30 +271,27 @@ pub fn appendConditionSql(
 pub fn decodeTypedRow(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !types.TypedRow {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    var fields = try allocator.alloc(types.FieldEntry, col_count);
+    if (col_count != table_metadata.fields.len) return types.StorageError.ColumnCountMismatch;
+
+    var values = try allocator.alloc(types.TypedValue, col_count);
     var i: usize = 0;
     errdefer {
-        for (fields[0..i]) |f| f.deinit(allocator);
-        allocator.free(fields);
+        for (values[0..i]) |value| value.deinit(allocator);
+        allocator.free(values);
     }
 
     while (i < col_count) : (i += 1) {
-        const col_name_c = sqlite.c.sqlite3_column_name(stmt, @intCast(i)) orelse return error.InternalError;
-        const col_name = std.mem.span(col_name_c);
-        const field = table_metadata.getField(col_name) orelse return types.StorageError.UnknownField;
-
+        const field = table_metadata.fields[i];
         const val = try types.TypedValue.fromSQLiteColumn(allocator, stmt, @intCast(i), field);
         errdefer val.deinit(allocator);
-
-        fields[i] = types.FieldEntry{
-            .name = field.name,
-            .value = val,
-        };
+        values[i] = val;
     }
-    return types.TypedRow{ .fields = fields };
+    return types.TypedRow{
+        .values = values,
+    };
 }
 
 pub fn execSelectDocumentTyped(
@@ -301,7 +300,7 @@ pub fn execSelectDocumentTyped(
     stmt: *sqlite.c.sqlite3_stmt,
     id: []const u8,
     namespace: []const u8,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
 ) !?types.TypedRow {
     if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
     if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
@@ -318,10 +317,12 @@ pub fn execQueryTyped(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     values: []const TypedValue,
-    table_metadata: schema_manager.TableMetadata,
+    table_metadata: *const schema_manager.TableMetadata,
     requested_limit: ?u32,
-    sort_field: []const u8,
+    sort_field_index: usize,
 ) !struct { rows: []types.TypedRow, next_cursor: ?types.TypedCursor } {
+    if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
+
     for (values, 0..) |v, i| {
         try v.bindSQLite(db, stmt, @intCast(i + 1), allocator);
     }
@@ -344,19 +345,23 @@ pub fn execQueryTyped(
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
         if (rows.items.len > limit) {
-            const last_row = rows.items[limit - 1];
-            const sort_val = last_row.getField(sort_field) orelse return error.InvalidMessageFormat;
-            const id_val = last_row.getField("id") orelse return error.InvalidMessageFormat;
-            next_cursor = types.TypedCursor{
-                .sort_value = try sort_val.clone(allocator),
-                .id = try allocator.dupe(u8, id_val.scalar.text),
-            };
-
-            var i: usize = limit;
-            while (i < rows.items.len) : (i += 1) {
-                rows.items[i].deinit(allocator);
+            if (limit > 0) {
+                const last_row = rows.items[limit - 1];
+                const sort_val = last_row.values[sort_field_index];
+                const id_val = last_row.values[schema_manager.id_field_index];
+                if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
+                next_cursor = types.TypedCursor{
+                    .sort_value = try sort_val.clone(allocator),
+                    .id = try allocator.dupe(u8, id_val.scalar.text),
+                };
             }
-            rows.items.len = limit;
+
+            while (rows.items.len > limit) {
+                if (rows.pop()) |extra_row| {
+                    var row = extra_row;
+                    row.deinit(allocator);
+                } else unreachable;
+            }
         }
     }
 

@@ -45,6 +45,8 @@ pub const StorageError = error{
     InvalidArrayElement,
     /// The provided data path is invalid (too short, too long, or malformed)
     InvalidPath,
+    /// SQLite returned a different number of columns than schema metadata expects
+    ColumnCountMismatch,
     /// Data directory is invalid or empty
     InvalidDataDir,
     /// Path is not a directory
@@ -55,11 +57,10 @@ pub const StorageError = error{
     SQLiteError,
 };
 
-/// A column name + msgpack value pair for storage inserts/updates.
+/// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
-    name: []const u8,
+    index: usize,
     value: TypedValue,
-    field_type: schema_manager.FieldType,
 };
 
 /// A managed result that might be backed by a cache handle.
@@ -87,45 +88,27 @@ pub const ManagedResult = struct {
     }
 };
 
-pub const FieldEntry = struct {
-    name: []const u8, // Borrowed (schema metadata/static)
-    value: TypedValue,
-
-    pub fn deinit(self: FieldEntry, allocator: Allocator) void {
-        self.value.deinit(allocator);
-    }
-
-    pub fn clone(self: FieldEntry, allocator: Allocator) !FieldEntry {
-        return .{ .name = self.name, .value = try self.value.clone(allocator) };
-    }
-};
-
 pub const TypedRow = struct {
-    fields: []FieldEntry, // Owned
+    values: []TypedValue,
 
     pub fn deinit(self: TypedRow, allocator: Allocator) void {
-        for (self.fields) |f| f.deinit(allocator);
-        allocator.free(self.fields);
+        for (self.values) |value| value.deinit(allocator);
+        allocator.free(self.values);
     }
 
     pub fn clone(self: TypedRow, allocator: Allocator) !TypedRow {
-        const cloned = try allocator.alloc(FieldEntry, self.fields.len);
+        const cloned = try allocator.alloc(TypedValue, self.values.len);
         var i: usize = 0;
         errdefer {
-            for (cloned[0..i]) |f| f.deinit(allocator);
+            for (cloned[0..i]) |value| value.deinit(allocator);
             allocator.free(cloned);
         }
-        while (i < self.fields.len) : (i += 1) {
-            cloned[i] = try self.fields[i].clone(allocator);
+        while (i < self.values.len) : (i += 1) {
+            cloned[i] = try self.values[i].clone(allocator);
         }
-        return .{ .fields = cloned };
-    }
-
-    pub fn getField(self: TypedRow, name: []const u8) ?TypedValue {
-        for (self.fields) |f| {
-            if (std.mem.eql(u8, f.name, name)) return f.value;
-        }
-        return null;
+        return .{
+            .values = cloned,
+        };
     }
 };
 
@@ -504,12 +487,6 @@ pub const ReconnectionConfig = struct {
     max_backoff_ms: u64 = 5000,
     /// Backoff multiplier for exponential backoff
     backoff_multiplier: f64 = 2.0,
-};
-
-pub const ColumnContext = struct {
-    index: c_int,
-    name: []const u8,
-    field: ?schema_manager.Field,
 };
 
 pub const WriteOp = union(enum) {

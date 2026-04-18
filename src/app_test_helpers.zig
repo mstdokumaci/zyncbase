@@ -16,6 +16,8 @@ const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
+const sth = @import("storage_engine_test_helpers.zig");
+const tth = @import("typed_test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -168,6 +170,62 @@ pub const AppTestContext = struct {
         self.memory_strategy.deinit();
     }
 
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_manager.TableMetadata {
+        return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
+    }
+
+    pub fn table(self: *AppTestContext, table_name: []const u8) !sth.TableFixture {
+        return .{
+            .engine = &self.storage_engine,
+            .metadata = try self.tableMetadata(table_name),
+        };
+    }
+
+    pub fn insertNamed(
+        self: *AppTestContext,
+        table_name: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        columns: anytype,
+    ) !void {
+        const tbl = try self.table(table_name);
+        try tbl.insertNamed(id, namespace, columns);
+    }
+
+    pub fn insertField(
+        self: *AppTestContext,
+        table_name: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: @import("storage_engine.zig").TypedValue,
+    ) !void {
+        const tbl = try self.table(table_name);
+        try tbl.insertField(id, namespace, field, value);
+    }
+
+    pub fn insertText(
+        self: *AppTestContext,
+        table_name: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: []const u8,
+    ) !void {
+        try self.insertField(table_name, id, namespace, field, tth.valText(value));
+    }
+
+    pub fn insertInt(
+        self: *AppTestContext,
+        table_name: []const u8,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: i64,
+    ) !void {
+        try self.insertField(table_name, id, namespace, field, tth.valInt(value));
+    }
+
     /// Helper to open a test connection and return a scoped wrapper.
     /// This ensures the correct LIFO release order for test and manager references.
     pub fn openScopedConnection(self: *AppTestContext, ws: *WebSocket) !ScopedConnection {
@@ -195,7 +253,7 @@ pub const AppTestContext = struct {
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
-            self.app.manager.onClose(self.ws, 1000, "normal");
+            self.app.manager.onClose(self.ws);
 
             // 2. Test drops its reference (may return to pool)
             if (self.conn.release()) {
@@ -248,7 +306,7 @@ pub const AppTestContext = struct {
 
             if (maybe_conn) |ws| {
                 var local_ws = ws; // Mutability for callback
-                self.manager.onClose(&local_ws, 1000, "shutdown");
+                self.manager.onClose(&local_ws);
             } else {
                 break;
             }

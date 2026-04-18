@@ -1,14 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 
-const storage_mod = @import("storage_engine.zig");
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
-const tth = @import("typed_test_helpers.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -27,7 +25,7 @@ test "Verification: WebSocket connection lifecycle" {
     try app.manager.onOpen(&ws);
     // Explicit close for middle-test state verification, plus defer for early failures
     var closed = false;
-    defer if (!closed) app.manager.onClose(&ws, 1000, "Cleanup");
+    defer if (!closed) app.manager.onClose(&ws);
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
@@ -39,7 +37,7 @@ test "Verification: WebSocket connection lifecycle" {
     try testing.expectEqualStrings("default", state.namespace);
 
     // Test connection close
-    app.manager.onClose(&ws, 1000, "Normal closure");
+    app.manager.onClose(&ws);
     closed = true;
 
     // Verify connection was removed
@@ -109,15 +107,12 @@ test "Verification: StoreSet message processing" {
 
     // Wait for write to complete
     try app.storage_engine.flushPendingWrites();
+    const data_table = try app.table("data_table");
 
     // Verify data was stored
-    var managed = try app.storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
-    defer managed.deinit();
-    if (managed.rows.len == 0) return error.DocumentNotFound;
-    const doc = managed.rows[0];
-
-    const val_payload = doc.getField("val") orelse return error.ValueNotFound;
-    try testing.expectEqualStrings("test_value", val_payload.scalar.text);
+    var doc = try data_table.getOne(allocator, "key", "test_namespace");
+    defer doc.deinit();
+    _ = try doc.expectFieldString("val", "test_value");
 }
 
 // Task 14 Verification: StoreQuery message processing
@@ -129,8 +124,7 @@ test "Verification: StoreQuery message processing" {
     defer app.deinit();
 
     // First, store a value (typed storage)
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("stored_value"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
+    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
@@ -210,11 +204,8 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer app.deinit();
 
     // Insert two rows so a limited query must return nextCursor
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_a"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
-
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_b"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
+    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
+    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
@@ -324,7 +315,7 @@ test "Verification: Error handling for invalid messages" {
     {
         var ws = createMockWebSocket();
         try app.manager.onOpen(&ws);
-        defer app.manager.onClose(&ws, 1000, "Normal closure");
+        defer app.manager.onClose(&ws);
 
         const text_message = "text message";
 
@@ -503,14 +494,11 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     }
 
     // Also verify directly in storage engine
+    const data_table = try app.table("data_table");
     for (test_data) |td| {
-        var managed = try app.storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
-        defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
-        const doc = managed.rows[0];
-
-        const got_val = doc.getField("val") orelse return error.MissingValue;
-        try testing.expectEqualStrings(td.value, got_val.scalar.text);
+        var doc = try data_table.getOne(allocator, td.id, td.namespace);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", td.value);
     }
 }
 
@@ -523,8 +511,7 @@ test "Verification: StoreSubscribe message processing" {
     defer app.deinit();
 
     // 1. Store a value
-    const cols = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("stored_value"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "key", "test_namespace", &cols);
+    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
@@ -605,11 +592,8 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer app.deinit();
 
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
-    const cols_a = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_a"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-a", "test_namespace", &cols_a);
-
-    const cols_b = [_]storage_mod.ColumnValue{.{ .name = "val", .value = tth.valText("value_b"), .field_type = .text }};
-    try app.storage_engine.insertOrReplace("data_table", "doc-b", "test_namespace", &cols_b);
+    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
+    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
