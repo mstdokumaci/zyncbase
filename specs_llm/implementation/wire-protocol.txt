@@ -19,8 +19,8 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type":  "StoreSet",
   "id":    2,
-  "path":  ["elements", "rect-1"],
-  "value": { "x": 100, "y": 200, "width": 50, "height": 50 }
+  "path":  [0, "rect-1"],
+  "value": { 1: 100, 2: 200, 3: 50, 4: 50 } // Integer-keyed map for field indices
 }
 ```"ok"```
 {
@@ -31,7 +31,7 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type": "StoreRemove",
   "id":   3,
-  "path": ["elements", "rect-1"]
+  "path": [0, "rect-1"]
 }
 ```"ok"```
 {
@@ -43,9 +43,9 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "type": "StoreBatch",
   "id":   4,
   "ops": [
-    ["s", ["tasks", "123"], { "status": "assigned" }],
-    ["s", ["users", "bob", "taskCount"], 5],
-    ["r", ["temporary_locks", "123"]]
+    ["s", [1, "123"], { 3: "assigned" }],
+    ["s", [0, "bob", 8], 5],
+    ["r", [2, "123"]]
   ]
 }
 ```codes `"s"` Set `path `value `"r"` Remove `path "ok"```
@@ -57,12 +57,12 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type":  "StoreQuery",
   "id":    6,
-  "collection": "users",
+  "table_index": 0,
   "conditions": [
-    ["age", 4, 18],              // [field, op_code, value] — op 4 = gte
-    ["status", 0, "active"]      // op 0 = eq
+    [5, 4, 18],              // [field_index, op_code, value] — op 4 = gte
+    [2, 0, "active"]         // op 0 = eq
   ],
-  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
+  "orderBy": [3, 1],  // [field_index, desc_flag] — 1 = desc
   "limit":   50,
   "after":   "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id]))
 }
@@ -77,11 +77,11 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
 {
   "type":    "StoreSubscribe",
   "id":      7,
-  "collection": "tasks",
+  "table_index": 1,
   "conditions": [
-    ["status", 0, "active"]      // [field, op_code, value] — op 0 = eq
+    [2, 0, "active"]      // [field_index, op_code, value] — op 0 = eq
   ],
-  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
+  "orderBy": [8, 1],  // [field_index, desc_flag] — 1 = desc
   "limit":   50
 }
 ```"ok" includes snapshot```
@@ -211,12 +211,12 @@ ZyncBase Wire Protocol Specification 2026-03-09 v1 Table of Contents [Overview [
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
-      "path":  ["elements", "rect-2"],
-      "value": { "x": 50, "y": 75 }   // Present for "set", absent for "remove"
+      "path":  [0, "rect-2"],
+      "value": { 1: 50, 2: 75 }       // Present for "set", absent for "remove"
     },
     {
       "op":   "remove",
-      "path": ["elements", "rect-3"]
+      "path": [0, "rect-3"]
     }
   ]
 }
@@ -247,7 +247,16 @@ GET /ws?ticket=zyc_tk_abc123... HTTP/1.1
 Upgrade: websocket
 Connection: Upgrade
 Origin: https://app.example.com
-```server validates Origin header Ticket signature expiry$session success HTTP 101 Switching Protocols failure HTTP 401 403. Connected message WebSocket server sends `Connected push```
+```server validates Origin header prevention Ticket signature expiry `$session` success HTTP 101 Switching Protocols failure HTTP 401 403. SchemaSync Connected WebSocket established server pushes two messages `SchemaSync dictionary integer routing SDK hash payload track queue compatibility `fields` array matches Zig server memory layout system columns`id_id_at_at included SDK indices align```
+{
+  "type":   "SchemaSync",
+  "tables": ["users", "tasks"],
+  "fields": [
+    ["id", "namespace_id", "email", "created_at", "updated_at"],
+    ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
+  ]
+}
+````Connected session context```
 {
   "type":               "Connected",
   "userId":             "user-123",       // Authenticated user ID (from sub claim)
@@ -288,4 +297,4 @@ Origin: https://app.example.com
   "type":    "ok",
   "allowed": true
 }
-```Message Summary Direction SDK method Response C→S `StoreSet` `store.set(path value) `ok` C→S `StoreRemove `store.remove(path) `ok` C→S `StoreBatch `store.batch(ops `ok` C→S `StoreQuery` `store.get(path).query(collection opts `ok `nextCursor C→S `StoreSubscribe` `store.listen(path.subscribe(collection `ok `subId `value `hasMore C→S `StoreUnsubscribe` function `ok C→S `StoreLoadMore`.loadMore() `ok `subId `value `hasMore `nextCursor C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe`.subscribe(cb)` `ok `subId `users` C→S `PresenceUnsubscribe` `ok C→S `PresenceRemove`.remove() `ok` C→S `StoreSetNamespace` `client.setStoreNamespace(ns) `ok` C→S `PresenceSetNamespace.setPresenceNamespace(ns) `ok` C→S `AuthRefresh `client.authRefresh(token) `ok `session S→C `Connected` Push (no `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` Push `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
+```Message Summary Direction SDK method Response C→S `StoreSet` `store.set(path value) `ok` C→S `StoreRemove `store.remove(path) `ok` C→S `StoreBatch `store.batch(ops `ok` C→S `StoreQuery` `store.get(path).query(collection opts `ok `nextCursor C→S `StoreSubscribe` `store.listen(path.subscribe(collection `ok `subId `value `hasMore C→S `StoreUnsubscribe` function `ok C→S `StoreLoadMore`.loadMore() `ok `subId `value `hasMore `nextCursor C→S `PresenceSet`.set(data) `ok C→S `PresenceSubscribe`.subscribe(cb)` `ok `subId `users` C→S `PresenceUnsubscribe` `ok C→S `PresenceRemove`.remove() `ok` C→S `StoreSetNamespace` `client.setStoreNamespace(ns) `ok` C→S `PresenceSetNamespace.setPresenceNamespace(ns `ok` C→S `AuthRefresh `client.authRefresh(token)` `ok` `session S→C `SchemaSync` Push (no `id S→C `Connected` Push `id S→C `StoreDelta` Push `id S→C `PresenceBroadcast` Push `id S→C `ServerDisconnect` Push `id Z↔H `HookServerOnConnect` Request/Response Z↔H `HookServerAuthCheck` Request/Response
