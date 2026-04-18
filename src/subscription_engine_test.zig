@@ -21,10 +21,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     _ = try engine.subscribe("default", "items", filter, 1, 100);
 
     // Create a matching row change
-    var new_row = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 0, .value = tth.valText("1") },
-        .{ .index = 2, .value = tth.valText("active") },
-    });
+    var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valText("active")});
     defer new_row.deinit(allocator);
 
     const change = RowChange{
@@ -89,14 +86,10 @@ test "SubscriptionEngine: operator matching" {
     });
     defer filter.deinit(allocator);
 
-    var row1 = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 2, .value = tth.valText("Alice") },
-    });
+    var row1 = try tth.rowFromTypedValues(allocator, &.{tth.valText("Alice")});
     defer row1.deinit(allocator);
 
-    var row2 = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 2, .value = tth.valText("Bob") },
-    });
+    var row2 = try tth.rowFromTypedValues(allocator, &.{tth.valText("Bob")});
     defer row2.deinit(allocator);
 
     try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1));
@@ -191,7 +184,7 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     defer filter.deinit(allocator);
     _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
 
-    var new_row = try tth.rowFromIndexedValues(allocator, &.{});
+    var new_row = try tth.rowFromTypedValues(allocator, &.{});
     defer new_row.deinit(allocator);
 
     const change = RowChange{
@@ -232,27 +225,21 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     // Case-insensitive startsWith
     {
-        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-            .{ .index = 2, .value = tth.valText("aLiCe") },
-        });
+        var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("aLiCe")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r));
     }
 
     // Case-insensitive endsWith
     {
-        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-            .{ .index = 2, .value = tth.valText("reAL") },
-        });
+        var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("reAL")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r));
     }
 
     // Case-insensitive contains
     {
-        var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-            .{ .index = 2, .value = tth.valText("vALid") },
-        });
+        var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("vALid")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r));
     }
@@ -304,9 +291,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 2, .value = tth.valText("admin") },
-    });
+    var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("admin")});
     defer r.deinit(allocator);
 
     const change = RowChange{
@@ -376,9 +361,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     _ = try engine.subscribe("default", "users", filter, 1, 100);
 
-    var r = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 2, .value = tth.valText("member") },
-    });
+    var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("member")});
     defer r.deinit(allocator);
 
     const change = RowChange{

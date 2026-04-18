@@ -41,25 +41,16 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
     return result;
 }
 
-pub const IndexedValue = struct {
-    index: usize,
-    value: TypedValue,
-};
-
 /// Creates a TypedRow without schema metadata.
 /// Initializes all slots to nil, sets canonical trailing system timestamps
-/// (`created_at`, `updated_at`) to 0 when present, then applies overrides.
-pub fn rowFromIndexedValues(
+/// (`created_at`, `updated_at`) to 0 when present, then applies values starting at index 2.
+pub fn rowFromTypedValues(
     allocator: std.mem.Allocator,
-    overrides: []const IndexedValue,
+    typed_values: []const TypedValue,
 ) !TypedRow {
     // Canonical minimum shape:
     // [id, namespace_id, created_at, updated_at]
-    var value_count: usize = 4;
-    for (overrides) |override| {
-        const needed = override.index + 3;
-        if (needed > value_count) value_count = needed;
-    }
+    const value_count: usize = @max(4, typed_values.len + 4);
 
     const values = try allocator.alloc(TypedValue, value_count);
     errdefer allocator.free(values);
@@ -74,9 +65,8 @@ pub fn rowFromIndexedValues(
         values[values.len - 1] = valInt(0);
     }
 
-    for (overrides) |override| {
-        if (override.index >= values.len) return error.IndexOutOfBounds;
-        values[override.index] = try override.value.clone(allocator);
+    for (typed_values, 0..) |value, index| {
+        values[index + 2] = try value.clone(allocator);
     }
 
     return .{ .values = values };

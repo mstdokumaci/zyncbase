@@ -50,9 +50,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
     // Concurrent handleRowChange
     const run_handle = struct {
         fn run(engine_ptr: *SubscriptionEngine, alloc: std.mem.Allocator) void {
-            var r = tth.rowFromIndexedValues(alloc, &[_]tth.IndexedValue{
-                .{ .index = 2, .value = tth.valBool(true) },
-            }) catch return;
+            var r = tth.rowFromTypedValues(alloc, &.{tth.valBool(true)}) catch return;
             defer r.deinit(alloc);
 
             const change = RowChange{

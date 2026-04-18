@@ -28,10 +28,10 @@ test "SubscriptionEngine: handleRowChange performance" {
         }
     }
 
-    var new_row = try tth.rowFromIndexedValues(allocator, &[_]tth.IndexedValue{
-        .{ .index = 2, .value = tth.valInt(0) }, // field_0
-        .{ .index = 3, .value = tth.valInt(1) }, // field_1
-        .{ .index = 4, .value = tth.valInt(2) }, // field_2
+    var new_row = try tth.rowFromTypedValues(allocator, &.{
+        tth.valInt(0), // field_0
+        tth.valInt(1), // field_1
+        tth.valInt(2), // field_2
     });
     defer new_row.deinit(allocator);
 
