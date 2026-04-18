@@ -274,7 +274,7 @@ pub fn decodeTypedRow(
     table_metadata: *const schema_manager.TableMetadata,
 ) !types.TypedRow {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    if (col_count != table_metadata.fields.len) return error.InvalidMessageFormat;
+    if (col_count != table_metadata.fields.len) return types.StorageError.ColumnCountMismatch;
 
     var values = try allocator.alloc(types.TypedValue, col_count);
     var i: usize = 0;

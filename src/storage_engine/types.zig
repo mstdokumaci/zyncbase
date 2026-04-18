@@ -45,6 +45,8 @@ pub const StorageError = error{
     InvalidArrayElement,
     /// The provided data path is invalid (too short, too long, or malformed)
     InvalidPath,
+    /// SQLite returned a different number of columns than schema metadata expects
+    ColumnCountMismatch,
     /// Data directory is invalid or empty
     InvalidDataDir,
     /// Path is not a directory
