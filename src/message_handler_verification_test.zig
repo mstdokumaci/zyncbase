@@ -7,7 +7,6 @@ const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
-const sth = @import("storage_engine_test_helpers.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -108,15 +107,12 @@ test "Verification: StoreSet message processing" {
 
     // Wait for write to complete
     try app.storage_engine.flushPendingWrites();
+    const data_table = try app.table("data_table");
 
     // Verify data was stored
-    var managed = try app.storage_engine.selectDocument(allocator, "data_table", "key", "test_namespace");
-    defer managed.deinit();
-    if (managed.rows.len == 0) return error.DocumentNotFound;
-    const doc = managed.rows[0];
-
-    const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.ValueNotFound;
-    _ = try sth.expectFieldString(doc, data_table_md, "val", "test_value");
+    var doc = try data_table.getOne(allocator, "key", "test_namespace");
+    defer doc.deinit();
+    _ = try doc.expectFieldString("val", "test_value");
 }
 
 // Task 14 Verification: StoreQuery message processing
@@ -498,14 +494,11 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     }
 
     // Also verify directly in storage engine
+    const data_table = try app.table("data_table");
     for (test_data) |td| {
-        var managed = try app.storage_engine.selectDocument(allocator, "data_table", td.id, td.namespace);
-        defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
-        const doc = managed.rows[0];
-
-        const data_table_md = app.store_service.schema_manager.getTable("data_table") orelse return error.MissingValue;
-        _ = try sth.expectFieldString(doc, data_table_md, "val", td.value);
+        var doc = try data_table.getOne(allocator, td.id, td.namespace);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", td.value);
     }
 }
 

@@ -170,53 +170,60 @@ pub const AppTestContext = struct {
         self.memory_strategy.deinit();
     }
 
-    pub fn tableMetadata(self: *const AppTestContext, table: []const u8) !*const schema_manager.TableMetadata {
-        return self.schema_manager.getTable(table) orelse error.UnknownTable;
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_manager.TableMetadata {
+        return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
+    }
+
+    pub fn table(self: *AppTestContext, table_name: []const u8) !sth.TableFixture {
+        return .{
+            .engine = &self.storage_engine,
+            .metadata = try self.tableMetadata(table_name),
+        };
     }
 
     pub fn insertNamed(
         self: *AppTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         columns: anytype,
     ) !void {
-        const table_metadata = try self.tableMetadata(table);
+        const table_metadata = try self.tableMetadata(table_name);
         try sth.insertNamedWithMetadata(&self.storage_engine, table_metadata, id, namespace, columns);
     }
 
     pub fn insertField(
         self: *AppTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: @import("storage_engine.zig").TypedValue,
     ) !void {
-        const table_metadata = try self.tableMetadata(table);
+        const table_metadata = try self.tableMetadata(table_name);
         try sth.insertFieldWithMetadata(&self.storage_engine, table_metadata, id, namespace, field, value);
     }
 
     pub fn insertText(
         self: *AppTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: []const u8,
     ) !void {
-        try self.insertField(table, id, namespace, field, tth.valText(value));
+        try self.insertField(table_name, id, namespace, field, tth.valText(value));
     }
 
     pub fn insertInt(
         self: *AppTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: i64,
     ) !void {
-        try self.insertField(table, id, namespace, field, tth.valInt(value));
+        try self.insertField(table_name, id, namespace, field, tth.valInt(value));
     }
 
     /// Helper to open a test connection and return a scoped wrapper.

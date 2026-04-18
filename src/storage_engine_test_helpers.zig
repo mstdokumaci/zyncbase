@@ -3,6 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
+const SelfMod = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
@@ -22,6 +23,185 @@ pub const NamedColumn = struct {
     value: storage_engine.TypedValue,
 };
 
+pub const TableFixture = struct {
+    engine: *StorageEngine,
+    metadata: *const TableMetadata,
+
+    pub fn fieldIndex(self: TableFixture, field: []const u8) !usize {
+        return self.metadata.field_index_map.get(field) orelse StorageError.UnknownField;
+    }
+
+    pub fn insertNamed(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+        columns: anytype,
+    ) !void {
+        try insertNamedWithMetadata(self.engine, self.metadata, id, namespace, columns);
+    }
+
+    pub fn insertField(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: storage_engine.TypedValue,
+    ) !void {
+        try insertFieldWithMetadata(self.engine, self.metadata, id, namespace, field, value);
+    }
+
+    pub fn insertText(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: []const u8,
+    ) !void {
+        try self.insertField(id, namespace, field, tth.valText(value));
+    }
+
+    pub fn insertInt(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+        field: []const u8,
+        value: i64,
+    ) !void {
+        try self.insertField(id, namespace, field, tth.valInt(value));
+    }
+
+    pub fn flush(self: TableFixture) !void {
+        try self.engine.flushPendingWrites();
+    }
+
+    pub fn selectDocument(
+        self: TableFixture,
+        allocator: Allocator,
+        id: []const u8,
+        namespace: []const u8,
+    ) !storage_engine.ManagedResult {
+        return self.engine.selectDocument(allocator, self.metadata.table.name, id, namespace);
+    }
+
+    pub fn getOne(
+        self: TableFixture,
+        allocator: Allocator,
+        id: []const u8,
+        namespace: []const u8,
+    ) !ManagedDocument {
+        var managed = try self.selectDocument(allocator, id, namespace);
+        if (managed.rows.len == 0) {
+            managed.deinit();
+            return error.NotFound;
+        }
+        return .{
+            .table = self,
+            .managed = managed,
+        };
+    }
+
+    pub fn getRowField(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8) ?storage_engine.TypedValue {
+        return SelfMod.getRowField(doc, self.metadata, key);
+    }
+
+    pub fn getFieldText(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8) ![]const u8 {
+        return SelfMod.getFieldText(doc, self.metadata, key);
+    }
+
+    pub fn getFieldTextOrNull(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8) ?[]const u8 {
+        return SelfMod.getFieldTextOrNull(doc, self.metadata, key);
+    }
+
+    pub fn getFieldInt(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8) !i64 {
+        return SelfMod.getFieldInt(doc, self.metadata, key);
+    }
+
+    pub fn expectMissingField(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8) !void {
+        try SelfMod.expectMissingField(doc, self.metadata, key);
+    }
+
+    pub fn expectFieldTextArray(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected: []const []const u8) !void {
+        try SelfMod.expectFieldTextArray(doc, self.metadata, key, expected);
+    }
+
+    pub fn expectFieldString(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
+        return SelfMod.expectFieldString(doc, self.metadata, key, expected);
+    }
+
+    pub fn expectFieldInt(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected: i64) !i64 {
+        return SelfMod.expectFieldInt(doc, self.metadata, key, expected);
+    }
+
+    pub fn expectFieldReal(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected: f64) !f64 {
+        return SelfMod.expectFieldReal(doc, self.metadata, key, expected);
+    }
+
+    pub fn expectFieldBool(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected: bool) !bool {
+        return SelfMod.expectFieldBool(doc, self.metadata, key, expected);
+    }
+
+    pub fn expectFieldArray(self: TableFixture, doc: storage_engine.TypedRow, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
+        return SelfMod.expectFieldArray(doc, self.metadata, key, expected_len);
+    }
+};
+
+pub const ManagedDocument = struct {
+    table: TableFixture,
+    managed: storage_engine.ManagedResult,
+
+    pub fn deinit(self: *ManagedDocument) void {
+        self.managed.deinit();
+    }
+
+    pub fn row(self: *const ManagedDocument) storage_engine.TypedRow {
+        return self.managed.rows[0];
+    }
+
+    pub fn getRowField(self: *const ManagedDocument, key: []const u8) ?storage_engine.TypedValue {
+        return self.table.getRowField(self.row(), key);
+    }
+
+    pub fn getFieldText(self: *const ManagedDocument, key: []const u8) ![]const u8 {
+        return self.table.getFieldText(self.row(), key);
+    }
+
+    pub fn getFieldTextOrNull(self: *const ManagedDocument, key: []const u8) ?[]const u8 {
+        return self.table.getFieldTextOrNull(self.row(), key);
+    }
+
+    pub fn getFieldInt(self: *const ManagedDocument, key: []const u8) !i64 {
+        return self.table.getFieldInt(self.row(), key);
+    }
+
+    pub fn expectMissingField(self: *const ManagedDocument, key: []const u8) !void {
+        try self.table.expectMissingField(self.row(), key);
+    }
+
+    pub fn expectFieldTextArray(self: *const ManagedDocument, key: []const u8, expected: []const []const u8) !void {
+        try self.table.expectFieldTextArray(self.row(), key, expected);
+    }
+
+    pub fn expectFieldString(self: *const ManagedDocument, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
+        return self.table.expectFieldString(self.row(), key, expected);
+    }
+
+    pub fn expectFieldInt(self: *const ManagedDocument, key: []const u8, expected: i64) !i64 {
+        return self.table.expectFieldInt(self.row(), key, expected);
+    }
+
+    pub fn expectFieldReal(self: *const ManagedDocument, key: []const u8, expected: f64) !f64 {
+        return self.table.expectFieldReal(self.row(), key, expected);
+    }
+
+    pub fn expectFieldBool(self: *const ManagedDocument, key: []const u8, expected: bool) !bool {
+        return self.table.expectFieldBool(self.row(), key, expected);
+    }
+
+    pub fn expectFieldArray(self: *const ManagedDocument, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
+        return self.table.expectFieldArray(self.row(), key, expected_len);
+    }
+};
+
 fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
     if (options.in_memory) {
         return TestContext.initInMemory(allocator);
@@ -37,8 +217,8 @@ pub const EngineTestContext = struct {
     memory_strategy: MemoryStrategy,
     test_context: TestContext,
 
-    pub fn init(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table) !void {
-        try self.initWithOptions(allocator, prefix, &[_]Table{table}, .{ .in_memory = true });
+    pub fn init(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, table_def: Table) !void {
+        try self.initWithOptions(allocator, prefix, &[_]Table{table_def}, .{ .in_memory = true });
     }
 
     pub fn initWithOptions(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
@@ -65,52 +245,59 @@ pub const EngineTestContext = struct {
         self.deinitInternal(false);
     }
 
-    pub fn tableMetadata(self: *const EngineTestContext, table: []const u8) !*const TableMetadata {
-        return self.sm.getTable(table) orelse StorageError.UnknownTable;
+    pub fn tableMetadata(self: *const EngineTestContext, table_name: []const u8) !*const TableMetadata {
+        return self.sm.getTable(table_name) orelse StorageError.UnknownTable;
+    }
+
+    pub fn table(self: *EngineTestContext, table_name: []const u8) !TableFixture {
+        return .{
+            .engine = &self.engine,
+            .metadata = try self.tableMetadata(table_name),
+        };
     }
 
     pub fn insertNamed(
         self: *EngineTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         columns: anytype,
     ) !void {
-        const table_metadata = try self.tableMetadata(table);
+        const table_metadata = try self.tableMetadata(table_name);
         try insertNamedWithMetadata(&self.engine, table_metadata, id, namespace, columns);
     }
 
     pub fn insertField(
         self: *EngineTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: storage_engine.TypedValue,
     ) !void {
-        try self.insertNamed(table, id, namespace, .{named(field, value)});
+        try self.insertNamed(table_name, id, namespace, .{named(field, value)});
     }
 
     pub fn insertText(
         self: *EngineTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: []const u8,
     ) !void {
-        try self.insertField(table, id, namespace, field, tth.valText(value));
+        try self.insertField(table_name, id, namespace, field, tth.valText(value));
     }
 
     pub fn insertInt(
         self: *EngineTestContext,
-        table: []const u8,
+        table_name: []const u8,
         id: []const u8,
         namespace: []const u8,
         field: []const u8,
         value: i64,
     ) !void {
-        try self.insertField(table, id, namespace, field, tth.valInt(value));
+        try self.insertField(table_name, id, namespace, field, tth.valInt(value));
     }
 
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
