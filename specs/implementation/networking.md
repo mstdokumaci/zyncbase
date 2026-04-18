@@ -244,25 +244,36 @@ WebSocket frames have minimal overhead:
 ```zig
 const Message = struct {
     type: MessageType,
-    id: u64, // Request ID
-    namespace: []const u8,
-    payload: union(MessageType) {
-        subscribe: SubscribePayload,
-        unsubscribe: UnsubscribePayload,
-        query: QueryPayload,
-        mutation: MutationPayload,
-        presence: PresencePayload,
-    },
+    id: ?u64,              // Request ID (client→server only)
+    // Type-specific fields are decoded inline per the wire protocol spec
 };
 
 const MessageType = enum {
-    subscribe,
-    unsubscribe,
-    query,
-    mutation,
-    presence,
-    response,
-    error,
+    // Client→Server (Store)
+    StoreSet,
+    StoreRemove,
+    StoreBatch,
+    StoreQuery,
+    StoreSubscribe,
+    StoreUnsubscribe,
+    StoreLoadMore,
+    // Client→Server (Presence)
+    PresenceSet,
+    PresenceSubscribe,
+    PresenceUnsubscribe,
+    PresenceRemove,
+    // Client→Server (Namespace / Auth)
+    StoreSetNamespace,
+    PresenceSetNamespace,
+    AuthRefresh,
+    // Server→Client
+    ok,
+    @"error",
+    SchemaSync,
+    Connected,
+    StoreDelta,
+    PresenceBroadcast,
+    ServerDisconnect,
 };
 ```
 

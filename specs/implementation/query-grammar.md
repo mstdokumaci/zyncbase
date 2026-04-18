@@ -177,7 +177,7 @@ The resulting condition tuple field must literally be: `"address__city"`.
 
 ## Abstract Syntax Tree (AST)
 
-The wire tuples map to the Zig AST after schema resolution. The parser converts wire field names into schema-backed field indexes.
+The wire tuples map directly to the Zig AST. The parser validates wire integer indices against the schema field array bounds.
 
 ```zig
 pub const QueryFilter = struct {
@@ -282,8 +282,8 @@ A standard filter contains both `conditions` and an optional `orConditions` arra
 
 ```json
 {
-  "conditions": [["priority", 0, "high"]],
-  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
+  "conditions": [[2, 0, "high"]],
+  "orConditions": [[4, 0, "active"], [4, 0, "pending"]]
 }
 ```
 

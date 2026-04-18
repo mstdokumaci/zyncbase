@@ -115,7 +115,7 @@ The first segment of a path (e.g., `tasks`) maps to a database table. This simpl
 
 ### Relational Patterns
 - **Flattening**: Simple nested objects are automatically flattened into relational columns.
-    - **Example**: `address.city` → `address_city TEXT`.
+    - **Example**: `address.city` → `address__city TEXT`.
 - **References**: Document-style references are enforced via SQLite foreign keys with configurable actions.
     - **Actions**: `cascade`, `restrict`, `set_null`.
 - **Arrays**: 
