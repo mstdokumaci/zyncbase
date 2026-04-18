@@ -3,6 +3,7 @@ const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine.zig");
 const helpers = @import("app_test_helpers.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const protocol = @import("protocol.zig");
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
@@ -293,7 +294,7 @@ test "StoreService: query - basic search" {
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
     const doc = qr.results.rows[0];
-    _ = try users.expectFieldString(doc, "name", "Alice");
+    _ = try sth.expectFieldString(doc, users.metadata, "name", "Alice");
 }
 
 test "StoreService: query - orderBy and limit" {
@@ -411,10 +412,10 @@ test "StoreService: queryWithCursor - pagination" {
     // Verify results are different (pagination worked)
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
-    const first_page_id = try data_table.getFieldText(first_doc, "id");
+    const first_page_id = try sth.getFieldText(first_doc, data_table.metadata, "id");
 
     const second_doc = next_results.rows[0];
-    const second_page_id = try data_table.getFieldText(second_doc, "id");
+    const second_page_id = try sth.getFieldText(second_doc, data_table.metadata, "id");
 
     try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
 }

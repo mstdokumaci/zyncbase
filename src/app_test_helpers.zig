@@ -188,8 +188,8 @@ pub const AppTestContext = struct {
         namespace: []const u8,
         columns: anytype,
     ) !void {
-        const table_metadata = try self.tableMetadata(table_name);
-        try sth.insertNamedWithMetadata(&self.storage_engine, table_metadata, id, namespace, columns);
+        const tbl = try self.table(table_name);
+        try tbl.insertNamed(id, namespace, columns);
     }
 
     pub fn insertField(
@@ -200,8 +200,8 @@ pub const AppTestContext = struct {
         field: []const u8,
         value: @import("storage_engine.zig").TypedValue,
     ) !void {
-        const table_metadata = try self.tableMetadata(table_name);
-        try sth.insertFieldWithMetadata(&self.storage_engine, table_metadata, id, namespace, field, value);
+        const tbl = try self.table(table_name);
+        try tbl.insertField(id, namespace, field, value);
     }
 
     pub fn insertText(

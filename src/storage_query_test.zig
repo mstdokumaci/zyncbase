@@ -46,7 +46,7 @@ test "StorageEngine: selectQuery basic equality" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    _ = try users.expectFieldString(res[0], "name", "Bob");
+    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Bob");
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -95,8 +95,8 @@ test "StorageEngine: selectQuery with OR and ordering" {
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    _ = try users.expectFieldString(res[0], "name", "Charlie"); // 35
-    _ = try users.expectFieldString(res[1], "name", "Bob"); // 25
+    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Charlie"); // 35
+    _ = try sth.expectFieldString(res[1], users.metadata, "name", "Bob"); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -128,8 +128,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
-    _ = try scores.expectFieldString(res1[0], "id", "id1");
-    _ = try scores.expectFieldString(res1[1], "id", "id2");
+    _ = try sth.expectFieldString(res1[0], scores.metadata, "id", "id1");
+    _ = try sth.expectFieldString(res1[1], scores.metadata, "id", "id2");
 
     // Query 2: Same query but AFTER [100, "id2"]
     var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
@@ -144,8 +144,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
-    _ = try scores.expectFieldString(res2[0], "id", "id3"); // 200
-    _ = try scores.expectFieldString(res2[1], "id", "id4"); // 300
+    _ = try sth.expectFieldString(res2[0], scores.metadata, "id", "id3"); // 200
+    _ = try sth.expectFieldString(res2[1], scores.metadata, "id", "id4"); // 300
 }
 
 fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: []const u8, name: []const u8, age: i64) !void {
@@ -210,12 +210,12 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const row = res[0];
 
     // Positive contract: array fields are decoded under their schema field names.
-    try items.expectFieldTextArray(row, "tags", &.{ "home", "urgent" });
-    try items.expectFieldTextArray(row, "labels", &.{ "p1", "work" });
+    try sth.expectFieldTextArray(row, items.metadata, "tags", &.{ "home", "urgent" });
+    try sth.expectFieldTextArray(row, items.metadata, "labels", &.{ "p1", "work" });
 
     // Negative contract: raw expression names never leak into row keys.
-    try items.expectMissingField(row, "json(tags)");
-    try items.expectMissingField(row, "json(labels)");
+    try sth.expectMissingField(row, items.metadata, "json(tags)");
+    try sth.expectMissingField(row, items.metadata, "json(labels)");
 }
 
 test "StorageEngine: LIKE wildcard escaping" {
@@ -257,7 +257,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try wildcards.expectFieldString(results[0], "id", "2");
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -277,7 +277,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try wildcards.expectFieldString(results[0], "id", "3");
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -297,7 +297,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try wildcards.expectFieldString(results[0], "id", "3");
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -317,7 +317,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try wildcards.expectFieldString(results[0], "id", "2");
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -337,7 +337,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try wildcards.expectFieldString(results[0], "id", "4");
+        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "4");
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding

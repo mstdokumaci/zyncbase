@@ -42,6 +42,7 @@ test "storage: error handling read-only filesystem" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     // Try to set a value
     {
@@ -50,7 +51,7 @@ test "storage: error handling read-only filesystem" {
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        var managed = try tbl.selectDocument(allocator, "key1", "data_table");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -62,7 +63,7 @@ test "storage: error handling constraint violations" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
-    const tbl_md = ctx.sm.getTable("data_table") orelse return error.UnknownTable;
+    const tbl = try ctx.table("data_table");
 
     // Set a value
     {
@@ -76,9 +77,9 @@ test "storage: error handling constraint violations" {
     try storage.flushPendingWrites();
     // Verify the value was updated
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
-        defer managed.deinit();
-        _ = try sth.expectFieldString(managed.rows[0], tbl_md, "val", "value2");
+        var doc = try tbl.getOne(allocator, "key1", "data_table");
+        defer doc.deinit();
+        _ = try doc.expectFieldString("val", "value2");
     }
 }
 test "storage: error handling transaction rollback on error" {
@@ -88,6 +89,7 @@ test "storage: error handling transaction rollback on error" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-rollback", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     try storage.beginTransaction();
     {
@@ -95,7 +97,7 @@ test "storage: error handling transaction rollback on error" {
     }
     try storage.rollbackTransaction();
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "key1", "data_table");
+        var managed = try tbl.selectDocument(allocator, "key1", "data_table");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -136,13 +138,14 @@ test "storage: error handling empty paths" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("data_table");
 
     {
         try ctx.insertText("data_table", "empty", "", "val", "value");
     }
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "data_table", "empty", "");
+        var managed = try tbl.selectDocument(allocator, "empty", "");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -154,6 +157,7 @@ test "storage: error handling large values" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("test");
 
     const large_value = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(large_value);
@@ -163,7 +167,7 @@ test "storage: error handling large values" {
     }
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "test", "large_key", "test");
+        var managed = try tbl.selectDocument(allocator, "large_key", "test");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -175,11 +179,12 @@ test "storage: error handling delete non-existent key" {
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
+    const tbl = try ctx.table("test");
 
     try storage.deleteDocument("test", "nonexistent", "test");
     try storage.flushPendingWrites();
     {
-        var managed = try storage.selectDocument(allocator, "test", "nonexistent", "test");
+        var managed = try tbl.selectDocument(allocator, "nonexistent", "test");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
