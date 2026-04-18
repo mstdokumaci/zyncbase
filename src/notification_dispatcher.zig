@@ -75,7 +75,6 @@ pub const NotificationDispatcher = struct {
         }
 
         const id_val_actual = id_val.?;
-        const is_delete = change.operation == .delete;
 
         // === Phase 2: Match subscriptions ===
         const arena = self.memory_strategy.acquireArena() catch |err| {
@@ -93,16 +92,31 @@ pub const NotificationDispatcher = struct {
         if (matches.len == 0) return;
 
         // === Phase 3: Pre-encode suffix template (once per change) ===
-        // This encodes: "ops": [{"op": "set"/"remove", "path": [collection, id], "value": <row>}]
+        // This encodes either:
+        //   "ops": [{"op": "remove", "path": [collection, id]}]
+        // or:
+        //   "ops": [{"op": "set", "path": [collection, id], "value": <row>}]
         // The expensive part (msgpack.encode(new_row)) happens exactly once here.
-        const suffix = protocol.encodeDeltaSuffix(
-            alloc,
-            change.collection,
-            id_val_actual,
-            is_delete,
-            change.new_row,
-            table_metadata,
-        ) catch |err| {
+        const suffix = switch (change.operation) {
+            .delete => protocol.encodeDeleteDeltaSuffix(
+                alloc,
+                change.collection,
+                id_val_actual,
+            ),
+            .insert, .update => blk: {
+                const new_row = change.new_row orelse {
+                    std.log.err("NotificationDispatcher skipping non-delete delta for {s}:{s} because new_row is missing", .{ change.namespace, change.collection });
+                    return;
+                };
+                break :blk protocol.encodeSetDeltaSuffix(
+                    alloc,
+                    change.collection,
+                    id_val_actual,
+                    new_row,
+                    table_metadata,
+                );
+            },
+        } catch |err| {
             std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{s}: {}", .{ change.namespace, change.collection, err });
             return;
         };

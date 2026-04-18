@@ -3,7 +3,25 @@ const testing = std.testing;
 const protocol = @import("protocol.zig");
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
+const schema_helpers = @import("schema_test_helpers.zig");
+const storage_types = @import("storage_engine/types.zig");
 const tth = @import("typed_test_helpers.zig");
+
+fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, namespace: []const u8, name: []const u8) !storage_types.TypedRow {
+    const values = try allocator.alloc(storage_types.TypedValue, 5);
+    errdefer allocator.free(values);
+
+    values[0] = try tth.valTextOwned(allocator, id);
+    errdefer values[0].deinit(allocator);
+    values[1] = try tth.valTextOwned(allocator, namespace);
+    errdefer values[1].deinit(allocator);
+    values[2] = try tth.valTextOwned(allocator, name);
+    errdefer values[2].deinit(allocator);
+    values[3] = tth.valInt(0);
+    values[4] = tth.valInt(0);
+
+    return .{ .values = values };
+}
 
 test "extractAs: Envelope from valid map" {
     const allocator = testing.allocator;
@@ -162,11 +180,20 @@ test "buildErrorResponse: produces valid MsgPack" {
     try testing.expectEqualStrings("Collection missing in schema", msg_val.str.value());
 }
 
-test "encodeDeltaSuffix: set operation" {
+test "encodeSetDeltaSuffix: set operation" {
     const allocator = testing.allocator;
 
-    const id_val = tth.valInt(12345);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "users", id_val, false, null, null);
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &.{"name"},
+    }});
+    defer sm.deinit();
+
+    const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
+    const row = try makeDeltaTestRow(allocator, "user-123", "default", "Ada");
+    defer row.deinit(allocator);
+
+    const suffix = try protocol.encodeSetDeltaSuffix(allocator, "users", tth.valText("user-123"), row, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -191,18 +218,21 @@ test "encodeDeltaSuffix: set operation" {
     try testing.expect(path == .arr);
     try testing.expectEqual(@as(usize, 2), path.arr.len);
     try testing.expectEqualStrings("users", path.arr[0].str.value());
-    try testing.expectEqual(@as(u64, 12345), path.arr[1].uint);
+    try testing.expectEqualStrings("user-123", path.arr[1].str.value());
 
     const value = try op_obj.mapGet("value");
     try testing.expect(value != null);
-    try testing.expect(value.? == .nil);
+    try testing.expect(value.? == .map);
+    try testing.expectEqualStrings("user-123", ((try value.?.mapGet("id")) orelse return error.MissingId).str.value());
+    try testing.expectEqualStrings("default", ((try value.?.mapGet("namespace_id")) orelse return error.MissingNamespaceId).str.value());
+    try testing.expectEqualStrings("Ada", ((try value.?.mapGet("name")) orelse return error.MissingValue).str.value());
 }
 
-test "encodeDeltaSuffix: delete operation" {
+test "encodeDeleteDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(999);
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "items", id_val, true, null, null);
+    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, "items", id_val);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -273,11 +303,11 @@ test "store_delta_header: decodes to StoreDelta type" {
     try testing.expectEqual(@as(u64, 42), sub_id_val.uint);
 }
 
-test "encodeDeltaSuffix: with string id" {
+test "encodeDeleteDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
     const id_val = tth.valText("doc-abc-123");
-    const suffix = try protocol.encodeDeltaSuffix(allocator, "posts", id_val, false, null, null);
+    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, "posts", id_val);
     defer allocator.free(suffix);
 
     // Decode and verify
