@@ -16,16 +16,16 @@ fn getDocumentHelper(
     allocator: Allocator,
     conn: *sqlite.Db,
     sm: *const schema_manager.SchemaManager,
-    table: []const u8,
+    table_index: usize,
     namespace: []const u8,
     id: []const u8,
-    sql_cache: *std.StringHashMap([]const u8),
+    sql_cache: *std.AutoHashMap(usize, []const u8),
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
-    const table_metadata = sm.getTable(table) orelse return null;
-    const sql_str = if (sql_cache.get(table)) |s| s else blk: {
+    const table_metadata = sm.getTableByIndex(table_index) orelse return null;
+    const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
         const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
-        try sql_cache.put(table, s);
+        try sql_cache.put(table_index, s);
         break :blk s;
     };
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
@@ -37,18 +37,16 @@ fn pushOwnedChange(
     allocator: Allocator,
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
     namespace: []const u8,
-    collection: []const u8,
+    table_index: usize,
     op: OwnedRowChange.Operation,
     old_row: ?types.TypedRow,
     new_row: ?types.TypedRow,
 ) !void {
     const ns = try allocator.dupe(u8, namespace);
     errdefer allocator.free(ns);
-    const coll = try allocator.dupe(u8, collection);
-    errdefer allocator.free(coll);
     try pending_changes.append(allocator, .{
         .namespace = ns,
-        .collection = coll,
+        .table_index = table_index,
         .operation = op,
         .old_row = old_row,
         .new_row = new_row,
@@ -66,7 +64,7 @@ pub fn executeBatch(
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
 
-    var sql_cache = std.StringHashMap([]const u8).init(allocator);
+    var sql_cache = std.AutoHashMap(usize, []const u8).init(allocator);
     defer {
         var it = sql_cache.valueIterator();
         while (it.next()) |sql_str| allocator.free(sql_str.*);
@@ -95,24 +93,24 @@ pub fn executeBatch(
     for (ops) |op| {
         switch (op) {
             .upsert => |iop| {
-                const table_metadata = sm.getTable(iop.table) orelse return StorageError.UnknownTable;
+                const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                 var old_row: ?types.TypedRow = null;
-                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table, iop.namespace, iop.id, &sql_cache, stmt_cache);
+                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, iop.namespace, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
                 } else |err| {
-                    std.log.err("Failed to capture old state (pre-UPSERT) for {s}: {}", .{ iop.table, err });
+                    std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ iop.table_index, err });
                 }
                 const maybe_new_row = executeUpsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |r| r.deinit(allocator);
                     const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch UPSERT", classified_err, iop.table);
+                    types.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
                     return classified_err;
                 };
 
                 if (maybe_new_row) |new_row| {
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table, op_type, old_row, new_row) catch |err| {
+                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table_index, op_type, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         if (old_row) |r| r.deinit(allocator);
                         var r = new_row;
@@ -120,22 +118,22 @@ pub fn executeBatch(
                     };
                 } else {
                     // This is unexpected for an INSERT OR REPLACE.
-                    std.log.err("UPSERT for {s}/{s} returned no row via RETURNING", .{ iop.table, iop.id });
+                    std.log.err("UPSERT for table index {d}/{s} returned no row via RETURNING", .{ iop.table_index, iop.id });
                     if (old_row) |r| r.deinit(allocator);
                     continue;
                 }
             },
             .delete => |dop| {
-                const table_metadata = sm.getTable(dop.table) orelse return StorageError.UnknownTable;
+                const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                 const maybe_old_row = executeDelete(allocator, conn, dop, table_metadata, stmt_cache) catch |err| {
                     const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch DELETE", classified_err, dop.table);
+                    types.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
                     return classified_err;
                 };
 
                 // For DELETE, the RETURNING * result IS the old row.
                 if (maybe_old_row) |old_row| {
-                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table, .delete, old_row, null) catch |err| {
+                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table_index, .delete, old_row, null) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         var r = old_row;
                         r.deinit(allocator);
@@ -143,7 +141,7 @@ pub fn executeBatch(
                 } else {
                     // If RETURNING * is empty, the row did not exist or was already deleted.
                     // This is a valid no-op state; we skip notifications for non-existent documents.
-                    std.log.debug("DELETE for {s}/{s}: no row found (already deleted)", .{ dop.table, dop.id });
+                    std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, dop.id });
                 }
             },
             .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable,
@@ -187,20 +185,20 @@ pub fn flushBatch(
     }
     for (batch.items) |op| {
         // SAFETY: initialized below in the switch statement
-        var table: []const u8 = undefined;
+        var table_index: usize = undefined;
         // SAFETY: initialized below in the switch statement
         var id: []const u8 = undefined;
         // SAFETY: initialized below in the switch statement
         var ns: []const u8 = undefined;
         const has_affected = switch (op) {
             .upsert => |o| blk: {
-                table = o.table;
+                table_index = o.table_index;
                 id = o.id;
                 ns = o.namespace;
                 break :blk true;
             },
             .delete => |o| blk: {
-                table = o.table;
+                table_index = o.table_index;
                 id = o.id;
                 ns = o.namespace;
                 break :blk true;
@@ -208,7 +206,8 @@ pub fn flushBatch(
             else => false,
         };
         if (has_affected) {
-            const key = reader.getCacheKey(allocator, table, ns, id) catch |err| {
+            const table_metadata = sm.getTableByIndex(table_index) orelse continue;
+            const key = reader.getCacheKey(allocator, table_metadata.table.name, ns, id) catch |err| {
                 std.log.err("Failed to create cache key for eviction: {}", .{err});
                 continue;
             };

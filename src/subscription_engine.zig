@@ -14,7 +14,7 @@ pub const SubscriptionId = u64;
 pub const SubscriptionGroup = struct {
     id: u64,
     namespace: []const u8,
-    collection: []const u8,
+    table_index: usize,
     filter: QueryFilter,
     /// Set of (connection_id, client_subscription_id)
     subscribers: std.AutoHashMapUnmanaged(SubscriberKey, void) = .empty,
@@ -26,7 +26,6 @@ pub const SubscriptionGroup = struct {
 
     pub fn deinit(self: *SubscriptionGroup, allocator: Allocator) void {
         allocator.free(self.namespace);
-        allocator.free(self.collection);
         self.filter.deinit(allocator);
         self.subscribers.deinit(allocator);
     }
@@ -34,9 +33,10 @@ pub const SubscriptionGroup = struct {
 
 /// Represents a change to a row, emitted by the storage engine or handler
 pub const RowChange = struct {
+    pub const Operation = enum { insert, update, delete };
     namespace: []const u8,
-    collection: []const u8,
-    operation: enum { insert, update, delete },
+    table_index: usize,
+    operation: Operation,
     /// The full record after the change. Null only for delete.
     new_row: ?TypedRow,
     /// The full record before the change. Null only for insert.
@@ -93,7 +93,7 @@ pub const SubscriptionEngine = struct {
     pub fn subscribe(
         self: *SubscriptionEngine,
         namespace: []const u8,
-        collection: []const u8,
+        table_index: usize,
         filter: QueryFilter,
         conn_id: u64,
         sub_id: u64,
@@ -101,7 +101,7 @@ pub const SubscriptionEngine = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, collection, filter);
+        const filter_key = try toCanonicalFilterKey(self.allocator, namespace, table_index, filter);
         defer self.allocator.free(filter_key);
 
         var group_id: u64 = 0;
@@ -117,8 +117,6 @@ pub const SubscriptionEngine = struct {
 
             const ns_copy = try self.allocator.dupe(u8, namespace);
             errdefer self.allocator.free(ns_copy);
-            const coll_copy = try self.allocator.dupe(u8, collection);
-            errdefer self.allocator.free(coll_copy);
 
             // Shared filter for the group must NOT contain cursor state.
             var group_filter = try filter.clone(self.allocator);
@@ -131,14 +129,14 @@ pub const SubscriptionEngine = struct {
             const group = SubscriptionGroup{
                 .id = group_id,
                 .namespace = ns_copy,
-                .collection = coll_copy,
+                .table_index = table_index,
                 .filter = group_filter,
             };
             try self.groups.put(self.allocator, group_id, group);
             try self.groups_by_filter.put(self.allocator, try self.allocator.dupe(u8, filter_key), group_id);
 
             // Index by collection
-            const coll_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ namespace, collection });
+            const coll_key = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ namespace, table_index });
             errdefer self.allocator.free(coll_key);
 
             const result = try self.groups_by_collection.getOrPut(self.allocator, coll_key);
@@ -171,7 +169,7 @@ pub const SubscriptionEngine = struct {
 
         if (group_ptr.subscribers.count() == 0) {
             // Group became empty - remove it
-            const filter_key = try toCanonicalFilterKey(self.allocator, group_ptr.namespace, group_ptr.collection, group_ptr.filter);
+            const filter_key = try toCanonicalFilterKey(self.allocator, group_ptr.namespace, group_ptr.table_index, group_ptr.filter);
             defer self.allocator.free(filter_key);
 
             if (self.groups_by_filter.fetchRemove(filter_key)) |entry| {
@@ -179,7 +177,7 @@ pub const SubscriptionEngine = struct {
             }
 
             // Remove from groups_by_collection
-            const coll_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ group_ptr.namespace, group_ptr.collection });
+            const coll_key = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ group_ptr.namespace, group_ptr.table_index });
             defer self.allocator.free(coll_key);
 
             if (self.groups_by_collection.getPtr(coll_key)) |list| {
@@ -208,12 +206,11 @@ pub const SubscriptionEngine = struct {
 
     pub const SubscriptionQuery = struct {
         namespace: []const u8,
-        collection: []const u8,
+        table_index: usize,
         filter: QueryFilter,
 
         pub fn deinit(self: *SubscriptionQuery, allocator: Allocator) void {
             allocator.free(self.namespace);
-            allocator.free(self.collection);
             self.filter.deinit(allocator);
         }
     };
@@ -234,15 +231,12 @@ pub const SubscriptionEngine = struct {
         const ns_copy = try allocator.dupe(u8, group.namespace);
         errdefer allocator.free(ns_copy);
 
-        const coll_copy = try allocator.dupe(u8, group.collection);
-        errdefer allocator.free(coll_copy);
-
         var filter_copy = try group.filter.clone(allocator);
         errdefer filter_copy.deinit(allocator);
 
         return SubscriptionQuery{
             .namespace = ns_copy,
-            .collection = coll_copy,
+            .table_index = group.table_index,
             .filter = filter_copy,
         };
     }
@@ -265,8 +259,8 @@ pub const SubscriptionEngine = struct {
         var heap_key: ?[]u8 = null;
         defer if (heap_key) |k| allocator.free(k);
 
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ change.namespace, change.collection }) catch blk: {
-            heap_key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ change.namespace, change.collection });
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ change.namespace, change.table_index }) catch blk: {
+            heap_key = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ change.namespace, change.table_index });
             break :blk heap_key.?;
         };
 
@@ -395,12 +389,12 @@ pub const SubscriptionEngine = struct {
         }
     }
 
-    fn toCanonicalFilterKey(allocator: Allocator, ns: []const u8, coll: []const u8, filter: QueryFilter) ![]u8 {
+    fn toCanonicalFilterKey(allocator: Allocator, ns: []const u8, table_index: usize, filter: QueryFilter) ![]u8 {
         var list = std.ArrayListUnmanaged(u8).empty;
         errdefer list.deinit(allocator);
 
         // Manual formatting to avoid complex writer setups with unmanaged
-        const base = try std.fmt.allocPrint(allocator, "{s}:{s}:", .{ ns, coll });
+        const base = try std.fmt.allocPrint(allocator, "{s}:{d}:", .{ ns, table_index });
         defer allocator.free(base);
         try list.appendSlice(allocator, base);
 

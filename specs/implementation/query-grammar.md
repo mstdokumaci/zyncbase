@@ -39,10 +39,10 @@ Each query operator maps to a fixed integer code matching the Zig `Operator` enu
 Each condition is encoded as a positional array:
 
 ```
-[field: string, op: int, value: any]
+[field_index: int, op: int, value: any]
 ```
 
-- `field` — Flattened field name (see [Flattening Rules](#flattening-rules))
+- `field_index` — Integer schema dictionary index (resolved by SDK)
 - `op` — Integer operator code from the table above
 - `value` — The comparison value. Omitted (2-element tuple) for `isNull` and `isNotNull`
 
@@ -51,10 +51,10 @@ Each condition is encoded as a positional array:
 Each sort descriptor is encoded as a positional array:
 
 ```
-[field: string, desc: int]
+[field_index: int, desc: int]
 ```
 
-- `field` — Field name
+- `field_index` — Integer schema dictionary index
 - `desc` — `0` for ascending, `1` for descending
 
 ### Transformation Examples
@@ -65,8 +65,8 @@ Each sort descriptor is encoded as a positional array:
 // SDK input
 { where: { age: { gte: 18 }, status: { eq: 'active' } } }
 
-// Wire output
-{ "conditions": [["age", 4, 18], ["status", 0, "active"]] }
+// Wire output (assuming age=3, status=4)
+{ "conditions": [[3, 4, 18], [4, 0, "active"]] }
 ```
 
 **Query with OR:**
@@ -83,10 +83,10 @@ Each sort descriptor is encoded as a positional array:
   }
 }
 
-// Wire output
+// Wire output (assuming priority=2, status=4)
 {
-  "conditions": [["priority", 0, "high"]],
-  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
+  "conditions": [[2, 0, "high"]],
+  "orConditions": [[4, 0, "active"], [4, 0, "pending"]]
 }
 ```
 
@@ -96,8 +96,8 @@ Each sort descriptor is encoded as a positional array:
 // SDK input
 { where: { deleted_at: { isNull: true } } }
 
-// Wire output
-{ "conditions": [["deleted_at", 11]] }
+// Wire output (assuming deleted_at=5)
+{ "conditions": [[5, 11]] }
 ```
 
 **Array operator:**
@@ -106,8 +106,8 @@ Each sort descriptor is encoded as a positional array:
 // SDK input
 { where: { role: { in: ['admin', 'editor'] } } }
 
-// Wire output
-{ "conditions": [["role", 9, ["admin", "editor"]]] }
+// Wire output (assuming role=6)
+{ "conditions": [[6, 9, ["admin", "editor"]]] }
 ```
 
 **Nested field (flattened):**
@@ -116,8 +116,8 @@ Each sort descriptor is encoded as a positional array:
 // SDK input
 { where: { address: { city: { eq: 'NYC' } } } }
 
-// Wire output
-{ "conditions": [["address__city", 0, "NYC"]] }
+// Wire output (assuming address__city=7)
+{ "conditions": [[7, 0, "NYC"]] }
 ```
 
 **Sort + pagination:**
@@ -126,8 +126,8 @@ Each sort descriptor is encoded as a positional array:
 // SDK input
 { orderBy: { created_at: 'desc' }, limit: 50, after: 'eyJpZCI6...' }
 
-// Wire output
-{ "orderBy": ["created_at", 1], "limit": 50, "after": "eyJpZCI6..." }
+// Wire output (assuming created_at=8)
+{ "orderBy": [8, 1], "limit": 50, "after": "eyJpZCI6..." }
 ```
 
 ### Full Wire Message
@@ -138,16 +138,16 @@ A complete `StoreQuery` message on the wire:
 {
   "type":  "StoreQuery",
   "id":    6,
-  "collection": "users",
+  "table_index": 0,
   "conditions": [
-    ["age", 4, 18],
-    ["status", 0, "active"]
+    [3, 4, 18],
+    [4, 0, "active"]
   ],
   "orConditions": [
-    ["role", 0, "admin"],
-    ["role", 0, "editor"]
+    [6, 0, "admin"],
+    [6, 0, "editor"]
   ],
-  "orderBy": ["created_at", 1],
+  "orderBy": [8, 1],
   "limit":   50,
   "after":   "eyJpZCI6..."
 }
@@ -157,9 +157,9 @@ A complete `StoreQuery` message on the wire:
 
 | SDK field | Wire key | Encoding |
 |-----------|----------|----------|
-| `where` (root conditions) | `conditions` | Array of `[field, op, value?]` tuples |
-| `where.or` | `orConditions` | Array of `[field, op, value?]` tuples |
-| `orderBy` | `orderBy` | `[field, desc]` tuple |
+| `where` (root conditions) | `conditions` | Array of `[field_index, op, value?]` tuples |
+| `where.or` | `orConditions` | Array of `[field_index, op, value?]` tuples |
+| `orderBy` | `orderBy` | `[field_index, desc]` tuple |
 | `limit` | `limit` | Integer (unchanged) |
 | `after` | `after` | String (unchanged) |
 
@@ -177,7 +177,7 @@ The resulting condition tuple field must literally be: `"address__city"`.
 
 ## Abstract Syntax Tree (AST)
 
-The wire tuples map to the Zig AST after schema resolution. The parser converts wire field names into schema-backed field indexes.
+The wire tuples map directly to the Zig AST. The parser validates wire integer indices against the schema field array bounds.
 
 ```zig
 pub const QueryFilter = struct {
@@ -204,11 +204,11 @@ pub const Operator = enum {
 
 ### Wire → AST Mapping
 
-The server deserializes each condition tuple into a `Condition` struct:
+The server deserializes each condition tuple into a `Condition` struct directly without string lookup:
 
 | Tuple position | AST field | Notes |
 |----------------|-----------|-------|
-| `[0]` | `Condition.field_index` | String field name from wire is resolved against table metadata |
+| `[0]` | `Condition.field_index` | Integer index direct assignment |
 | `[1]` | `Condition.op` | Integer cast to `Operator` enum |
 | `[2]` | `Condition.value` | Any MessagePack value. Absent for `isNull`/`isNotNull` |
 
@@ -216,7 +216,7 @@ Sort tuples map to `SortDescriptor`:
 
 | Tuple position | AST field | Notes |
 |----------------|-----------|-------|
-| `[0]` | `SortDescriptor.field_index` | String field name from wire is resolved against table metadata |
+| `[0]` | `SortDescriptor.field_index` | Integer index direct assignment |
 | `[1]` | `SortDescriptor.desc` | `1` → `true`, `0` → `false` |
 
 ---
@@ -282,8 +282,8 @@ A standard filter contains both `conditions` and an optional `orConditions` arra
 
 ```json
 {
-  "conditions": [["priority", 0, "high"]],
-  "orConditions": [["status", 0, "active"], ["status", 0, "pending"]]
+  "conditions": [[2, 0, "high"]],
+  "orConditions": [[4, 0, "active"], [4, 0, "pending"]]
 }
 ```
 

@@ -78,7 +78,7 @@ test "NotificationDispatcher: poll processes items" {
 
     try cb.push(.{
         .namespace = try alloc.dupe(u8, "ns"),
-        .collection = try alloc.dupe(u8, "coll"),
+        .table_index = tbl_md.index,
         .operation = .insert,
         .old_row = null,
         .new_row = new_row,

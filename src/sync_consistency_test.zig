@@ -48,7 +48,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     filter.conditions = conditions;
     defer filter.deinit(allocator);
 
-    _ = try sub_engine.subscribe("ns", "items", filter, 42, 101);
+    _ = try sub_engine.subscribe("ns", (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
 
     // 4) Flush queued writes into DB + change buffer.
     try engine.flushPendingWrites();
@@ -67,7 +67,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     const captured = drain_buf.items[0];
     const row_change = RowChange{
         .namespace = captured.namespace,
-        .collection = captured.collection,
+        .table_index = captured.table_index,
         .operation = @enumFromInt(@intFromEnum(captured.operation)),
         .new_row = captured.new_row,
         .old_row = captured.old_row,

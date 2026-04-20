@@ -23,7 +23,8 @@ export type LifecycleEvent =
 	| "disconnected"
 	| "reconnecting"
 	| "error"
-	| "statusChange";
+	| "statusChange"
+	| "schemaChange";
 
 // ─── Client configuration ────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export interface StoreQuery {
 	type: "StoreQuery";
 	id: number;
 	namespace: string;
-	collection: string;
+	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
@@ -144,7 +145,7 @@ export interface StoreSubscribe {
 	type: "StoreSubscribe";
 	id: number;
 	namespace: string;
-	collection: string;
+	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
@@ -162,6 +163,7 @@ export interface StoreLoadMore {
 	id: number;
 	subId: number;
 	nextCursor: string;
+	table_index?: string | number;
 }
 
 /** Union of all outbound message types. */
@@ -208,5 +210,15 @@ export interface StoreDelta {
 	>;
 }
 
+export interface SchemaSync {
+	type: "SchemaSync";
+	tables: string[];
+	fields: string[][];
+}
+
 /** Union of all inbound message types. */
-export type InboundMessage = OkResponse | ErrorResponse | StoreDelta;
+export type InboundMessage =
+	| OkResponse
+	| ErrorResponse
+	| StoreDelta
+	| SchemaSync;

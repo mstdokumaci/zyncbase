@@ -59,6 +59,19 @@ function restoreWebSocket() {
 		OriginalWebSocket;
 }
 
+function triggerSchemaSync() {
+	const payload = encode({
+		type: "SchemaSync",
+		tables: ["users"],
+		fields: [["id", "namespace_id", "name", "created_at", "updated_at"]],
+	});
+	const arrayBuffer = payload.buffer.slice(
+		payload.byteOffset,
+		payload.byteOffset + payload.byteLength,
+	) as ArrayBuffer;
+	mockWs.triggerMessage(arrayBuffer);
+}
+
 const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
 	reconnect: false,
@@ -90,12 +103,14 @@ describe("createClient", () => {
 });
 
 describe("ZyncBaseClient", () => {
-	test("connect() returns a Promise<void> that resolves on open", async () => {
+	test("connect() returns a Promise<void> that resolves on SchemaSync", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
 		const p = client.connect();
 		mockWs.triggerOpen();
+		triggerSchemaSync();
 		await expect(p).resolves.toBeUndefined();
+		client.disconnect();
 		restoreWebSocket();
 	});
 
@@ -104,6 +119,7 @@ describe("ZyncBaseClient", () => {
 		const client = createClient(defaultOptions);
 		const p = client.connect();
 		mockWs.triggerOpen();
+		triggerSchemaSync();
 		await p;
 		client.disconnect();
 		expect(mockWs.readyState).toBe(MockWebSocket.CLOSED);
@@ -117,8 +133,10 @@ describe("ZyncBaseClient", () => {
 		client.on("connected", () => events.push("connected"));
 		const p = client.connect();
 		mockWs.triggerOpen();
+		triggerSchemaSync();
 		await p;
 		expect(events).toContain("connected");
+		client.disconnect();
 		restoreWebSocket();
 	});
 
@@ -138,6 +156,7 @@ describe("ZyncBaseClient", () => {
 
 		const p = client.connect();
 		mockWs.triggerOpen();
+		triggerSchemaSync();
 		await p;
 
 		// Trigger a set call but catch its rejection to allow the test to continue
@@ -163,7 +182,7 @@ describe("ZyncBaseClient", () => {
 		await setPromise;
 		expect(errors.length).toBeGreaterThan(0);
 		expect((errors[0] as Record<string, unknown>).code).toBe("INTERNAL_ERROR");
-
+		client.disconnect();
 		restoreWebSocket();
 	});
 });

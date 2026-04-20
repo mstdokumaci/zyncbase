@@ -10,7 +10,7 @@ test "ConnectionManager - init and deinit" {
     try app.init(allocator, "conn-mgr-init", &.{});
     defer app.deinit();
 
-    try testing.expectEqual(@as(usize, 0), app.manager.map.count());
+    try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
 }
 
 test "ConnectionManager - onOpen and onClose" {
@@ -25,12 +25,12 @@ test "ConnectionManager - onOpen and onClose" {
     {
         const sc = try app.openScopedConnection(&dummy_ws);
         defer sc.deinit();
-        try testing.expectEqual(@as(usize, 1), app.manager.map.count());
+        try testing.expectEqual(@as(usize, 1), app.connection_manager.map.count());
         try testing.expectEqual(dummy_ws.getConnId(), sc.conn.id);
     }
 
     // Test onClose (after sc.deinit() has run)
-    try testing.expectEqual(@as(usize, 0), app.manager.map.count());
+    try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
 }
 
 test "ConnectionManager - max connections" {
@@ -40,7 +40,7 @@ test "ConnectionManager - max connections" {
     defer app.deinit();
 
     // Set a small limit for testing
-    app.manager.max_connections = 2;
+    app.connection_manager.max_connections = 2;
 
     var ws1 = createMockWebSocket();
     var ws2 = createMockWebSocket();
@@ -52,15 +52,15 @@ test "ConnectionManager - max connections" {
     const sc2 = try app.openScopedConnection(&ws2);
     defer sc2.deinit();
 
-    try testing.expectEqual(@as(usize, 2), app.manager.map.count());
+    try testing.expectEqual(@as(usize, 2), app.connection_manager.map.count());
 
     // Third connection should be rejected (close called on ws)
     // Note: AppTestContext.openScopedConnection calls manager.onOpen
     // We should check if it's in the map.
-    app.manager.onOpen(&ws3) catch unreachable;
-    try testing.expectEqual(@as(usize, 2), app.manager.map.count());
+    app.connection_manager.onOpen(&ws3) catch unreachable;
+    try testing.expectEqual(@as(usize, 2), app.connection_manager.map.count());
     // The connection should not be in the map
-    try testing.expectError(error.ConnectionNotFound, app.manager.acquireConnection(ws3.getConnId()));
+    try testing.expectError(error.ConnectionNotFound, app.connection_manager.acquireConnection(ws3.getConnId()));
 }
 
 test "ConnectionManager - acquire and release" {
@@ -74,7 +74,7 @@ test "ConnectionManager - acquire and release" {
     defer sc.deinit();
 
     // Manual acquire incrementing refcount
-    const conn = try app.manager.acquireConnection(ws.getConnId());
+    const conn = try app.connection_manager.acquireConnection(ws.getConnId());
 
     // We now have 3 references:
     // 1. Owned by the ConnectionManager (onOpen)

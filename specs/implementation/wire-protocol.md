@@ -98,8 +98,8 @@ Write a value at a path. Applied optimistically on the client.
 {
   "type":  "StoreSet",
   "id":    2,
-  "path":  ["elements", "rect-1"],
-  "value": { "x": 100, "y": 200, "width": 50, "height": 50 }
+  "path":  [0, "rect-1"],
+  "value": { 1: 100, 2: 200, 3: 50, 4: 50 } // Integer-keyed map for field indices
 }
 ```
 
@@ -124,7 +124,7 @@ Remove a value at a path.
 {
   "type": "StoreRemove",
   "id":   3,
-  "path": ["elements", "rect-1"]
+  "path": [0, "rect-1"]
 }
 ```
 
@@ -148,9 +148,9 @@ Perform multiple write operations atomically. See the [Batch Operations Specific
   "type": "StoreBatch",
   "id":   4,
   "ops": [
-    ["s", ["tasks", "123"], { "status": "assigned" }],
-    ["s", ["users", "bob", "taskCount"], 5],
-    ["r", ["temporary_locks", "123"]]
+    ["s", [1, "123"], { 3: "assigned" }],
+    ["s", [0, "bob", 8], 5],
+    ["r", [2, "123"]]
   ]
 }
 ```
@@ -180,12 +180,12 @@ Execute a one-off filtered query (non-real-time) on a collection. Query conditio
 {
   "type":  "StoreQuery",
   "id":    6,
-  "collection": "users",
+  "table_index": 0,
   "conditions": [
-    ["age", 4, 18],              // [field, op_code, value] — op 4 = gte
-    ["status", 0, "active"]      // op 0 = eq
+    [5, 4, 18],              // [field_index, op_code, value] — op 4 = gte
+    [2, 0, "active"]         // op 0 = eq
   ],
-  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
+  "orderBy": [3, 1],  // [field_index, desc_flag] — 1 = desc
   "limit":   50,
   "after":   "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id]))
 }
@@ -212,11 +212,11 @@ Subscribe to a filtered query's results in real-time. (Maps to `store.subscribe(
 {
   "type":    "StoreSubscribe",
   "id":      7,
-  "collection": "tasks",
+  "table_index": 1,
   "conditions": [
-    ["status", 0, "active"]      // [field, op_code, value] — op 0 = eq
+    [2, 0, "active"]      // [field_index, op_code, value] — op 0 = eq
   ],
-  "orderBy": ["created_at", 1],  // [field, desc_flag] — 1 = desc
+  "orderBy": [8, 1],  // [field_index, desc_flag] — 1 = desc
   "limit":   50
 }
 ```
@@ -493,12 +493,12 @@ Notifies a subscribed client that their subscription's result set has changed.
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
-      "path":  ["elements", "rect-2"],
-      "value": { "x": 50, "y": 75 }   // Present for "set", absent for "remove"
+      "path":  [0, "rect-2"],
+      "value": { 1: 50, 2: 75 }       // Present for "set", absent for "remove"
     },
     {
       "op":   "remove",
-      "path": ["elements", "rect-3"]
+      "path": [0, "rect-3"]
     }
   ]
 }
@@ -593,9 +593,27 @@ The server validates:
 
 On success: HTTP 101 Switching Protocols. On failure: HTTP 401 or 403.
 
-### 3. Connected message
+### 3. SchemaSync & Connected
 
-After the WebSocket is established, the server sends a `Connected` push:
+After the WebSocket is established, the server pushes two foundational messages:
+
+**1. `SchemaSync`**
+Provides the structural dictionary for integer-based routing. The SDK must dynamically hash this payload offline to track queue compatibility.
+*Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
+
+```
+{
+  "type":   "SchemaSync",
+  "tables": ["users", "tasks"],
+  "fields": [
+    ["id", "namespace_id", "email", "created_at", "updated_at"],
+    ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
+  ]
+}
+```
+
+**2. `Connected`**
+Provides session context.
 
 ```
 {
@@ -754,6 +772,7 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` |
 | C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` |
 | C→S | `AuthRefresh` | `client.authRefresh(token)` | `ok` with `session` |
+| S→C | `SchemaSync` | — | Push (no `id`) |
 | S→C | `Connected` | — | Push (no `id`) |
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |

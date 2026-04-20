@@ -43,9 +43,9 @@ export class ZyncBaseClient {
 		});
 	}
 
-	/** Connect to the server. Returns a Promise that resolves when connected. */
+	/** Connect to the server. Returns a Promise that resolves when connected and SchemaSync is received. */
 	connect(): Promise<void> {
-		return this.conn.connect();
+		return this.conn.connect().then(() => this.conn.awaitSchemaSync());
 	}
 
 	/** Disconnect from the server and cancel all pending timers. */

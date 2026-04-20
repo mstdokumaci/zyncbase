@@ -14,6 +14,7 @@ const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
+const Payload = msgpack_utils.Payload;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -72,7 +73,7 @@ pub const AppTestContext = struct {
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
     handler: MessageHandler,
-    manager: ConnectionManager,
+    connection_manager: ConnectionManager,
     schema_manager: SchemaManager,
     test_context: schema_helpers.TestContext,
 
@@ -147,8 +148,8 @@ pub const AppTestContext = struct {
         errdefer self.handler.deinit();
 
         // 8. Initialize Connection Manager
-        try self.manager.init(allocator, &self.memory_strategy, &self.handler);
-        errdefer self.manager.deinit();
+        try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
+        errdefer self.connection_manager.deinit();
     }
 
     pub fn deinit(self: *AppTestContext) void {
@@ -156,7 +157,7 @@ pub const AppTestContext = struct {
         self.storage_engine.deinit();
 
         // 2. Shut down subsystems
-        self.manager.deinit();
+        self.connection_manager.deinit();
 
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
@@ -172,6 +173,16 @@ pub const AppTestContext = struct {
 
     pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_manager.TableMetadata {
         return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
+    }
+
+    pub fn tableIndex(self: *const AppTestContext, table_name: []const u8) usize {
+        const md = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return md.index;
+    }
+
+    pub fn fieldIndex(self: *const AppTestContext, table_name: []const u8, field_name: []const u8) usize {
+        const tbl = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 
     pub fn table(self: *AppTestContext, table_name: []const u8) !sth.TableFixture {
@@ -229,8 +240,8 @@ pub const AppTestContext = struct {
     /// Helper to open a test connection and return a scoped wrapper.
     /// This ensures the correct LIFO release order for test and manager references.
     pub fn openScopedConnection(self: *AppTestContext, ws: *WebSocket) !ScopedConnection {
-        try self.manager.onOpen(ws);
-        const conn = try self.manager.acquireConnection(ws.getConnId());
+        try self.connection_manager.onOpen(ws);
+        const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         return ScopedConnection{
             .app = self,
             .ws = ws,
@@ -253,7 +264,7 @@ pub const AppTestContext = struct {
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
-            self.app.manager.onClose(self.ws);
+            self.app.connection_manager.onClose(self.ws);
 
             // 2. Test drops its reference (may return to pool)
             if (self.conn.release()) {
@@ -271,8 +282,8 @@ pub const AppTestContext = struct {
     pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
         const ws = try self.allocator.create(WebSocket);
         ws.* = createMockWebSocket();
-        try self.manager.onOpen(ws);
-        const conn = try self.manager.acquireConnection(ws.getConnId());
+        try self.connection_manager.onOpen(ws);
+        const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         return ScopedConnection{
             .app = self,
             .ws = ws,
@@ -286,15 +297,15 @@ pub const AppTestContext = struct {
     /// the onClose callbacks for all mock WebSockets, since the test environment
     /// lacks the asynchronous event loop that would normally handle this.
     pub fn closeAllConnections(self: *AppTestContext) void {
-        self.manager.closeAllConnections();
+        self.connection_manager.closeAllConnections();
 
         // Pump onClose for all remaining connections in the manager.
         // We iterate and remove until empty to avoid concurrent modification issues.
         while (true) {
             const maybe_conn = blk: {
-                self.manager.mutex.lock();
-                defer self.manager.mutex.unlock();
-                var it = self.manager.map.valueIterator();
+                self.connection_manager.mutex.lock();
+                defer self.connection_manager.mutex.unlock();
+                var it = self.connection_manager.map.valueIterator();
                 if (it.next()) |conn_ptr| {
                     const conn = conn_ptr.*;
                     // Create a local copy of the WebSocket to avoid accessing
@@ -306,10 +317,41 @@ pub const AppTestContext = struct {
 
             if (maybe_conn) |ws| {
                 var local_ws = ws; // Mutability for callback
-                self.manager.onClose(&local_ws);
+                self.connection_manager.onClose(&local_ws);
             } else {
                 break;
             }
         }
     }
 };
+
+/// Creates a MsgPack Payload representing a document map based on schema.
+/// Translates string field names to numeric indices using TableMetadata.
+pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_manager.TableMetadata, fields: anytype) !Payload {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+
+    const fields_info = @typeInfo(@TypeOf(fields)).@"struct".fields;
+    try msgpack_utils.encodeMapHeader(writer, fields_info.len);
+
+    inline for (fields_info) |f| {
+        const entry = @field(fields, f.name);
+        const raw_field = entry[0];
+        const val = entry[1];
+
+        const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
+            .int, .comptime_int => @as(usize, @intCast(raw_field)),
+            else => tbl.getFieldIndex(raw_field) orelse return error.UnknownField,
+        };
+
+        // Encode numeric key
+        try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(f_idx), writer);
+
+        // Encode value
+        try msgpack.encodeAnyToPayload(allocator, writer, val);
+    }
+
+    var reader: std.Io.Reader = .fixed(buf.items);
+    return try msgpack_utils.decodeTrusted(allocator, &reader);
+}

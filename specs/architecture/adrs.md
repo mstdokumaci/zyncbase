@@ -446,10 +446,10 @@ The SDK targets TypeScript developers who benefit from expressive, nested syntax
 The SDK provides developer-friendly syntax. The wire protocol uses compact positional arrays. The SDK is responsible for transforming one into the other before transmission.
 
 This principle applies to:
-- **Paths**: SDK accepts `'users.u1.name'`, wire sends `['users', 'u1', 'name']`.
-- **Query conditions**: SDK accepts `{ age: { gte: 18 } }`, wire sends `['age', 4, 18]` (positional tuple: `[field, op_code, value]`).
-- **Sort descriptors**: SDK accepts `{ created_at: 'desc' }`, wire sends `['created_at', 1]` (positional tuple: `[field, desc_flag]`).
-- **Nested Fields**: SDK accepts `'users.u1.address.city'`, wire sends `['users', 'u1', 'address__city']`.
+- **Paths**: SDK accepts `'users.u1.name'`, wire sends `[0, 'u1', 2]` (mapped via ADR-025 dictionary indices).
+- **Query conditions**: SDK accepts `{ age: { gte: 18 } }`, wire sends `[3, 4, 18]` (positional tuple: `[field_index, op_code, value]`).
+- **Sort descriptors**: SDK accepts `{ created_at: 'desc' }`, wire sends `[8, 1]` (positional tuple: `[field_index, desc_flag]`).
+- **Nested Fields**: SDK accepts `'users.u1.address.city'`, internally flattens to `address__city`, and sends the mapped integer `field_index`.
 
 See [Query Grammar](../implementation/query-grammar.md) for the full wire encoding specification including operator codes.
 
@@ -619,3 +619,32 @@ ZyncBase treats schema-defined typed arrays (`type: "array"` + primitive `items`
 **Principles Alignment**:  
 - #5 TypeScript-First  
 - #8 Predictable Performance
+
+---
+
+## ADR-025: Schema Dictionary Compression (Integer Routing)
+
+**Date**: 2026-04-18  
+**Status**: Accepted  
+
+**Context**:  
+ZyncBase handles extremely high message throughput. Server-side routing using string-based collection names and field names requires allocating strings, computing hashes, and performing hash map lookups for every read and write operation. Sending repeated strings over the wire also increases bandwidth usage substantially.
+
+**Decision**:  
+Replace all schema-defined string identifiers with dense integer mappings over the wire protocol for `Store` operations. 
+
+1. **SchemaSync Handshake**: Immediately after connection, the server pushes a `SchemaSync` message containing positional arrays of tables and fields (including system columns). 
+2. **SDK Runtime Dictionary**: The client SDK dynamically builds an in-memory string-to-integer mapping at runtime from this payload.
+3. **Payload Translation**: The SDK resolves all developer-provided logical string paths (`'users.u1.address.city'`) into integer arrays representing `[table_index, id, field_index]` before sending them to the server. Operation values use integer-keyed maps (`{ 2: "Alice" }`) to safely permit sparse updates without payload ambiguity.
+4. **Presence Exemptions**: `Presence` APIs are explicitly exempt from this optimization and continue to use string-based properties, as they lack formal schema definitions.
+5. **Offline Safety**: The SDK hashes the `SchemaSync` payload to detect unexpected schema modifications across server restarts, safeguarding offline operation queues against catastrophic index shifting.
+
+**Rationale**:
+- **Performance**: Transforms O(N) string hashing and map lookups in Zig into O(1) direct array assignments. Memory allocations for strings in parsing logic are completely removed.
+- **Bandwidth**: Exchanging 1-byte integers via MessagePack instead of repetitive strings massively reduces typical payload footprint.
+- **Forward Compatibility**: Sending the dictionary arrays from the server dynamically guarantees that older, stale mobile clients can automatically adapt to newly injected fields without breaking. 
+
+**Principles Alignment**:  
+- #8 Predictable Performance
+- #1 Real-time First
+- #5 TypeScript-First

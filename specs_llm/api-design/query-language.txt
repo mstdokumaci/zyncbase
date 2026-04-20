@@ -10,7 +10,7 @@ ZyncBase Query Language Reference 2026-03-09 Prisma-inspired query language.stor
 
 // ZyncBase style (implicit AND)
 { age: { gte: 18 }, status: { eq: 'active' } }
-```Query Equality Operators```typescript
+```Query Operators developers define queries string field names SDK transforms string field references into integer_index values optimal execution performance Equality Operators```typescript
 {
   where: {
     status: { eq: 'active' },      // Equal

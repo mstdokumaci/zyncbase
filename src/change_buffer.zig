@@ -4,7 +4,7 @@ const TypedRow = @import("storage_engine/types.zig").TypedRow;
 
 pub const OwnedRowChange = struct {
     namespace: []const u8,
-    collection: []const u8,
+    table_index: usize,
     operation: Operation,
     old_row: ?TypedRow,
     new_row: ?TypedRow,
@@ -13,7 +13,6 @@ pub const OwnedRowChange = struct {
 
     pub fn deinit(self: *OwnedRowChange, allocator: Allocator) void {
         allocator.free(self.namespace);
-        allocator.free(self.collection);
         if (self.old_row) |r| r.deinit(allocator);
         if (self.new_row) |r| r.deinit(allocator);
     }

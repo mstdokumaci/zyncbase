@@ -20,18 +20,18 @@ test "connection: state deallocation on close" {
         const conn_id = dummy_ws.getConnId();
 
         // onOpen handles acquisition, init, and adding to map
-        try app.manager.onOpen(&dummy_ws);
+        try app.connection_manager.onOpen(&dummy_ws);
 
         // Verify connection is in manager
-        const retrieved = try app.manager.acquireConnection(conn_id);
+        const retrieved = try app.connection_manager.acquireConnection(conn_id);
         defer if (retrieved.release()) app.releaseConnection(retrieved);
         try testing.expectEqual(conn_id, retrieved.id);
 
         // Remove connection - should deallocate state once all refs are gone
-        app.manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws);
 
         // Verify connection is no longer in manager
-        const result = app.manager.acquireConnection(conn_id);
+        const result = app.connection_manager.acquireConnection(conn_id);
         try testing.expectError(error.ConnectionNotFound, result);
     }
 
@@ -45,17 +45,17 @@ test "connection: state deallocation on close" {
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
             ws.* = createMockWebSocket();
-            try app.manager.onOpen(ws);
+            try app.connection_manager.onOpen(ws);
         }
 
         // Close all connections
         for (&websockets) |*ws| {
-            app.manager.onClose(ws);
+            app.connection_manager.onClose(ws);
         }
 
         // Verify all connections are removed
         for (&websockets) |*ws| {
-            const result = app.manager.acquireConnection(ws.getConnId());
+            const result = app.connection_manager.acquireConnection(ws.getConnId());
             try testing.expectError(error.ConnectionNotFound, result);
         }
     }
@@ -68,9 +68,9 @@ test "connection: state deallocation on close" {
 
         var dummy_ws = createMockWebSocket();
         const conn_id = dummy_ws.getConnId();
-        try app.manager.onOpen(&dummy_ws);
+        try app.connection_manager.onOpen(&dummy_ws);
 
-        const state = try app.manager.acquireConnection(conn_id);
+        const state = try app.connection_manager.acquireConnection(conn_id);
         defer if (state.release()) app.releaseConnection(state);
 
         // Add some subscription IDs
@@ -79,10 +79,10 @@ test "connection: state deallocation on close" {
         try state.subscription_ids.append(state.allocator, 300);
 
         // Remove connection - should deallocate state including subscription list
-        app.manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws);
 
         // Verify connection is removed
-        const result = app.manager.acquireConnection(conn_id);
+        const result = app.connection_manager.acquireConnection(conn_id);
         try testing.expectError(error.ConnectionNotFound, result);
     }
 
@@ -96,7 +96,7 @@ test "connection: state deallocation on close" {
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
             ws.* = createMockWebSocket();
-            try app.manager.onOpen(ws);
+            try app.connection_manager.onOpen(ws);
         }
 
         // Clear all connections at once
@@ -104,7 +104,7 @@ test "connection: state deallocation on close" {
 
         // Verify all connections are removed
         for (&websockets) |*ws| {
-            const result = app.manager.acquireConnection(ws.getConnId());
+            const result = app.connection_manager.acquireConnection(ws.getConnId());
             try testing.expectError(error.ConnectionNotFound, result);
         }
     }
@@ -120,9 +120,9 @@ test "connection: state deallocation on close" {
         while (iter < iterations) : (iter += 1) {
             var dummy_ws = createMockWebSocket();
             const conn_id = dummy_ws.getConnId();
-            try app.manager.onOpen(&dummy_ws);
+            try app.connection_manager.onOpen(&dummy_ws);
 
-            const state = try app.manager.acquireConnection(conn_id);
+            const state = try app.connection_manager.acquireConnection(conn_id);
             defer if (state.release()) app.releaseConnection(state);
 
             // Add some subscriptions
@@ -130,7 +130,7 @@ test "connection: state deallocation on close" {
             try state.subscription_ids.append(state.allocator, conn_id * 10 + 1);
 
             // Immediately remove
-            app.manager.onClose(&dummy_ws);
+            app.connection_manager.onClose(&dummy_ws);
         }
     }
 
@@ -147,15 +147,15 @@ test "connection: state deallocation on close" {
                     var dummy_ws = createMockWebSocket();
                     const conn_id = dummy_ws.getConnId();
 
-                    ctx.manager.onOpen(&dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    ctx.connection_manager.onOpen(&dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
 
-                    const state = ctx.manager.acquireConnection(conn_id) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    const state = ctx.connection_manager.acquireConnection(conn_id) catch unreachable; // zwanzig-disable-line: swallowed-error
                     state.subscription_ids.append(state.allocator, conn_id * 100) catch unreachable; // zwanzig-disable-line: swallowed-error
                     state.subscription_ids.append(state.allocator, conn_id * 100 + 1) catch unreachable; // zwanzig-disable-line: swallowed-error
                     if (state.release()) ctx.releaseConnection(state);
 
                     // Remove immediately
-                    ctx.manager.onClose(&dummy_ws);
+                    ctx.connection_manager.onClose(&dummy_ws);
                 }
             }
         }.run;
@@ -182,8 +182,8 @@ test "connection: state deallocation on close" {
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets, 0..) |*ws, i| {
             ws.* = createMockWebSocket();
-            try deinit_app.manager.onOpen(ws);
-            const state = try deinit_app.manager.acquireConnection(ws.getConnId());
+            try deinit_app.connection_manager.onOpen(ws);
+            const state = try deinit_app.connection_manager.acquireConnection(ws.getConnId());
             defer if (state.release()) deinit_app.releaseConnection(state);
             try state.subscription_ids.append(state.allocator, i * 10);
         }
@@ -203,7 +203,7 @@ test "connection: state deallocation edge cases" {
 
         // Try to remove a connection that doesn't exist
         var dummy_ws = createMockWebSocket();
-        app.manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws);
     }
 
     // Test: Connection with empty subscription list
@@ -213,9 +213,9 @@ test "connection: state deallocation edge cases" {
         defer app.deinit();
 
         var dummy_ws = createMockWebSocket();
-        try app.manager.onOpen(&dummy_ws);
+        try app.connection_manager.onOpen(&dummy_ws);
         // Don't add any subscriptions
-        app.manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws);
     }
 
     // Test: Connection with large subscription list
@@ -226,8 +226,8 @@ test "connection: state deallocation edge cases" {
 
         var dummy_ws = createMockWebSocket();
         const conn_id = dummy_ws.getConnId();
-        try app.manager.onOpen(&dummy_ws);
-        const state = try app.manager.acquireConnection(conn_id);
+        try app.connection_manager.onOpen(&dummy_ws);
+        const state = try app.connection_manager.acquireConnection(conn_id);
         defer if (state.release()) app.releaseConnection(state);
 
         // Add many subscriptions
@@ -235,6 +235,6 @@ test "connection: state deallocation edge cases" {
         while (i < 128) : (i += 1) {
             try state.subscription_ids.append(state.allocator, i);
         }
-        app.manager.onClose(&dummy_ws);
+        app.connection_manager.onClose(&dummy_ws);
     }
 }

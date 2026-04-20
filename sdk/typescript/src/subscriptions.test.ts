@@ -19,7 +19,7 @@ describe("SubscriptionTracker", () => {
 				const params: Omit<StoreSubscribe, "id"> = {
 					type: "StoreSubscribe",
 					namespace: "public",
-					collection: "users",
+					table_index: "users",
 				};
 
 				tracker.register(subId, {
@@ -58,7 +58,7 @@ describe("SubscriptionTracker", () => {
 						params: {
 							type: "StoreSubscribe",
 							namespace: "public",
-							collection: "users",
+							table_index: "users",
 						},
 						callbacks: [callback],
 						projection: null,
@@ -97,7 +97,7 @@ describe("SubscriptionTracker - replayAll", () => {
 					const params: Omit<StoreSubscribe, "id"> = {
 						type: "StoreSubscribe",
 						namespace: "public",
-						collection: collections[i],
+						table_index: collections[i],
 					};
 					tracker.register(subIds[i], {
 						params,
@@ -107,7 +107,8 @@ describe("SubscriptionTracker - replayAll", () => {
 				}
 
 				// Collect all params and subIds passed to send
-				const sent: { params: Omit<StoreSubscribe, "id">; subId: number }[] = [];
+				const sent: { params: Omit<StoreSubscribe, "id">; subId: number }[] =
+					[];
 				await tracker.replayAll(async (params, subId) => {
 					sent.push({ params, subId });
 				});

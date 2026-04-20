@@ -16,39 +16,30 @@ The query engine handles filtering, sorting, and real-time subscriptions. It exe
 
 ### Query Structure
 
+See [Query Grammar](./query-grammar.md) for the authoritative AST definitions (`QueryFilter`, `Condition`, `SortDescriptor`).
+
 ```zig
 const Query = struct {
-    path: []const u8,
-    filters: []Filter,
-    sort: ?Sort,
+    table_index: usize,                    // Integer index from SchemaSync dictionary
+    filters: []Condition,
+    sort: ?SortDescriptor,
     limit: ?usize,
-    after: ?[]const u8, // Opaque token (base64 encoded cursor)
+    after: ?[]const u8,                    // Opaque token (base64 encoded cursor)
 };
 
-const Filter = struct {
-    field: []const u8,
-    op: FilterOp,
-    value: json.Value,
+const Condition = struct {
+    field_index: usize,                    // Integer index from SchemaSync dictionary
+    op: Operator,
+    value: ?TypedValue,
 };
 
-const FilterOp = enum {
-    eq,         // ==
-    ne,         // !=
-    gt,         // >
-    gte,        // >=
-    lt,         // <
-    lte,        // <=
-    in,         // IN
-    contains,   // LIKE %value%
-    startsWith, // LIKE value%
-    endsWith,   // LIKE %value
-    isNull,     // IS NULL
-    isNotNull,  // IS NOT NULL
+const Operator = enum {
+    eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
 };
 
-const Sort = struct {
-    field: []const u8,
-    direction: enum { asc, desc },
+const SortDescriptor = struct {
+    field_index: usize,                    // Integer index from SchemaSync dictionary
+    desc: bool,
 };
 ```
 
@@ -123,20 +114,24 @@ const QueryEngine = struct {
     fn buildSQL(self: *QueryEngine, query: Query) ![]const u8 {
         var buf = ArrayList(u8).init(self.allocator);
         
-        // Query the path's table directly
+        // Resolve table name from schema arrays via integer index
+        const table_name = self.schema.tables[query.table_index].name;
         try buf.appendSlice("SELECT * FROM ");
-        try buf.appendSlice(query.path);  // e.g., 'tasks'
+        try buf.appendSlice(table_name);
         try buf.appendSlice(" WHERE namespace_id = ?");
         
-        for (query.filters) |filter| {
+        for (query.filters) |condition| {
             try buf.appendSlice(" AND ");
-            try self.appendFilter(&buf, filter);
+            // Resolve column name from schema field arrays via integer index
+            const col_name = self.schema.tables[query.table_index].fields[condition.field_index].name;
+            try self.appendCondition(&buf, col_name, condition);
         }
         
         if (query.sort) |sort| {
             try buf.appendSlice(" ORDER BY ");
-            try buf.appendSlice(sort.field);
-            try buf.appendSlice(if (sort.direction == .asc) " ASC" else " DESC");
+            const sort_col = self.schema.tables[query.table_index].fields[sort.field_index].name;
+            try buf.appendSlice(sort_col);
+            try buf.appendSlice(if (sort.desc) " DESC" else " ASC");
         }
         
         if (query.limit) |limit| {

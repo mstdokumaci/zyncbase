@@ -119,15 +119,16 @@ test "storage: error handling concurrent access safety" {
         allocator: std.mem.Allocator,
     };
     const runRead = struct {
-        fn run(t_ctx: ThreadContext) void {
-            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, "data_table", "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
+        fn run(t_ctx: ThreadContext, table_index: usize) void {
+            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, "key1", "data_table") catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
             _ = managed.rows;
         }
     }.run;
     var threads: [4]std.Thread = undefined;
+    const tbl_md = ctx.sm.getTable("data_table") orelse return error.UnknownTable;
     for (&threads) |*t| {
-        t.* = try std.Thread.spawn(.{}, runRead, .{ThreadContext{ .storage = storage, .allocator = allocator }});
+        t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index });
     }
     for (threads) |t| t.join();
 }
@@ -181,7 +182,7 @@ test "storage: error handling delete non-existent key" {
     const storage = &ctx.engine;
     const tbl = try ctx.table("test");
 
-    try storage.deleteDocument("test", "nonexistent", "test");
+    try tbl.deleteDocument("nonexistent", "test");
     try storage.flushPendingWrites();
     {
         var managed = try tbl.selectDocument(allocator, "nonexistent", "test");

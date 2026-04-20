@@ -68,6 +68,8 @@ We evaluated MongoDB, GraphQL/Hasura, Prisma, and custom approaches. We chose Pr
 
 ## Query Operators
 
+> *Note: While developers define queries using these string-based field names, the SDK's internal dictionary mapping strictly transforms all string field references into dense integer `field_index` values over the wire for optimal execution performance.*
+
 ### Equality Operators
 
 ```typescript

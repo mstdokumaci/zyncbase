@@ -158,3 +158,12 @@ pub fn decodeBase64(allocator: std.mem.Allocator, token: []const u8) !Payload {
     var reader: std.Io.Reader = .fixed(final_decoded);
     return decodeTrusted(allocator, &reader) catch return error.InvalidBase64Token;
 }
+
+/// Safely extract a usize from an integer Payload. Returns null on type mismatch.
+pub fn extractPayloadUint(p: Payload) ?usize {
+    return switch (p) {
+        .uint => |v| std.math.cast(usize, v),
+        .int => |v| std.math.cast(usize, v),
+        else => null,
+    };
+}

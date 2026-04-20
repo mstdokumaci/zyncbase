@@ -13,7 +13,7 @@ test "ChangeBuffer: basic push and drain" {
     // Push one item
     try cb.push(.{
         .namespace = try alloc.dupe(u8, "ns"),
-        .collection = try alloc.dupe(u8, "coll"),
+        .table_index = 1,
         .operation = .insert,
         .old_row = null,
         .new_row = null,
@@ -28,7 +28,7 @@ test "ChangeBuffer: basic push and drain" {
     try cb.drainInto(&out, alloc);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expectEqualStrings("ns", out.items[0].namespace);
-    try testing.expectEqualStrings("coll", out.items[0].collection);
+    try testing.expectEqual(@as(usize, 1), out.items[0].table_index);
     try testing.expectEqual(OwnedRowChange.Operation.insert, out.items[0].operation);
 
     // Drain again should be empty
@@ -53,10 +53,9 @@ test "ChangeBuffer: concurrent push and drain stress" {
         fn run(ctx: *Context) !void {
             for (0..ctx.items_to_push) |i| {
                 const ns = try std.fmt.allocPrint(ctx.alloc, "ns{}", .{i});
-                const coll = try std.fmt.allocPrint(ctx.alloc, "coll{}", .{i});
                 try ctx.cb.push(.{
                     .namespace = ns,
-                    .collection = coll,
+                    .table_index = i,
                     .operation = .update,
                     .old_row = null,
                     .new_row = null,

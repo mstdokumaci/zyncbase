@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const storage_mod = @import("storage_engine.zig");
+const schema_manager = @import("schema_manager.zig");
 
 pub const Envelope = struct {
     type: []const u8,
@@ -11,13 +12,13 @@ pub const Envelope = struct {
 
 pub const StorePathRequest = struct {
     namespace: []const u8,
-    path: []const []const u8,
+    path: Payload = .nil,
     value: ?Payload = null,
 };
 
 pub const StoreCollectionRequest = struct {
     namespace: []const u8,
-    collection: []const u8,
+    table_index: Payload = .nil,
 };
 
 pub const StoreUnsubscribeRequest = struct {
@@ -421,10 +422,10 @@ pub const store_delta_header = blk: {
     break :blk buf[0..stream.pos].*;
 };
 
-fn encodeDeltaPath(writer: anytype, collection: []const u8, id_val: storage_mod.TypedValue) !void {
+fn encodeDeltaPath(writer: anytype, table_index: usize, id_val: storage_mod.TypedValue) !void {
     try msgpack.writeMsgPackStr(writer, "path");
     try writer.writeByte(0x92); // fixarray(2)
-    try msgpack.writeMsgPackStr(writer, collection);
+    try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
     try id_val.writeMsgPack(writer);
 }
 
@@ -432,7 +433,7 @@ fn encodeDeltaPath(writer: anytype, collection: []const u8, id_val: storage_mod.
 /// Caller owns the returned slice (allocated from the arena).
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
-    collection: []const u8,
+    table_index: usize,
     id_val: storage_mod.TypedValue,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
@@ -444,7 +445,7 @@ pub fn encodeDeleteDeltaSuffix(
     try writer.writeByte(0x82);
     try msgpack.writeMsgPackStr(writer, "op");
     try msgpack.writeMsgPackStr(writer, "remove");
-    try encodeDeltaPath(writer, collection, id_val);
+    try encodeDeltaPath(writer, table_index, id_val);
 
     return list.toOwnedSlice(allocator);
 }
@@ -453,7 +454,7 @@ pub fn encodeDeleteDeltaSuffix(
 /// Caller owns the returned slice (allocated from the arena).
 pub fn encodeSetDeltaSuffix(
     allocator: Allocator,
-    collection: []const u8,
+    table_index: usize,
     id_val: storage_mod.TypedValue,
     new_row: storage_mod.TypedRow,
     table_metadata: *const storage_mod.TableMetadata,
@@ -467,7 +468,7 @@ pub fn encodeSetDeltaSuffix(
     try writer.writeByte(0x83);
     try msgpack.writeMsgPackStr(writer, "op");
     try msgpack.writeMsgPackStr(writer, "set");
-    try encodeDeltaPath(writer, collection, id_val);
+    try encodeDeltaPath(writer, table_index, id_val);
     try msgpack.writeMsgPackStr(writer, "value");
     try encodeTypedRow(writer, new_row, table_metadata);
 
@@ -478,7 +479,44 @@ pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata
     if (row.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeMapHeader(writer, row.values.len);
     for (row.values, 0..) |value, idx| {
-        try msgpack.writeMsgPackStr(writer, table_metadata.fields[idx].name);
+        try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
         try value.writeMsgPack(writer);
     }
+}
+
+/// Build a SchemaSync message containing the positional tables and fields arrays.
+/// This message is pre-encoded once at startup and sent to every new connection.
+/// The caller owns the returned slice.
+pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.SchemaManager) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    // Top-level map: { "type": "SchemaSync", "tables": [...], "fields": [[...], ...] }
+    try msgpack.encodeMapHeader(writer, 3);
+
+    // "type": "SchemaSync"
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "SchemaSync");
+
+    // "tables": [table_name_0, table_name_1, ...]
+    try msgpack.writeMsgPackStr(writer, "tables");
+    const tables = sm.schema.tables;
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        try msgpack.writeMsgPackStr(writer, table.name);
+    }
+
+    // "fields": [[field_name_0, field_name_1, ...], ...]
+    try msgpack.writeMsgPackStr(writer, "fields");
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        const tbl_md = sm.getTable(table.name) orelse return error.UnknownTable;
+        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
+        for (tbl_md.fields) |field| {
+            try msgpack.writeMsgPackStr(writer, field.name);
+        }
+    }
+
+    return list.toOwnedSlice(allocator);
 }

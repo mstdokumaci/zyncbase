@@ -69,6 +69,15 @@ function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 		OPEN: MockWebSocket.OPEN,
 	});
 	const manager = new ConnectionManager(defaultOptions);
+	// Pre-seed with a minimal schema so StoreSet/StoreQuery tests don't throw TABLE_NOT_FOUND
+	manager.schemaDictionary.processSchemaSync({
+		tables: ["a", "users", "tasks"],
+		fields: [
+			["b", "c"],
+			["name", "age"],
+			["title", "meta"],
+		],
+	});
 	return { manager, mockWs };
 }
 
@@ -223,6 +232,8 @@ describe("ConnectionManager", () => {
 				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
+			await (manager as unknown as { processingPromise: Promise<void> })
+				.processingPromise;
 
 			expect(received).toHaveLength(1);
 			expect((received[0] as Record<string, unknown>).subId).toBe(42);
@@ -247,6 +258,44 @@ describe("ConnectionManager", () => {
 			// Now resolve the actual pending request
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
 			await expect(p).resolves.toMatchObject({ type: "ok", id: 1 });
+		});
+	});
+
+	describe("SchemaSync race condition (ADR-025)", () => {
+		test("processes StoreDelta only after SchemaSync is fully ready", async () => {
+			const { manager, mockWs } = makeManager();
+			const connectPromise = manager.connect();
+			mockWs.triggerOpen();
+			await connectPromise;
+
+			const received: unknown[] = [];
+			manager.onDelta((delta) => received.push(delta));
+
+			// 1. Send SchemaSync
+			const schema = {
+				type: "SchemaSync",
+				tables: ["users"],
+				fields: [["name", "age"]],
+			};
+			mockWs.triggerMessage(encodeToBuffer(schema));
+
+			// 2. Send StoreDelta immediately (should be queued and processed using NEW schema)
+			const delta = {
+				type: "StoreDelta",
+				subId: 1,
+				ops: [{ op: "set", path: [0, "u1", 0], value: "Alice" }], // [users, u1, name]
+			};
+			mockWs.triggerMessage(encodeToBuffer(delta));
+
+			// At this point, the queue is processing. We await the processingPromise.
+			await (manager as unknown as { processingPromise: Promise<void> })
+				.processingPromise;
+
+			expect(received).toHaveLength(1);
+			// Verify that the path was correctly decoded using the new schema
+			expect(
+				(received[0] as { ops: { path: string[] }[] }).ops[0].path,
+			).toEqual(["users", "u1", "name"]);
 		});
 	});
 
@@ -360,9 +409,12 @@ describe("ConnectionManager", () => {
 			function wsFactory1() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory1, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory1,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -393,9 +445,12 @@ describe("ConnectionManager", () => {
 			function wsFactory2() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory2, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory2,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -422,9 +477,12 @@ describe("ConnectionManager", () => {
 			function wsFactory3() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory3, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory3,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -456,9 +514,12 @@ describe("ConnectionManager", () => {
 				wsInstances++;
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory4, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory4,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -487,9 +548,12 @@ describe("ConnectionManager", () => {
 			function wsFactory5() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory5, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory5,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",

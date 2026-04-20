@@ -215,6 +215,7 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.message_handler,
+            &self.schema_manager,
         );
         errdefer self.connection_manager.deinit();
 

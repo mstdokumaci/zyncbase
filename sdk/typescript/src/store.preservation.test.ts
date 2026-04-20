@@ -107,49 +107,63 @@ describe("encodeQueryOptions — preservation property", () => {
 	});
 
 	test("where with contains operator", () => {
-		const result = encodeQueryOptions({ where: { name: { contains: "Alice" } } });
+		const result = encodeQueryOptions({
+			where: { name: { contains: "Alice" } },
+		});
 		expect(result).toEqual({
 			conditions: [["name", 6, "Alice"]],
 		});
 	});
 
 	test("where with startsWith operator", () => {
-		const result = encodeQueryOptions({ where: { email: { startsWith: "admin" } } });
+		const result = encodeQueryOptions({
+			where: { email: { startsWith: "admin" } },
+		});
 		expect(result).toEqual({
 			conditions: [["email", 7, "admin"]],
 		});
 	});
 
 	test("where with endsWith operator", () => {
-		const result = encodeQueryOptions({ where: { email: { endsWith: ".com" } } });
+		const result = encodeQueryOptions({
+			where: { email: { endsWith: ".com" } },
+		});
 		expect(result).toEqual({
 			conditions: [["email", 8, ".com"]],
 		});
 	});
 
 	test("where with in operator", () => {
-		const result = encodeQueryOptions({ where: { role: { in: ["admin", "mod"] } } });
+		const result = encodeQueryOptions({
+			where: { role: { in: ["admin", "mod"] } },
+		});
 		expect(result).toEqual({
 			conditions: [["role", 9, ["admin", "mod"]]],
 		});
 	});
 
 	test("where with notIn operator", () => {
-		const result = encodeQueryOptions({ where: { status: { notIn: ["banned", "deleted"] } } });
+		const result = encodeQueryOptions({
+			where: { status: { notIn: ["banned", "deleted"] } },
+		});
 		expect(result).toEqual({
 			conditions: [["status", 10, ["banned", "deleted"]]],
 		});
 	});
 
 	test("where with isNull operator", () => {
-		const result = encodeQueryOptions({ where: { deleted_at: { isNull: true } } });
+		const result = encodeQueryOptions({
+			where: { deleted_at: { isNull: true } },
+		});
 		expect(result).toEqual({
 			conditions: [["deleted_at", 11]],
 		});
 	});
 
 	test("where with isNotNull operator", () => {
-		const result = encodeQueryOptions({ where: { email: { isNotNull: true } } });
+		const result = encodeQueryOptions({
+			where: { email: { isNotNull: true } },
+		});
 		expect(result).toEqual({
 			conditions: [["email", 12]],
 		});
@@ -344,9 +358,12 @@ describe("WebSocket mock injection — preservation property", () => {
 		function wsFactory() {
 			return mockWs;
 		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-			OPEN: MockWebSocket.OPEN,
-		});
+		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+			wsFactory,
+			{
+				OPEN: MockWebSocket.OPEN,
+			},
+		);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const connectPromise = manager.connect();
@@ -363,9 +380,12 @@ describe("WebSocket mock injection — preservation property", () => {
 		function wsFactory() {
 			return mockWs;
 		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-			OPEN: MockWebSocket.OPEN,
-		});
+		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+			wsFactory,
+			{
+				OPEN: MockWebSocket.OPEN,
+			},
+		);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const connectPromise = manager.connect();
@@ -384,9 +404,12 @@ describe("WebSocket mock injection — preservation property", () => {
 			wsInstances++;
 			return mockWs;
 		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-			OPEN: MockWebSocket.OPEN,
-		});
+		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+			wsFactory,
+			{
+				OPEN: MockWebSocket.OPEN,
+			},
+		);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const connectPromise = manager.connect();
@@ -402,9 +425,12 @@ describe("WebSocket mock injection — preservation property", () => {
 		function wsFactory() {
 			return mockWs;
 		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-			OPEN: MockWebSocket.OPEN,
-		});
+		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+			wsFactory,
+			{
+				OPEN: MockWebSocket.OPEN,
+			},
+		);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const errors: unknown[] = [];
@@ -418,7 +444,9 @@ describe("WebSocket mock injection — preservation property", () => {
 		} catch {}
 
 		expect(errors).toHaveLength(1);
-		expect((errors[0] as Record<string, unknown>).code).toBe("CONNECTION_FAILED");
+		expect((errors[0] as Record<string, unknown>).code).toBe(
+			"CONNECTION_FAILED",
+		);
 	});
 
 	test("factory function pattern: close event propagates correctly", async () => {
@@ -427,9 +455,12 @@ describe("WebSocket mock injection — preservation property", () => {
 		function wsFactory() {
 			return mockWs;
 		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-			OPEN: MockWebSocket.OPEN,
-		});
+		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+			wsFactory,
+			{
+				OPEN: MockWebSocket.OPEN,
+			},
+		);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const connectPromise = manager.connect();
@@ -451,9 +482,12 @@ describe("WebSocket mock injection — preservation property", () => {
 			function wsFactory() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager(defaultOptions);
 			const connectPromise = manager.connect();

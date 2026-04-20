@@ -16,6 +16,7 @@ pub const FieldType = schema_manager.FieldType;
 pub const TableMetadata = schema_manager.TableMetadata;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
+pub const query_parser = @import("query_parser.zig");
 pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
@@ -80,7 +81,31 @@ pub const TableFixture = struct {
         id: []const u8,
         namespace: []const u8,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectDocument(allocator, self.metadata.table.name, id, namespace);
+        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace);
+    }
+
+    pub fn selectQuery(
+        self: TableFixture,
+        allocator: Allocator,
+        namespace: []const u8,
+        filter: query_parser.QueryFilter,
+    ) !storage_engine.ManagedResult {
+        return self.engine.selectQuery(allocator, self.metadata.index, namespace, filter);
+    }
+
+    pub fn countRows(
+        self: TableFixture,
+        namespace: []const u8,
+    ) !usize {
+        return self.engine.countRows(self.metadata.index, namespace);
+    }
+
+    pub fn deleteDocument(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+    ) !void {
+        return self.engine.deleteDocument(self.metadata.index, id, namespace);
     }
 
     pub fn getOne(
@@ -192,6 +217,16 @@ pub const EngineTestContext = struct {
 
     pub fn tableMetadata(self: *const EngineTestContext, table_name: []const u8) !*const TableMetadata {
         return self.sm.getTable(table_name) orelse StorageError.UnknownTable;
+    }
+
+    pub fn tableIndex(self: *const EngineTestContext, table_name: []const u8) usize {
+        const md = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return md.index;
+    }
+
+    pub fn fieldIndex(self: *const EngineTestContext, table_name: []const u8, field_name: []const u8) usize {
+        const tbl = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 
     pub fn table(self: *EngineTestContext, table_name: []const u8) !TableFixture {
@@ -388,9 +423,9 @@ fn insertNamedWithMetadata(
     namespace: []const u8,
     columns: anytype,
 ) !void {
-    var resolved: [columns.len]ColumnValue = undefined;
+    var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.table.name, id, namespace, &resolved);
+    try engine.insertOrReplace(table_metadata.index, id, namespace, &resolved);
 }
 
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───

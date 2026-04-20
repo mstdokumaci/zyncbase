@@ -3,6 +3,8 @@ const Allocator = std.mem.Allocator;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
+const SchemaManager = @import("schema_manager.zig").SchemaManager;
+const protocol = @import("protocol.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
@@ -22,18 +24,26 @@ pub const ConnectionManager = struct {
     /// Maximum number of concurrent connections allowed
     max_connections: usize = 100_000,
 
+    /// Pre-encoded SchemaSync message sent to every new connection on open.
+    schema_sync_msg: []const u8,
+
     pub fn init(
         self: *ConnectionManager,
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
+        schema_manager: *const SchemaManager,
     ) !void {
+        // Pre-build SchemaSync message once at startup
+        const schema_sync_msg = try protocol.buildSchemaSyncMessage(allocator, schema_manager);
+
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .message_handler = message_handler,
             .map = std.AutoHashMap(u64, *Connection).init(memory_strategy.generalAllocator()),
             .mutex = .{},
+            .schema_sync_msg = schema_sync_msg,
         };
     }
 
@@ -50,6 +60,8 @@ pub const ConnectionManager = struct {
         }
         self.map.deinit();
         self.mutex.unlock();
+
+        self.allocator.free(self.schema_sync_msg);
     }
 
     /// Close all active connections for graceful shutdown
@@ -84,6 +96,9 @@ pub const ConnectionManager = struct {
 
         try self.map.put(conn_id, conn);
         std.log.info("Client connected: id={}", .{conn_id});
+
+        // Send SchemaSync as the first message on this connection
+        ws.send(self.schema_sync_msg, .binary);
     }
 
     /// Entry point for WebSocket message events

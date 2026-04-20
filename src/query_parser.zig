@@ -178,16 +178,13 @@ fn parseCursorSortValue(
 pub fn parseQueryFilter(
     allocator: std.mem.Allocator,
     sm: *const SchemaManager,
-    collection: []const u8,
+    table_index: usize,
     payload: msgpack.Payload,
 ) ParserError!QueryFilter {
     if (payload != .map) return error.InvalidMessageFormat;
 
-    // ADR-019: reject __ from client
-    if (std.mem.containsAtLeast(u8, collection, 1, "__")) return error.InvalidTableName;
-
     // Find the table metadata in schema for validation
-    const table_metadata = sm.getTable(collection) orelse return error.UnknownTable;
+    const table_metadata = sm.getTableByIndex(table_index) orelse return error.UnknownTable;
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
@@ -272,16 +269,15 @@ pub const ResolvedField = struct {
     items_type: ?schema_manager.FieldType,
 };
 
-/// Resolves the metadata (FieldType and items_type) for a given field.
-/// Handles both schema-defined fields and built-in system columns.
+/// Resolves the metadata (FieldType and items_type) for a given field by index.
 pub fn resolveFieldMetadata(
     table_metadata: *const schema_manager.TableMetadata,
-    field: []const u8,
+    field_index: usize,
 ) ParserError!ResolvedField {
-    const idx = table_metadata.field_index_map.get(field) orelse return error.UnknownField;
-    const f = table_metadata.fields[idx];
+    if (field_index >= table_metadata.fields.len) return error.UnknownField;
+    const f = table_metadata.fields[field_index];
     return .{
-        .field_index = idx,
+        .field_index = field_index,
         .field_type = f.sql_type,
         .items_type = f.items_type,
     };
@@ -449,9 +445,9 @@ fn parseCondition(
     const arr = payload.arr;
     if (arr.len < 2 or arr.len > 3) return error.InvalidConditionFormat;
 
-    if (arr[0] != .str) return error.InvalidFieldName;
-    const field = arr[0].str.value();
-    const resolved = try resolveFieldMetadata(table_metadata, field);
+    // Field is now an integer index
+    const field_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidFieldName;
+    const resolved = try resolveFieldMetadata(table_metadata, field_index);
 
     const op = try parseOperator(arr[1]);
     const operand = if (arr.len == 3) arr[2] else null;
@@ -475,9 +471,9 @@ fn parseSortDescriptor(
     const arr = payload.arr;
     if (arr.len != 2) return error.InvalidSortFormat;
 
-    if (arr[0] != .str) return error.InvalidFieldName;
-    const field = arr[0].str.value();
-    const resolved = try resolveFieldMetadata(table_metadata, field);
+    // Field is now an integer index
+    const field_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidFieldName;
+    const resolved = try resolveFieldMetadata(table_metadata, field_index);
     const desc = try parseSortDirection(arr[1]);
 
     return SortDescriptor{

@@ -50,15 +50,15 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
-        const table_metadata = self.schema_manager.getTable(change.collection) orelse {
-            std.log.err("NotificationDispatcher skipping delta for unknown collection {s}", .{change.collection});
+        const table_metadata = self.schema_manager.getTableByIndex(change.table_index) orelse {
+            std.log.err("NotificationDispatcher skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };
 
         // === Phase 1: Extract row metadata ===
         const row_change = RowChange{
             .namespace = change.namespace,
-            .collection = change.collection,
+            .table_index = change.table_index,
             .operation = @enumFromInt(@intFromEnum(change.operation)),
             .new_row = change.new_row,
             .old_row = change.old_row,
@@ -70,7 +70,7 @@ pub const NotificationDispatcher = struct {
             null;
 
         if (id_val == null) {
-            std.log.err("NotificationDispatcher skipping delta for {s}:{s} because row has no id", .{ change.namespace, change.collection });
+            std.log.err("NotificationDispatcher skipping delta for {s}:{d} because row has no id", .{ change.namespace, change.table_index });
             return;
         }
 
@@ -93,31 +93,31 @@ pub const NotificationDispatcher = struct {
 
         // === Phase 3: Pre-encode suffix template (once per change) ===
         // This encodes either:
-        //   "ops": [{"op": "remove", "path": [collection, id]}]
+        //   "ops": [{"op": "remove", "path": [table, id]}]
         // or:
-        //   "ops": [{"op": "set", "path": [collection, id], "value": <row>}]
+        //   "ops": [{"op": "set", "path": [table, id], "value": <row>}]
         // The expensive part (msgpack.encode(new_row)) happens exactly once here.
         const suffix = switch (change.operation) {
             .delete => protocol.encodeDeleteDeltaSuffix(
                 alloc,
-                change.collection,
+                table_metadata.index,
                 id_val_actual,
             ),
             .insert, .update => blk: {
                 const new_row = change.new_row orelse {
-                    std.log.err("NotificationDispatcher skipping non-delete delta for {s}:{s} because new_row is missing", .{ change.namespace, change.collection });
+                    std.log.err("NotificationDispatcher skipping non-delete delta for {s}:{d} because new_row is missing", .{ change.namespace, change.table_index });
                     return;
                 };
                 break :blk protocol.encodeSetDeltaSuffix(
                     alloc,
-                    change.collection,
+                    table_metadata.index,
                     id_val_actual,
                     new_row,
                     table_metadata,
                 );
             },
         } catch |err| {
-            std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{s}: {}", .{ change.namespace, change.collection, err });
+            std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
             return;
         };
 

@@ -59,7 +59,7 @@ client.store.batch([
   { op: 'set', path: `users.${userId}`, value: { name: 'Alice' } },
   { op: 'set', path: `profiles.${profileId}`, value: { user_id: userId } }
 ])
-```Path Syntax (Strings vs Arrays) methods accept dot-notation strings Arrays Array canonical format Logical vs. Wire-Format Paths Paths follow logical progression from collections to documents specific fields SDK supports variadic segments **wire protocol** (socket enforces flattened structure for nested fields using `__` separator SDK handles transformation automatically Target  Logical Path (SDK) Wire-Format Path (Socket) Pattern **Collection** `['users']` **Document**['users', 'u1'] id **Field**['users' 'name'] id **Nested Field**['users', 'u1 'address' 'city'][collection, id flattened__nested] Why use Arrays? preferred dealing with variables or IDs dots```typescript
+```Path Syntax (Strings vs Arrays) methods accept dot-notation strings Arrays Array canonical format Logical vs. Wire-Format Paths Paths follow logical progression from collections to documents specific fields SDK supports variadic segments **wire protocol** (socket enforces compact structure using schema index dictionaries SDK resolves nested strings translates into mapped `table_index` `field_index` integers. Target  Logical Path (SDK) Flattened (SDK Internal)  Wire-Format Path (Socket) Pattern **Collection** `['users']`[table_index] **Document**['users', 'u1']_index id] **Field**['users', 'u1, 'name'][table_index, id field_index] **Nested Field**['users', 'u1 'address', 'city']`[0 5[table_index id field_index] Why use Arrays? Arrays preferred dealing with variables IDs dots```typescript
 const userId = 'alice.smith' // Dot in ID!
 
 // ❌ Dot-notation breaks (ambiguous)

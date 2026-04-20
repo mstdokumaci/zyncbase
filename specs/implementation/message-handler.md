@@ -78,7 +78,7 @@ The `MessageHandler` is shared across all worker threads. Thread safety is achie
 ## Validation & Success Criteria
 
 - [x] Arena is released after every message (checked via pooled arena stats)
-- [x] Correct routing for all wire protocol operations (`StoreSet`, `StoreGet`, etc.)
+- [x] Correct routing for all wire protocol operations (`StoreSet`, `StoreRemove`, `StoreBatch`, `StoreQuery`, `StoreSubscribe`, etc.)
 - [x] ThreadSanitizer passes for concurrent message processing across multiple connections
 
 ---

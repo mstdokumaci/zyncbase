@@ -28,7 +28,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
             var i: u32 = 0;
             while (i < sub_count) : (i += 1) {
                 const conn_id = start_id + i;
-                _ = engine_ptr.subscribe("ns", "coll", filter, conn_id, 1) catch @panic("subscribe failed");
+                _ = engine_ptr.subscribe("ns", 0, filter, conn_id, 1) catch @panic("subscribe failed");
             }
         }
     }.run;
@@ -55,7 +55,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
 
             const change = RowChange{
                 .namespace = "ns",
-                .collection = "coll",
+                .table_index = 0,
                 .operation = .update,
                 .new_row = r,
                 .old_row = null,
@@ -87,7 +87,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
 
     const count = 400;
     for (0..count) |i| {
-        _ = try engine.subscribe("n", "c", filter, i, 1);
+        _ = try engine.subscribe("n", 0, filter, i, 1);
     }
 
     const thread_count = 4;

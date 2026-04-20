@@ -280,7 +280,7 @@ await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
 const users = await zyncbase.query('users', {
   where: { 'address.location.lat': { gte: 37 } }
 })
-```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations Efficient querying SQLite indexes on flattened columns No depth limit nesting Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 ZyncBase supports arrays with constraints Simple arrays```json
+```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings SDK **Benefits Efficient querying SQLite indexes on flattened columns No depth limit for nesting Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 ZyncBase supports arrays with constraints Simple arrays```json
 {
   "store": {
     "tasks": {

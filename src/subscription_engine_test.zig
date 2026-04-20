@@ -1,16 +1,29 @@
 const std = @import("std");
 const testing = std.testing;
-const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const RowChange = @import("subscription_engine.zig").RowChange;
-const query_parser = @import("query_parser.zig");
+const subscription_engine = @import("subscription_engine.zig");
+const SubscriptionEngine = subscription_engine.SubscriptionEngine;
+const types = @import("storage_engine/types.zig");
+const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
-const types = @import("storage_engine/types.zig");
+const query_parser = @import("query_parser.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
+
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "items",
+            .fields = &.{
+                sth.makeField("id", .text, true),
+                sth.makeField("name", .text, false),
+                sth.makeField("status", .text, false),
+            },
+        },
+    });
+    defer sm.deinit();
 
     const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{ .field_index = 2, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
@@ -18,15 +31,15 @@ test "SubscriptionEngine: basic subscribe and match" {
     defer filter.deinit(allocator);
 
     // Subscribe
-    _ = try engine.subscribe("default", "items", filter, 1, 100);
+    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Create a matching row change
     var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valText("active")});
     defer new_row.deinit(allocator);
 
-    const change = RowChange{
+    const change = subscription_engine.RowChange{
         .namespace = "default",
-        .collection = "items",
+        .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = new_row,
         .old_row = null,
@@ -50,9 +63,20 @@ test "SubscriptionEngine: group sharing" {
     });
     defer filter.deinit(allocator);
 
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "coll",
+            .fields = &.{
+                sth.makeField("id", .text, true),
+                sth.makeField("age", .integer, false),
+            },
+        },
+    });
+    defer sm.deinit();
+
     // Two different subscribers for EXACTLY the same filter
-    const first = try engine.subscribe("ns", "coll", filter, 1, 101);
-    const second = try engine.subscribe("ns", "coll", filter, 2, 102);
+    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
+    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
 
     try testing.expect(first); // First one should create group
     try testing.expect(!second); // Second one should join existing group
@@ -70,7 +94,12 @@ test "SubscriptionEngine: unsubscribe clean up" {
     });
     defer filter.deinit(allocator);
 
-    _ = try engine.subscribe("n", "c", filter, 1, 1);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = "c", .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe("n", (sm.getTable("c") orelse return error.TestExpectedValue).index, filter, 1, 1);
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 
     try engine.unsubscribe(1, 1);
@@ -111,9 +140,14 @@ test "SubscriptionEngine: canonical filter key includes values" {
     });
     defer filter2.deinit(allocator);
 
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = "items", .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
     // Subscribe with different values
-    _ = try engine.subscribe("default", "items", filter1, 1, 101);
-    _ = try engine.subscribe("default", "items", filter2, 2, 102);
+    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     // If they share the same key, they will be in the same group.
     // They SHOULD be in different groups because the values are different.
@@ -144,8 +178,13 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     });
     defer filter2.deinit(allocator);
 
-    _ = try engine.subscribe("default", "users", filter1, 1, 101);
-    _ = try engine.subscribe("default", "users", filter2, 2, 102);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = "users", .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -165,8 +204,13 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     });
     defer filter_real.deinit(allocator);
 
-    _ = try engine.subscribe("default", "scores", filter_int, 1, 201);
-    _ = try engine.subscribe("default", "scores", filter_real, 2, 202);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = "scores", .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe("default", (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_int, 1, 201);
+    _ = try engine.subscribe("default", (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_real, 2, 202);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -175,21 +219,25 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
-
     const long_ns = "a" ** 150;
     const long_coll = "b" ** 150;
     // combined length (150 + 1 + 150 = 301) will be > 256 stack buffer
 
     const filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    _ = try engine.subscribe(long_ns, long_coll, filter, 1, 100);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = long_coll, .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe(long_ns, (sm.getTable(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var new_row = try tth.rowFromTypedValues(allocator, &.{});
     defer new_row.deinit(allocator);
 
-    const change = RowChange{
+    const change = subscription_engine.RowChange{
         .namespace = long_ns,
-        .collection = long_coll,
+        .table_index = (sm.getTable(long_coll) orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = new_row,
         .old_row = null,
@@ -264,8 +312,20 @@ test "SubscriptionEngine: group sharing with different condition order" {
     });
     defer filter2.deinit(allocator);
 
-    const first = try engine.subscribe("ns", "coll", filter1, 1, 101);
-    const second = try engine.subscribe("ns", "coll", filter2, 2, 102);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "coll",
+            .fields = &.{
+                sth.makeField("id", .text, true),
+                sth.makeField("status", .text, false),
+                sth.makeField("type", .text, false),
+            },
+        },
+    });
+    defer sm.deinit();
+
+    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second); // Should share group!
@@ -289,14 +349,25 @@ test "SubscriptionEngine: in operator subscribe and match" {
     });
     defer filter.deinit(allocator);
 
-    _ = try engine.subscribe("default", "users", filter, 1, 100);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "users",
+            .fields = &.{
+                sth.makeField("id", .text, true),
+                sth.makeField("role", .text, false),
+            },
+        },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("admin")});
     defer r.deinit(allocator);
 
-    const change = RowChange{
+    const change = subscription_engine.RowChange{
         .namespace = "default",
-        .collection = "users",
+        .table_index = (sm.getTable("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = r,
         .old_row = null,
@@ -335,8 +406,13 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     });
     defer filter2.deinit(allocator);
 
-    const first = try engine.subscribe("ns", "coll", filter1, 1, 101);
-    const second = try engine.subscribe("ns", "coll", filter2, 2, 102);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{ .name = "coll", .fields = &.{sth.makeField("id", .text, true)} },
+    });
+    defer sm.deinit();
+
+    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second);
@@ -359,14 +435,25 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     });
     defer filter.deinit(allocator);
 
-    _ = try engine.subscribe("default", "users", filter, 1, 100);
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "users",
+            .fields = &.{
+                sth.makeField("id", .text, true),
+                sth.makeField("role", .text, false),
+            },
+        },
+    });
+    defer sm.deinit();
+
+    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("member")});
     defer r.deinit(allocator);
 
-    const change = RowChange{
+    const change = subscription_engine.RowChange{
         .namespace = "default",
-        .collection = "users",
+        .table_index = (sm.getTable("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = r,
         .old_row = null,

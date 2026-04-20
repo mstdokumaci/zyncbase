@@ -33,7 +33,7 @@ const client = createClient({
   storeNamespace: 'tenant:acme:workspace:ws-1',
   presenceNamespace: 'tenant:acme:workspace:ws-1:document:doc-123'
 })
-```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT **WebSocket /ws?ticket=... opens WebSocket connection`Connected` server sends message `userId active namespaces SDK wait `Connected push before resolving() promise```typescript
+```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary ADR-025)`Connected server sends message `userId `session active SDK wait `SchemaSync `Connected pushes before resolving `connect() promise```typescript
 await client.connect()
 // Connection is fully established, ready to use store and presence APIs
 ````Promise<void> `ZyncBaseError `AUTH_FAILED `CONNECTION_FAILED `client.disconnect() closes connection clears active namespace```typescript

@@ -436,14 +436,14 @@ pub const StorageEngine = struct {
     /// INSERT OR REPLACE a document into a table.
     pub fn insertOrReplace(
         self: *StorageEngine,
-        table: []const u8,
+        table_index: usize,
         id: []const u8,
         namespace: []const u8,
         columns: []const ColumnValue,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
         const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
         errdefer self.allocator.free(sql_string);
@@ -464,12 +464,10 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(id_owned);
         const ns_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(ns_owned);
-        const table_owned = try self.allocator.dupe(u8, table_metadata.table.name);
-        errdefer self.allocator.free(table_owned);
 
         const op = WriteOp{
             .upsert = .{
-                .table = table_owned,
+                .table_index = table_index,
                 .id = id_owned,
                 .namespace = ns_owned,
                 .sql = sql_string,
@@ -487,14 +485,14 @@ pub const StorageEngine = struct {
     pub fn selectDocument(
         self: *StorageEngine,
         allocator: Allocator,
-        table: []const u8,
+        table_index: usize,
         id: []const u8,
         namespace: []const u8,
     ) !ManagedResult {
         try self.ensureRunning();
-        try self.schema_manager.validateTable(table);
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
-        const cache_key = try reader.getCacheKey(allocator, table, namespace, id);
+        const cache_key = try reader.getCacheKey(allocator, table_metadata.table.name, namespace, id);
         defer allocator.free(cache_key);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
@@ -514,7 +512,6 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.schema_manager.getTable(table).?;
         const sql_query = try reader.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql_query);
 
@@ -543,19 +540,18 @@ pub const StorageEngine = struct {
     pub fn selectQuery(
         self: *StorageEngine,
         allocator: Allocator,
-        table: []const u8,
+        table_index: usize,
         namespace: []const u8,
         filter: query_parser.QueryFilter,
     ) !ManagedResult {
         try self.ensureRunning();
-        try self.schema_manager.validateTable(table);
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const table_metadata = self.schema_manager.getTable(table).?;
         const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
         defer query_res.deinit(allocator);
 
@@ -584,13 +580,13 @@ pub const StorageEngine = struct {
     /// DELETE a document from a table.
     pub fn deleteDocument(
         self: *StorageEngine,
-        table: []const u8,
+        table_index: usize,
         id: []const u8,
         namespace: []const u8,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const table_metadata = self.schema_manager.getTable(table) orelse return error.UnknownTable;
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
         errdefer self.allocator.free(sql_string);
@@ -599,12 +595,10 @@ pub const StorageEngine = struct {
         errdefer self.allocator.free(id_owned);
         const ns_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(ns_owned);
-        const table_owned = try self.allocator.dupe(u8, table_metadata.table.name);
-        errdefer self.allocator.free(table_owned);
 
         const op = WriteOp{
             .delete = .{
-                .table = table_owned,
+                .table_index = table_index,
                 .id = id_owned,
                 .namespace = ns_owned,
                 .sql = sql_string,
