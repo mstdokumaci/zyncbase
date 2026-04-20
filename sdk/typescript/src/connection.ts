@@ -58,6 +58,9 @@ export class ConnectionManager {
 	// Schema dictionary (populated from SchemaSync)
 	readonly schemaDictionary = new SchemaDictionary();
 
+	// Sequence lock for inbound message processing
+	private processingPromise: Promise<void> = Promise.resolve();
+
 	// SchemaSync readiness promise
 	private schemaSyncResolve: (() => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => { });
@@ -336,6 +339,17 @@ export class ConnectionManager {
 	}
 
 	private _handleRawMessage(data: ArrayBuffer | Uint8Array): void {
+		// Queue the message for sequential processing
+		this.processingPromise = this.processingPromise
+			.then(() => this._processInbound(data))
+			.catch((err) => {
+				if (this.options.debug) {
+					console.error("[SDK] Error processing inbound message:", err);
+				}
+			});
+	}
+
+	private async _processInbound(data: ArrayBuffer | Uint8Array): Promise<void> {
 		let msg: InboundMessage;
 		try {
 			msg = decode(
@@ -356,7 +370,7 @@ export class ConnectionManager {
 		let processedMsg: InboundMessage = msg;
 		switch (type) {
 			case "SchemaSync":
-				this._handleSchemaSync(msg);
+				await this._handleSchemaSync(msg);
 				return; // SchemaSync is internal — not dispatched to messageHandler
 			case "ok":
 				this._handleOkResponse(msg as OkResponse);
@@ -403,18 +417,18 @@ export class ConnectionManager {
 		}
 	}
 
-	private _handleSchemaSync(msg: InboundMessage): void {
+	private async _handleSchemaSync(msg: InboundMessage): Promise<void> {
 		const payload = msg as { tables: string[]; fields: string[][] };
-		this.schemaDictionary.processSchemaSync(payload).then((schemaChanged) => {
-			if (schemaChanged) {
-				this.emit("schemaChange");
-			}
-			// Resolve the schemaSyncPromise so awaitSchemaSync() unblocks
-			if (this.schemaSyncResolve) {
-				this.schemaSyncResolve();
-				this.schemaSyncResolve = null;
-			}
-		});
+		const schemaChanged = await this.schemaDictionary.processSchemaSync(payload);
+
+		if (schemaChanged) {
+			this.emit("schemaChange");
+		}
+		// Resolve the schemaSyncPromise so awaitSchemaSync() unblocks
+		if (this.schemaSyncResolve) {
+			this.schemaSyncResolve();
+			this.schemaSyncResolve = null;
+		}
 	}
 
 	private _handleDeltaPush(delta: StoreDelta): void {

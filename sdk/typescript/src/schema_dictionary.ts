@@ -255,6 +255,7 @@ export class SchemaDictionary {
 	}
 
 	// ─── Private helpers ───────────────────────────────────────────────────
+	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
 
 	/**
 	 * Compute an xxHash64 of the canonical JSON representation of
@@ -264,7 +265,10 @@ export class SchemaDictionary {
 		tables: string[];
 		fields: string[][];
 	}): Promise<string> {
-		const hasher = await xxhash();
+		if (!SchemaDictionary.xxhashPromise) {
+			SchemaDictionary.xxhashPromise = xxhash();
+		}
+		const hasher = await SchemaDictionary.xxhashPromise;
 		const canonical = JSON.stringify({
 			tables: payload.tables,
 			fields: payload.fields,

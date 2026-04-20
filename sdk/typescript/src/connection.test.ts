@@ -223,6 +223,7 @@ describe("ConnectionManager", () => {
 				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
+			await (manager as any).processingPromise;
 
 			expect(received).toHaveLength(1);
 			expect((received[0] as Record<string, unknown>).subId).toBe(42);
@@ -247,6 +248,41 @@ describe("ConnectionManager", () => {
 			// Now resolve the actual pending request
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
 			await expect(p).resolves.toMatchObject({ type: "ok", id: 1 });
+		});
+	});
+
+	describe("SchemaSync race condition (ADR-025)", () => {
+		test("processes StoreDelta only after SchemaSync is fully ready", async () => {
+			const { manager, mockWs } = makeManager();
+			const connectPromise = manager.connect();
+			mockWs.triggerOpen();
+			await connectPromise;
+
+			const received: any[] = [];
+			manager.onDelta((delta) => received.push(delta));
+
+			// 1. Send SchemaSync
+			const schema = {
+				type: "SchemaSync",
+				tables: ["users"],
+				fields: [["name", "age"]],
+			};
+			mockWs.triggerMessage(encodeToBuffer(schema));
+
+			// 2. Send StoreDelta immediately (should be queued and processed using NEW schema)
+			const delta = {
+				type: "StoreDelta",
+				subId: 1,
+				ops: [{ op: "set", path: [0, "u1", 0], value: "Alice" }], // [users, u1, name]
+			};
+			mockWs.triggerMessage(encodeToBuffer(delta));
+
+			// At this point, the queue is processing. We await the processingPromise.
+			await (manager as any).processingPromise;
+
+			expect(received).toHaveLength(1);
+			// Verify that the path was correctly decoded using the new schema
+			expect(received[0].ops[0].path).toEqual(["users", "u1", "name"]);
 		});
 	});
 
