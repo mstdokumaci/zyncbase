@@ -6,6 +6,7 @@ const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
+const store_helpers = @import("store_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 
 const table_defs = [_]helpers.TableDef{
@@ -61,7 +62,7 @@ test "Verification: StoreSet message processing" {
     // Create a proper MessagePack StoreSet message
     const tbl = try app.tableMetadata("data_table");
     const val_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-    const message = try msgpack.createStoreSetFieldMessage(
+    const message = try store_helpers.createStoreSetFieldMessage(
         allocator,
         1,
         "test_namespace",
@@ -146,7 +147,7 @@ test "Verification: StoreQuery message processing" {
     try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
     // Create a StoreQuery message
-    const message = try msgpack.createStoreQueryMessage(
+    const message = try store_helpers.createStoreQueryMessage(
         allocator,
         2,
         "test_namespace",
@@ -227,7 +228,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
     try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
 
-    const message = try msgpack.createStoreQueryMessage(
+    const message = try store_helpers.createStoreQueryMessage(
         allocator,
         42,
         "test_namespace",
@@ -415,7 +416,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
         {
             const tbl = try app.tableMetadata("data_table");
             const val_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-            const set_message = try msgpack.createStoreSetFieldMessage(
+            const set_message = try store_helpers.createStoreSetFieldMessage(
                 allocator,
                 i + 1,
                 td.namespace,
@@ -464,7 +465,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
             try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
-            const query_message = try msgpack.createStoreQueryMessage(
+            const query_message = try store_helpers.createStoreQueryMessage(
                 allocator,
                 i + 100,
                 td.namespace,
@@ -541,7 +542,7 @@ test "Verification: StoreSubscribe message processing" {
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
     try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
-    const message = try msgpack.createStoreSubscribeMessage(
+    const message = try store_helpers.createStoreSubscribeMessage(
         allocator,
         3,
         "test_namespace",
@@ -626,7 +627,7 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
 
     // Subscribe (server will assign subId)
-    const subscribe_message = try msgpack.createStoreSubscribeMessage(
+    const subscribe_message = try store_helpers.createStoreSubscribeMessage(
         allocator,
         77,
         "test_namespace",

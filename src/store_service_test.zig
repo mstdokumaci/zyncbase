@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const msgpack = @import("msgpack_utils.zig");
 const storage_mod = @import("storage_engine.zig");
+const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const protocol = @import("protocol.zig");
@@ -28,7 +29,7 @@ test "StoreService: set - full document replacement" {
 
     // 1. Success path: Valid document
     {
-        const val = try helpers.createDocumentMapPayload(allocator, users.metadata, .{
+        const val = try store_helpers.createDocumentMapPayload(allocator, users.metadata, .{
             .{ "name", "Alice" },
             .{ "age", @as(i64, 30) },
         });
@@ -47,7 +48,7 @@ test "StoreService: set - full document replacement" {
 
     // 5. Negative path: Unknown table
     {
-        const val = try helpers.createDocumentMapPayload(allocator, users.metadata, .{});
+        const val = try store_helpers.createDocumentMapPayload(allocator, users.metadata, .{});
         defer val.free(allocator);
 
         const result = service.set(@as(usize, 999), "id", "ns", 2, null, val);
@@ -102,7 +103,7 @@ test "StoreService: remove" {
     // Setup: Create a document
     {
         const tbl_users = app.schema_manager.getTable("users") orelse return error.UnknownTable;
-        const val = try helpers.createDocumentMapPayload(allocator, tbl_users, .{
+        const val = try store_helpers.createDocumentMapPayload(allocator, tbl_users, .{
             .{ "name", "Alice" },
             .{ "age", @as(i64, 30) },
         });

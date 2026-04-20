@@ -4,6 +4,7 @@ const helpers = @import("app_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
+const store_helpers = @import("store_test_helpers.zig");
 test "buffer: message deallocation after processing" {
     // This property test verifies that for any processed message,
     // the message buffer is deallocated after processing completes.
@@ -37,7 +38,7 @@ test "buffer: message deallocation after processing" {
         // Create a simple MessagePack message
         const tbl = try app.tableMetadata("test");
         const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-        const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p1", field_idx, "value");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p1", field_idx, "value");
         defer allocator.free(message);
 
         // Parse the message
@@ -59,7 +60,7 @@ test "buffer: message deallocation after processing" {
         const conn = sc.conn;
 
         // Create invalid message (missing required fields)
-        const invalid_message = try msgpack.createInvalidStoreSetMessageMissingId(allocator, "test");
+        const invalid_message = try store_helpers.createInvalidStoreSetMessageMissingId(allocator, "test");
         defer allocator.free(invalid_message);
 
         var reader: std.Io.Reader = .fixed(invalid_message);
@@ -81,7 +82,7 @@ test "buffer: message deallocation after processing" {
         while (iter < iterations) : (iter += 1) {
             const tbl = try app.tableMetadata("test");
             const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-            const message = try msgpack.createStoreSetFieldMessage(
+            const message = try store_helpers.createStoreSetFieldMessage(
                 allocator,
                 @as(u64, iter),
                 "test_ns",
@@ -111,7 +112,7 @@ test "buffer: message deallocation after processing" {
         {
             const tbl = try app.tableMetadata("test");
             const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-            const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p2", field_idx, "value1");
+            const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p2", field_idx, "value1");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -125,7 +126,7 @@ test "buffer: message deallocation after processing" {
         // StoreQuery
         {
             const tbl = try app.tableMetadata("test");
-            const message = try msgpack.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", tbl.index);
+            const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", tbl.index);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -180,7 +181,7 @@ test "buffer: concurrent message deallocation" {
             while (i < ctx.iterations) : (i += 1) {
                 const tbl = try ctx.app.tableMetadata("test");
                 const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-                const message = try msgpack.createStoreSetFieldMessage(
+                const message = try store_helpers.createStoreSetFieldMessage(
                     ctx.app.allocator,
                     @as(u64, i),
                     "test_ns",
