@@ -442,8 +442,8 @@ test "StoreService: validateFieldWrite tests" {
     {
         const val = try msgpack.Payload.strToPayload("oops", allocator);
         defer val.free(allocator);
-        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("id").?, val));
-        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("created_at").?, val));
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("id") orelse unreachable, val));
+        try testing.expectError(StorageError.ImmutableField, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("created_at") orelse unreachable, val));
     }
 
     // 2. Unknown field
@@ -458,13 +458,13 @@ test "StoreService: validateFieldWrite tests" {
         // Expected integer, got string
         const val = try msgpack.Payload.strToPayload("not-an-int", allocator);
         defer val.free(allocator);
-        try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("age").?, val));
+        try testing.expectError(error.TypeMismatch, store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("age") orelse unreachable, val));
     }
 
     // 4. Success case
     {
         const val = msgpack.Payload.intToPayload(25);
-        const field = try store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("age").?, val);
+        const field = try store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("age") orelse unreachable, val);
         try testing.expectEqualStrings("age", field.name);
         try testing.expectEqual(schema_manager.FieldType.integer, field.sql_type);
     }

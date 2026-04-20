@@ -174,12 +174,12 @@ pub const Schema = struct {
 };
 
 pub const SchemaMetadata = struct {
-    table_metadata: std.StringHashMap(TableMetadata),
-    /// Positional array for index-based lookup (matches SchemaSync table order)
-    tables: []const TableMetadata,
+    table_index_map: std.StringHashMap(usize),
+    tables: []TableMetadata,
 
     pub fn init(allocator: Allocator, schema: *const Schema) !SchemaMetadata {
-        var table_metadata = std.StringHashMap(TableMetadata).init(allocator);
+        var table_index_map = std.StringHashMap(usize).init(allocator);
+        errdefer table_index_map.deinit();
 
         var tables_list = std.ArrayListUnmanaged(TableMetadata).empty;
         errdefer {
@@ -190,27 +190,26 @@ pub const SchemaMetadata = struct {
         for (schema.tables, 0..) |*t, idx| {
             var md = try TableMetadata.init(allocator, t, idx);
             errdefer md.deinit(allocator);
-            try table_metadata.put(t.name, md);
+            try table_index_map.put(t.name, idx);
             try tables_list.append(allocator, md);
         }
         return .{
-            .table_metadata = table_metadata,
+            .table_index_map = table_index_map,
             .tables = try tables_list.toOwnedSlice(allocator),
         };
     }
 
     pub fn deinit(self: *SchemaMetadata, allocator: Allocator) void {
-        var it = self.table_metadata.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
+        self.table_index_map.deinit();
+        for (self.tables) |*t| {
+            t.deinit(allocator);
         }
-        self.table_metadata.deinit();
         allocator.free(self.tables);
     }
 
     pub fn getTable(self: *const SchemaMetadata, name: []const u8) ?*const TableMetadata {
-        const ptr = self.table_metadata.getPtr(name) orelse return null;
-        return ptr;
+        const idx = self.table_index_map.get(name) orelse return null;
+        return &self.tables[idx];
     }
 
     /// Get table metadata by positional index (as used in SchemaSync / wire protocol).

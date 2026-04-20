@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const schema_parser = @import("schema_parser.zig");
-const types = @import("storage_engine/types.zig");
 
 // Re-export all schema types so consumers import only schema_manager.zig
 pub const Schema = schema_parser.Schema;
@@ -62,7 +61,6 @@ pub const SchemaManager = struct {
         const tbl = self.getTable(table) orelse return null;
         return tbl.getField(field);
     }
-
 
     /// Get table metadata by positional index (as used in SchemaSync / wire protocol).
     pub fn getTableByIndex(self: *const SchemaManager, index: usize) ?*const TableMetadata {
