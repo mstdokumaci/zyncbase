@@ -1,6 +1,6 @@
 // Connection Manager
 import { decode, encode } from "@msgpack/msgpack";
-import { ErrorCodes, ZyncBaseError } from "./errors";
+import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	ClientOptions,
@@ -628,21 +628,25 @@ export class ConnectionManager {
 
 	private _mapSchemaEncodingError(err: unknown): ZyncBaseError {
 		if (err instanceof ZyncBaseError) return err;
+
+		if (err instanceof SchemaError) {
+			if (err.code === "TABLE_NOT_FOUND") {
+				return new ZyncBaseError(err.message, {
+					code: ErrorCodes.COLLECTION_NOT_FOUND,
+					category: "validation",
+					retryable: false,
+				});
+			}
+			if (err.code === "FIELD_NOT_FOUND") {
+				return new ZyncBaseError(err.message, {
+					code: ErrorCodes.FIELD_NOT_FOUND,
+					category: "validation",
+					retryable: false,
+				});
+			}
+		}
+
 		const message = err instanceof Error ? err.message : "Schema encoding failed";
-		if (message.includes("unknown table")) {
-			return new ZyncBaseError(message, {
-				code: ErrorCodes.COLLECTION_NOT_FOUND,
-				category: "validation",
-				retryable: false,
-			});
-		}
-		if (message.includes("unknown field")) {
-			return new ZyncBaseError(message, {
-				code: ErrorCodes.FIELD_NOT_FOUND,
-				category: "validation",
-				retryable: false,
-			});
-		}
 		return new ZyncBaseError(message, {
 			code: ErrorCodes.INVALID_MESSAGE,
 			category: "validation",

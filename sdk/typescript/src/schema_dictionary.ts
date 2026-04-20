@@ -5,6 +5,7 @@
 // Built from the SchemaSync message pushed by the server on connect.
 
 import xxhash from "xxhash-wasm";
+import { SchemaError } from "./errors.js";
 
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
@@ -88,7 +89,10 @@ export class SchemaDictionary {
 	getTableIndex(name: string): number {
 		const idx = this.tableToIndex.get(name);
 		if (idx === undefined) {
-			throw new Error(`SchemaDictionary: unknown table "${name}"`);
+			throw new SchemaError(
+				`SchemaDictionary: unknown table "${name}"`,
+				"TABLE_NOT_FOUND",
+			);
 		}
 		return idx;
 	}
@@ -97,12 +101,16 @@ export class SchemaDictionary {
 	getFieldIndex(tableIndex: number, fieldName: string): number {
 		const fieldMap = this.fieldToIndex.get(tableIndex);
 		if (fieldMap === undefined) {
-			throw new Error(`SchemaDictionary: unknown table index ${tableIndex}`);
+			throw new SchemaError(
+				`SchemaDictionary: unknown table index ${tableIndex}`,
+				"TABLE_NOT_FOUND",
+			);
 		}
 		const idx = fieldMap.get(fieldName);
 		if (idx === undefined) {
-			throw new Error(
+			throw new SchemaError(
 				`SchemaDictionary: unknown field "${fieldName}" in table index ${tableIndex}`,
+				"FIELD_NOT_FOUND",
 			);
 		}
 		return idx;

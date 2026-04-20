@@ -116,3 +116,16 @@ export class ZyncBaseError extends Error {
 		});
 	}
 }
+
+/** Error thrown by SchemaDictionary when a lookup fails. */
+export class SchemaError extends Error {
+	constructor(
+		message: string,
+		public readonly code: "TABLE_NOT_FOUND" | "FIELD_NOT_FOUND",
+	) {
+		super(message);
+		this.name = "SchemaError";
+		Object.setPrototypeOf(this, SchemaError.prototype);
+	}
+}
+
