@@ -217,4 +217,8 @@ export interface SchemaSync {
 }
 
 /** Union of all inbound message types. */
-export type InboundMessage = OkResponse | ErrorResponse | StoreDelta | SchemaSync;
+export type InboundMessage =
+	| OkResponse
+	| ErrorResponse
+	| StoreDelta
+	| SchemaSync;

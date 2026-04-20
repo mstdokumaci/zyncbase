@@ -64,7 +64,7 @@ export class ConnectionManager {
 	// SchemaSync readiness promise
 	private schemaSyncResolve: (() => void) | null = null;
 	private schemaSyncReject: ((reason?: any) => void) | null = null;
-	private schemaSyncPromise: Promise<void> = new Promise(() => { });
+	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
 	constructor(options: ClientOptions) {
 		this.options = options;
@@ -97,7 +97,7 @@ export class ConnectionManager {
 			this.schemaSyncReject = reject;
 		});
 		// Prevent unhandled rejections if the promise is rejected before it's awaited
-		this.schemaSyncPromise.catch(() => { });
+		this.schemaSyncPromise.catch(() => {});
 
 		return new Promise((resolve, reject) => {
 			const ws = new WebSocket(this.options.url);
@@ -443,7 +443,8 @@ export class ConnectionManager {
 
 	private async _handleSchemaSync(msg: InboundMessage): Promise<void> {
 		const payload = msg as { tables: string[]; fields: string[][] };
-		const schemaChanged = await this.schemaDictionary.processSchemaSync(payload);
+		const schemaChanged =
+			await this.schemaDictionary.processSchemaSync(payload);
 
 		if (schemaChanged) {
 			this.emit("schemaChange");
@@ -462,7 +463,9 @@ export class ConnectionManager {
 		}
 	}
 
-	private _encodeWireMessage(msg: Record<string, unknown>): Record<string, unknown> {
+	private _encodeWireMessage(
+		msg: Record<string, unknown>,
+	): Record<string, unknown> {
 		const type = msg.type;
 		if (typeof type !== "string" || !type.startsWith("Store")) return msg;
 
@@ -470,7 +473,11 @@ export class ConnectionManager {
 
 		if (type === "StoreSet" || type === "StoreRemove") {
 			const path = wire.path;
-			if (Array.isArray(path) && path.length > 0 && typeof path[0] === "string") {
+			if (
+				Array.isArray(path) &&
+				path.length > 0 &&
+				typeof path[0] === "string"
+			) {
 				const logicalPath = path as string[];
 				const encodedPath = this.schemaDictionary.encodePath(logicalPath);
 				wire.path = encodedPath;
@@ -497,11 +504,17 @@ export class ConnectionManager {
 					if (!Array.isArray(op) || op.length < 2) return op;
 					const kind = op[0];
 					const rawPath = op[1];
-					if (!Array.isArray(rawPath) || rawPath.length === 0 || typeof rawPath[0] !== "string") {
+					if (
+						!Array.isArray(rawPath) ||
+						rawPath.length === 0 ||
+						typeof rawPath[0] !== "string"
+					) {
 						return op;
 					}
 
-					const encodedPath = this.schemaDictionary.encodePath(rawPath as string[]);
+					const encodedPath = this.schemaDictionary.encodePath(
+						rawPath as string[],
+					);
 					if (kind === "r") return ["r", encodedPath];
 					if (
 						kind === "s" &&
@@ -526,7 +539,11 @@ export class ConnectionManager {
 			return wire;
 		}
 
-		if (type === "StoreQuery" || type === "StoreSubscribe" || type === "StoreLoadMore") {
+		if (
+			type === "StoreQuery" ||
+			type === "StoreSubscribe" ||
+			type === "StoreLoadMore"
+		) {
 			if (typeof wire.table_index === "string") {
 				const tableIndex = this.schemaDictionary.getTableIndex(
 					wire.table_index as string,
@@ -537,7 +554,10 @@ export class ConnectionManager {
 					wire.conditions = this._encodeConditions(tableIndex, wire.conditions);
 				}
 				if (wire.orConditions !== undefined) {
-					wire.orConditions = this._encodeConditions(tableIndex, wire.orConditions);
+					wire.orConditions = this._encodeConditions(
+						tableIndex,
+						wire.orConditions,
+					);
 				}
 				if (wire.orderBy !== undefined) {
 					wire.orderBy = this._encodeOrderBy(tableIndex, wire.orderBy);
@@ -549,10 +569,7 @@ export class ConnectionManager {
 		return wire;
 	}
 
-	private _encodeConditions(
-		tableIndex: number,
-		raw: unknown,
-	): unknown {
+	private _encodeConditions(tableIndex: number, raw: unknown): unknown {
 		if (!Array.isArray(raw)) return raw;
 		return raw.map((cond) => {
 			if (!Array.isArray(cond) || cond.length < 2) return cond;
@@ -562,9 +579,7 @@ export class ConnectionManager {
 				typeof field === "string"
 					? this.schemaDictionary.getFieldIndex(tableIndex, field)
 					: field;
-			return cond.length === 2
-				? [fieldIndex, op]
-				: [fieldIndex, op, cond[2]];
+			return cond.length === 2 ? [fieldIndex, op] : [fieldIndex, op, cond[2]];
 		});
 	}
 
@@ -584,9 +599,15 @@ export class ConnectionManager {
 			const wirePath = op.path as unknown as Array<number | string>;
 			let decodedPath = op.path;
 			let tableIndex: number | null = null;
-			if (Array.isArray(wirePath) && wirePath.length > 0 && typeof wirePath[0] === "number") {
+			if (
+				Array.isArray(wirePath) &&
+				wirePath.length > 0 &&
+				typeof wirePath[0] === "number"
+			) {
 				tableIndex = wirePath[0] as number;
-				decodedPath = this.schemaDictionary.decodePath(wirePath) as unknown as string[];
+				decodedPath = this.schemaDictionary.decodePath(
+					wirePath,
+				) as unknown as string[];
 			}
 
 			if (
@@ -652,12 +673,12 @@ export class ConnectionManager {
 			}
 		}
 
-		const message = err instanceof Error ? err.message : "Schema encoding failed";
+		const message =
+			err instanceof Error ? err.message : "Schema encoding failed";
 		return new ZyncBaseError(message, {
 			code: ErrorCodes.INVALID_MESSAGE,
 			category: "validation",
 			retryable: false,
 		});
 	}
-
 }

@@ -198,7 +198,10 @@ export class SchemaDictionary {
 	 */
 	decodePath(wirePath: (number | string)[]): string[] {
 		if (wirePath.length === 0) {
-			throw new SchemaError("SchemaDictionary: empty wire path", "INVALID_PATH");
+			throw new SchemaError(
+				"SchemaDictionary: empty wire path",
+				"INVALID_PATH",
+			);
 		}
 
 		const tableIndex = wirePath[0] as number;

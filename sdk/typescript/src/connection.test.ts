@@ -72,7 +72,11 @@ function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 	// Pre-seed with a minimal schema so StoreSet/StoreQuery tests don't throw TABLE_NOT_FOUND
 	manager.schemaDictionary.processSchemaSync({
 		tables: ["a", "users", "tasks"],
-		fields: [["b", "c"], ["name", "age"], ["title", "meta"]],
+		fields: [
+			["b", "c"],
+			["name", "age"],
+			["title", "meta"],
+		],
 	});
 	return { manager, mockWs };
 }
@@ -401,9 +405,12 @@ describe("ConnectionManager", () => {
 			function wsFactory1() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory1, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory1,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -434,9 +441,12 @@ describe("ConnectionManager", () => {
 			function wsFactory2() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory2, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory2,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -463,9 +473,12 @@ describe("ConnectionManager", () => {
 			function wsFactory3() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory3, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory3,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -497,9 +510,12 @@ describe("ConnectionManager", () => {
 				wsInstances++;
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory4, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory4,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
@@ -528,9 +544,12 @@ describe("ConnectionManager", () => {
 			function wsFactory5() {
 				return mockWs;
 			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory5, {
-				OPEN: MockWebSocket.OPEN,
-			});
+			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
+				wsFactory5,
+				{
+					OPEN: MockWebSocket.OPEN,
+				},
+			);
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",

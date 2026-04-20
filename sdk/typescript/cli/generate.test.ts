@@ -4,9 +4,9 @@ import * as fs from "node:fs";
 // tsc spawns are slow — give the compile test plenty of time
 setDefaultTimeout(120_000);
 
-import * as fc from "fast-check";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as fc from "fast-check";
 
 import {
 	collectFieldPathsForTest,
@@ -171,7 +171,9 @@ type _Paths = ValidPaths;
 				try {
 					fs.unlinkSync(typesFile);
 					fs.unlinkSync(importFile);
-				} catch (e) { console.warn("Failed to clean up temporary test files:", e); }
+				} catch (e) {
+					console.warn("Failed to clean up temporary test files:", e);
+				}
 
 				expect(result.exitCode).toBe(0);
 			}),

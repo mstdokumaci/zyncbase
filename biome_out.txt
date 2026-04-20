@@ -1,0 +1,99 @@
+sdk/typescript/src/connection.test.ts:235:22 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    233 │ 			};
+    234 │ 			mockWs.triggerMessage(encodeToBuffer(delta));
+  > 235 │ 			await (manager as any).processingPromise;
+        │ 			                  ^^^
+    236 │ 
+    237 │ 			expect(received).toHaveLength(1);
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+sdk/typescript/src/connection.test.ts:270:20 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    268 │ 			await connectPromise;
+    269 │ 
+  > 270 │ 			const received: any[] = [];
+        │ 			                ^^^
+    271 │ 			manager.onDelta((delta) => received.push(delta));
+    272 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+sdk/typescript/src/connection.test.ts:290:22 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    289 │ 			// At this point, the queue is processing. We await the processingPromise.
+  > 290 │ 			await (manager as any).processingPromise;
+        │ 			                  ^^^
+    291 │ 
+    292 │ 			expect(received).toHaveLength(1);
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+sdk/typescript/src/connection.ts:66:39 lint/suspicious/noExplicitAny ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected any. Specify a different type.
+  
+    64 │ 	// SchemaSync readiness promise
+    65 │ 	private schemaSyncResolve: (() => void) | null = null;
+  > 66 │ 	private schemaSyncReject: ((reason?: any) => void) | null = null;
+       │ 	                                     ^^^
+    67 │ 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
+    68 │ 
+  
+  i any disables many type checking rules. Its use should be avoided.
+  
+
+sdk/typescript/src/connection.ts:128:26 lint/complexity/noExcessiveCognitiveComplexity ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Excessive complexity of 12 detected (max: 10).
+  
+    126 │ 			};
+    127 │ 
+  > 128 │ 			ws.onclose = (_event) => {
+        │ 			                      ^^^
+    129 │ 				const err = new ZyncBaseError("Connection closed", {
+    130 │ 					code: ErrorCodes.CONNECTION_FAILED,
+  
+  i Please refactor this function to reduce its complexity score from 12 to the max allowed complexity 10.
+  
+
+sdk/typescript/src/connection.ts:466:10 lint/complexity/noExcessiveCognitiveComplexity ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Excessive complexity of 27 detected (max: 10).
+  
+    464 │ 	}
+    465 │ 
+  > 466 │ 	private _encodeWireMessage(
+        │ 	        ^^^^^^^^^^^^^^^^^^
+    467 │ 		msg: Record<string, unknown>,
+    468 │ 	): Record<string, unknown> {
+  
+  i Please refactor this function to reduce its complexity score from 27 to the max allowed complexity 10.
+  
+
+sdk/typescript/src/connection.ts:503:34 lint/complexity/noExcessiveCognitiveComplexity ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Excessive complexity of 19 detected (max: 10).
+  
+    501 │ 		if (type === "StoreBatch") {
+    502 │ 			if (Array.isArray(wire.ops)) {
+  > 503 │ 				wire.ops = wire.ops.map((op) => {
+        │ 				                             ^^^
+    504 │ 					if (!Array.isArray(op) || op.length < 2) return op;
+    505 │ 					const kind = op[0];
+  
+  i Please refactor this function to reduce its complexity score from 19 to the max allowed complexity 10.
+  
+
+Checked 25 files in 30ms. No fixes applied.
+Found 7 warnings.

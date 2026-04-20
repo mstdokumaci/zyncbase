@@ -133,7 +133,15 @@ function encodeConditionObject(
 			conditions.push(...encodeOperatorObject(fieldKey, v, opKeys));
 		} else {
 			// Nested field object — recurse
-			conditions.push(...encodeConditionObject(v as Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>, fieldKey));
+			conditions.push(
+				...encodeConditionObject(
+					v as Record<
+						string,
+						JsonValue | Record<string, JsonValue> | JsonValue[]
+					>,
+					fieldKey,
+				),
+			);
 		}
 	}
 	return conditions;
@@ -143,33 +151,43 @@ function encodeConditionObject(
  * Encode SDK-side QueryOptions into wire-format fields for StoreQuery / StoreSubscribe.
  */
 function extractOrConditions(
-	or: (Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>)[]
+	or: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>[],
 ): WireCondition[] {
 	const orConditions: WireCondition[] = [];
 	for (const clause of or) {
-		orConditions.push(
-			...encodeConditionObject(clause),
-		);
+		orConditions.push(...encodeConditionObject(clause));
 	}
 	return orConditions;
 }
 
-function encodeWhereClause(where: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>): {
+function encodeWhereClause(
+	where: Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>,
+): {
 	conditions?: WireCondition[];
 	orConditions?: WireCondition[];
 } {
 	const { or, ...rest } = where;
-	const result: { conditions?: WireCondition[]; orConditions?: WireCondition[] } = {};
+	const result: {
+		conditions?: WireCondition[];
+		orConditions?: WireCondition[];
+	} = {};
 	const conditions = encodeConditionObject(rest);
 	if (conditions.length > 0) result.conditions = conditions;
 	if (Array.isArray(or)) {
-		const orConditions = extractOrConditions(or as (Record<string, JsonValue | Record<string, JsonValue> | JsonValue[]>)[]);
+		const orConditions = extractOrConditions(
+			or as Record<
+				string,
+				JsonValue | Record<string, JsonValue> | JsonValue[]
+			>[],
+		);
 		if (orConditions.length > 0) result.orConditions = orConditions;
 	}
 	return result;
 }
 
-function encodeOrderBy(orderBy: Record<string, "asc" | "desc">): [string, number] {
+function encodeOrderBy(
+	orderBy: Record<string, "asc" | "desc">,
+): [string, number] {
 	const [field, dir] = Object.entries(orderBy)[0];
 	return [field, dir === "desc" ? 1 : 0];
 }
@@ -345,7 +363,7 @@ export class StoreImpl {
 					const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 					return rows.map((row) =>
 						row !== null && typeof row === "object" && !Array.isArray(row)
-							? unflatten(row as Record<string, JsonValue>) as JsonValue
+							? (unflatten(row as Record<string, JsonValue>) as JsonValue)
 							: row,
 					) as JsonValue;
 				})
@@ -367,9 +385,11 @@ export class StoreImpl {
 					const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 					if (rows.length === 0) return null;
 					const row = rows[0];
-					return (row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row as Record<string, JsonValue>) as JsonValue
-						: row) as JsonValue;
+					return (
+						row !== null && typeof row === "object" && !Array.isArray(row)
+							? (unflatten(row as Record<string, JsonValue>) as JsonValue)
+							: row
+					) as JsonValue;
 				});
 		}
 
@@ -383,7 +403,9 @@ export class StoreImpl {
 			.then((ok) => {
 				const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
 				if (rows.length === 0) return undefined;
-				const record = unflatten(rows[0] as Record<string, JsonValue>) as Record<string, JsonValue>;
+				const record = unflatten(
+					rows[0] as Record<string, JsonValue>,
+				) as Record<string, JsonValue>;
 
 				let val: JsonValue | undefined = record as JsonValue;
 				for (const part of segments.slice(2)) {
@@ -421,7 +443,7 @@ export class StoreImpl {
 			.then((ok) => {
 				const rows = (ok.value ?? []).map((row: JsonValue) =>
 					row !== null && typeof row === "object" && !Array.isArray(row)
-						? unflatten(row as Record<string, JsonValue>) as JsonValue
+						? (unflatten(row as Record<string, JsonValue>) as JsonValue)
 						: row,
 				);
 				const result = rows as JsonValue[] & { nextCursor: string | null };
@@ -460,7 +482,9 @@ export class StoreImpl {
 				typeof wireValue === "object" &&
 				!Array.isArray(wireValue)
 			) {
-				wireValue = flatten(wireValue as Record<string, JsonValue>) as JsonValue;
+				wireValue = flatten(
+					wireValue as Record<string, JsonValue>,
+				) as JsonValue;
 			}
 			wireOps.push(["s", wirePath, wireValue ?? null]);
 		}

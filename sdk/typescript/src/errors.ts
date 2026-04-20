@@ -121,11 +121,13 @@ export class ZyncBaseError extends Error {
 export class SchemaError extends Error {
 	constructor(
 		message: string,
-		public readonly code: "TABLE_NOT_FOUND" | "FIELD_NOT_FOUND" | "INVALID_PATH",
+		public readonly code:
+			| "TABLE_NOT_FOUND"
+			| "FIELD_NOT_FOUND"
+			| "INVALID_PATH",
 	) {
 		super(message);
 		this.name = "SchemaError";
 		Object.setPrototypeOf(this, SchemaError.prototype);
 	}
 }
-

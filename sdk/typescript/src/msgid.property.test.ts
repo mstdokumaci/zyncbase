@@ -61,7 +61,10 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 		// Pre-seed with a minimal schema so StoreQuery tests don't throw TABLE_NOT_FOUND
 		manager.schemaDictionary.processSchemaSync({
 			tables: ["test", "users"],
-			fields: [["id", "name"], ["name", "age"]],
+			fields: [
+				["id", "name"],
+				["name", "age"],
+			],
 		});
 
 		// Dispatch N messages (they'll be pending since no responses come)

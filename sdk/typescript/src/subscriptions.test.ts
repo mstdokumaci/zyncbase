@@ -107,7 +107,8 @@ describe("SubscriptionTracker - replayAll", () => {
 				}
 
 				// Collect all params and subIds passed to send
-				const sent: { params: Omit<StoreSubscribe, "id">; subId: number }[] = [];
+				const sent: { params: Omit<StoreSubscribe, "id">; subId: number }[] =
+					[];
 				await tracker.replayAll(async (params, subId) => {
 					sent.push({ params, subId });
 				});

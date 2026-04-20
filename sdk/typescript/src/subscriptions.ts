@@ -207,11 +207,15 @@ export class SubscriptionTracker {
 		return undefined;
 	}
 
-	private _getField(record: JsonValue, fieldPath: string): JsonValue | undefined {
+	private _getField(
+		record: JsonValue,
+		fieldPath: string,
+	): JsonValue | undefined {
 		const parts = fieldPath.split(".");
 		let value: JsonValue | undefined = record;
 		for (const part of parts) {
-			if (value == null || typeof value !== "object" || Array.isArray(value)) return undefined;
+			if (value == null || typeof value !== "object" || Array.isArray(value))
+				return undefined;
 			value = (value as Record<string, JsonValue>)[part];
 		}
 		return value;
