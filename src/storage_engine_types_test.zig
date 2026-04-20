@@ -108,7 +108,7 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
 
     var insert_stmt_opt: ?*sqlite.c.sqlite3_stmt = null;
     const insert_sql = "INSERT INTO test (id, int_val, real_val, text_val, bool_val, arr_val) VALUES (?, ?, ?, ?, ?, ?)";
-    _ = sqlite.c.sqlite3_prepare_v2(db.db, insert_sql, -1, &insert_stmt_opt, null);
+    try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_OK), sqlite.c.sqlite3_prepare_v2(db.db, insert_sql, -1, &insert_stmt_opt, null));
     const insert_stmt = insert_stmt_opt orelse return error.TestUnexpectedResult;
     defer _ = sqlite.c.sqlite3_finalize(insert_stmt);
 
@@ -133,16 +133,16 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
     try tv_bool.bindSQLite(&db, insert_stmt, 5, allocator);
     try tv_arr.bindSQLite(&db, insert_stmt, 6, allocator);
 
-    _ = sqlite.c.sqlite3_step(insert_stmt);
+    try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_DONE), sqlite.c.sqlite3_step(insert_stmt));
 
     // Query values back
     var select_stmt_opt: ?*sqlite.c.sqlite3_stmt = null;
     const select_sql = "SELECT int_val, real_val, text_val, bool_val, arr_val FROM test LIMIT 1";
-    _ = sqlite.c.sqlite3_prepare_v2(db.db, select_sql, -1, &select_stmt_opt, null);
+    try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_OK), sqlite.c.sqlite3_prepare_v2(db.db, select_sql, -1, &select_stmt_opt, null));
     const select_stmt = select_stmt_opt orelse return error.TestUnexpectedResult;
     defer _ = sqlite.c.sqlite3_finalize(select_stmt);
 
-    _ = sqlite.c.sqlite3_step(select_stmt);
+    try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_ROW), sqlite.c.sqlite3_step(select_stmt));
 
     // Reconstruct TypedValues from columns
     const int_f = schema_manager.Field{ .name = "int_val", .sql_type = .integer, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
