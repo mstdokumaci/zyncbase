@@ -650,6 +650,7 @@ export class StoreImpl {
 						type: "StoreLoadMore",
 						subId,
 						nextCursor: cursor,
+						collection,
 					})
 					.then((ok) => {
 						nextCursor = ok.nextCursor ?? null;

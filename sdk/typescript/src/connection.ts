@@ -412,7 +412,8 @@ export class ConnectionManager {
 			let decodedOk = ok;
 			if (
 				(entry.outboundType === "StoreQuery" ||
-					entry.outboundType === "StoreSubscribe") &&
+					entry.outboundType === "StoreSubscribe" ||
+					entry.outboundType === "StoreLoadMore") &&
 				typeof entry.outboundCollection === "number" &&
 				Array.isArray(ok.value)
 			) {
@@ -520,7 +521,7 @@ export class ConnectionManager {
 			return wire;
 		}
 
-		if (type === "StoreQuery" || type === "StoreSubscribe") {
+		if (type === "StoreQuery" || type === "StoreSubscribe" || type === "StoreLoadMore") {
 			if (typeof wire.collection === "string") {
 				const tableIndex = this.schemaDictionary.getTableIndex(
 					wire.collection as string,

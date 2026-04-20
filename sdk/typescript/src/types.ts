@@ -163,6 +163,7 @@ export interface StoreLoadMore {
 	id: number;
 	subId: number;
 	nextCursor: string;
+	collection?: string | number;
 }
 
 /** Union of all outbound message types. */
