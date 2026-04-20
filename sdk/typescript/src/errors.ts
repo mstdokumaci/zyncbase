@@ -121,7 +121,7 @@ export class ZyncBaseError extends Error {
 export class SchemaError extends Error {
 	constructor(
 		message: string,
-		public readonly code: "TABLE_NOT_FOUND" | "FIELD_NOT_FOUND",
+		public readonly code: "TABLE_NOT_FOUND" | "FIELD_NOT_FOUND" | "INVALID_PATH",
 	) {
 		super(message);
 		this.name = "SchemaError";

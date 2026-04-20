@@ -58,6 +58,12 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 		const manager = new ConnectionManager(options);
 		await manager.connect();
 
+		// Pre-seed with a minimal schema so StoreQuery tests don't throw TABLE_NOT_FOUND
+		manager.schemaDictionary.processSchemaSync({
+			tables: ["test", "users"],
+			fields: [["id", "name"], ["name", "age"]],
+		});
+
 		// Dispatch N messages (they'll be pending since no responses come)
 		const dispatchPromises: Promise<unknown>[] = [];
 		for (let i = 0; i < n; i++) {

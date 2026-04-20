@@ -119,8 +119,9 @@ export class SchemaDictionary {
 	/** Get the table name for a given index. Throws if out of range. */
 	getTableName(index: number): string {
 		if (index < 0 || index >= this.tables.length) {
-			throw new Error(
+			throw new SchemaError(
 				`SchemaDictionary: table index ${index} out of range (0..${this.tables.length - 1})`,
+				"TABLE_NOT_FOUND",
 			);
 		}
 		return this.tables[index];
@@ -129,14 +130,16 @@ export class SchemaDictionary {
 	/** Get the field name for a given table and field index. Throws if out of range. */
 	getFieldName(tableIndex: number, fieldIndex: number): string {
 		if (tableIndex < 0 || tableIndex >= this.fields.length) {
-			throw new Error(
+			throw new SchemaError(
 				`SchemaDictionary: table index ${tableIndex} out of range`,
+				"TABLE_NOT_FOUND",
 			);
 		}
 		const tableFields = this.fields[tableIndex];
 		if (fieldIndex < 0 || fieldIndex >= tableFields.length) {
-			throw new Error(
+			throw new SchemaError(
 				`SchemaDictionary: field index ${fieldIndex} out of range for table index ${tableIndex}`,
+				"FIELD_NOT_FOUND",
 			);
 		}
 		return tableFields[fieldIndex];
@@ -162,7 +165,7 @@ export class SchemaDictionary {
 	 */
 	encodePath(segments: string[]): (number | string)[] {
 		if (segments.length === 0) {
-			throw new Error("SchemaDictionary: empty path");
+			throw new SchemaError("SchemaDictionary: empty path", "INVALID_PATH");
 		}
 
 		const tableIndex = this.getTableIndex(segments[0]);
@@ -195,7 +198,7 @@ export class SchemaDictionary {
 	 */
 	decodePath(wirePath: (number | string)[]): string[] {
 		if (wirePath.length === 0) {
-			throw new Error("SchemaDictionary: empty wire path");
+			throw new SchemaError("SchemaDictionary: empty wire path", "INVALID_PATH");
 		}
 
 		const tableIndex = wirePath[0] as number;

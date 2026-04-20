@@ -69,6 +69,11 @@ function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 		OPEN: MockWebSocket.OPEN,
 	});
 	const manager = new ConnectionManager(defaultOptions);
+	// Pre-seed with a minimal schema so StoreSet/StoreQuery tests don't throw TABLE_NOT_FOUND
+	manager.schemaDictionary.processSchemaSync({
+		tables: ["a", "users", "tasks"],
+		fields: [["b", "c"], ["name", "age"], ["title", "meta"]],
+	});
 	return { manager, mockWs };
 }
 

@@ -1,6 +1,6 @@
 // Connection Manager
 import { decode, encode } from "@msgpack/msgpack";
-import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors";
+import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	ClientOptions,
