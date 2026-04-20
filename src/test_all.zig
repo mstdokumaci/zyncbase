@@ -7,6 +7,7 @@ test {
     _ = @import("uwebsockets_wrapper_test.zig");
     _ = @import("hook_server_client_test.zig");
     _ = @import("storage_engine_test.zig");
+    _ = @import("storage_engine_types_test.zig");
     _ = @import("violation_tracker_test.zig");
     _ = @import("lock_free_cache_test.zig");
     _ = @import("lock_free_cache_leak_test.zig");
