@@ -567,6 +567,7 @@ export class ConnectionManager {
 			if (
 				op.op === "set" &&
 				tableIndex !== null &&
+				wirePath.length === 2 &&
 				op.value !== null &&
 				typeof op.value === "object" &&
 				!Array.isArray(op.value) &&
