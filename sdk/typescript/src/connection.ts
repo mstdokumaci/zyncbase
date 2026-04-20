@@ -63,6 +63,7 @@ export class ConnectionManager {
 
 	// SchemaSync readiness promise
 	private schemaSyncResolve: (() => void) | null = null;
+	private schemaSyncReject: ((reason?: any) => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => { });
 
 	constructor(options: ClientOptions) {
@@ -90,9 +91,12 @@ export class ConnectionManager {
 		this.setStatus("connecting");
 
 		// Create a fresh SchemaSync readiness promise
-		this.schemaSyncPromise = new Promise<void>((resolve) => {
+		this.schemaSyncPromise = new Promise<void>((resolve, reject) => {
 			this.schemaSyncResolve = resolve;
+			this.schemaSyncReject = reject;
 		});
+		// Prevent unhandled rejections if the promise is rejected before it's awaited
+		this.schemaSyncPromise.catch(() => { });
 
 		return new Promise((resolve, reject) => {
 			const ws = new WebSocket(this.options.url);
@@ -112,20 +116,29 @@ export class ConnectionManager {
 					category: "network",
 					retryable: true,
 				});
+				if (this.schemaSyncReject) {
+					this.schemaSyncReject(err);
+					this.schemaSyncReject = null;
+				}
 				this.emit("error", err);
 				reject(err);
 			};
 
 			ws.onclose = (_event) => {
+				const err = new ZyncBaseError("Connection closed", {
+					code: ErrorCodes.CONNECTION_FAILED,
+					category: "network",
+					retryable: true,
+				});
+
+				if (this.schemaSyncReject) {
+					this.schemaSyncReject(err);
+					this.schemaSyncReject = null;
+				}
+
 				// Reject all pending requests
 				for (const [_id, { reject: rej }] of this.pendingQueue) {
-					rej(
-						new ZyncBaseError("Connection closed", {
-							code: ErrorCodes.CONNECTION_FAILED,
-							category: "network",
-							retryable: true,
-						}),
-					);
+					rej(err);
 				}
 				this.pendingQueue.clear();
 
@@ -278,14 +291,19 @@ export class ConnectionManager {
 			this.ws = null;
 		}
 		// Reject all pending requests
+		const discErr = new ZyncBaseError("Disconnected", {
+			code: ErrorCodes.CONNECTION_FAILED,
+			category: "network",
+			retryable: false,
+		});
+
+		if (this.schemaSyncReject) {
+			this.schemaSyncReject(discErr);
+			this.schemaSyncReject = null;
+		}
+
 		for (const [, { reject: rej }] of this.pendingQueue) {
-			rej(
-				new ZyncBaseError("Disconnected", {
-					code: ErrorCodes.CONNECTION_FAILED,
-					category: "network",
-					retryable: false,
-				}),
-			);
+			rej(discErr);
 		}
 		this.pendingQueue.clear();
 		this.setStatus("disconnected");
@@ -428,6 +446,7 @@ export class ConnectionManager {
 		if (this.schemaSyncResolve) {
 			this.schemaSyncResolve();
 			this.schemaSyncResolve = null;
+			this.schemaSyncReject = null;
 		}
 	}
 
