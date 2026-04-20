@@ -113,7 +113,8 @@ export class ConnectionManager {
 
 			ws.onerror = (_event) => this._handleSocketError(reject);
 
-			ws.onclose = (_event) => this._handleSocketClose(_event.code, _event.reason);
+			ws.onclose = (_event) =>
+				this._handleSocketClose(_event.code, _event.reason);
 
 			ws.onmessage = (event) => this._handleRawMessage(event.data);
 		});
@@ -158,7 +159,6 @@ export class ConnectionManager {
 			this.emit("disconnected", code, reason);
 		}
 	}
-
 
 	/** Wait for SchemaSync to be received and processed. */
 	awaitSchemaSync(): Promise<void> {
