@@ -91,7 +91,7 @@ test "storage: thread-safe engine access" {
         }
     };
     const ReadThread = struct {
-        fn run(eng: *StorageEngine, thread_id: usize) !void {
+        fn run(eng: *StorageEngine, table_index: usize, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key = try std.fmt.allocPrint(
@@ -100,7 +100,7 @@ test "storage: thread-safe engine access" {
                     .{ thread_id % (num_threads / 2), i },
                 );
                 defer testing.allocator.free(key);
-                var managed = try eng.selectDocument(testing.allocator, "test", key, "test");
+                var managed = try eng.selectDocument(testing.allocator, table_index, key, "test");
                 defer managed.deinit();
             }
         }
@@ -113,8 +113,9 @@ test "storage: thread-safe engine access" {
     }
     // Spawn read threads
     var read_threads: [num_threads / 2]std.Thread = undefined;
+    const test_table = try ctx.table("test");
     for (&read_threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, ReadThread.run, .{ engine, i });
+        thread.* = try std.Thread.spawn(.{}, ReadThread.run, .{ engine, test_table.metadata.index, i });
     }
     // Wait for all threads
     for (write_threads) |thread| {
@@ -126,7 +127,7 @@ test "storage: thread-safe engine access" {
     // Flush writes and verify data
     try engine.flushPendingWrites();
     // Verify some data was written
-    var managed = try engine.selectDocument(allocator, "test", "/thread0/key0", "test");
+    var managed = try test_table.selectDocument(allocator, "/thread0/key0", "test");
     defer managed.deinit();
     const doc = managed.rows;
     try testing.expect(doc.len > 0);
@@ -150,9 +151,10 @@ test "storage: connection pool reuse and release" {
     // If connections weren't released, we'd run out of connections
     const num_operations = 1000;
     var i: usize = 0;
+    const test_table = try ctx.table("test");
     while (i < num_operations) : (i += 1) {
         const key = if (i % 2 == 0) "key1" else "key2";
-        var managed = try engine.selectDocument(testing.allocator, "test", key, "test");
+        var managed = try test_table.selectDocument(testing.allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
         try testing.expect(doc.len > 0);
@@ -187,9 +189,10 @@ test "storage: persistence round-trip (various types)" {
     }
     // Flush writes
     try engine.flushPendingWrites();
+    const test_table = try ctx.table("test");
     // Retrieve and verify all test cases
     for (test_cases) |tc| {
-        var managed = try engine.selectDocument(allocator, "test", tc.path, "test");
+        var managed = try test_table.selectDocument(allocator, tc.path, "test");
         defer managed.deinit();
         const doc = managed.rows;
         try testing.expect(doc.len > 0);
@@ -213,20 +216,21 @@ test "storage: insert/delete inverse consistency" {
         .{ .namespace = "ns1", .path = "/key2", .value = "{\"data\":\"value2\"}" },
         .{ .namespace = "ns2", .path = "/key1", .value = "{\"data\":\"value3\"}" },
     };
+    const test_table = try ctx.table("test");
     for (test_cases) |tc| {
         // Insert
         try ctx.insertText("test", tc.path, "test", "val", tc.value);
         try engine.flushPendingWrites();
         // Verify it exists
-        var managed1 = try engine.selectDocument(allocator, "test", tc.path, "test");
+        var managed1 = try test_table.selectDocument(allocator, tc.path, "test");
         defer managed1.deinit();
         const doc1 = managed1.rows;
         try testing.expect(doc1.len > 0);
         // Delete
-        try engine.deleteDocument("test", tc.path, "test");
+        try test_table.deleteDocument(tc.path, "test");
         try engine.flushPendingWrites();
         // Verify it's gone
-        var managed2 = try engine.selectDocument(allocator, "test", tc.path, "test");
+        var managed2 = try test_table.selectDocument(allocator, tc.path, "test");
         defer managed2.deinit();
         const doc2 = managed2.rows;
         try testing.expect(doc2.len == 0);
@@ -249,11 +253,12 @@ test "storage: transaction isolation and consistency" {
         try ctx.insertText("test", "/key2", "test", "val", "initial2");
     }
     try engine.flushPendingWrites();
+    const test_table = try ctx.table("test");
     // Verify initial state
-    var managed1 = try engine.selectDocument(allocator, "test", "/key1", "test");
+    var managed1 = try test_table.selectDocument(allocator, "/key1", "test");
     defer managed1.deinit();
     const doc1 = managed1.rows;
-    var managed2 = try engine.selectDocument(allocator, "test", "/key2", "test");
+    var managed2 = try test_table.selectDocument(allocator, "/key2", "test");
     defer managed2.deinit();
     const doc2 = managed2.rows;
     try testing.expect(doc1.len > 0);
@@ -267,15 +272,15 @@ test "storage: transaction isolation and consistency" {
     // Flush to ensure operations are processed
     try engine.flushPendingWrites();
     // All operations should have been applied atomically
-    var managed_up1 = try engine.selectDocument(allocator, "test", "/key1", "test");
+    var managed_up1 = try test_table.selectDocument(allocator, "/key1", "test");
     defer managed_up1.deinit();
     const up1 = managed_up1.rows;
 
-    var managed_up2 = try engine.selectDocument(allocator, "test", "/key2", "test");
+    var managed_up2 = try test_table.selectDocument(allocator, "/key2", "test");
     defer managed_up2.deinit();
     const up2 = managed_up2.rows;
 
-    var managed_n3 = try engine.selectDocument(allocator, "test", "/key3", "test");
+    var managed_n3 = try test_table.selectDocument(allocator, "/key3", "test");
     defer managed_n3.deinit();
     const n3 = managed_n3.rows;
     try testing.expect(up1.len > 0);
@@ -296,7 +301,7 @@ test "storage: transaction isolation and consistency" {
         try ctx.insertText("test", key, "test", "val", value);
     }
     // While the batch is being processed, concurrent reads should work
-    var managed_conc = try engine.selectDocument(allocator, "test", "/concurrent_key", "test");
+    var managed_conc = try test_table.selectDocument(allocator, "/concurrent_key", "test");
     defer managed_conc.deinit();
     const conc_read = managed_conc.rows;
     try testing.expect(conc_read.len > 0);
@@ -307,7 +312,7 @@ test "storage: transaction isolation and consistency" {
     while (i < num_ops) : (i += 1) {
         const key = try std.fmt.allocPrint(allocator, "/batch_key{d}", .{i});
         defer allocator.free(key);
-        var managed = try engine.selectDocument(allocator, "test", key, "test");
+        var managed = try test_table.selectDocument(allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
         try testing.expect(doc.len > 0);
@@ -327,8 +332,9 @@ test "storage: automatic transaction rollback on failure" {
         try ctx.insertText("test", "/key1", "test", "val", "initial");
     }
     try engine.flushPendingWrites();
+    const test_table = try ctx.table("test");
     // Verify initial state
-    var managed_init = try engine.selectDocument(allocator, "test", "/key1", "test");
+    var managed_init = try test_table.selectDocument(allocator, "/key1", "test");
     defer managed_init.deinit();
     const init_doc = managed_init.rows;
     try testing.expect(init_doc.len > 0);
@@ -346,12 +352,12 @@ test "storage: automatic transaction rollback on failure" {
     // Flush any pending writes from before the transaction
     try engine.flushPendingWrites();
     // Verify changes were rolled back
-    var managed_arb1 = try engine.selectDocument(allocator, "test", "/key1", "test");
+    var managed_arb1 = try test_table.selectDocument(allocator, "/key1", "test");
     defer managed_arb1.deinit();
     const arb1 = managed_arb1.rows;
     try testing.expect(arb1.len > 0);
 
-    var managed_arb2 = try engine.selectDocument(allocator, "test", "/key2", "test");
+    var managed_arb2 = try test_table.selectDocument(allocator, "/key2", "test");
     defer managed_arb2.deinit();
     const arb2 = managed_arb2.rows;
     try testing.expect(arb2.len == 0);
@@ -364,7 +370,7 @@ test "storage: automatic transaction rollback on failure" {
     }
     try engine.commitTransaction();
     try engine.flushPendingWrites();
-    var managed_comm = try engine.selectDocument(allocator, "test", "/key3", "test");
+    var managed_comm = try test_table.selectDocument(allocator, "/key3", "test");
     defer managed_comm.deinit();
     const comm = managed_comm.rows;
     try testing.expect(comm.len > 0);
@@ -394,7 +400,7 @@ test "storage: automatic transaction rollback on failure" {
     while (j < batch_size) : (j += 1) {
         const key = try std.fmt.allocPrint(allocator, "/batch_test{d}", .{j});
         defer allocator.free(key);
-        var managed = try engine.selectDocument(allocator, "test", key, "test");
+        var managed = try test_table.selectDocument(allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
         try testing.expect(doc.len > 0);
@@ -427,7 +433,8 @@ test "storage: document set/get round-trip" {
             sth.named("score", tth.valInt(score_val)),
         });
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
+        const items_table = try ctx.table("items");
+        var managed = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
@@ -463,7 +470,8 @@ test "storage: field set/get round-trip" {
         try engine.flushPendingWrites();
 
         // Use selectDocument to verify the field update
-        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
+        const items_table = try ctx.table("items");
+        var managed = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
@@ -504,15 +512,16 @@ test "storage: query is namespace-scoped" {
         try engine.flushPendingWrites();
 
         // Use selectQuery with an empty filter to verify collection scoping
+        const items_table = try ctx.table("items");
         const filter_a = try qth.makeDefaultFilter(allocator);
         defer filter_a.deinit(allocator);
-        var managed_a = try engine.selectQuery(allocator, "items", ns_a, filter_a);
+        var managed_a = try items_table.selectQuery(allocator, ns_a, filter_a);
         defer managed_a.deinit();
         try testing.expectEqual(count_a, managed_a.rows.len);
 
         const filter_b = try qth.makeDefaultFilter(allocator);
         defer filter_b.deinit(allocator);
-        var managed_b = try engine.selectQuery(allocator, "items", ns_b, filter_b);
+        var managed_b = try items_table.selectQuery(allocator, ns_b, filter_b);
         defer managed_b.deinit();
         try testing.expectEqual(count_b, managed_b.rows.len);
     }
@@ -530,11 +539,12 @@ test "storage: remove then get returns null" {
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
+        const items_table = try ctx.table("items");
         try ctx.insertInt("items", id, "ns-test", "val", 42);
         try engine.flushPendingWrites();
-        try engine.deleteDocument("items", id, "ns-test");
+        try items_table.deleteDocument(id, "ns-test");
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
+        var managed = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed.deinit();
         const after = managed.rows;
         try testing.expect(after.len == 0);
@@ -554,10 +564,11 @@ test "storage: updated_at is always refreshed on write" {
     while (iter < 20) : (iter += 1) {
         const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
         defer allocator.free(id);
+        const items_table = try ctx.table("items");
         const t_before_insert = std.time.timestamp();
         try ctx.insertInt("items", id, "ns-test", "val", 1);
         try engine.flushPendingWrites();
-        var managed1 = try engine.selectDocument(allocator, "items", id, "ns-test");
+        var managed1 = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed1.deinit();
         if (managed1.rows.len == 0) return error.MissingDoc;
         const doc1 = managed1.rows[0];
@@ -567,7 +578,7 @@ test "storage: updated_at is always refreshed on write" {
         try ctx.insertInt("items", id, "ns-test", "val", 2);
         try engine.flushPendingWrites();
 
-        var managed2 = try engine.selectDocument(allocator, "items", id, "ns-test");
+        var managed2 = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed2.deinit();
         if (managed2.rows.len == 0) return error.MissingDoc;
         const doc2 = managed2.rows[0];
@@ -604,12 +615,13 @@ test "storage: write/read round-trip for array fields" {
         const storage_engine = @import("storage_engine.zig");
         const tags_tv = try storage_engine.TypedValue.fromPayload(allocator, .array, .integer, array_payload);
         defer tags_tv.deinit(allocator);
+        const items_table = try ctx.table("items");
         try ctx.insertNamed("items", id, "ns-test", .{
             sth.named("tags", tags_tv),
             sth.named("name", tth.valText("test-item")),
         });
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
+        var managed = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];
@@ -652,6 +664,7 @@ test "storage: non-array fields are unaffected" {
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;
         const active_val = rand.boolean();
+        const items_table = try ctx.table("items");
         try ctx.insertNamed("items", id, "ns-test", .{
             sth.named("title", tth.valText(title_str)),
             sth.named("score", tth.valInt(score_val)),
@@ -659,7 +672,7 @@ test "storage: non-array fields are unaffected" {
             sth.named("active", tth.valBool(active_val)),
         });
         try engine.flushPendingWrites();
-        var managed = try engine.selectDocument(allocator, "items", id, "ns-test");
+        var managed = try items_table.selectDocument(allocator, id, "ns-test");
         defer managed.deinit();
         if (managed.rows.len == 0) return error.MissingDoc;
         const doc = managed.rows[0];

@@ -101,10 +101,11 @@ pub const Table = struct {
 
 pub const TableMetadata = struct {
     table: *const Table,
+    index: usize,
     fields: []Field,
     field_index_map: std.StringHashMap(usize),
 
-    pub fn init(allocator: Allocator, table: *const Table) !TableMetadata {
+    pub fn init(allocator: Allocator, table: *const Table, table_index: usize) !TableMetadata {
         // Canonical order:
         // id, namespace_id, <declared schema fields>, created_at, updated_at
         const total = table.fields.len + 4;
@@ -125,6 +126,7 @@ pub const TableMetadata = struct {
 
         return .{
             .table = table,
+            .index = table_index,
             .fields = fields,
             .field_index_map = field_index_map,
         };
@@ -138,6 +140,10 @@ pub const TableMetadata = struct {
     pub fn getField(self: *const TableMetadata, name: []const u8) ?Field {
         const idx = self.field_index_map.get(name) orelse return null;
         return self.fields[idx];
+    }
+
+    pub fn getFieldIndex(self: *const TableMetadata, name: []const u8) ?usize {
+        return self.field_index_map.get(name);
     }
 };
 
@@ -169,14 +175,27 @@ pub const Schema = struct {
 
 pub const SchemaMetadata = struct {
     table_metadata: std.StringHashMap(TableMetadata),
+    /// Positional array for index-based lookup (matches SchemaSync table order)
+    tables: []const TableMetadata,
 
     pub fn init(allocator: Allocator, schema: *const Schema) !SchemaMetadata {
         var table_metadata = std.StringHashMap(TableMetadata).init(allocator);
-        for (schema.tables) |*t| {
-            try table_metadata.put(t.name, try TableMetadata.init(allocator, t));
+
+        var tables_list = std.ArrayListUnmanaged(TableMetadata).empty;
+        errdefer {
+            for (tables_list.items) |*t| t.deinit(allocator);
+            tables_list.deinit(allocator);
+        }
+
+        for (schema.tables, 0..) |*t, idx| {
+            var md = try TableMetadata.init(allocator, t, idx);
+            errdefer md.deinit(allocator);
+            try table_metadata.put(t.name, md);
+            try tables_list.append(allocator, md);
         }
         return .{
             .table_metadata = table_metadata,
+            .tables = try tables_list.toOwnedSlice(allocator),
         };
     }
 
@@ -186,11 +205,18 @@ pub const SchemaMetadata = struct {
             entry.value_ptr.deinit(allocator);
         }
         self.table_metadata.deinit();
+        allocator.free(self.tables);
     }
 
     pub fn getTable(self: *const SchemaMetadata, name: []const u8) ?*const TableMetadata {
         const ptr = self.table_metadata.getPtr(name) orelse return null;
         return ptr;
+    }
+
+    /// Get table metadata by positional index (as used in SchemaSync / wire protocol).
+    pub fn getTableByIndex(self: *const SchemaMetadata, index: usize) ?*const TableMetadata {
+        if (index >= self.tables.len) return null;
+        return &self.tables[index];
     }
 };
 

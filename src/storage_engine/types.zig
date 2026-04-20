@@ -495,7 +495,7 @@ pub const WriteOp = union(enum) {
     rollback_transaction: struct { completion_signal: ?*CompletionSignal },
     checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
     upsert: struct {
-        table: []const u8,
+        table_index: usize,
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
@@ -504,7 +504,7 @@ pub const WriteOp = union(enum) {
         completion_signal: ?*CompletionSignal = null,
     },
     delete: struct {
-        table: []const u8,
+        table_index: usize,
         id: []const u8,
         namespace: []const u8,
         sql: []const u8,
@@ -559,7 +559,6 @@ pub const WriteOp = union(enum) {
         switch (self) {
             .upsert => |op| {
                 allocator.free(op.namespace);
-                allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
                 for (op.values) |val| val.deinit(allocator);
@@ -567,7 +566,6 @@ pub const WriteOp = union(enum) {
             },
             .delete => |op| {
                 allocator.free(op.namespace);
-                allocator.free(op.table);
                 allocator.free(op.id);
                 allocator.free(op.sql);
             },

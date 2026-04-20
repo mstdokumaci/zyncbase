@@ -77,7 +77,7 @@ test "logging: connection events" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
     const memory_strategy = &app.memory_strategy;
 
     // Test 1: Connection open logs connection ID
@@ -216,7 +216,7 @@ test "logging: error details" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
     const storage_engine = &app.storage_engine;
 
     // Test 1: Message parsing errors are logged
@@ -272,8 +272,9 @@ test "logging: error details" {
     // Test 3: Database errors are logged
     // Storage engine logs errors internally when operations fail
     {
+        const tbl_md = app.schema_manager.getTable("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
-        var managed = try storage_engine.selectDocument(testing.allocator, "data_table", "path", "nonexistent");
+        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, "path", "nonexistent");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -364,7 +365,7 @@ test "logging: level filtering" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler);
+        try manager.init(allocator, &memory_strategy, &handler, &sm2);
         defer manager.deinit();
 
         // Trigger different log levels
@@ -449,7 +450,7 @@ test "logging: message formatting" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler);
+        try manager.init(allocator, &memory_strategy, &handler, &sm3);
         defer manager.deinit();
 
         // Trigger various log messages
@@ -518,20 +519,15 @@ test "logging: message formatting" {
         defer handler.deinit();
 
         var manager: ConnectionManager = undefined;
-        try manager.init(allocator, &memory_strategy, &handler);
+        try manager.init(allocator, &memory_strategy, &handler, &sm4);
         defer manager.deinit();
 
         // Test multiple connections to verify ID formatting
         const num_connections = 5;
         var connections: [num_connections]WebSocket = undefined;
 
-        for (&connections, 0..) |*ws, i| {
-            ws.* = WebSocket{
-                .ws = @ptrFromInt(i + 7000),
-                .ssl = false,
-                .user_data = undefined,
-            };
-            ws.user_data = ws;
+        for (&connections) |*ws| {
+            ws.* = createMockWebSocket();
             try manager.onOpen(ws);
         }
 

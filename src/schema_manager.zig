@@ -73,4 +73,9 @@ pub const SchemaManager = struct {
         const tbl = self.getTable(table) orelse return types.StorageError.UnknownTable;
         if (tbl.getField(field) == null) return types.StorageError.UnknownField;
     }
+
+    /// Get table metadata by positional index (as used in SchemaSync / wire protocol).
+    pub fn getTableByIndex(self: *const SchemaManager, index: usize) ?*const TableMetadata {
+        return self.metadata.getTableByIndex(index);
+    }
 };

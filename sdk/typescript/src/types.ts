@@ -23,7 +23,8 @@ export type LifecycleEvent =
 	| "disconnected"
 	| "reconnecting"
 	| "error"
-	| "statusChange";
+	| "statusChange"
+	| "schemaChange";
 
 // ─── Client configuration ────────────────────────────────────────────────────
 
@@ -208,5 +209,11 @@ export interface StoreDelta {
 	>;
 }
 
+export interface SchemaSync {
+	type: "SchemaSync";
+	tables: string[];
+	fields: string[][];
+}
+
 /** Union of all inbound message types. */
-export type InboundMessage = OkResponse | ErrorResponse | StoreDelta;
+export type InboundMessage = OkResponse | ErrorResponse | StoreDelta | SchemaSync;

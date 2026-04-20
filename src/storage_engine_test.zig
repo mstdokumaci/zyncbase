@@ -80,13 +80,12 @@ test "StorageEngine: delete document" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-delete", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const docs = try ctx.table("test");
 
     try docs.insertText("id1", "ns", "val", "foo");
     try docs.flush();
 
-    try engine.deleteDocument("test", "id1", "ns");
+    try docs.deleteDocument("id1", "ns");
     try docs.flush();
 
     var managed = try docs.selectDocument(allocator, "id1", "ns");
@@ -151,7 +150,6 @@ test "StorageEngine: query collection" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-query", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const users = try ctx.table("users");
 
     // Set multiple documents
@@ -161,7 +159,7 @@ test "StorageEngine: query collection" {
     // Query for collection using empty filter
     const filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try engine.selectQuery(allocator, "users", "test_namespace", filter);
+    var managed = try users.selectQuery(allocator, "test_namespace", filter);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 2), managed.rows.len);
 }
@@ -232,11 +230,11 @@ test "StorageEngine: automatic rollback in batch operations" {
     // Verify no transaction is active after batch completes
     try testing.expect(!engine.isTransactionActive());
     // Verify data was written
-    var managed1 = try engine.selectDocument(allocator, "items", "id1", "test_ns");
+    var managed1 = try (try ctx.table("items")).selectDocument(allocator, "id1", "test_ns");
     defer managed1.deinit();
     try testing.expect(managed1.rows.len > 0);
 
-    var managed2 = try engine.selectDocument(allocator, "items", "id2", "test_ns");
+    var managed2 = try (try ctx.table("items")).selectDocument(allocator, "id2", "test_ns");
     defer managed2.deinit();
     try testing.expect(managed2.rows.len > 0);
 }
@@ -256,7 +254,7 @@ test "StorageEngine: concurrent reads" {
     // Perform multiple concurrent reads
     const Thread = struct {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, id: []const u8) !void {
-            var managed = try eng.selectDocument(alloc, "items", id, "test_namespace");
+            var managed = try eng.selectDocument(alloc, 0, id, "test_namespace");
             defer managed.deinit();
             try testing.expect(managed.rows.len > 0);
         }
@@ -309,12 +307,11 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         .in_memory = false,
     });
     defer verify_ctx.deinit();
-    const verify_engine = &verify_ctx.engine;
 
     for (0..num_keys) |i| {
         var id_buf: [32]u8 = undefined;
         const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
-        var managed = try verify_engine.selectDocument(allocator, "items", id, "ns");
+        var managed = try (try verify_ctx.table("items")).selectDocument(allocator, id, "ns");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -335,7 +332,7 @@ test "StorageEngine: client writes blocked during migration" {
     const err1 = ctx.insertField("items", "id1", "ns", "val", tth.valInt(1));
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
-    const err3 = engine.deleteDocument("items", "id1", "ns");
+    const err3 = (try ctx.table("items")).deleteDocument("id1", "ns");
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
 test "StorageEngine: manual transaction MUST increment write_seq on commit" {

@@ -1,6 +1,7 @@
 // Connection Manager
 import { decode, encode } from "@msgpack/msgpack";
 import { ErrorCodes, ZyncBaseError } from "./errors";
+import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	ClientOptions,
 	ErrorResponse,
@@ -14,6 +15,12 @@ import type {
 type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
 type DeltaHandler = (delta: StoreDelta) => void;
+type PendingEntry = {
+	resolve: (value: OkResponse) => void;
+	reject: (reason: unknown) => void;
+	outboundType?: string;
+	outboundCollection?: number;
+};
 
 type ConnectionStatus =
 	| "connecting"
@@ -27,10 +34,7 @@ export class ConnectionManager {
 
 	// msg_id counter and pending queue
 	private nextMsgId = 1;
-	private pendingQueue: Map<
-		number,
-		{ resolve: (value: OkResponse) => void; reject: (reason: unknown) => void }
-	> = new Map();
+	private pendingQueue: Map<number, PendingEntry> = new Map();
 
 	// Lifecycle event registry
 	private eventListeners: Map<LifecycleEvent, EventHandler[]> = new Map();
@@ -50,6 +54,13 @@ export class ConnectionManager {
 	// Active namespaces
 	private storeNamespace: string;
 	private presenceNamespace: string;
+
+	// Schema dictionary (populated from SchemaSync)
+	readonly schemaDictionary = new SchemaDictionary();
+
+	// SchemaSync readiness promise
+	private schemaSyncResolve: (() => void) | null = null;
+	private schemaSyncPromise: Promise<void> = new Promise(() => { });
 
 	constructor(options: ClientOptions) {
 		this.options = options;
@@ -74,6 +85,11 @@ export class ConnectionManager {
 	connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.setStatus("connecting");
+
+		// Create a fresh SchemaSync readiness promise
+		this.schemaSyncPromise = new Promise<void>((resolve) => {
+			this.schemaSyncResolve = resolve;
+		});
 
 		return new Promise((resolve, reject) => {
 			const ws = new WebSocket(this.options.url);
@@ -122,6 +138,11 @@ export class ConnectionManager {
 				this._handleRawMessage(event.data);
 			};
 		});
+	}
+
+	/** Wait for SchemaSync to be received and processed. */
+	awaitSchemaSync(): Promise<void> {
+		return this.schemaSyncPromise;
 	}
 
 	/** Compute the backoff delay for a given attempt number. Exported for testing. */
@@ -198,10 +219,27 @@ export class ConnectionManager {
 				JSON.stringify(msgWithId),
 			);
 		}
-		const encoded = encode(msgWithId) as Uint8Array;
+		let wireMsgWithId: Record<string, unknown>;
+		try {
+			wireMsgWithId = this._encodeWireMessage(msgWithId);
+		} catch (err) {
+			throw this._mapSchemaEncodingError(err);
+		}
+		const encoded = encode(wireMsgWithId) as Uint8Array;
 
 		return new Promise((resolve, reject) => {
-			this.pendingQueue.set(id, { resolve, reject });
+			this.pendingQueue.set(id, {
+				resolve,
+				reject,
+				outboundType:
+					typeof wireMsgWithId.type === "string"
+						? (wireMsgWithId.type as string)
+						: undefined,
+				outboundCollection:
+					typeof wireMsgWithId.collection === "number"
+						? (wireMsgWithId.collection as number)
+						: undefined,
+			});
 			try {
 				this.send(encoded);
 			} catch (err) {
@@ -315,7 +353,11 @@ export class ConnectionManager {
 			console.log(`[SDK] << ${type} (id=${id}):`, JSON.stringify(msg));
 		}
 
+		let processedMsg: InboundMessage = msg;
 		switch (type) {
+			case "SchemaSync":
+				this._handleSchemaSync(msg);
+				return; // SchemaSync is internal — not dispatched to messageHandler
 			case "ok":
 				this._handleOkResponse(msg as OkResponse);
 				break;
@@ -323,18 +365,33 @@ export class ConnectionManager {
 				this._handleErrorResponse(msg as ErrorResponse);
 				break;
 			case "StoreDelta":
-				this._handleDeltaPush(msg as StoreDelta);
+				processedMsg = this._decodeDelta(msg as StoreDelta);
+				this._handleDeltaPush(processedMsg as StoreDelta);
 				break;
 		}
 
-		if (this.messageHandler) this.messageHandler(msg);
+		if (this.messageHandler) this.messageHandler(processedMsg);
 	}
 
 	private _handleOkResponse(ok: OkResponse): void {
 		const entry = this.pendingQueue.get(ok.id);
 		if (entry) {
 			this.pendingQueue.delete(ok.id);
-			entry.resolve(ok);
+			let decodedOk = ok;
+			if (
+				(entry.outboundType === "StoreQuery" ||
+					entry.outboundType === "StoreSubscribe") &&
+				typeof entry.outboundCollection === "number" &&
+				Array.isArray(ok.value)
+			) {
+				decodedOk = {
+					...ok,
+					value: ok.value.map((row) =>
+						this._decodeRow(entry.outboundCollection as number, row),
+					) as OkResponse["value"],
+				};
+			}
+			entry.resolve(decodedOk);
 		}
 	}
 
@@ -346,9 +403,217 @@ export class ConnectionManager {
 		}
 	}
 
+	private _handleSchemaSync(msg: InboundMessage): void {
+		const payload = msg as { tables: string[]; fields: string[][] };
+		this.schemaDictionary.processSchemaSync(payload).then((schemaChanged) => {
+			if (schemaChanged) {
+				this.emit("schemaChange");
+			}
+			// Resolve the schemaSyncPromise so awaitSchemaSync() unblocks
+			if (this.schemaSyncResolve) {
+				this.schemaSyncResolve();
+				this.schemaSyncResolve = null;
+			}
+		});
+	}
+
 	private _handleDeltaPush(delta: StoreDelta): void {
 		if (this.deltaHandler) {
 			this.deltaHandler(delta);
 		}
 	}
+
+	private _encodeWireMessage(msg: Record<string, unknown>): Record<string, unknown> {
+		const type = msg.type;
+		if (typeof type !== "string" || !type.startsWith("Store")) return msg;
+
+		const wire: Record<string, unknown> = { ...msg };
+
+		if (type === "StoreSet" || type === "StoreRemove") {
+			const path = wire.path;
+			if (Array.isArray(path) && path.length > 0 && typeof path[0] === "string") {
+				const logicalPath = path as string[];
+				const encodedPath = this.schemaDictionary.encodePath(logicalPath);
+				wire.path = encodedPath;
+				if (
+					type === "StoreSet" &&
+					logicalPath.length === 2 &&
+					wire.value !== null &&
+					typeof wire.value === "object" &&
+					!Array.isArray(wire.value)
+				) {
+					const tableIndex = encodedPath[0] as number;
+					wire.value = this.schemaDictionary.encodeValue(
+						tableIndex,
+						wire.value as Record<string, unknown>,
+					);
+				}
+			}
+			return wire;
+		}
+
+		if (type === "StoreBatch") {
+			if (Array.isArray(wire.ops)) {
+				wire.ops = wire.ops.map((op) => {
+					if (!Array.isArray(op) || op.length < 2) return op;
+					const kind = op[0];
+					const rawPath = op[1];
+					if (!Array.isArray(rawPath) || rawPath.length === 0 || typeof rawPath[0] !== "string") {
+						return op;
+					}
+
+					const encodedPath = this.schemaDictionary.encodePath(rawPath as string[]);
+					if (kind === "r") return ["r", encodedPath];
+					if (
+						kind === "s" &&
+						(rawPath as string[]).length === 2 &&
+						op[2] !== null &&
+						typeof op[2] === "object" &&
+						!Array.isArray(op[2])
+					) {
+						const tableIndex = encodedPath[0] as number;
+						return [
+							"s",
+							encodedPath,
+							this.schemaDictionary.encodeValue(
+								tableIndex,
+								op[2] as Record<string, unknown>,
+							),
+						];
+					}
+					return ["s", encodedPath, op[2]];
+				});
+			}
+			return wire;
+		}
+
+		if (type === "StoreQuery" || type === "StoreSubscribe") {
+			if (typeof wire.collection === "string") {
+				const tableIndex = this.schemaDictionary.getTableIndex(
+					wire.collection as string,
+				);
+				wire.collection = tableIndex;
+
+				if (wire.conditions !== undefined) {
+					wire.conditions = this._encodeConditions(tableIndex, wire.conditions);
+				}
+				if (wire.orConditions !== undefined) {
+					wire.orConditions = this._encodeConditions(tableIndex, wire.orConditions);
+				}
+				if (wire.orderBy !== undefined) {
+					wire.orderBy = this._encodeOrderBy(tableIndex, wire.orderBy);
+				}
+			}
+			return wire;
+		}
+
+		return wire;
+	}
+
+	private _encodeConditions(
+		tableIndex: number,
+		raw: unknown,
+	): unknown {
+		if (!Array.isArray(raw)) return raw;
+		return raw.map((cond) => {
+			if (!Array.isArray(cond) || cond.length < 2) return cond;
+			const field = cond[0];
+			const op = cond[1];
+			const fieldIndex =
+				typeof field === "string"
+					? this.schemaDictionary.getFieldIndex(tableIndex, field)
+					: field;
+			return cond.length === 2
+				? [fieldIndex, op]
+				: [fieldIndex, op, cond[2]];
+		});
+	}
+
+	private _encodeOrderBy(tableIndex: number, raw: unknown): unknown {
+		if (!Array.isArray(raw) || raw.length !== 2) return raw;
+		const field = raw[0];
+		const dir = raw[1];
+		const fieldIndex =
+			typeof field === "string"
+				? this.schemaDictionary.getFieldIndex(tableIndex, field)
+				: field;
+		return [fieldIndex, dir];
+	}
+
+	private _decodeDelta(delta: StoreDelta): StoreDelta {
+		const decodedOps = delta.ops.map((op) => {
+			const wirePath = op.path as unknown as Array<number | string>;
+			let decodedPath = op.path;
+			let tableIndex: number | null = null;
+			if (Array.isArray(wirePath) && wirePath.length > 0 && typeof wirePath[0] === "number") {
+				tableIndex = wirePath[0] as number;
+				decodedPath = this.schemaDictionary.decodePath(wirePath) as unknown as string[];
+			}
+
+			if (
+				op.op === "set" &&
+				tableIndex !== null &&
+				op.value !== null &&
+				typeof op.value === "object" &&
+				!Array.isArray(op.value) &&
+				this._isNumericKeyedObject(op.value as Record<string, unknown>)
+			) {
+				return {
+					...op,
+					path: decodedPath,
+					value: this.schemaDictionary.decodeValue(
+						tableIndex,
+						op.value as unknown as Record<number, unknown>,
+					) as unknown as typeof op.value,
+				};
+			}
+			return { ...op, path: decodedPath };
+		});
+		return { ...delta, ops: decodedOps } as StoreDelta;
+	}
+
+	private _decodeRow(tableIndex: number, row: unknown): unknown {
+		if (
+			row === null ||
+			typeof row !== "object" ||
+			Array.isArray(row) ||
+			!this._isNumericKeyedObject(row as Record<string, unknown>)
+		) {
+			return row;
+		}
+		return this.schemaDictionary.decodeValue(
+			tableIndex,
+			row as Record<number, unknown>,
+		);
+	}
+
+	private _isNumericKeyedObject(obj: Record<string, unknown>): boolean {
+		const keys = Object.keys(obj);
+		return keys.length > 0 && keys.every((k) => /^\d+$/.test(k));
+	}
+
+	private _mapSchemaEncodingError(err: unknown): ZyncBaseError {
+		if (err instanceof ZyncBaseError) return err;
+		const message = err instanceof Error ? err.message : "Schema encoding failed";
+		if (message.includes("unknown table")) {
+			return new ZyncBaseError(message, {
+				code: ErrorCodes.COLLECTION_NOT_FOUND,
+				category: "validation",
+				retryable: false,
+			});
+		}
+		if (message.includes("unknown field")) {
+			return new ZyncBaseError(message, {
+				code: ErrorCodes.FIELD_NOT_FOUND,
+				category: "validation",
+				retryable: false,
+			});
+		}
+		return new ZyncBaseError(message, {
+			code: ErrorCodes.INVALID_MESSAGE,
+			category: "validation",
+			retryable: false,
+		});
+	}
+
 }

@@ -239,15 +239,27 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
-        if (req.path.len < 2) return error.InvalidPath;
+        if (req.path != .arr) return error.InvalidMessageFormat;
+        const arr = req.path.arr;
+        if (arr.len < 2) return error.InvalidPath;
+
+        const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
+        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        if (arr[1] != .str) return error.InvalidMessageFormat;
+        const doc_id = arr[1].str.value();
+        const field_index: ?usize = if (arr.len >= 3) blk: {
+            const fi = msgpack.extractPayloadUint(arr[2]) orelse return error.InvalidMessageFormat;
+            if (fi >= tbl_md.fields.len) return error.UnknownField;
+            break :blk fi;
+        } else null;
         const value = req.value orelse return error.MissingRequiredFields;
 
         try self.store_service.set(
-            req.path[0],
-            req.path[1],
+            table_index,
+            doc_id,
             req.namespace,
-            req.path.len,
-            if (req.path.len == 3) req.path[2] else null,
+            arr.len,
+            field_index,
             value,
         );
 
@@ -261,13 +273,20 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
-        if (req.path.len < 2) return error.InvalidPath;
+        if (req.path != .arr) return error.InvalidMessageFormat;
+        const arr = req.path.arr;
+        if (arr.len < 2) return error.InvalidPath;
+
+        const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
+        _ = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        if (arr[1] != .str) return error.InvalidMessageFormat;
+        const doc_id = arr[1].str.value();
 
         try self.store_service.remove(
-            req.path[0],
-            req.path[1],
+            table_index,
+            doc_id,
             req.namespace,
-            req.path.len,
+            arr.len,
         );
 
         return try protocol.buildSuccessResponse(arena_allocator, msg_id);
@@ -281,15 +300,16 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
-        const sub_id = try generateSubscriptionId(conn);
+        const table_index = msgpack.extractPayloadUint(req.collection) orelse return error.InvalidMessageFormat;
+        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
 
-        var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
+        var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);
         defer qr.deinit(arena_allocator);
 
-        _ = try self.subscription_engine.subscribe(req.namespace, req.collection, qr.filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(req.namespace, table_index, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
         return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
     }
 
@@ -315,11 +335,12 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
+        const table_index = msgpack.extractPayloadUint(req.collection) orelse return error.InvalidMessageFormat;
+        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
-        var qr = try self.store_service.query(arena_allocator, req.collection, req.namespace, payload);
+        var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);
         defer qr.deinit(arena_allocator);
 
-        const tbl_md = self.schema_manager.getTable(req.collection) orelse return error.UnknownTable;
         return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
     }
 
@@ -342,10 +363,10 @@ pub const MessageHandler = struct {
 
         const cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor, sub_query.filter.order_by.field_type, sub_query.filter.order_by.items_type);
 
-        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.collection, sub_query.namespace, &sub_query.filter, cursor);
+        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.table_index, sub_query.namespace, &sub_query.filter, cursor);
         defer results.deinit();
 
-        const tbl_md = self.schema_manager.getTable(sub_query.collection) orelse return error.UnknownTable;
+        const tbl_md = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
         return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
     }
 

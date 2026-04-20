@@ -22,7 +22,6 @@ test "property: random query filters on StorageEngine" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-query-p1", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
 
     // Seed some data
     try seedEntities(allocator, &ctx, seeded_entity_count);
@@ -35,7 +34,7 @@ test "property: random query filters on StorageEngine" {
         defer filter.deinit(allocator);
 
         // Execute query
-        var managed = try engine.selectQuery(allocator, "entities", "ns1", filter);
+        var managed = try (try ctx.table("entities")).selectQuery(allocator, "ns1", filter);
         defer managed.deinit();
         try testing.expect(managed.rows.len >= 0);
     }
@@ -79,11 +78,11 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     var filter = query_parser.QueryFilter{
         .order_by = .{
             .field_index = switch (field_idx) {
-                0 => 2, // name
-                1 => 3, // age
-                2 => 4, // score
+                0 => 4, // name
+                1 => 5, // age
+                2 => 6, // score
                 3 => 0, // id
-                4 => 5, // created_at
+                4 => 2, // created_at
                 else => unreachable,
             },
             .desc = random.boolean(),
@@ -146,11 +145,11 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
 
     const ft: schema_manager.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
     const field_index: usize = if (std.mem.eql(u8, field, "name"))
-        2
+        4
     else if (std.mem.eql(u8, field, "age"))
-        3
+        5
     else
-        4;
+        6;
 
     return .{
         .field_index = field_index,

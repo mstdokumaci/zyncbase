@@ -16,7 +16,7 @@ test "connection: open/close is inverse operation" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Test single connection open/close
     {
@@ -103,7 +103,7 @@ test "connection: thread-safe manager access" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Spawn multiple threads performing concurrent operations
     const num_threads = 10;
@@ -133,7 +133,7 @@ fn concurrentManagerOps(
     start_id: u64,
     count: usize,
 ) void {
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const conn_id = start_id + i;
@@ -168,7 +168,7 @@ test "connection: concurrent reads are non-blocking" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Pre-populate manager with connections
     const num_connections = 100;
@@ -207,7 +207,7 @@ fn concurrentReads(
     num_connections: usize,
     num_reads: usize,
 ) void {
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
@@ -257,7 +257,7 @@ fn concurrentMixedOps(
     start_id: u64,
     count: usize,
 ) void {
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
@@ -297,7 +297,7 @@ test "connection: closeAll is thread-safe" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Add some initial connections
     var i: usize = 0;
@@ -353,7 +353,7 @@ test "connection: unique IDs" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Test 1: Sequential connections should have unique IDs
     {
@@ -446,7 +446,7 @@ test "connection: unique IDs" {
     {
         // Create a second manager instance using the same context components (safely)
         var manager2: ConnectionManager = undefined;
-        try manager2.init(allocator, &app.memory_strategy, &app.handler);
+        try manager2.init(allocator, &app.memory_strategy, &app.handler, &app.schema_manager);
         defer manager2.deinit();
 
         // Open connections on both managers
@@ -511,7 +511,7 @@ test "message: all valid frames are parsed" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Test 1: Valid StoreSet message should be parsed successfully
     {
@@ -521,7 +521,9 @@ test "message: all valid frames are parsed" {
         defer manager.onClose(&ws);
 
         // Create a valid MessagePack message
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "data_table", "key1", "val" }, "value1");
+        const tbl = app.schema_manager.getTable("data_table").?;
+        const field_idx = tbl.getFieldIndex("val").?;
+        const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, "key1", field_idx, "value1");
         defer allocator.free(message);
 
         // This should not throw a parsing error
@@ -538,7 +540,8 @@ test "message: all valid frames are parsed" {
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
 
-        const message = try msgpack.createStoreQueryMessage(allocator, 2, "test", "data_table", filter);
+        const tbl = app.schema_manager.getTable("data_table").?;
+        const message = try msgpack.createStoreQueryMessage(allocator, 2, "test", tbl.index, filter);
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -551,7 +554,9 @@ test "message: all valid frames are parsed" {
         try manager.onOpen(&ws);
         defer manager.onClose(&ws);
 
-        const message = try msgpack.createStoreSetMessage(allocator, 123, "ns", &.{ "data_table", "p", "val" }, "v");
+        const tbl = app.schema_manager.getTable("data_table").?;
+        const field_idx = tbl.getFieldIndex("val").?;
+        const message = try msgpack.createStoreSetFieldMessage(allocator, 123, "ns", tbl.index, "p", field_idx, "v");
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -570,7 +575,8 @@ test "message: all valid frames are parsed" {
         };
 
         for (messages, 0..) |m, i| {
-            const msg = try msgpack.createStoreSetMessage(allocator, @intCast(i), m.ns, &.{m.p}, m.v);
+            const tbl = app.schema_manager.getTable("data_table").?;
+            const msg = try msgpack.createStoreSetMessage(allocator, @intCast(i), m.ns, tbl.index, m.p, m.v);
             defer allocator.free(msg);
             manager.onMessage(&ws, msg, .binary);
         }
@@ -604,7 +610,9 @@ test "message: request routing to handlers" {
         defer sc.deinit();
         const conn = sc.conn;
 
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key1", "val" }, "value1");
+        const tbl = app.schema_manager.getTable("test_table").?;
+        const field_idx = tbl.getFieldIndex("val").?;
+        const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, "key1", field_idx, "value1");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -624,8 +632,9 @@ test "message: request routing to handlers" {
         defer sc.deinit();
         const conn = sc.conn;
 
-        // First set a value
-        const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key2", "val" }, "value2");
+        const tbl = app.schema_manager.getTable("test_table").?;
+        const field_idx = tbl.getFieldIndex("val").?;
+        const set_message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, "key2", field_idx, "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -638,7 +647,8 @@ test "message: request routing to handlers" {
         // Now query the value
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
-        const query_message = try msgpack.createStoreQueryMessage(allocator, 2, "test", "test_table", filter);
+        const tbl_q = app.schema_manager.getTable("test_table").?;
+        const query_message = try msgpack.createStoreQueryMessage(allocator, 2, "test", tbl_q.index, filter);
         defer allocator.free(query_message);
 
         var get_reader: std.Io.Reader = .fixed(query_message);
@@ -658,7 +668,7 @@ test "message: request routing to handlers" {
         defer sc.deinit();
         const conn = sc.conn;
 
-        const message = try msgpack.createCustomMessage(allocator, 3, "UnknownType", "test", &.{"key"});
+        const message = try msgpack.createCustomMessage(allocator, 3, "UnknownType", "test", null, &.{"key"});
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -683,11 +693,15 @@ test "message: request routing to handlers" {
         defer sc.deinit();
         const conn = sc.conn;
 
+        const tbl_m = app.schema_manager.getTable("test_table").?;
+        const field_idx_m = tbl_m.getFieldIndex("val").?;
+        var q_f = msgpack.Payload.mapPayload(allocator);
+        defer q_f.free(allocator);
         const msgs = [_][]const u8{
-            try msgpack.createStoreSetMessage(allocator, 10, "ns", &.{ "test_table", "p1", "val" }, "v1"),
-            try msgpack.createStoreQueryMessage(allocator, 11, "ns", "test_table", msgpack.Payload.mapPayload(allocator)),
-            try msgpack.createStoreSetMessage(allocator, 12, "ns", &.{ "test_table", "p2", "val" }, "v2"),
-            try msgpack.createCustomMessage(allocator, 13, "InvalidType", "ns", &.{ "test_table", "p3" }),
+            try msgpack.createStoreSetFieldMessage(allocator, 10, "ns", tbl_m.index, "p1", field_idx_m, "v1"),
+            try msgpack.createStoreQueryMessage(allocator, 11, "ns", tbl_m.index, q_f),
+            try msgpack.createStoreSetFieldMessage(allocator, 12, "ns", tbl_m.index, "p2", field_idx_m, "v2"),
+            try msgpack.createCustomMessage(allocator, 13, "InvalidType", "ns", tbl_m.index, &.{"p3"}),
         };
         defer {
             for (msgs) |m| allocator.free(m);
@@ -741,7 +755,9 @@ test "message: response correlation by ID" {
         const conn = sc.conn;
 
         const correlation_id: u64 = 12345;
-        const message = try msgpack.createStoreSetMessage(allocator, correlation_id, "test", &.{ "test_table", "key", "val" }, "val");
+        const tbl = app.schema_manager.getTable("test_table").?;
+        const field_idx = tbl.getFieldIndex("val").?;
+        const message = try msgpack.createStoreSetFieldMessage(allocator, correlation_id, "test", tbl.index, "key", field_idx, "val");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -774,8 +790,9 @@ test "message: response correlation by ID" {
         defer sc.deinit();
         const conn = sc.conn;
 
-        // First set a value
-        const set_message = try msgpack.createStoreSetMessage(allocator, 1, "test", &.{ "test_table", "key2", "val" }, "value2");
+        const tbl_s = app.schema_manager.getTable("test_table").?;
+        const field_idx_s = tbl_s.getFieldIndex("val").?;
+        const set_message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test", tbl_s.index, "key2", field_idx_s, "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -789,7 +806,8 @@ test "message: response correlation by ID" {
         const correlation_id: u64 = 99999;
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
-        const query_message = try msgpack.createStoreQueryMessage(allocator, correlation_id, "test", "test_table", filter);
+        const tbl_qr = app.schema_manager.getTable("test_table").?;
+        const query_message = try msgpack.createStoreQueryMessage(allocator, correlation_id, "test", tbl_qr.index, filter);
         defer allocator.free(query_message);
 
         var get_reader: std.Io.Reader = .fixed(query_message);
@@ -825,7 +843,9 @@ test "message: response correlation by ID" {
         const correlation_ids = [_]u64{ 1, 100, 999, 12345, 0 };
 
         for (correlation_ids) |corr_id| {
-            const message = try msgpack.createStoreSetMessage(allocator, corr_id, "test", &.{ "test_table", "key", "val" }, "val");
+            const tbl = app.schema_manager.getTable("test_table").?;
+            const field_idx = tbl.getFieldIndex("val").?;
+            const message = try msgpack.createStoreSetFieldMessage(allocator, corr_id, "test", tbl.index, "key", field_idx, "val");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -859,10 +879,11 @@ test "message: response correlation by ID" {
         defer sc.deinit();
         const conn = sc.conn;
 
+        const tbl = app.schema_manager.getTable("test_table").?;
         const correlation_id: u64 = 77777;
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
-        const message = try msgpack.createStoreQueryMessage(allocator, correlation_id, "test", "test_table", filter);
+        const message = try msgpack.createStoreQueryMessage(allocator, correlation_id, "test", @intCast(tbl.index), filter);
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -903,7 +924,7 @@ test "message: error responses for invalid types/fields" {
     });
     defer app.deinit();
 
-    const manager = &app.manager;
+    const manager = &app.connection_manager;
 
     // Test 1: Invalid MessagePack should trigger error response
     {

@@ -17,7 +17,6 @@ test "StorageEngine: selectQuery basic equality" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-basic", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const users = try ctx.table("users");
 
     // Seed data
@@ -41,7 +40,7 @@ test "StorageEngine: selectQuery basic equality" {
     };
     filter.conditions = conds;
 
-    var managed = try engine.selectQuery(allocator, "users", "ns", filter);
+    var managed = try users.selectQuery(allocator, "ns", filter);
     defer managed.deinit();
     const res = managed.rows;
 
@@ -60,7 +59,6 @@ test "StorageEngine: selectQuery with OR and ordering" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-complex", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const users = try ctx.table("users");
 
     try seedUser(allocator, users, "1", "Alice", 30);
@@ -90,7 +88,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     };
     filter.or_conditions = or_conds;
 
-    var managed = try engine.selectQuery(allocator, "users", "ns", filter);
+    var managed = try users.selectQuery(allocator, "ns", filter);
     defer managed.deinit();
     const res = managed.rows;
 
@@ -109,7 +107,6 @@ test "StorageEngine: selectQuery pagination (after)" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-index", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const scores = try ctx.table("scores");
 
     // IDs are used as secondary sort key
@@ -124,7 +121,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
-    var managed1 = try engine.selectQuery(allocator, "scores", "ns", filter1);
+    var managed1 = try scores.selectQuery(allocator, "ns", filter1);
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
@@ -140,7 +137,7 @@ test "StorageEngine: selectQuery pagination (after)" {
         .id = try allocator.dupe(u8, "id2"),
     };
 
-    var managed2 = try engine.selectQuery(allocator, "scores", "ns", filter2);
+    var managed2 = try scores.selectQuery(allocator, "ns", filter2);
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
@@ -172,7 +169,6 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-array-projection-aliased-multi-field", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const items = try ctx.table("items");
 
     const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
@@ -201,7 +197,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     };
     filter.conditions = conds;
 
-    var managed = try engine.selectQuery(allocator, "items", "ns", filter);
+    var managed = try items.selectQuery(allocator, "ns", filter);
     defer managed.deinit();
 
     const res = managed.rows;
@@ -228,7 +224,6 @@ test "StorageEngine: LIKE wildcard escaping" {
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();
-    const engine = &ctx.engine;
     const wildcards = try ctx.table("wildcards");
     const data_index = try wildcards.fieldIndex("data");
 
@@ -253,7 +248,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.conditions = conds;
-        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -273,7 +268,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.conditions = conds;
-        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -293,7 +288,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.conditions = conds;
-        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -313,7 +308,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.conditions = conds;
-        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -333,7 +328,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.conditions = conds;
-        var managed = try engine.selectQuery(allocator, "wildcards", ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -363,7 +358,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         filter.conditions = conds;
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
-        var managed = try engine.selectQuery(allocator, "wildcards", "ns", filter);
+        var managed = try wildcards.selectQuery(allocator, "ns", filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 0), results.len);

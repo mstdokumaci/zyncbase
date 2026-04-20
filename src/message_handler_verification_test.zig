@@ -22,26 +22,26 @@ test "Verification: WebSocket connection lifecycle" {
 
     // Test connection open
     var ws = createMockWebSocket();
-    try app.manager.onOpen(&ws);
+    try app.connection_manager.onOpen(&ws);
     // Explicit close for middle-test state verification, plus defer for early failures
     var closed = false;
-    defer if (!closed) app.manager.onClose(&ws);
+    defer if (!closed) app.connection_manager.onClose(&ws);
 
     const conn_id = ws.getConnId();
     try testing.expect(conn_id > 0);
 
     // Verify connection exists in manager
-    const state = try app.manager.acquireConnection(conn_id);
+    const state = try app.connection_manager.acquireConnection(conn_id);
     defer if (state.release()) app.memory_strategy.releaseConnection(state);
     try testing.expectEqual(conn_id, state.id);
     try testing.expectEqualStrings("default", state.namespace);
 
     // Test connection close
-    app.manager.onClose(&ws);
+    app.connection_manager.onClose(&ws);
     closed = true;
 
     // Verify connection was removed
-    const result = app.manager.acquireConnection(conn_id);
+    const result = app.connection_manager.acquireConnection(conn_id);
     if (result) |s| {
         _ = s.release();
         return error.TestExpectedError;
@@ -59,11 +59,15 @@ test "Verification: StoreSet message processing" {
     defer app.deinit();
 
     // Create a proper MessagePack StoreSet message
-    const message = try msgpack.createStoreSetMessage(
+    const tbl = try app.tableMetadata("data_table");
+    const val_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+    const message = try msgpack.createStoreSetFieldMessage(
         allocator,
         1,
         "test_namespace",
-        &[_][]const u8{ "data_table", "key", "val" },
+        @intCast(tbl.index),
+        "key",
+        val_idx,
         "test_value",
     );
     defer allocator.free(message);
@@ -133,7 +137,9 @@ test "Verification: StoreQuery message processing" {
 
     var conds_arr = try allocator.alloc(msgpack.Payload, 1);
     var cond_arr = try allocator.alloc(msgpack.Payload, 3);
-    cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+    const tbl = try app.tableMetadata("data_table");
+    const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
+    cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
     cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
     cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
@@ -144,7 +150,7 @@ test "Verification: StoreQuery message processing" {
         allocator,
         2,
         "test_namespace",
-        "data_table",
+        @intCast(tbl.index),
         filter_map,
     );
     defer allocator.free(message);
@@ -186,7 +192,7 @@ test "Verification: StoreQuery message processing" {
                 try testing.expectEqual(@as(usize, 1), val.arr.len);
                 const doc = val.arr[0];
                 try testing.expect(doc == .map);
-                const v_opt = try msgpack.getMapValue(doc, "val");
+                const v_opt = try msgpack.getMapValueByName(doc, tbl, "val");
                 const v_payload = v_opt orelse return error.TestExpectedError;
                 try testing.expectEqualStrings("stored_value", v_payload.str.value());
                 found_value = true;
@@ -214,7 +220,9 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer filter_map.free(allocator);
 
     var order_tuple = try allocator.alloc(msgpack.Payload, 2);
-    order_tuple[0] = try msgpack.Payload.strToPayload("created_at", allocator);
+    const tbl = try app.tableMetadata("data_table");
+    const created_at_idx = tbl.getFieldIndex("created_at") orelse return error.UnknownField;
+    order_tuple[0] = msgpack.Payload.uintToPayload(created_at_idx);
     order_tuple[1] = msgpack.Payload.uintToPayload(1);
     try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
     try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
@@ -223,7 +231,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
         allocator,
         42,
         "test_namespace",
-        "data_table",
+        @intCast(tbl.index),
         filter_map,
     );
     defer allocator.free(message);
@@ -314,14 +322,14 @@ test "Verification: Error handling for invalid messages" {
     // Test 3: Text messages should be rejected
     {
         var ws = createMockWebSocket();
-        try app.manager.onOpen(&ws);
-        defer app.manager.onClose(&ws);
+        try app.connection_manager.onOpen(&ws);
+        defer app.connection_manager.onClose(&ws);
 
         const text_message = "text message";
 
         // Should handle error gracefully (not crash) and reject by returning early
         // from manager.onMessage due to non-binary type.
-        app.manager.onMessage(&ws, text_message, .text);
+        app.connection_manager.onMessage(&ws, text_message, .text);
     }
 
     // Test 4: Unknown message type should fail routing
@@ -405,11 +413,15 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 
     for (test_data, 0..) |td, i| {
         {
-            const set_message = try msgpack.createStoreSetMessage(
+            const tbl = try app.tableMetadata("data_table");
+            const val_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+            const set_message = try msgpack.createStoreSetFieldMessage(
                 allocator,
                 i + 1,
                 td.namespace,
-                &[_][]const u8{ "data_table", td.id, "val" },
+                @intCast(tbl.index),
+                td.id,
+                val_idx,
                 td.value,
             );
             defer allocator.free(set_message);
@@ -444,7 +456,9 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 
             var conds_arr = try allocator.alloc(msgpack.Payload, 1);
             var cond_arr = try allocator.alloc(msgpack.Payload, 3);
-            cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+            const tbl = try app.tableMetadata("data_table");
+            const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
+            cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
             cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
             cond_arr[2] = try msgpack.Payload.strToPayload(td.id, allocator);
             conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
@@ -454,7 +468,7 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
                 allocator,
                 i + 100,
                 td.namespace,
-                "data_table",
+                @intCast(tbl.index),
                 filter_map,
             );
             defer allocator.free(query_message);
@@ -479,10 +493,10 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 
             var found = false;
             for (results.arr) |doc| {
-                const id_opt = try msgpack.getMapValue(doc, "id");
+                const id_opt = try msgpack.getMapValueByName(doc, tbl, "id");
                 const id_payload = id_opt orelse continue;
                 if (std.mem.eql(u8, id_payload.str.value(), td.id)) {
-                    const val_opt = try msgpack.getMapValue(doc, "val");
+                    const val_opt = try msgpack.getMapValueByName(doc, tbl, "val");
                     const val_payload = val_opt orelse return error.TestExpectedError;
                     try testing.expectEqualStrings(td.value, val_payload.str.value());
                     found = true;
@@ -519,7 +533,9 @@ test "Verification: StoreSubscribe message processing" {
     defer filter_map.free(allocator);
     var conds_arr = try allocator.alloc(msgpack.Payload, 1);
     var cond_arr = try allocator.alloc(msgpack.Payload, 3);
-    cond_arr[0] = try msgpack.Payload.strToPayload("id", allocator);
+    const tbl = try app.tableMetadata("data_table");
+    const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
+    cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
     cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
     cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
@@ -529,7 +545,7 @@ test "Verification: StoreSubscribe message processing" {
         allocator,
         3,
         "test_namespace",
-        "data_table",
+        @intCast(tbl.index),
         filter_map,
         12345,
     );
@@ -579,7 +595,7 @@ test "Verification: StoreSubscribe message processing" {
     try testing.expectEqual(@as(usize, 1), results_p.arr.len);
 
     const doc = results_p.arr[0];
-    const got_val_opt = try msgpack.getMapValue(doc, "val");
+    const got_val_opt = try msgpack.getMapValueByName(doc, tbl, "val");
     const got_val = got_val_opt orelse return error.TestExpectedError;
     try testing.expectEqualStrings("stored_value", got_val.str.value());
 }
@@ -602,7 +618,9 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer filter_map.free(allocator);
 
     var order_tuple = try allocator.alloc(msgpack.Payload, 2);
-    order_tuple[0] = try msgpack.Payload.strToPayload("created_at", allocator);
+    const tbl = try app.tableMetadata("data_table");
+    const created_at_idx = tbl.getFieldIndex("created_at") orelse return error.UnknownField;
+    order_tuple[0] = msgpack.Payload.uintToPayload(created_at_idx);
     order_tuple[1] = msgpack.Payload.uintToPayload(1); // DESC
     try filter_map.mapPut("orderBy", msgpack.Payload{ .arr = order_tuple });
     try filter_map.mapPut("limit", msgpack.Payload.uintToPayload(1));
@@ -612,7 +630,7 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
         allocator,
         77,
         "test_namespace",
-        "data_table",
+        @intCast(tbl.index),
         filter_map,
         9999,
     );

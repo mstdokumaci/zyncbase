@@ -16,6 +16,7 @@ pub const FieldType = schema_manager.FieldType;
 pub const TableMetadata = schema_manager.TableMetadata;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
+pub const query_parser = @import("query_parser.zig");
 pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
@@ -80,7 +81,31 @@ pub const TableFixture = struct {
         id: []const u8,
         namespace: []const u8,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectDocument(allocator, self.metadata.table.name, id, namespace);
+        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace);
+    }
+
+    pub fn selectQuery(
+        self: TableFixture,
+        allocator: Allocator,
+        namespace: []const u8,
+        filter: query_parser.QueryFilter,
+    ) !storage_engine.ManagedResult {
+        return self.engine.selectQuery(allocator, self.metadata.index, namespace, filter);
+    }
+
+    pub fn countRows(
+        self: TableFixture,
+        namespace: []const u8,
+    ) !usize {
+        return self.engine.countRows(self.metadata.index, namespace);
+    }
+
+    pub fn deleteDocument(
+        self: TableFixture,
+        id: []const u8,
+        namespace: []const u8,
+    ) !void {
+        return self.engine.deleteDocument(self.metadata.index, id, namespace);
     }
 
     pub fn getOne(
@@ -388,9 +413,9 @@ fn insertNamedWithMetadata(
     namespace: []const u8,
     columns: anytype,
 ) !void {
-    var resolved: [columns.len]ColumnValue = undefined;
+    var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.table.name, id, namespace, &resolved);
+    try engine.insertOrReplace(table_metadata.index, id, namespace, &resolved);
 }
 
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───
@@ -466,4 +491,23 @@ pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMeta
     try testing.expect(val == .array);
     try testing.expectEqual(expected_len, val.array.len);
     return val;
+}
+
+pub fn makeRowChangeNamed(
+    allocator: std.mem.Allocator,
+    sm: *const SchemaManager,
+    table_name: []const u8,
+    namespace: []const u8,
+    op: @import("change_buffer.zig").OwnedRowChange.Operation,
+    old_row: ?storage_engine.TypedRow,
+    new_row: ?storage_engine.TypedRow,
+) !@import("change_buffer.zig").OwnedRowChange {
+    const metadata = sm.getTable(table_name) orelse return error.UnknownTable;
+    return .{
+        .namespace = try allocator.dupe(u8, namespace),
+        .table_index = metadata.index,
+        .operation = op,
+        .old_row = old_row,
+        .new_row = new_row,
+    };
 }

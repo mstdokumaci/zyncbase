@@ -44,6 +44,7 @@ test "storage: stability no crashes on concurrent errors" {
         fn run(t_ctx: ThreadContext) void {
             var i: usize = 0;
             const ops = 40;
+            const tbl_md = t_ctx.ctx.sm.getTable("test") orelse @panic("test table missing");
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
                 const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
@@ -51,11 +52,11 @@ test "storage: stability no crashes on concurrent errors" {
                 // Try to set a value
                 t_ctx.ctx.insertText("test", key, "test", "val", key) catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
-                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, "test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
                 _ = managed.rows;
                 // Try to delete the value
-                t_ctx.ctx.engine.deleteDocument("test", key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, "test") catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
@@ -263,14 +264,14 @@ test "storage: stability concurrent reads during write errors" {
         allocator: std.mem.Allocator,
     };
     const readerThread = struct {
-        fn run(r_ctx: ReaderContext) void {
+        fn run(r_ctx: ReaderContext, table_index: usize) void {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed1.deinit();
                 _ = managed1.rows;
-                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, "test", "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed2.deinit();
                 _ = managed2.rows;
                 // Small delay
@@ -279,11 +280,12 @@ test "storage: stability concurrent reads during write errors" {
         }
     }.run;
     // Spawn reader threads
+    const tbl_md = ctx.sm.getTable("test") orelse return error.UnknownTable;
     for (&reader_threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, readerThread, .{ReaderContext{
+        thread.* = try std.Thread.spawn(.{}, readerThread, .{ ReaderContext{
             .storage = storage,
             .allocator = allocator,
-        }});
+        }, tbl_md.index });
     }
     // Meanwhile, cause some transaction errors
     var i: usize = 0;

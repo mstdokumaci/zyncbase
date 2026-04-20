@@ -76,14 +76,14 @@ pub const StoreService = struct {
     /// Handles both full-document replacement (path len 2) and field-level updates (path len 3).
     pub fn set(
         self: *StoreService,
-        table: []const u8,
+        table_index: usize,
         doc_id: []const u8,
         namespace: []const u8,
         segments_len: usize,
-        field_name: ?[]const u8,
+        field_index: ?usize,
         value: msgpack.Payload,
     ) !void {
-        const tbl_md = self.schema_manager.getTable(table) orelse return StorageError.UnknownTable;
+        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (segments_len == 2) {
             // Full document replacement
@@ -98,33 +98,45 @@ pub const StoreService = struct {
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
-                if (entry.key_ptr.* != .str) continue;
-                const fn_inner = entry.key_ptr.*.str.value();
-
-                const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
+                // Value map keys are field indices. Accept both integer keys and numeric strings
+                // because JS objects in MessagePack decode with string keys.
+                const f_idx = blk: {
+                    if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
+                    if (entry.key_ptr.* == .str) {
+                        const key_str = entry.key_ptr.*.str.value();
+                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch continue;
+                    }
+                    continue;
+                };
+                if (f_idx >= tbl_md.fields.len) return StorageError.UnknownField;
+                const fn_inner = tbl_md.fields[f_idx].name;
+                const field = validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*) catch {
+                    std.log.debug("Skipping invalid field write for {s}.{s}", .{ tbl_md.table.name, fn_inner });
+                    continue;
+                };
                 const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
-                const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
                 try columns.append(self.allocator, .{
-                    .index = field_index,
+                    .index = f_idx,
                     .value = typed,
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, columns.items);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, columns.items);
         } else if (segments_len == 3) {
             // Partial update / field-level update
-            const fn_inner = field_name orelse return StorageError.InvalidPath;
+            const f_index = field_index orelse return StorageError.InvalidPath;
+            if (f_index >= tbl_md.fields.len) return StorageError.UnknownField;
+            const fn_inner = tbl_md.fields[f_index].name;
             const field = try validateFieldWrite(tbl_md, fn_inner, value);
             const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
-            const field_index = tbl_md.field_index_map.get(fn_inner) orelse return StorageError.UnknownField;
 
             const col = [_]storage_mod.ColumnValue{.{
-                .index = field_index,
+                .index = f_index,
                 .value = typed,
             }};
-            try self.storage_engine.insertOrReplace(table, doc_id, namespace, &col);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, &col);
         } else {
             return StorageError.InvalidPath;
         }
@@ -134,15 +146,15 @@ pub const StoreService = struct {
     /// Handles document deletion (path len 2). Field-level removal is not supported (use set to null).
     pub fn remove(
         self: *StoreService,
-        table: []const u8,
+        table_index: usize,
         doc_id: []const u8,
         namespace: []const u8,
         segments_len: usize,
     ) !void {
-        try self.schema_manager.validateTable(table);
+        _ = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (segments_len == 2) {
-            try self.storage_engine.deleteDocument(table, doc_id, namespace);
+            try self.storage_engine.deleteDocument(table_index, doc_id, namespace);
         } else {
             return StorageError.InvalidPath;
         }
@@ -154,23 +166,23 @@ pub const StoreService = struct {
     pub fn query(
         self: *StoreService,
         allocator: Allocator,
-        collection: []const u8,
+        table_index: usize,
         namespace: []const u8,
         payload: msgpack.Payload,
     ) !QueryResult {
-        const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, collection, payload);
+        const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
         errdefer filter.deinit(allocator);
 
         if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
             // Fast path: use selectDocument with cache
-            const result = try self.storage_engine.selectDocument(allocator, collection, id, namespace);
+            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace);
             return QueryResult{
                 .results = result,
                 .filter = filter,
             };
         }
 
-        const results = try self.storage_engine.selectQuery(allocator, collection, namespace, filter);
+        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace, filter);
         return QueryResult{
             .results = results,
             .filter = filter,
@@ -182,7 +194,7 @@ pub const StoreService = struct {
     pub fn queryWithCursor(
         self: *StoreService,
         allocator: Allocator,
-        collection: []const u8,
+        table_index: usize,
         namespace: []const u8,
         filter: *query_parser.QueryFilter,
         cursor: query_parser.Cursor,
@@ -190,7 +202,7 @@ pub const StoreService = struct {
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
-        return try self.storage_engine.selectQuery(allocator, collection, namespace, filter.*);
+        return try self.storage_engine.selectQuery(allocator, table_index, namespace, filter.*);
     }
 };
 

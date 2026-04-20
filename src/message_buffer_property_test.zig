@@ -35,7 +35,9 @@ test "buffer: message deallocation after processing" {
         const conn = sc.conn;
 
         // Create a simple MessagePack message
-        const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "p1", "val" }, "value");
+        const tbl = try app.tableMetadata("test");
+        const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+        const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p1", field_idx, "value");
         defer allocator.free(message);
 
         // Parse the message
@@ -77,11 +79,15 @@ test "buffer: message deallocation after processing" {
         const iterations = 1000;
         var iter: usize = 0;
         while (iter < iterations) : (iter += 1) {
-            const message = try msgpack.createStoreSetMessage(
+            const tbl = try app.tableMetadata("test");
+            const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+            const message = try msgpack.createStoreSetFieldMessage(
                 allocator,
                 @as(u64, iter),
                 "test_ns",
-                &.{ "test", "p1", "val" },
+                tbl.index,
+                "p1",
+                field_idx,
                 "value",
             );
             defer allocator.free(message);
@@ -103,7 +109,9 @@ test "buffer: message deallocation after processing" {
 
         // StoreSet
         {
-            const message = try msgpack.createStoreSetMessage(allocator, 1, "test_ns", &.{ "test", "p2", "val" }, "value1");
+            const tbl = try app.tableMetadata("test");
+            const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+            const message = try msgpack.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, "p2", field_idx, "value1");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -116,7 +124,8 @@ test "buffer: message deallocation after processing" {
 
         // StoreQuery
         {
-            const message = try msgpack.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", "test");
+            const tbl = try app.tableMetadata("test");
+            const message = try msgpack.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", tbl.index);
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -169,11 +178,15 @@ test "buffer: concurrent message deallocation" {
 
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                const message = try msgpack.createStoreSetMessage(
+                const tbl = try ctx.app.tableMetadata("test");
+                const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
+                const message = try msgpack.createStoreSetFieldMessage(
                     ctx.app.allocator,
                     @as(u64, i),
                     "test_ns",
-                    &.{ "test", "p1", "val" },
+                    tbl.index,
+                    "p1",
+                    field_idx,
                     "value",
                 );
                 defer ctx.app.allocator.free(message);

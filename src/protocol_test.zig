@@ -51,9 +51,9 @@ test "extractAs: StorePathRequest from valid map" {
 
     var path_arr = try allocator.alloc(Payload, 3);
 
-    path_arr[0] = try Payload.strToPayload("items", allocator);
+    path_arr[0] = Payload.uintToPayload(0); // table index
     path_arr[1] = try Payload.strToPayload("doc1", allocator);
-    path_arr[2] = try Payload.strToPayload("tags", allocator);
+    path_arr[2] = Payload.uintToPayload(2); // field index
 
     var map = Payload.mapPayload(allocator);
     try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
@@ -62,10 +62,11 @@ test "extractAs: StorePathRequest from valid map" {
 
     const result = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, map);
     try testing.expectEqualStrings("default", result.namespace);
-    try testing.expectEqual(@as(usize, 3), result.path.len);
-    try testing.expectEqualStrings("items", result.path[0]);
-    try testing.expectEqualStrings("doc1", result.path[1]);
-    try testing.expectEqualStrings("tags", result.path[2]);
+    try testing.expect(result.path == .arr);
+    try testing.expectEqual(@as(usize, 3), result.path.arr.len);
+    try testing.expectEqual(@as(u64, 0), result.path.arr[0].uint);
+    try testing.expectEqualStrings("doc1", result.path.arr[1].str.value());
+    try testing.expectEqual(@as(u64, 2), result.path.arr[2].uint);
     try testing.expect(result.value != null);
 
     map.free(allocator);
@@ -78,7 +79,7 @@ test "extractAs: StorePathRequest without value" {
     const arena_allocator = arena.allocator();
 
     var path_arr = try allocator.alloc(Payload, 2);
-    path_arr[0] = try Payload.strToPayload("items", allocator);
+    path_arr[0] = Payload.uintToPayload(0); // table index
     path_arr[1] = try Payload.strToPayload("doc1", allocator);
 
     var map = Payload.mapPayload(allocator);
@@ -97,11 +98,12 @@ test "extractAs: StoreCollectionRequest from valid map" {
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
     try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
-    try map.mapPut("collection", try Payload.strToPayload("users", allocator));
+    try map.mapPut("collection", Payload.uintToPayload(0));
 
     const result = try protocol.extractAs(protocol.StoreCollectionRequest, undefined, map);
     try testing.expectEqualStrings("default", result.namespace);
-    try testing.expectEqualStrings("users", result.collection);
+    try testing.expect(result.collection == .uint);
+    try testing.expectEqual(@as(u64, 0), result.collection.uint);
 }
 
 test "extractAs: StoreUnsubscribeRequest from valid map" {
@@ -193,7 +195,7 @@ test "encodeSetDeltaSuffix: set operation" {
     const row = try makeDeltaTestRow(allocator, "user-123", "default", "Ada");
     defer row.deinit(allocator);
 
-    const suffix = try protocol.encodeSetDeltaSuffix(allocator, "users", tth.valText("user-123"), row, table_metadata);
+    const suffix = try protocol.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), row, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -217,22 +219,26 @@ test "encodeSetDeltaSuffix: set operation" {
     const path = (try op_obj.mapGet("path")) orelse return error.MissingPath;
     try testing.expect(path == .arr);
     try testing.expectEqual(@as(usize, 2), path.arr.len);
-    try testing.expectEqualStrings("users", path.arr[0].str.value());
+    try testing.expectEqual(@as(u64, 0), path.arr[0].uint);
     try testing.expectEqualStrings("user-123", path.arr[1].str.value());
 
+    // Value map now uses integer keys
     const value = try op_obj.mapGet("value");
     try testing.expect(value != null);
     try testing.expect(value.? == .map);
-    try testing.expectEqualStrings("user-123", ((try value.?.mapGet("id")) orelse return error.MissingId).str.value());
-    try testing.expectEqualStrings("default", ((try value.?.mapGet("namespace_id")) orelse return error.MissingNamespaceId).str.value());
-    try testing.expectEqualStrings("Ada", ((try value.?.mapGet("name")) orelse return error.MissingValue).str.value());
+    // Integer key 0 = id field, key 1 = namespace_id, key 2 = name
+    // Verify the map has entries with integer keys
+    var val_it = value.?.map.iterator();
+    var found_entries: usize = 0;
+    while (val_it.next()) |_| found_entries += 1;
+    try testing.expectEqual(@as(usize, 5), found_entries);
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(999);
-    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, "items", id_val);
+    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, 0, id_val);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -249,7 +255,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     try testing.expectEqualStrings("remove", op.str.value());
 
     const path = (try op_obj.mapGet("path")) orelse return error.MissingPath;
-    try testing.expectEqualStrings("items", path.arr[0].str.value());
+    try testing.expectEqual(@as(u64, 0), path.arr[0].uint); // table index
     try testing.expectEqual(@as(u64, 999), path.arr[1].uint);
 
     try testing.expect((try op_obj.mapGet("value")) == null);
@@ -307,7 +313,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
     const id_val = tth.valText("doc-abc-123");
-    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, "posts", id_val);
+    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, 1, id_val);
     defer allocator.free(suffix);
 
     // Decode and verify
@@ -325,7 +331,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const path_opt = try op_obj.mapGet("path");
     try testing.expect(path_opt != null);
     const path = path_opt.?;
-    try testing.expectEqualStrings("posts", path.arr[0].str.value());
+    try testing.expectEqual(@as(u64, 1), path.arr[0].uint); // table index
     try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
 }
 

@@ -11,9 +11,11 @@ pub const NamedCondition = struct {
     field: []const u8,
     op: query_parser.Operator,
     value: ?TypedValue,
-    field_type: FieldType,
-    items_type: ?FieldType,
 };
+
+pub fn namedCondition(field: []const u8, op: query_parser.Operator, value: ?TypedValue) NamedCondition {
+    return .{ .field = field, .op = op, .value = value };
+}
 
 /// Creates a QueryFilter with a default order_by = "id" ASC.
 /// Caller owns the memory and must call deinit(allocator).
@@ -69,13 +71,14 @@ fn resolveNamedCondition(
     table_metadata: *const schema_manager.TableMetadata,
     named: NamedCondition,
 ) !Condition {
-    const field_index = table_metadata.field_index_map.get(named.field) orelse return error.UnknownField;
+    const idx = table_metadata.field_index_map.get(named.field) orelse return error.UnknownField;
+    const f = table_metadata.fields[idx];
     return .{
-        .field_index = field_index,
+        .field_index = idx,
         .op = named.op,
         .value = if (named.value) |v| try v.clone(allocator) else null,
-        .field_type = named.field_type,
-        .items_type = named.items_type,
+        .field_type = f.sql_type,
+        .items_type = f.items_type,
     };
 }
 
@@ -101,4 +104,13 @@ pub fn makeFilterWithNamedConditions(
 
     filter.conditions = heap_conds;
     return filter;
+}
+pub fn parseQueryFilterNamed(
+    allocator: std.mem.Allocator,
+    sm: *const schema_manager.SchemaManager,
+    table_name: []const u8,
+    payload: @import("msgpack_utils.zig").Payload,
+) !QueryFilter {
+    const table_metadata = sm.getTable(table_name) orelse return error.UnknownTable;
+    return try query_parser.parseQueryFilter(allocator, sm, table_metadata.index, payload);
 }

@@ -72,13 +72,11 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
             .field = "tags",
             .op = .contains,
             .value = tth.valText("urgent"),
-            .field_type = .array,
-            .items_type = .text,
         },
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_managed = try engine.selectQuery(allocator, "items", ns, sql_filter);
+    var sql_managed = try engine.selectQuery(allocator, items_md.index, ns, sql_filter);
     defer sql_managed.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, items_md);
@@ -90,8 +88,6 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
             .field = "tags",
             .op = .contains,
             .value = tth.valText("urgent"),
-            .field_type = .array,
-            .items_type = .text,
         },
     });
     defer mem_filter.deinit(allocator);
@@ -99,7 +95,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_managed = try engine.selectQuery(allocator, "items", ns, all_filter);
+    var all_managed = try engine.selectQuery(allocator, items_md.index, ns, all_filter);
     defer all_managed.deinit();
 
     var mem_ids = std.StringHashMap(void).init(allocator);
@@ -171,13 +167,11 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
             .field = "scores",
             .op = .contains,
             .value = tth.valInt(20),
-            .field_type = .array,
-            .items_type = .integer,
         },
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_managed = try engine.selectQuery(allocator, "players", ns, sql_filter);
+    var sql_managed = try engine.selectQuery(allocator, players_md.index, ns, sql_filter);
     defer sql_managed.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_managed.rows, players_md);
@@ -189,8 +183,6 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
             .field = "scores",
             .op = .contains,
             .value = tth.valInt(20),
-            .field_type = .array,
-            .items_type = .integer,
         },
     });
     defer mem_filter.deinit(allocator);
@@ -198,7 +190,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_managed = try engine.selectQuery(allocator, "players", ns, all_filter);
+    var all_managed = try engine.selectQuery(allocator, players_md.index, ns, all_filter);
     defer all_managed.deinit();
 
     var mem_ids = std.StringHashMap(void).init(allocator);

@@ -72,7 +72,7 @@ pub const AppTestContext = struct {
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
     handler: MessageHandler,
-    manager: ConnectionManager,
+    connection_manager: ConnectionManager,
     schema_manager: SchemaManager,
     test_context: schema_helpers.TestContext,
 
@@ -147,8 +147,8 @@ pub const AppTestContext = struct {
         errdefer self.handler.deinit();
 
         // 8. Initialize Connection Manager
-        try self.manager.init(allocator, &self.memory_strategy, &self.handler);
-        errdefer self.manager.deinit();
+        try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
+        errdefer self.connection_manager.deinit();
     }
 
     pub fn deinit(self: *AppTestContext) void {
@@ -156,7 +156,7 @@ pub const AppTestContext = struct {
         self.storage_engine.deinit();
 
         // 2. Shut down subsystems
-        self.manager.deinit();
+        self.connection_manager.deinit();
 
         // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
@@ -229,8 +229,8 @@ pub const AppTestContext = struct {
     /// Helper to open a test connection and return a scoped wrapper.
     /// This ensures the correct LIFO release order for test and manager references.
     pub fn openScopedConnection(self: *AppTestContext, ws: *WebSocket) !ScopedConnection {
-        try self.manager.onOpen(ws);
-        const conn = try self.manager.acquireConnection(ws.getConnId());
+        try self.connection_manager.onOpen(ws);
+        const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         return ScopedConnection{
             .app = self,
             .ws = ws,
@@ -253,7 +253,7 @@ pub const AppTestContext = struct {
 
         pub fn deinit(self: ScopedConnection) void {
             // 1. Manager drops its reference (removes from map, runs teardown)
-            self.app.manager.onClose(self.ws);
+            self.app.connection_manager.onClose(self.ws);
 
             // 2. Test drops its reference (may return to pool)
             if (self.conn.release()) {
@@ -271,8 +271,8 @@ pub const AppTestContext = struct {
     pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
         const ws = try self.allocator.create(WebSocket);
         ws.* = createMockWebSocket();
-        try self.manager.onOpen(ws);
-        const conn = try self.manager.acquireConnection(ws.getConnId());
+        try self.connection_manager.onOpen(ws);
+        const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         return ScopedConnection{
             .app = self,
             .ws = ws,
@@ -286,15 +286,15 @@ pub const AppTestContext = struct {
     /// the onClose callbacks for all mock WebSockets, since the test environment
     /// lacks the asynchronous event loop that would normally handle this.
     pub fn closeAllConnections(self: *AppTestContext) void {
-        self.manager.closeAllConnections();
+        self.connection_manager.closeAllConnections();
 
         // Pump onClose for all remaining connections in the manager.
         // We iterate and remove until empty to avoid concurrent modification issues.
         while (true) {
             const maybe_conn = blk: {
-                self.manager.mutex.lock();
-                defer self.manager.mutex.unlock();
-                var it = self.manager.map.valueIterator();
+                self.connection_manager.mutex.lock();
+                defer self.connection_manager.mutex.unlock();
+                var it = self.connection_manager.map.valueIterator();
                 if (it.next()) |conn_ptr| {
                     const conn = conn_ptr.*;
                     // Create a local copy of the WebSocket to avoid accessing
@@ -306,7 +306,7 @@ pub const AppTestContext = struct {
 
             if (maybe_conn) |ws| {
                 var local_ws = ws; // Mutability for callback
-                self.manager.onClose(&local_ws);
+                self.connection_manager.onClose(&local_ws);
             } else {
                 break;
             }
