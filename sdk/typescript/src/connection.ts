@@ -410,21 +410,25 @@ export class ConnectionManager {
 		if (entry) {
 			this.pendingQueue.delete(ok.id);
 			let decodedOk = ok;
-			if (
-				(entry.outboundType === "StoreQuery" ||
-					entry.outboundType === "StoreSubscribe" ||
-					entry.outboundType === "StoreLoadMore") &&
-				typeof entry.outboundCollection === "number" &&
-				Array.isArray(ok.value)
-			) {
-				decodedOk = {
-					...ok,
-					value: ok.value.map((row) =>
-						this._decodeRow(entry.outboundCollection as number, row),
-					) as OkResponse["value"],
-				};
+			try {
+				if (
+					(entry.outboundType === "StoreQuery" ||
+						entry.outboundType === "StoreSubscribe" ||
+						entry.outboundType === "StoreLoadMore") &&
+					typeof entry.outboundCollection === "number" &&
+					Array.isArray(ok.value)
+				) {
+					decodedOk = {
+						...ok,
+						value: ok.value.map((row) =>
+							this._decodeRow(entry.outboundCollection as number, row),
+						) as OkResponse["value"],
+					};
+				}
+				entry.resolve(decodedOk);
+			} catch (err) {
+				entry.reject(err);
 			}
-			entry.resolve(decodedOk);
 		}
 	}
 
