@@ -98,12 +98,12 @@ test "extractAs: StoreCollectionRequest from valid map" {
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
     try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
-    try map.mapPut("collection", Payload.uintToPayload(0));
+    try map.mapPut("table_index", Payload.uintToPayload(0));
 
     const result = try protocol.extractAs(protocol.StoreCollectionRequest, undefined, map);
     try testing.expectEqualStrings("default", result.namespace);
-    try testing.expect(result.collection == .uint);
-    try testing.expectEqual(@as(u64, 0), result.collection.uint);
+    try testing.expect(result.table_index == .uint);
+    try testing.expectEqual(@as(u64, 0), result.table_index.uint);
 }
 
 test "extractAs: StoreUnsubscribeRequest from valid map" {

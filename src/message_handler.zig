@@ -300,7 +300,7 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
-        const table_index = msgpack.extractPayloadUint(req.collection) orelse return error.InvalidMessageFormat;
+        const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
 
@@ -335,7 +335,7 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
-        const table_index = msgpack.extractPayloadUint(req.collection) orelse return error.InvalidMessageFormat;
+        const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
         var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);

@@ -18,7 +18,7 @@ pub const StorePathRequest = struct {
 
 pub const StoreCollectionRequest = struct {
     namespace: []const u8,
-    collection: Payload = .nil,
+    table_index: Payload = .nil,
 };
 
 pub const StoreUnsubscribeRequest = struct {

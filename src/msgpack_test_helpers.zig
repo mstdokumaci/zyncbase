@@ -212,7 +212,7 @@ pub fn createStoreQueryMessage(
     allocator: std.mem.Allocator,
     id: u64,
     namespace: []const u8,
-    collection: usize,
+    table_index: usize,
     filter: msgpack_utils.Payload,
 ) ![]u8 {
     var p = msgpack_utils.Payload.mapPayload(allocator);
@@ -230,7 +230,7 @@ pub fn createStoreQueryMessage(
         try p.mapPut("namespace", k_val);
     }
     {
-        try p.mapPut("collection", msgpack_utils.Payload.uintToPayload(collection));
+        try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
 
     // Flat filter fields
@@ -255,7 +255,7 @@ pub fn createStoreQueryMessageWithFilterKey(
     allocator: std.mem.Allocator,
     id: u64,
     namespace: []const u8,
-    collection: usize,
+    table_index: usize,
     filter: msgpack_utils.Payload,
 ) ![]u8 {
     var p = msgpack_utils.Payload.mapPayload(allocator);
@@ -273,7 +273,7 @@ pub fn createStoreQueryMessageWithFilterKey(
         try p.mapPut("namespace", k_val);
     }
     {
-        try p.mapPut("collection", msgpack_utils.Payload.uintToPayload(collection));
+        try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
     {
         const k_val = try filter.deepClone(allocator);
@@ -291,18 +291,18 @@ pub fn createStoreQueryMessageWithEmptyFilter(
     allocator: std.mem.Allocator,
     id: u64,
     namespace: []const u8,
-    collection: usize,
+    table_index: usize,
 ) ![]u8 {
     var filter = msgpack_utils.Payload.mapPayload(allocator);
     defer filter.free(allocator);
-    return createStoreQueryMessageWithFilterKey(allocator, id, namespace, collection, filter);
+    return createStoreQueryMessageWithFilterKey(allocator, id, namespace, table_index, filter);
 }
 
 pub fn createStoreSubscribeMessage(
     allocator: std.mem.Allocator,
     id: u64,
     namespace: []const u8,
-    collection: usize,
+    table_index: usize,
     filter: msgpack_utils.Payload,
     _subscription_id: u64,
 ) ![]u8 {
@@ -322,7 +322,7 @@ pub fn createStoreSubscribeMessage(
         try p.mapPut("namespace", k_val);
     }
     {
-        try p.mapPut("collection", msgpack_utils.Payload.uintToPayload(collection));
+        try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
 
     // Flat filter fields

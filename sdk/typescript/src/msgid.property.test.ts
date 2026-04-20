@@ -69,7 +69,7 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 		for (let i = 0; i < n; i++) {
 			dispatchPromises.push(
 				manager
-					.dispatch({ type: "StoreQuery", collection: "test" })
+					.dispatch({ type: "StoreQuery", table_index: "test" })
 					.catch(() => {
 						// Ignore rejections from disconnect cleanup
 					}),

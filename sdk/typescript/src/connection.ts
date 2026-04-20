@@ -19,7 +19,7 @@ type PendingEntry = {
 	resolve: (value: OkResponse) => void;
 	reject: (reason: unknown) => void;
 	outboundType?: string;
-	outboundCollection?: number;
+	outboundTableIndex?: number;
 };
 
 type ConnectionStatus =
@@ -252,9 +252,9 @@ export class ConnectionManager {
 					typeof wireMsgWithId.type === "string"
 						? (wireMsgWithId.type as string)
 						: undefined,
-				outboundCollection:
-					typeof wireMsgWithId.collection === "number"
-						? (wireMsgWithId.collection as number)
+				outboundTableIndex:
+					typeof wireMsgWithId.table_index === "number"
+						? (wireMsgWithId.table_index as number)
 						: undefined,
 			});
 			try {
@@ -416,13 +416,13 @@ export class ConnectionManager {
 					(entry.outboundType === "StoreQuery" ||
 						entry.outboundType === "StoreSubscribe" ||
 						entry.outboundType === "StoreLoadMore") &&
-					typeof entry.outboundCollection === "number" &&
+					typeof entry.outboundTableIndex === "number" &&
 					Array.isArray(ok.value)
 				) {
 					decodedOk = {
 						...ok,
 						value: ok.value.map((row) =>
-							this._decodeRow(entry.outboundCollection as number, row),
+							this._decodeRow(entry.outboundTableIndex as number, row),
 						) as OkResponse["value"],
 					};
 				}
@@ -527,11 +527,11 @@ export class ConnectionManager {
 		}
 
 		if (type === "StoreQuery" || type === "StoreSubscribe" || type === "StoreLoadMore") {
-			if (typeof wire.collection === "string") {
+			if (typeof wire.table_index === "string") {
 				const tableIndex = this.schemaDictionary.getTableIndex(
-					wire.collection as string,
+					wire.table_index as string,
 				);
-				wire.collection = tableIndex;
+				wire.table_index = tableIndex;
 
 				if (wire.conditions !== undefined) {
 					wire.conditions = this._encodeConditions(tableIndex, wire.conditions);

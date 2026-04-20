@@ -339,7 +339,7 @@ export class StoreImpl {
 			return this.conn
 				.dispatch({
 					type: "StoreQuery",
-					collection: segments[0],
+					table_index: segments[0],
 				})
 				.then((ok) => {
 					const rows: JsonValue[] = (ok.value ?? []) as JsonValue[];
@@ -360,7 +360,7 @@ export class StoreImpl {
 			return this.conn
 				.dispatch({
 					type: "StoreQuery",
-					collection: segments[0],
+					table_index: segments[0],
 					conditions: [["id", 0, segments[1]]],
 				})
 				.then((ok) => {
@@ -377,7 +377,7 @@ export class StoreImpl {
 		return this.conn
 			.dispatch({
 				type: "StoreQuery",
-				collection: segments[0],
+				table_index: segments[0],
 				conditions: [["id", 0, segments[1]]],
 			})
 			.then((ok) => {
@@ -415,7 +415,7 @@ export class StoreImpl {
 		return this.conn
 			.dispatch({
 				type: "StoreQuery",
-				collection,
+				table_index: collection,
 				...encoded,
 			})
 			.then((ok) => {
@@ -536,14 +536,14 @@ export class StoreImpl {
 			subscribeParams = {
 				type: "StoreSubscribe",
 				namespace: this.conn.getStoreNamespace(),
-				collection: segments[0],
+				table_index: segments[0],
 			};
 			projection = { field: null, depth: 1 };
 		} else {
 			subscribeParams = {
 				type: "StoreSubscribe",
 				namespace: this.conn.getStoreNamespace(),
-				collection: segments[0],
+				table_index: segments[0],
 				conditions: [["id", 0, segments[1]]],
 			};
 			const field = segments.length === 2 ? null : segments.slice(2).join(".");
@@ -593,7 +593,7 @@ export class StoreImpl {
 		const subscribeParams: Omit<StoreSubscribe, "id"> = {
 			type: "StoreSubscribe",
 			namespace: this.conn.getStoreNamespace(),
-			collection,
+			table_index: collection,
 			...encoded,
 		};
 
@@ -650,7 +650,7 @@ export class StoreImpl {
 						type: "StoreLoadMore",
 						subId,
 						nextCursor: cursor,
-						collection,
+						table_index: collection,
 					})
 					.then((ok) => {
 						nextCursor = ok.nextCursor ?? null;

@@ -131,7 +131,7 @@ export interface StoreQuery {
 	type: "StoreQuery";
 	id: number;
 	namespace: string;
-	collection: string;
+	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
@@ -145,7 +145,7 @@ export interface StoreSubscribe {
 	type: "StoreSubscribe";
 	id: number;
 	namespace: string;
-	collection: string;
+	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
 	orderBy?: [field: string, descFlag: number];
@@ -163,7 +163,7 @@ export interface StoreLoadMore {
 	id: number;
 	subId: number;
 	nextCursor: string;
-	collection?: string | number;
+	table_index?: string | number;
 }
 
 /** Union of all outbound message types. */

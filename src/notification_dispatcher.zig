@@ -51,7 +51,7 @@ pub const NotificationDispatcher = struct {
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
         const table_metadata = self.schema_manager.getTableByIndex(change.table_index) orelse {
-            std.log.err("NotificationDispatcher skipping delta for unknown collection index {d}", .{change.table_index});
+            std.log.err("NotificationDispatcher skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };
 
@@ -93,9 +93,9 @@ pub const NotificationDispatcher = struct {
 
         // === Phase 3: Pre-encode suffix template (once per change) ===
         // This encodes either:
-        //   "ops": [{"op": "remove", "path": [collection, id]}]
+        //   "ops": [{"op": "remove", "path": [table, id]}]
         // or:
-        //   "ops": [{"op": "set", "path": [collection, id], "value": <row>}]
+        //   "ops": [{"op": "set", "path": [table, id], "value": <row>}]
         // The expensive part (msgpack.encode(new_row)) happens exactly once here.
         const suffix = switch (change.operation) {
             .delete => protocol.encodeDeleteDeltaSuffix(
