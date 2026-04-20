@@ -89,6 +89,7 @@ export class ConnectionManager {
 	connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.setStatus("connecting");
+		this.processingPromise = Promise.resolve();
 
 		// Create a fresh SchemaSync readiness promise
 		this.schemaSyncPromise = new Promise<void>((resolve, reject) => {
