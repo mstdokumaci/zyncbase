@@ -232,7 +232,7 @@ describe("ConnectionManager", () => {
 				ops: [{ op: "set", path: ["users", "u1"], value: { name: "Alice" } }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
-			await (manager as any).processingPromise;
+			await (manager as unknown as { processingPromise: Promise<void> }).processingPromise;
 
 			expect(received).toHaveLength(1);
 			expect((received[0] as Record<string, unknown>).subId).toBe(42);
@@ -267,7 +267,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerOpen();
 			await connectPromise;
 
-			const received: any[] = [];
+			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
 
 			// 1. Send SchemaSync
@@ -287,11 +287,11 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
 			// At this point, the queue is processing. We await the processingPromise.
-			await (manager as any).processingPromise;
+			await (manager as unknown as { processingPromise: Promise<void> }).processingPromise;
 
 			expect(received).toHaveLength(1);
 			// Verify that the path was correctly decoded using the new schema
-			expect(received[0].ops[0].path).toEqual(["users", "u1", "name"]);
+			expect((received[0] as Record<string, any>).ops[0].path).toEqual(["users", "u1", "name"]);
 		});
 	});
 

@@ -63,7 +63,7 @@ export class ConnectionManager {
 
 	// SchemaSync readiness promise
 	private schemaSyncResolve: (() => void) | null = null;
-	private schemaSyncReject: ((reason?: any) => void) | null = null;
+	private schemaSyncReject: ((reason?: unknown) => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
 	constructor(options: ClientOptions) {
@@ -111,51 +111,54 @@ export class ConnectionManager {
 				resolve();
 			};
 
-			ws.onerror = (_event) => {
-				const err = new ZyncBaseError("WebSocket error", {
-					code: ErrorCodes.CONNECTION_FAILED,
-					category: "network",
-					retryable: true,
-				});
-				if (this.schemaSyncReject) {
-					this.schemaSyncReject(err);
-					this.schemaSyncReject = null;
-				}
-				this.emit("error", err);
-				reject(err);
-			};
+			ws.onerror = (_event) => this._handleSocketError(reject);
 
-			ws.onclose = (_event) => {
-				const err = new ZyncBaseError("Connection closed", {
-					code: ErrorCodes.CONNECTION_FAILED,
-					category: "network",
-					retryable: true,
-				});
+			ws.onclose = (_event) => this._handleSocketClose(_event.code, _event.reason);
 
-				if (this.schemaSyncReject) {
-					this.schemaSyncReject(err);
-					this.schemaSyncReject = null;
-				}
-
-				// Reject all pending requests
-				for (const [_id, { reject: rej }] of this.pendingQueue) {
-					rej(err);
-				}
-				this.pendingQueue.clear();
-
-				if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
-					this._scheduleReconnect();
-				} else {
-					this.setStatus("disconnected");
-					this.emit("disconnected", _event.code, _event.reason);
-				}
-			};
-
-			ws.onmessage = (event) => {
-				this._handleRawMessage(event.data);
-			};
+			ws.onmessage = (event) => this._handleRawMessage(event.data);
 		});
 	}
+
+	private _handleSocketError(reject: (reason?: unknown) => void): void {
+		const err = new ZyncBaseError("WebSocket error", {
+			code: ErrorCodes.CONNECTION_FAILED,
+			category: "network",
+			retryable: true,
+		});
+		if (this.schemaSyncReject) {
+			this.schemaSyncReject(err);
+			this.schemaSyncReject = null;
+		}
+		this.emit("error", err);
+		reject(err);
+	}
+
+	private _handleSocketClose(code: number, reason: string): void {
+		const err = new ZyncBaseError("Connection closed", {
+			code: ErrorCodes.CONNECTION_FAILED,
+			category: "network",
+			retryable: true,
+		});
+
+		if (this.schemaSyncReject) {
+			this.schemaSyncReject(err);
+			this.schemaSyncReject = null;
+		}
+
+		// Reject all pending requests
+		for (const [_id, { reject: rej }] of this.pendingQueue) {
+			rej(err);
+		}
+		this.pendingQueue.clear();
+
+		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
+			this._scheduleReconnect();
+		} else {
+			this.setStatus("disconnected");
+			this.emit("disconnected", code, reason);
+		}
+	}
+
 
 	/** Wait for SchemaSync to be received and processed. */
 	awaitSchemaSync(): Promise<void> {
@@ -469,103 +472,114 @@ export class ConnectionManager {
 		const type = msg.type;
 		if (typeof type !== "string" || !type.startsWith("Store")) return msg;
 
-		const wire: Record<string, unknown> = { ...msg };
+		let wire: Record<string, unknown> = { ...msg };
 
 		if (type === "StoreSet" || type === "StoreRemove") {
-			const path = wire.path;
-			if (
-				Array.isArray(path) &&
-				path.length > 0 &&
-				typeof path[0] === "string"
-			) {
-				const logicalPath = path as string[];
-				const encodedPath = this.schemaDictionary.encodePath(logicalPath);
-				wire.path = encodedPath;
-				if (
-					type === "StoreSet" &&
-					logicalPath.length === 2 &&
-					wire.value !== null &&
-					typeof wire.value === "object" &&
-					!Array.isArray(wire.value)
-				) {
-					const tableIndex = encodedPath[0] as number;
-					wire.value = this.schemaDictionary.encodeValue(
-						tableIndex,
-						wire.value as Record<string, unknown>,
-					);
-				}
-			}
-			return wire;
-		}
-
-		if (type === "StoreBatch") {
-			if (Array.isArray(wire.ops)) {
-				wire.ops = wire.ops.map((op) => {
-					if (!Array.isArray(op) || op.length < 2) return op;
-					const kind = op[0];
-					const rawPath = op[1];
-					if (
-						!Array.isArray(rawPath) ||
-						rawPath.length === 0 ||
-						typeof rawPath[0] !== "string"
-					) {
-						return op;
-					}
-
-					const encodedPath = this.schemaDictionary.encodePath(
-						rawPath as string[],
-					);
-					if (kind === "r") return ["r", encodedPath];
-					if (
-						kind === "s" &&
-						(rawPath as string[]).length === 2 &&
-						op[2] !== null &&
-						typeof op[2] === "object" &&
-						!Array.isArray(op[2])
-					) {
-						const tableIndex = encodedPath[0] as number;
-						return [
-							"s",
-							encodedPath,
-							this.schemaDictionary.encodeValue(
-								tableIndex,
-								op[2] as Record<string, unknown>,
-							),
-						];
-					}
-					return ["s", encodedPath, op[2]];
-				});
-			}
-			return wire;
-		}
-
-		if (
+			wire = this._encodeStoreSetRemove(wire, type);
+		} else if (type === "StoreBatch") {
+			wire = this._encodeStoreBatch(wire);
+		} else if (
 			type === "StoreQuery" ||
 			type === "StoreSubscribe" ||
 			type === "StoreLoadMore"
 		) {
-			if (typeof wire.table_index === "string") {
-				const tableIndex = this.schemaDictionary.getTableIndex(
-					wire.table_index as string,
-				);
-				wire.table_index = tableIndex;
-
-				if (wire.conditions !== undefined) {
-					wire.conditions = this._encodeConditions(tableIndex, wire.conditions);
-				}
-				if (wire.orConditions !== undefined) {
-					wire.orConditions = this._encodeConditions(
-						tableIndex,
-						wire.orConditions,
-					);
-				}
-				if (wire.orderBy !== undefined) {
-					wire.orderBy = this._encodeOrderBy(tableIndex, wire.orderBy);
-				}
-			}
-			return wire;
+			wire = this._encodeStoreQuerySubscribe(wire);
 		}
 
+		return wire;
+	}
+
+	private _encodeStoreSetRemove(
+		wire: Record<string, unknown>,
+		type: string,
+	): Record<string, unknown> {
+		const path = wire.path;
+		if (Array.isArray(path) && path.length > 0 && typeof path[0] === "string") {
+			const logicalPath = path as string[];
+			const encodedPath = this.schemaDictionary.encodePath(logicalPath);
+			wire.path = encodedPath;
+			if (
+				type === "StoreSet" &&
+				logicalPath.length === 2 &&
+				wire.value !== null &&
+				typeof wire.value === "object" &&
+				!Array.isArray(wire.value)
+			) {
+				const tableIndex = encodedPath[0] as number;
+				wire.value = this.schemaDictionary.encodeValue(
+					tableIndex,
+					wire.value as Record<string, unknown>,
+				);
+			}
+		}
+		return wire;
+	}
+
+	private _encodeStoreBatch(
+		wire: Record<string, unknown>,
+	): Record<string, unknown> {
+		if (Array.isArray(wire.ops)) {
+			wire.ops = wire.ops.map((op) => this._encodeBatchOp(op));
+		}
+		return wire;
+	}
+
+	private _encodeBatchOp(op: unknown): unknown {
+		if (!Array.isArray(op) || op.length < 2) return op;
+		const kind = op[0];
+		const rawPath = op[1];
+		if (
+			!Array.isArray(rawPath) ||
+			rawPath.length === 0 ||
+			typeof rawPath[0] !== "string"
+		) {
+			return op;
+		}
+
+		const encodedPath = this.schemaDictionary.encodePath(rawPath as string[]);
+		if (kind === "r") return ["r", encodedPath];
+		if (
+			kind === "s" &&
+			(rawPath as string[]).length === 2 &&
+			op[2] !== null &&
+			typeof op[2] === "object" &&
+			!Array.isArray(op[2])
+		) {
+			const tableIndex = encodedPath[0] as number;
+			return [
+				"s",
+				encodedPath,
+				this.schemaDictionary.encodeValue(
+					tableIndex,
+					op[2] as Record<string, unknown>,
+				),
+			];
+		}
+		return ["s", encodedPath, op[2]];
+	}
+
+	private _encodeStoreQuerySubscribe(
+		wire: Record<string, unknown>,
+	): Record<string, unknown> {
+		if (typeof wire.table_index === "string") {
+			const tableIndex = this.schemaDictionary.getTableIndex(
+				wire.table_index as string,
+			);
+			wire.table_index = tableIndex;
+
+			if (wire.conditions !== undefined) {
+				wire.conditions = this._encodeConditions(tableIndex, wire.conditions);
+			}
+			if (wire.orConditions !== undefined) {
+				wire.orConditions = this._encodeConditions(
+					tableIndex,
+					wire.orConditions,
+				);
+			}
+			if (wire.orderBy !== undefined) {
+				wire.orderBy = this._encodeOrderBy(tableIndex, wire.orderBy);
+			}
+		}
 		return wire;
 	}
 
