@@ -14,6 +14,7 @@ const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
+const Payload = msgpack_utils.Payload;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -174,6 +175,16 @@ pub const AppTestContext = struct {
         return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
     }
 
+    pub fn tableIndex(self: *const AppTestContext, table_name: []const u8) usize {
+        const md = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return md.index;
+    }
+
+    pub fn fieldIndex(self: *const AppTestContext, table_name: []const u8, field_name: []const u8) usize {
+        const tbl = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
+    }
+
     pub fn table(self: *AppTestContext, table_name: []const u8) !sth.TableFixture {
         return .{
             .engine = &self.storage_engine,
@@ -313,3 +324,34 @@ pub const AppTestContext = struct {
         }
     }
 };
+
+/// Creates a MsgPack Payload representing a document map based on schema.
+/// Translates string field names to numeric indices using TableMetadata.
+pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema_manager.TableMetadata, fields: anytype) !Payload {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+
+    const fields_info = @typeInfo(@TypeOf(fields)).@"struct".fields;
+    try msgpack_utils.encodeMapHeader(writer, fields_info.len);
+
+    inline for (fields_info) |f| {
+        const entry = @field(fields, f.name);
+        const raw_field = entry[0];
+        const val = entry[1];
+
+        const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
+            .int, .comptime_int => @as(usize, @intCast(raw_field)),
+            else => tbl.getFieldIndex(raw_field) orelse return error.UnknownField,
+        };
+
+        // Encode numeric key
+        try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(f_idx), writer);
+
+        // Encode value
+        try msgpack.encodeAnyToPayload(allocator, writer, val);
+    }
+
+    var reader: std.Io.Reader = .fixed(buf.items);
+    return try msgpack_utils.decodeTrusted(allocator, &reader);
+}

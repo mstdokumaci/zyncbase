@@ -219,6 +219,16 @@ pub const EngineTestContext = struct {
         return self.sm.getTable(table_name) orelse StorageError.UnknownTable;
     }
 
+    pub fn tableIndex(self: *const EngineTestContext, table_name: []const u8) usize {
+        const md = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return md.index;
+    }
+
+    pub fn fieldIndex(self: *const EngineTestContext, table_name: []const u8, field_name: []const u8) usize {
+        const tbl = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
+    }
+
     pub fn table(self: *EngineTestContext, table_name: []const u8) !TableFixture {
         return .{
             .engine = &self.engine,
@@ -491,23 +501,4 @@ pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMeta
     try testing.expect(val == .array);
     try testing.expectEqual(expected_len, val.array.len);
     return val;
-}
-
-pub fn makeRowChangeNamed(
-    allocator: std.mem.Allocator,
-    sm: *const SchemaManager,
-    table_name: []const u8,
-    namespace: []const u8,
-    op: @import("change_buffer.zig").OwnedRowChange.Operation,
-    old_row: ?storage_engine.TypedRow,
-    new_row: ?storage_engine.TypedRow,
-) !@import("change_buffer.zig").OwnedRowChange {
-    const metadata = sm.getTable(table_name) orelse return error.UnknownTable;
-    return .{
-        .namespace = try allocator.dupe(u8, namespace),
-        .table_index = metadata.index,
-        .operation = op,
-        .old_row = old_row,
-        .new_row = new_row,
-    };
 }

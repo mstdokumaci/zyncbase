@@ -5,7 +5,6 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
 const sub_eng = @import("subscription_engine.zig");
-const seth = @import("subscription_engine_test_helpers.zig");
 const cb = @import("change_buffer.zig");
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
 const RowChange = sub_eng.RowChange;
@@ -49,7 +48,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     filter.conditions = conditions;
     defer filter.deinit(allocator);
 
-    _ = try seth.subscribeNamed(&sub_engine, &ctx.sm, "ns", "items", filter, 42, 101);
+    _ = try sub_engine.subscribe("ns", (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
 
     // 4) Flush queued writes into DB + change buffer.
     try engine.flushPendingWrites();

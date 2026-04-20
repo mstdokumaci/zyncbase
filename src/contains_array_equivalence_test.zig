@@ -6,6 +6,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
+const query_parser = @import("query_parser.zig");
 
 fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.StringHashMap(void) {
     var ids = std.StringHashMap(void).init(allocator);
@@ -67,11 +68,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try engine.flushPendingWrites();
 
     // --- SQL path: tags contains "urgent" ---
-    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field = "tags",
+            .field_index = items_md.getFieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valText("urgent"),
+            .field_type = .array,
+            .items_type = .text,
         },
     });
     defer sql_filter.deinit(allocator);
@@ -83,11 +86,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, items_md, &[_]qth.NamedCondition{
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field = "tags",
+            .field_index = items_md.getFieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valText("urgent"),
+            .field_type = .array,
+            .items_type = .text,
         },
     });
     defer mem_filter.deinit(allocator);
@@ -162,11 +167,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try engine.flushPendingWrites();
 
     // --- SQL path: scores contains 20 ---
-    var sql_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field = "scores",
+            .field_index = players_md.getFieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valInt(20),
+            .field_type = .array,
+            .items_type = .integer,
         },
     });
     defer sql_filter.deinit(allocator);
@@ -178,11 +185,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithNamedConditions(allocator, players_md, &[_]qth.NamedCondition{
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field = "scores",
+            .field_index = players_md.getFieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valInt(20),
+            .field_type = .array,
+            .items_type = .integer,
         },
     });
     defer mem_filter.deinit(allocator);

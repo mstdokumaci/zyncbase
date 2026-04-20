@@ -1,21 +1,12 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const schema_manager = @import("schema_manager.zig");
-const types = @import("storage_engine/types.zig");
+const msgpack_utils = @import("msgpack_utils.zig");
+const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
 const FieldType = schema_manager.FieldType;
-const TypedValue = types.TypedValue;
-
-pub const NamedCondition = struct {
-    field: []const u8,
-    op: query_parser.Operator,
-    value: ?TypedValue,
-};
-
-pub fn namedCondition(field: []const u8, op: query_parser.Operator, value: ?TypedValue) NamedCondition {
-    return .{ .field = field, .op = op, .value = value };
-}
+const Payload = msgpack_utils.Payload;
 
 /// Creates a QueryFilter with a default order_by = "id" ASC.
 /// Caller owns the memory and must call deinit(allocator).
@@ -66,51 +57,73 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
     return filter;
 }
 
-fn resolveNamedCondition(
+/// Generates a MsgPack Payload representing a QueryFilter.
+/// This matches the protocol format defined in ADR-025.
+/// tbl_md is used to resolve field names to indices if strings are provided in params.
+pub fn createQueryFilterPayload(
     allocator: std.mem.Allocator,
-    table_metadata: *const schema_manager.TableMetadata,
-    named: NamedCondition,
-) !Condition {
-    const idx = table_metadata.field_index_map.get(named.field) orelse return error.UnknownField;
-    const f = table_metadata.fields[idx];
-    return .{
-        .field_index = idx,
-        .op = named.op,
-        .value = if (named.value) |v| try v.clone(allocator) else null,
-        .field_type = f.sql_type,
-        .items_type = f.items_type,
-    };
-}
+    tbl_md: *const schema_manager.TableMetadata,
+    params: anytype,
+) !Payload {
+    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
+    errdefer filter_map.free(allocator);
 
-pub fn makeFilterWithNamedConditions(
-    allocator: std.mem.Allocator,
-    table_metadata: *const schema_manager.TableMetadata,
-    conds: []const NamedCondition,
-) !QueryFilter {
-    var filter = try makeDefaultFilter(allocator);
-    errdefer filter.deinit(allocator);
+    const ParamType = @TypeOf(params);
+    const param_fields = @typeInfo(ParamType).@"struct".fields;
 
-    const heap_conds = try allocator.alloc(Condition, conds.len);
-    var count: usize = 0;
-    errdefer {
-        for (heap_conds[0..count]) |*c| c.deinit(allocator);
-        allocator.free(heap_conds);
+    inline for (param_fields) |f| {
+        if (comptime std.mem.eql(u8, f.name, "conditions") or std.mem.eql(u8, f.name, "or_conditions")) {
+            const conditions = @field(params, f.name);
+            var count: usize = 0;
+            inline for (conditions) |_| count += 1;
+
+            var conds_arr = try allocator.alloc(Payload, count);
+            errdefer allocator.free(conds_arr);
+
+            inline for (conditions, 0..) |cond_src, ci| {
+                const cond_info = @typeInfo(@TypeOf(cond_src)).@"struct";
+                const raw_field = cond_src[0];
+                const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
+                    .int, .comptime_int => @as(usize, @intCast(raw_field)),
+                    else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
+                };
+
+                var cond_arr = try allocator.alloc(Payload, cond_info.fields.len);
+                errdefer allocator.free(cond_arr);
+                cond_arr[0] = Payload.uintToPayload(f_idx);
+                cond_arr[1] = Payload.uintToPayload(@intCast(cond_src[1]));
+                if (cond_info.fields.len > 2) {
+                    cond_arr[2] = try mth.anyToPayload(allocator, cond_src[2]);
+                }
+                conds_arr[ci] = Payload{ .arr = cond_arr };
+            }
+            const key = if (comptime std.mem.eql(u8, f.name, "or_conditions")) "orConditions" else "conditions";
+            try filter_map.mapPut(key, Payload{ .arr = conds_arr });
+        } else if (comptime std.mem.eql(u8, f.name, "orderBy")) {
+            const order_by = @field(params, f.name);
+            const raw_field = order_by[0];
+            const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
+                .int, .comptime_int => @as(usize, @intCast(raw_field)),
+                else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
+            };
+
+            var order_arr = try allocator.alloc(Payload, 2);
+            errdefer allocator.free(order_arr);
+            order_arr[0] = Payload.uintToPayload(f_idx);
+            order_arr[1] = Payload.uintToPayload(@intCast(order_by[1]));
+            try filter_map.mapPut("orderBy", Payload{ .arr = order_arr });
+        } else if (comptime std.mem.eql(u8, f.name, "limit")) {
+            const limit = @field(params, f.name);
+            try filter_map.mapPut("limit", Payload.uintToPayload(@intCast(limit)));
+        } else if (comptime std.mem.eql(u8, f.name, "cursor")) {
+            const cursor = @field(params, f.name);
+            if (@TypeOf(cursor) == Payload) {
+                try filter_map.mapPut("after", try cursor.deepClone(allocator));
+            } else {
+                try filter_map.mapPut("after", try mth.anyToPayload(allocator, cursor));
+            }
+        }
     }
 
-    for (conds) |c| {
-        heap_conds[count] = try resolveNamedCondition(allocator, table_metadata, c);
-        count += 1;
-    }
-
-    filter.conditions = heap_conds;
-    return filter;
-}
-pub fn parseQueryFilterNamed(
-    allocator: std.mem.Allocator,
-    sm: *const schema_manager.SchemaManager,
-    table_name: []const u8,
-    payload: @import("msgpack_utils.zig").Payload,
-) !QueryFilter {
-    const table_metadata = sm.getTable(table_name) orelse return error.UnknownTable;
-    return try query_parser.parseQueryFilter(allocator, sm, table_metadata.index, payload);
+    return filter_map;
 }

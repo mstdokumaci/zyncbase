@@ -89,106 +89,7 @@ pub fn getMapValueByName(payload: Payload, tbl: *const TableMetadata, name: []co
     return try getMapValueByUint(payload, index);
 }
 
-pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const TableMetadata, fields: anytype) !Payload {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
-
-    const fields_info = @typeInfo(@TypeOf(fields)).@"struct".fields;
-    try msgpack_utils.encodeMapHeader(writer, fields_info.len);
-
-    inline for (fields_info) |f| {
-        const entry = @field(fields, f.name);
-        const raw_field = entry[0];
-        const val = entry[1];
-
-        const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
-            .int, .comptime_int => @as(usize, @intCast(raw_field)),
-            else => tbl.getFieldIndex(raw_field) orelse return error.UnknownField,
-        };
-
-        // Encode numeric key
-        try msgpack_utils.encode(msgpack_utils.Payload.uintToPayload(f_idx), writer);
-
-        // Encode value
-        try encodeAnyToPayload(allocator, writer, val);
-    }
-
-    var reader: std.Io.Reader = .fixed(buf.items);
-    return try msgpack_utils.decodeTrusted(allocator, &reader);
-}
-
-pub fn createQueryFilterPayload(
-    allocator: std.mem.Allocator,
-    sm: *const schema_manager.SchemaManager,
-    table_index: usize,
-    params: anytype,
-) !Payload {
-    const tbl_md = sm.getTableByIndex(table_index) orelse return error.UnknownTable;
-    var filter_map = msgpack_utils.Payload.mapPayload(allocator);
-    errdefer filter_map.free(allocator);
-
-    const ParamType = @TypeOf(params);
-    const param_fields = @typeInfo(ParamType).@"struct".fields;
-
-    inline for (param_fields) |f| {
-        if (comptime std.mem.eql(u8, f.name, "conditions") or std.mem.eql(u8, f.name, "or_conditions")) {
-            const conditions = @field(params, f.name);
-            var count: usize = 0;
-            inline for (conditions) |_| count += 1;
-
-            var conds_arr = try allocator.alloc(Payload, count);
-            errdefer allocator.free(conds_arr);
-
-            inline for (conditions, 0..) |cond_src, ci| {
-                const cond_info = @typeInfo(@TypeOf(cond_src)).@"struct";
-                const raw_field = cond_src[0];
-                const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
-                    .int, .comptime_int => @as(usize, @intCast(raw_field)),
-                    else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
-                };
-
-                var cond_arr = try allocator.alloc(Payload, cond_info.fields.len);
-                errdefer allocator.free(cond_arr);
-                cond_arr[0] = Payload.uintToPayload(f_idx);
-                cond_arr[1] = Payload.uintToPayload(@intCast(cond_src[1]));
-                if (cond_info.fields.len > 2) {
-                    cond_arr[2] = try anyToPayload(allocator, cond_src[2]);
-                }
-                conds_arr[ci] = Payload{ .arr = cond_arr };
-            }
-            const key = if (comptime std.mem.eql(u8, f.name, "or_conditions")) "orConditions" else "conditions";
-            try filter_map.mapPut(key, Payload{ .arr = conds_arr });
-        } else if (comptime std.mem.eql(u8, f.name, "orderBy")) {
-            const order_by = @field(params, f.name);
-            const raw_field = order_by[0];
-            const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
-                .int, .comptime_int => @as(usize, @intCast(raw_field)),
-                else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
-            };
-
-            var order_arr = try allocator.alloc(Payload, 2);
-            errdefer allocator.free(order_arr);
-            order_arr[0] = Payload.uintToPayload(f_idx);
-            order_arr[1] = Payload.uintToPayload(@intCast(order_by[1]));
-            try filter_map.mapPut("orderBy", Payload{ .arr = order_arr });
-        } else if (comptime std.mem.eql(u8, f.name, "limit")) {
-            const limit = @field(params, f.name);
-            try filter_map.mapPut("limit", Payload.uintToPayload(@intCast(limit)));
-        } else if (comptime std.mem.eql(u8, f.name, "cursor")) {
-            const cursor = @field(params, f.name);
-            if (@TypeOf(cursor) == Payload) {
-                try filter_map.mapPut("after", try cursor.deepClone(allocator));
-            } else {
-                try filter_map.mapPut("after", try anyToPayload(allocator, cursor));
-            }
-        }
-    }
-
-    return filter_map;
-}
-
-fn anyToPayload(allocator: std.mem.Allocator, val: anytype) !Payload {
+pub fn anyToPayload(allocator: std.mem.Allocator, val: anytype) !Payload {
     const T = @TypeOf(val);
     if (T == Payload) return try val.deepClone(allocator);
 
@@ -209,7 +110,7 @@ fn anyToPayload(allocator: std.mem.Allocator, val: anytype) !Payload {
     return error.UnsupportedType;
 }
 
-fn encodeAnyToPayload(allocator: std.mem.Allocator, writer: anytype, val: anytype) !void {
+pub fn encodeAnyToPayload(allocator: std.mem.Allocator, writer: anytype, val: anytype) !void {
     const ValType = @TypeOf(val);
     if (ValType == Payload) {
         try msgpack_utils.encode(val, writer);

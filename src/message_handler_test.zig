@@ -424,7 +424,7 @@ test "MessageHandler: StoreSet success response format" {
     const conn = sc.conn;
 
     const tbl = try app.tableMetadata("test");
-    const doc_p = try msgpack_helpers.createDocumentMapPayload(allocator, tbl, .{.{ "val", "val" }});
+    const doc_p = try helpers.createDocumentMapPayload(allocator, tbl, .{.{ "val", "val" }});
     defer doc_p.free(allocator);
 
     const message = try msgpack_helpers.createStoreSetMessageWithPayload(allocator, 1, "test", tbl.index, "key", null, doc_p);

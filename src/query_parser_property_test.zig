@@ -2,7 +2,7 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const qth = @import("query_parser_test_helpers.zig");
+const query_parser = @import("query_parser.zig");
 const testing = std.testing;
 
 test "property: random valid query filters" {
@@ -51,7 +51,8 @@ test "property: random valid query filters" {
         var sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
-        const filter = try qth.parseQueryFilterNamed(allocator, &sm, "items", root);
+        const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+        const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
         filter.deinit(allocator);
     }
 }
@@ -77,7 +78,8 @@ test "property: reject unknown field names" {
         var sm = try sth.createSchemaManager(allocator, &tables);
         defer sm.deinit();
 
-        const result = qth.parseQueryFilterNamed(allocator, &sm, "items", root);
+        const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+        const result = query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
         try testing.expectError(error.UnknownField, result);
     }
 }
