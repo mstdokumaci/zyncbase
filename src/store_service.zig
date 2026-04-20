@@ -104,16 +104,13 @@ pub const StoreService = struct {
                     if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
                     if (entry.key_ptr.* == .str) {
                         const key_str = entry.key_ptr.*.str.value();
-                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch continue;
+                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
                     }
-                    continue;
+                    return StorageError.UnknownField;
                 };
                 if (f_idx >= tbl_md.fields.len) return StorageError.UnknownField;
                 const fn_inner = tbl_md.fields[f_idx].name;
-                const field = validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*) catch {
-                    std.log.debug("Skipping invalid field write for {s}.{s}", .{ tbl_md.table.name, fn_inner });
-                    continue;
-                };
+                const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
                 const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
