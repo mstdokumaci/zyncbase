@@ -63,16 +63,6 @@ pub const SchemaManager = struct {
         return tbl.getField(field);
     }
 
-    /// Validate that a table exists in the schema.
-    pub fn validateTable(self: *const SchemaManager, name: []const u8) !void {
-        _ = self.getTable(name) orelse return types.StorageError.UnknownTable;
-    }
-
-    /// Validate that a field exists in a specific table.
-    pub fn validateField(self: *const SchemaManager, table: []const u8, field: []const u8) !void {
-        const tbl = self.getTable(table) orelse return types.StorageError.UnknownTable;
-        if (tbl.getField(field) == null) return types.StorageError.UnknownField;
-    }
 
     /// Get table metadata by positional index (as used in SchemaSync / wire protocol).
     pub fn getTableByIndex(self: *const SchemaManager, index: usize) ?*const TableMetadata {

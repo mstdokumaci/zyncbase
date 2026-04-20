@@ -29,12 +29,17 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?[]const 
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
     tbl_md: *const schema_manager.TableMetadata,
-    field_name: []const u8,
+    field_index: usize,
     value: msgpack.Payload,
 ) !schema_manager.Field {
-    if (schema_manager.isSystemColumn(field_name)) return StorageError.ImmutableField;
+    if (field_index >= tbl_md.fields.len) return StorageError.UnknownField;
 
-    const field = tbl_md.getField(field_name) orelse return StorageError.UnknownField;
+    // Indices 0 (id) and 1 (namespace_id) are immutable.
+    // The last two fields are created_at and updated_at, which are also immutable by the client.
+    if (field_index == schema_manager.id_field_index or
+        field_index == schema_manager.namespace_id_field_index or
+        field_index >= tbl_md.fields.len - 2) return StorageError.ImmutableField;
+    const field = tbl_md.fields[field_index];
 
     if (field.required and value == .nil) return StorageError.NullNotAllowed;
 
@@ -108,9 +113,8 @@ pub const StoreService = struct {
                     }
                     return StorageError.UnknownField;
                 };
-                if (f_idx >= tbl_md.fields.len) return StorageError.UnknownField;
-                const fn_inner = tbl_md.fields[f_idx].name;
-                const field = try validateFieldWrite(tbl_md, fn_inner, entry.value_ptr.*);
+
+                const field = try validateFieldWrite(tbl_md, f_idx, entry.value_ptr.*);
                 const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
@@ -123,9 +127,7 @@ pub const StoreService = struct {
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const f_index = field_index orelse return StorageError.InvalidPath;
-            if (f_index >= tbl_md.fields.len) return StorageError.UnknownField;
-            const fn_inner = tbl_md.fields[f_index].name;
-            const field = try validateFieldWrite(tbl_md, fn_inner, value);
+            const field = try validateFieldWrite(tbl_md, f_index, value);
             const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
 
