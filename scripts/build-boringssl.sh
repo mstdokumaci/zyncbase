@@ -17,7 +17,7 @@ if command -v ninja &> /dev/null; then
     BUILD_CMD="ninja"
 else
     GENERATOR="Unix Makefiles"
-    BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu || echo 2)"
+    BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 fi
 
 if [[ "$TARGET" == "native" ]]; then
