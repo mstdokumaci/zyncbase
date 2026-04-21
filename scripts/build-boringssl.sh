@@ -26,11 +26,16 @@ else
     echo "Building BoringSSL for target: $TARGET..."
 fi
 
-TARGET_STAMP="$BUILD_DIR/.zyncbase-target"
-CACHE_FILE="$BUILD_DIR/CMakeCache.txt"
+BUILD_DIR_ABS="$BUILD_DIR"
+if [[ "$BUILD_DIR_ABS" != /* ]]; then
+    BUILD_DIR_ABS="$PROJECT_ROOT/$BUILD_DIR_ABS"
+fi
+
+TARGET_STAMP="$BUILD_DIR_ABS/.zyncbase-target"
+CACHE_FILE="$BUILD_DIR_ABS/CMakeCache.txt"
 if [[ -f "$TARGET_STAMP" ]] && [[ "$(cat "$TARGET_STAMP")" != "$TARGET" ]]; then
-    echo "Build directory target changed. Cleaning $BUILD_DIR..."
-    rm -rf "$BUILD_DIR"
+    echo "Build directory target changed. Cleaning $BUILD_DIR_ABS..."
+    rm -rf "$BUILD_DIR_ABS"
 fi
 
 if [[ -f "$CACHE_FILE" ]]; then
@@ -38,16 +43,16 @@ if [[ -f "$CACHE_FILE" ]]; then
     CACHED_SOURCE_DIR="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$CACHE_FILE" | head -n 1)"
 
     if [[ -n "$CACHED_GENERATOR" ]] && [[ "$CACHED_GENERATOR" != "$GENERATOR" ]]; then
-        echo "CMake generator changed from '$CACHED_GENERATOR' to '$GENERATOR'. Cleaning $BUILD_DIR..."
-        rm -rf "$BUILD_DIR"
+        echo "CMake generator changed from '$CACHED_GENERATOR' to '$GENERATOR'. Cleaning $BUILD_DIR_ABS..."
+        rm -rf "$BUILD_DIR_ABS"
     elif [[ -n "$CACHED_SOURCE_DIR" ]] && [[ "$CACHED_SOURCE_DIR" != "$BORINGSSL_DIR" ]]; then
-        echo "CMake source directory changed. Cleaning $BUILD_DIR..."
-        rm -rf "$BUILD_DIR"
+        echo "CMake source directory changed. Cleaning $BUILD_DIR_ABS..."
+        rm -rf "$BUILD_DIR_ABS"
     fi
 fi
 
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
+mkdir -p "$BUILD_DIR_ABS"
+cd "$BUILD_DIR_ABS"
 
 # Create the Zig wrapper script to handle assembler flag issues
 ZIG_WRAPPER="$(pwd)/zig-wrapper.sh"
@@ -113,4 +118,4 @@ $BUILD_CMD crypto ssl decrepit
 
 echo "$TARGET" > "$TARGET_STAMP"
 
-echo "✓ BoringSSL built successfully at $BUILD_DIR"
+echo "✓ BoringSSL built successfully at $BUILD_DIR_ABS"
