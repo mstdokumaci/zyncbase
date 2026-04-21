@@ -12,18 +12,40 @@ SUFFIX="${2:-}" # Optional suffix for build directory naming
 BUILD_DIR="${3:-$BORINGSSL_DIR/build}"
 MACOS_SDK="$4"
 
+if command -v ninja &> /dev/null; then
+    GENERATOR="Ninja"
+    BUILD_CMD="ninja"
+else
+    GENERATOR="Unix Makefiles"
+    BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+fi
+
 if [[ "$TARGET" == "native" ]]; then
     echo "Building BoringSSL for native target..."
 else
     echo "Building BoringSSL for target: $TARGET..."
 fi
 
-# Ensure build dir exists and handle generator mismatches
-if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
-    # If we are changing something fundamental, or just to be safe, prune the cache
-    echo "Existing CMake cache found. Cleaning for a fresh configuration..."
-    rm -rf "$BUILD_DIR"/*
+TARGET_STAMP="$BUILD_DIR/.zyncbase-target"
+CACHE_FILE="$BUILD_DIR/CMakeCache.txt"
+if [[ -f "$TARGET_STAMP" ]] && [[ "$(cat "$TARGET_STAMP")" != "$TARGET" ]]; then
+    echo "Build directory target changed. Cleaning $BUILD_DIR..."
+    rm -rf "$BUILD_DIR"
 fi
+
+if [[ -f "$CACHE_FILE" ]]; then
+    CACHED_GENERATOR="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "$CACHE_FILE" | head -n 1)"
+    CACHED_SOURCE_DIR="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$CACHE_FILE" | head -n 1)"
+
+    if [[ -n "$CACHED_GENERATOR" ]] && [[ "$CACHED_GENERATOR" != "$GENERATOR" ]]; then
+        echo "CMake generator changed from '$CACHED_GENERATOR' to '$GENERATOR'. Cleaning $BUILD_DIR..."
+        rm -rf "$BUILD_DIR"
+    elif [[ -n "$CACHED_SOURCE_DIR" ]] && [[ "$CACHED_SOURCE_DIR" != "$BORINGSSL_DIR" ]]; then
+        echo "CMake source directory changed. Cleaning $BUILD_DIR..."
+        rm -rf "$BUILD_DIR"
+    fi
+fi
+
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
@@ -66,15 +88,6 @@ exec zig "\$CMD" "\${EXTRA_FLAGS[@]}" "\${ARGS[@]}"
 EOF
 chmod +x "$ZIG_WRAPPER"
 
-# Configure with CMake using our Zig wrapper
-if command -v ninja &> /dev/null; then
-    GENERATOR="Ninja"
-    BUILD_CMD="ninja"
-else
-    GENERATOR="Unix Makefiles"
-    BUILD_CMD="make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
-fi
-
 EXTRA_CMAKE_FLAGS=()
 if [[ "$TARGET" == *"macos"* ]]; then
     # Extract architecture from target (e.g., x86_64 from x86_64-macos)
@@ -97,5 +110,7 @@ cmake -G "$GENERATOR" \
 
 # Build
 $BUILD_CMD crypto ssl decrepit
+
+echo "$TARGET" > "$TARGET_STAMP"
 
 echo "✓ BoringSSL built successfully at $BUILD_DIR"
