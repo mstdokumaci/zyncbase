@@ -37,27 +37,29 @@ Storage Layer 2026-03-09 Overview ZyncBase uses SQLite Write-Ahead Logging (WAL)
 ```Connection Pool Strategy multiple CPU cores ZyncBase maintains connection pool one reader per core writes queued executed via single connection SQLite serialization requirements [ADR-005]-threaded-core reader per Maximizes parallel read throughput connection contention writer** Batched efficiency `fsync() overhead-local Minimizes internal synchronization overhead Schema Design Relational-Document Hybrid ZyncBase generates SQLite tables from `schema.json frontend developers work with paths core maintains relational integrity [ADR-019]-hybrid-path Path-to-Table Mapping first segment path maps to database table simplifies indexing query optimization Schema ZyncBase strict-schema architecture valid JSON schema file for server startup server no schema or invalid database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity Relational Patterns nested objects flattened into relational columns `address.city →Document enforced via SQLite foreign keys configurable actions `cascade `restrict_null normalized canonical sorted sets on write Canonical arrays persisted returned sorted unique form forbidden separate store paths references Schema Tasks Projects declarative schema ZyncBase generates optimized DDL```sql
 -- Projects table
 CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT NOT NULL,
     name TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (id, namespace_id)
 );
 
 -- Tasks table with foreign key
 CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT NOT NULL,
     title TEXT,
     status TEXT,
     priority INTEGER,
-    projectId TEXT,
+    projectId BLOB,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    PRIMARY KEY (id, namespace_id),
     FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_projectId ON tasks(projectId);
-```Write Strategy Batching for Throughput SQLite single-writer limitation mitigated by async ring-buffer queue transaction batching Batching batching Each write separate transaction `fsync() call limits throughput to ~100 writes/sec latency batching 100+ operations one transaction one `fsync( call enables 10,000+ writes/sec 100x improvement Batching Strategy **Batch Triggered when queue threshold 100 Triggered if operations queued long Batching Trade-off Asynchronous Error Reporting writes asynchronous server returns `ok operation accepted write fails asynchronous error message Auto-Migration System ZyncBase structural detection system manages schema evolution Creating tables adding columns **Destructive Type changes column removals gated behind environment configuration Uses temporary table backups SQLite `ALTER TABLE` limitations Checkpoint Management WAL files require management prevent disk bloat read degradation Non-blocking merges during idle periods Triggered by WAL file page threshold Forced merges during maintenance windowsComparison Alternatives Database Type Concurrency Setup Performance Use Case **SQLite (WAL Embedded Parallel reads Zero-config 70k reads/s Vertical scaling **PostgreSQL** Server Full parallel Complex 100k+ ops/s Horizontal scaling **Redis** In-memory Single-threaded Simple 100k+ ops/s Caching **MongoDB** Server Full parallel Medium 50k+ ops/s Document store Limitations Trade-offs Single Writer SQLite allows one writer batching scale massive write-heavy workloads Checkpoint Starvation Heavy read load entries DB file growth read degradation ZyncBase manages proactive checkpointing No Horizontal Scaling (v1.0 storage layer vertical scaling single node multi clusters suggests LiteFS Marmot future [Storage Implementation Zig code PRAGMAs DDL generator [Threading Model connection pool parallel reads Records SQLite performance benchmarks
+```SDKs expose IDs references as strings core system stores packed 16-byte values Write Strategy Batching for Throughput SQLite single-writer limitation mitigated by async ring-buffer queue transaction batching Batching batching Each write separate transaction `fsync() call limits throughput to ~100 writes/sec batching 100+ operations one transaction one `fsync( call enables 10,000+ writes/sec 100x improvement Batching Strategy Triggered when queue reaches threshold 100 Triggered if operations queued long Trade-off Asynchronous Error Reporting server returns `ok` operation accepted write fails asynchronous error message SDK update Auto-Migration System ZyncBase structural detection system manages schema evolution Additions** Creating tables adding columns automatically **Destructive Type changes column removals gated behind environment configuration Uses temporary table backups SQLite `ALTER TABLE` limitations Checkpoint Management WAL files require management prevent disk bloat read degradation Non-blocking merges during idle periodsTriggered by WAL file page threshold Forced merges during maintenance windows Comparison Alternatives Database Type Concurrency Setup Performance Use Case **SQLite (WAL Embedded Parallel reads Zero-config 70k reads/s Vertical scaling Server Full parallel Complex 100k+ ops/s Horizontal scaling In-memory Single-threaded Simple 100k+ ops/s Caching **MongoDB** Server Full parallel Medium 50k+ ops/s Document store Limitations Trade-offs Single Writer SQLite allows one writer batching scale massive write-heavy workloads Checkpoint Starvation Heavy read load WAL entries main DB WAL file growth read degradation ZyncBase manages proactive checkpointing No Horizontal Scaling storage layer for vertical scaling single node multi clusters suggests LiteFS or Marmot future [Storage Implementation Zig code PRAGMAs DDL generator Model parallel reads Architectural Decision Records SQLite performance benchmarks
