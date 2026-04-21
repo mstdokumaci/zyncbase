@@ -37,7 +37,7 @@ pub const MigrationDetector = struct {
     }
 
     pub fn detectChanges(self: *MigrationDetector, target: schema_manager.Schema) !MigrationPlan {
-        var changes: std.ArrayList(Change) = .{};
+        var changes: std.ArrayListUnmanaged(Change) = .empty;
         errdefer {
             for (changes.items) |c| self.freeChange(c);
             changes.deinit(self.allocator);

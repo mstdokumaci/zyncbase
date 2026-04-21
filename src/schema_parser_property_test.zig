@@ -19,7 +19,7 @@ test "schema_parser: object field flattening" {
     while (iter < 100) : (iter += 1) {
         const n_props = rand.intRangeAtMost(usize, 1, 5);
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         try buf.appendSlice(allocator, "{\"version\":\"1.0.0\",\"store\":{\"t\":{\"fields\":{\"addr\":{\"type\":\"object\",\"fields\":{");
@@ -67,7 +67,7 @@ test "schema_parser: unknown keys tolerated" {
     while (iter < 100) : (iter += 1) {
         const n_extra = rand.intRangeAtMost(usize, 1, 3);
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         try buf.appendSlice(allocator, "{\"version\":\"1.0.0\",\"store\":{\"items\":{\"fields\":{\"title\":{\"type\":\"string\"}},\"required\":[\"title\"]");
@@ -112,7 +112,7 @@ test "schema_parser: missing type rejected" {
     while (iter < 100) : (iter += 1) {
         const fname = field_names[rand.intRangeAtMost(usize, 0, field_names.len - 1)];
 
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         try buf.print(
@@ -141,7 +141,7 @@ test "schema_parser: parse/print round-trip" {
 
     var iter: usize = 0;
     while (iter < 100) : (iter += 1) {
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         const n_tables = rand.intRangeAtMost(usize, 1, 3);

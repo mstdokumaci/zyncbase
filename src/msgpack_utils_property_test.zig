@@ -164,7 +164,7 @@ test "msgpack: round-trip encoding/decoding preservation" {
         defer payload.free(allocator);
 
         // Encode using the project's standard ArrayList writer
-        var list: std.ArrayList(u8) = .{};
+        var list: std.ArrayListUnmanaged(u8) = .empty;
         defer list.deinit(allocator);
         try msgpack_utils.encode(payload, list.writer(allocator));
 

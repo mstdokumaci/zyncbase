@@ -144,7 +144,7 @@ pub const ConfigLoader = struct {
     }
 
     fn substituteEnvVars(allocator: Allocator, content: []const u8) ![]const u8 {
-        var result: std.ArrayList(u8) = .{};
+        var result: std.ArrayListUnmanaged(u8) = .empty;
         errdefer result.deinit(allocator);
 
         var i: usize = 0;
@@ -300,7 +300,7 @@ pub const ConfigLoader = struct {
 
                 if (security_obj.get("allowedOrigins")) |origins| {
                     if (origins == .array) {
-                        var origin_list: std.ArrayList([]const u8) = .{};
+                        var origin_list: std.ArrayListUnmanaged([]const u8) = .empty;
                         for (origins.array.items) |origin| {
                             if (origin == .string) {
                                 try origin_list.append(allocator, try allocator.dupe(u8, origin.string));

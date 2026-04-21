@@ -114,7 +114,7 @@ pub fn createStoreQueryMessage(
         }
     }
 
-    var list: std.ArrayList(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     try msgpack_utils.encode(p, list.writer(allocator));
     return try list.toOwnedSlice(allocator);
@@ -206,7 +206,7 @@ pub fn createStoreSubscribeMessage(
         }
     }
 
-    var list: std.ArrayList(u8) = .{};
+    var list: std.ArrayListUnmanaged(u8) = .empty;
     errdefer list.deinit(allocator);
     try msgpack_utils.encode(p, list.writer(allocator));
     return try list.toOwnedSlice(allocator);
