@@ -164,7 +164,7 @@ pub const MigrationExecutor = struct {
         }
 
         // 5. Build common columns (intersection of backup cols and new table cols)
-        var common: std.ArrayList([]const u8) = .{};
+        var common: std.ArrayListUnmanaged([]const u8) = .empty;
         defer common.deinit(self.allocator);
 
         for (backup_cols) |bc| {
@@ -183,7 +183,7 @@ pub const MigrationExecutor = struct {
         }
 
         if (common.items.len > 0) {
-            var col_list: std.ArrayList(u8) = .{};
+            var col_list: std.ArrayListUnmanaged(u8) = .empty;
             defer col_list.deinit(self.allocator);
             for (common.items, 0..) |col, i| {
                 if (i > 0) try col_list.appendSlice(self.allocator, ", ");
@@ -230,7 +230,7 @@ pub const MigrationExecutor = struct {
             pk: i64,
         };
 
-        var cols: std.ArrayList([]const u8) = .{};
+        var cols: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer {
             for (cols.items) |c| self.allocator.free(c);
             cols.deinit(self.allocator);

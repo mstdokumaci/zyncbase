@@ -12,7 +12,7 @@ pub const DDLGenerator = struct {
     /// Returns a single string with all statements separated by ";\n".
     /// Caller owns the returned slice.
     pub fn generateDDL(self: *DDLGenerator, table: schema_manager.Table) ![]const u8 {
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(self.allocator);
 
         // ── CREATE TABLE ──────────────────────────────────────────────────────

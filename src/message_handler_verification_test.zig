@@ -296,7 +296,7 @@ test "Verification: Error handling for invalid messages" {
         const conn = sc.conn;
 
         // Create a MessagePack map without required fields
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         // fixmap with 1 element
@@ -336,7 +336,7 @@ test "Verification: Error handling for invalid messages" {
     // Test 4: Unknown message type should fail routing
     {
         // Create a MessagePack message with unknown type
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
 
         // fixmap with 2 elements
@@ -679,7 +679,7 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     try load_more_map.mapPut("subId", msgpack.Payload.uintToPayload(sub_id));
     try load_more_map.mapPut("nextCursor", try msgpack.Payload.strToPayload(next_cursor, allocator));
 
-    var load_buf: std.ArrayList(u8) = .{};
+    var load_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer load_buf.deinit(allocator);
     try msgpack.encode(load_more_map, load_buf.writer(allocator));
     const load_more_message = try load_buf.toOwnedSlice(allocator);

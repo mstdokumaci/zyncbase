@@ -247,7 +247,7 @@ pub const SchemaParser = struct {
         const store_val = root.object.get("store") orelse return error.MissingStore;
         if (store_val != .object) return error.InvalidStore;
 
-        var tables: std.ArrayList(Table) = .{};
+        var tables: std.ArrayListUnmanaged(Table) = .empty;
         errdefer {
             for (tables.items) |t| freeTable(self.allocator, t);
             tables.deinit(self.allocator);
@@ -293,7 +293,7 @@ pub const SchemaParser = struct {
             }
 
             // fields
-            var fields: std.ArrayList(Field) = .{};
+            var fields: std.ArrayListUnmanaged(Field) = .empty;
             errdefer {
                 for (fields.items) |f| freeField(self.allocator, f);
                 fields.deinit(self.allocator);
@@ -325,7 +325,7 @@ pub const SchemaParser = struct {
     fn parseFields(
         self: *SchemaParser,
         fields_val: std.json.Value,
-        fields: *std.ArrayList(Field),
+        fields: *std.ArrayListUnmanaged(Field),
         required_set: *std.StringHashMap(void),
         prefix: []const u8,
     ) !void {
@@ -410,7 +410,7 @@ pub const SchemaParser = struct {
     /// Serialise an in-memory Schema back to canonical JSON.
     /// The caller owns the returned slice.
     pub fn print(self: *SchemaParser, schema: Schema) ![]const u8 {
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         errdefer buf.deinit(self.allocator);
 
         try buf.appendSlice(self.allocator, "{\"version\":");
@@ -429,7 +429,7 @@ pub const SchemaParser = struct {
         return buf.toOwnedSlice(self.allocator);
     }
 
-    fn printObjectContent(self: *SchemaParser, buf: *std.ArrayList(u8), fields: []const Field, prefix: []const u8) !void {
+    fn printObjectContent(self: *SchemaParser, buf: *std.ArrayListUnmanaged(u8), fields: []const Field, prefix: []const u8) !void {
         try buf.appendSlice(self.allocator, "\"fields\":{");
 
         var first_field = true;
@@ -566,7 +566,7 @@ pub fn onDeleteName(od: OnDelete) []const u8 {
     };
 }
 
-fn writeJsonString(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []const u8) !void {
+fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, s: []const u8) !void {
     try buf.append(allocator, '"');
     for (s) |c| {
         switch (c) {

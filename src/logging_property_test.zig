@@ -21,7 +21,8 @@ const StoreService = @import("store_service.zig").StoreService;
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
-    messages: std.ArrayList(LogMessage),
+    allocator: std.mem.Allocator,
+    messages: std.ArrayListUnmanaged(LogMessage) = .empty,
     mutex: std.Thread.Mutex,
 
     const LogMessage = struct {
@@ -36,7 +37,8 @@ const LogCapture = struct {
 
     fn init(allocator: std.mem.Allocator) LogCapture {
         return .{
-            .messages = std.ArrayList(LogMessage).init(allocator),
+            .allocator = allocator,
+            .messages = .empty,
             .mutex = .{},
         };
     }
@@ -45,7 +47,7 @@ const LogCapture = struct {
         for (self.messages.items) |*msg| {
             msg.deinit();
         }
-        self.messages.deinit();
+        self.messages.deinit(self.allocator);
     }
 
     fn contains(self: *LogCapture, needle: []const u8) bool {
