@@ -32,7 +32,32 @@ runs:
       shell: bash
       run: ./scripts/apply-patches.sh
 
+    - name: Resolve BoringSSL cache inputs
+      id: boringssl-cache-inputs
+      shell: bash
+      run: |
+        TARGET="${{ inputs.boringssl-target }}"
+        SUFFIX="${{ inputs.boringssl-suffix }}"
+        BUILD_DIR="vendor/boringssl/build"
+        if [ -n "$SUFFIX" ]; then
+          BUILD_DIR="vendor/boringssl/build-$SUFFIX"
+        fi
+
+        echo "build_dir=$BUILD_DIR" >> "$GITHUB_OUTPUT"
+        echo "image_os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "boringssl_rev=$(git -C vendor/boringssl rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore BoringSSL cache
+      id: boringssl-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.boringssl-cache-inputs.outputs.build_dir }}
+        key: boringssl-${{ runner.os }}-${{ runner.arch }}-${{ steps.boringssl-cache-inputs.outputs.image_os }}-${{ inputs.boringssl-target }}-${{ steps.boringssl-cache-inputs.outputs.boringssl_rev }}-${{ hashFiles('scripts/build-boringssl.sh', 'scripts/apply-patches.sh', 'patches/**') }}
+        restore-keys: |
+          boringssl-${{ runner.os }}-${{ runner.arch }}-${{ steps.boringssl-cache-inputs.outputs.image_os }}-${{ inputs.boringssl-target }}-${{ steps.boringssl-cache-inputs.outputs.boringssl_rev }}-
+
     - name: Build BoringSSL
+      if: steps.boringssl-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         TARGET="${{ inputs.boringssl-target }}"
@@ -43,12 +68,10 @@ runs:
             MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
         fi
         
-        BUILD_DIR="vendor/boringssl/build"
-        if [ -n "$SUFFIX" ]; then
-            BUILD_DIR="vendor/boringssl/build-$SUFFIX"
-        fi
+        BUILD_DIR="${{ steps.boringssl-cache-inputs.outputs.build_dir }}"
 
         ./scripts/build-boringssl.sh "$TARGET" "$SUFFIX" "$BUILD_DIR" "$MACOS_SDK"
-        
-        # Export the path for subsequent zig build steps in the same job
-        echo "ZYNCBASE_BORINGSSL_PATH=$(pwd)/$BUILD_DIR" >> $GITHUB_ENV
+
+    - name: Export BoringSSL path
+      shell: bash
+      run: echo "ZYNCBASE_BORINGSSL_PATH=$(pwd)/${{ steps.boringssl-cache-inputs.outputs.build_dir }}" >> "$GITHUB_ENV"
