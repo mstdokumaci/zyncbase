@@ -16,14 +16,13 @@ This document serves as the implementation specification defining the `nextCurso
 
 In a high-throughput environment, queries ordered exclusively by a singular column (e.g., `ORDER BY created_at DESC`) are structurally unsafe. Millions of rows can share the exact precise timestamp. Standard cursors inherently risk "infinite loops" and skipped pages via collision overlap.
 
-Following established industry patterns found in strictly enforced schemas (Firebase / PostgREST), ZyncBase utilizes **Compound Cursors**. A compound cursor encodes the primary sorting column and an implicit, globally unique identifier (e.g. Doc ID). 
+Following established industry patterns found in strictly enforced schemas (Firebase / PostgREST), ZyncBase utilizes **Compound Cursors**. A compound cursor encodes the primary sorting column and an implicit, globally unique identifier (the packed 16-byte document ID). 
 
-The generated `nextCursor` string provided inside `StoreQuery` responses is an opaque Base64 literal representing a tuple constraint:
+The generated `nextCursor` string provided inside `StoreQuery` responses is an opaque Base64 literal representing a MessagePack tuple constraint:
 
 ```typescript
-const cursorTuple = [sort_value, document_id];
-const opaqueToken = btoa(JSON.stringify(cursorTuple)); 
-// "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+const cursorTuple = [sort_value, docIdBin16];
+const opaqueToken = base64(msgpackEncode(cursorTuple));
 ```
 
 ---
@@ -49,7 +48,7 @@ WHERE ...
 ORDER BY sort_column ASC, id ASC
 LIMIT x
 ```
-_(Parameter binding matches `[sort_value, sort_value, document_id]`)_
+_(Parameter binding matches `[sort_value, sort_value, document_id_blob]`)_
 
 When navigating a **`descending`** sequence, the translation is inverted:
 ```sql

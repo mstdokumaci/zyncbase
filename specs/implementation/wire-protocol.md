@@ -25,6 +25,8 @@
 
 This document specifies the complete client-server contract for ZyncBase. Every WebSocket message is a **MessagePack-encoded map** (or JSON in debug mode, per ADR-011). Each message conforms to one of the types defined in this spec.
 
+> Examples below use pseudo-literals like `<bin16("rect-1")>` for MessagePack `bin(16)` values. On the public SDK surface, document IDs and reference fields remain strings; on the wire they are packed into 16-byte binary IDs.
+
 **Design principles:**
 
 - **1:1 SDK mapping** — Every client SDK method maps to exactly one message type. No overloaded messages.
@@ -98,7 +100,7 @@ Write a value at a path. Applied optimistically on the client.
 {
   "type":  "StoreSet",
   "id":    2,
-  "path":  [0, "rect-1"],
+  "path":  [0, <bin16("rect-1")>],
   "value": { 1: 100, 2: 200, 3: 50, 4: 50 } // Integer-keyed map for field indices
 }
 ```
@@ -124,7 +126,7 @@ Remove a value at a path.
 {
   "type": "StoreRemove",
   "id":   3,
-  "path": [0, "rect-1"]
+  "path": [0, <bin16("rect-1")>]
 }
 ```
 
@@ -148,9 +150,9 @@ Perform multiple write operations atomically. See the [Batch Operations Specific
   "type": "StoreBatch",
   "id":   4,
   "ops": [
-    ["s", [1, "123"], { 3: "assigned" }],
-    ["s", [0, "bob", 8], 5],
-    ["r", [2, "123"]]
+    ["s", [1, <bin16("123")>], { 3: "assigned" }],
+    ["s", [0, <bin16("bob")>, 8], 5],
+    ["r", [2, <bin16("123")>]]
   ]
 }
 ```
@@ -187,7 +189,7 @@ Execute a one-off filtered query (non-real-time) on a collection. Query conditio
   ],
   "orderBy": [3, 1],  // [field_index, desc_flag] — 1 = desc
   "limit":   50,
-  "after":   "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id]))
+  "after":   "..." // Opaque Base64(MessagePack([sort_value, doc_id_bin]))
 }
 ```
 
@@ -198,7 +200,7 @@ Execute a one-off filtered query (non-real-time) on a collection. Query conditio
   "type":       "ok",
   "id":         6,
   "value":      [ ... ],    // Array of matching items
-  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0=" // Base64(JSON([sort_value, id])) or null
+  "nextCursor": "..." // Opaque Base64(MessagePack([sort_value, doc_id_bin])) or null
 }
 ```
 
@@ -230,7 +232,7 @@ Subscribe to a filtered query's results in real-time. (Maps to `store.subscribe(
   "subId":      456,
   "value":      [ ... ],
   "hasMore":    true,
-  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+  "nextCursor": "..."
 }
 ```
 
@@ -243,7 +245,7 @@ Request more historical data for an active subscription.
   "type":       "StoreLoadMore",
   "id":         8,
   "subId":      456,
-  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+  "nextCursor": "..."
 }
 ```
 
@@ -256,7 +258,7 @@ Request more historical data for an active subscription.
   "subId":      456,
   "value":      [ ... ],
   "hasMore":    true,
-  "nextCursor": "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+  "nextCursor": "..."
 }
 ```
 
@@ -608,6 +610,10 @@ Provides the structural dictionary for integer-based routing. The SDK must dynam
   "fields": [
     ["id", "namespace_id", "email", "created_at", "updated_at"],
     ["id", "namespace_id", "title", "status", "created_at", "updated_at"]
+  ],
+  "fieldFlags": [
+    [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id
+    [3, 1, 0, 0, 1, 1]
   ]
 }
 ```

@@ -47,7 +47,7 @@ A field definition MUST contain a `type` property.
 |:---|:---:|:---|:---|
 | `type` | `string` | - | One of the types listed above. |
 | `indexed` | `boolean` | `false` | Creates a SQLite index for this column. |
-| `references` | `string` | `null` | Target table name for a foreign key relationship. |
+| `references` | `string` | `null` | Target table name for a foreign key relationship. Referenced fields are stored internally as packed `doc_id` values (`BLOB(16)`), while the SDK still exposes them as strings. |
 | `onDelete` | `string` | `"restrict"` | `set_null`, `cascade`, `restrict`. Note: `set_null` requires the field to be optional (not in `required`). |
 
 ### Array Properties
@@ -90,6 +90,8 @@ Example:
 Flattens to SQLite column: `profile__userId TEXT`.
 
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
+
+> *Document IDs*: Every table has a built-in `id` system column stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK is responsible for converting between user-facing string IDs (UUIDv7 or strict short IDs) and the packed 16-byte representation.
 
 ---
 

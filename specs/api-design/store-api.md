@@ -24,13 +24,15 @@ There are strict rules on what you can write based on the depth of the path:
 | **Field** (`'users.u1.name'`) | `3+` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
 
 ### `store.create(collection, value)`
-Creates a new document within a collection. The SDK synchronously generates a time-sortable ID (UUIDv7) and calls `set` under the hood.
+Creates a new document within a collection. The SDK synchronously generates a canonical lowercase UUIDv7 string and calls `set` under the hood.
 
 ```typescript
 // ID is generated locally for immediate optimistic UI rendering
 const id = client.store.create('elements', { type: 'rect', x: 10 })
 ```
 **Returns**: `string` (The generated ID)
+
+Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.
 
 ### `store.get(path)`
 Read a value from the state tree.
@@ -187,7 +189,7 @@ await client.store.batch([
 ## Utilities
 
 ### `client.utils.id()`
-Generates a time-sortable UID (UUIDv7 or ULID) synchronously on the client. Useful for generating IDs for batch operations where `store.create` cannot be used directly because relational keys need to be explicitly set.
+Generates a canonical lowercase UUIDv7 string synchronously on the client. Useful for generating IDs for batch operations where `store.create` cannot be used directly because relational keys need to be explicitly set.
 
 ```typescript
 const userId = client.utils.id();
@@ -212,9 +214,9 @@ Paths follow a logical progression from collections to documents to specific fie
 | Target | Logical Path (SDK) | Flattened (SDK Internal) | Wire-Format Path (Socket) | Pattern |
 | :--- | :--- | :--- | :--- | :--- |
 | **Collection** | `['users']` | `['users']` | `[0]` | `[table_index]` |
-| **Document** | `['users', 'u1']` | `['users', 'u1']` | `[0, 'u1']` | `[table_index, id]` |
-| **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[0, 'u1', 2]` | `[table_index, id, field_index]` |
-| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[0, 'u1', 5]` | `[table_index, id, field_index]` |
+| **Document** | `['users', 'u1']` | `['users', 'u1']` | `[0, <bin16('u1')>]` | `[table_index, id_bin16]` |
+| **Field** | `['users', 'u1', 'name']` | `['users', 'u1', 'name']` | `[0, <bin16('u1')>, 2]` | `[table_index, id_bin16, field_index]` |
+| **Nested Field** | `['users', 'u1', 'address', 'city']` | `['users', 'u1', 'address__city']` | `[0, <bin16('u1')>, 5]` | `[table_index, id_bin16, field_index]` |
 
 ### Why use Arrays?
 Arrays are preferred when dealing with variables or IDs that might contain dots:

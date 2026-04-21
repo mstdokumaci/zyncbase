@@ -445,7 +445,11 @@ export class ConnectionManager {
 	}
 
 	private async _handleSchemaSync(msg: InboundMessage): Promise<void> {
-		const payload = msg as { tables: string[]; fields: string[][] };
+		const payload = msg as {
+			tables: string[];
+			fields: string[][];
+			fieldFlags?: number[][];
+		};
 		const schemaChanged =
 			await this.schemaDictionary.processSchemaSync(payload);
 
@@ -498,6 +502,7 @@ export class ConnectionManager {
 			const logicalPath = path as string[];
 			const encodedPath = this.schemaDictionary.encodePath(logicalPath);
 			wire.path = encodedPath;
+			const tableIndex = encodedPath[0] as number;
 			if (
 				type === "StoreSet" &&
 				logicalPath.length === 2 &&
@@ -505,10 +510,19 @@ export class ConnectionManager {
 				typeof wire.value === "object" &&
 				!Array.isArray(wire.value)
 			) {
-				const tableIndex = encodedPath[0] as number;
 				wire.value = this.schemaDictionary.encodeValue(
 					tableIndex,
 					wire.value as Record<string, unknown>,
+				);
+			} else if (
+				type === "StoreSet" &&
+				logicalPath.length >= 3 &&
+				encodedPath.length === 3
+			) {
+				wire.value = this.schemaDictionary.encodeFieldValue(
+					tableIndex,
+					encodedPath[2] as number,
+					wire.value,
 				);
 			}
 		}
@@ -555,6 +569,17 @@ export class ConnectionManager {
 				),
 			];
 		}
+		if (kind === "s" && encodedPath.length === 3) {
+			return [
+				"s",
+				encodedPath,
+				this.schemaDictionary.encodeFieldValue(
+					encodedPath[0] as number,
+					encodedPath[2] as number,
+					op[2],
+				),
+			];
+		}
 		return ["s", encodedPath, op[2]];
 	}
 
@@ -593,7 +618,17 @@ export class ConnectionManager {
 				typeof field === "string"
 					? this.schemaDictionary.getFieldIndex(tableIndex, field)
 					: field;
-			return cond.length === 2 ? [fieldIndex, op] : [fieldIndex, op, cond[2]];
+			return cond.length === 2
+				? [fieldIndex, op]
+				: [
+						fieldIndex,
+						op,
+						this.schemaDictionary.encodeFieldValue(
+							tableIndex,
+							fieldIndex as number,
+							cond[2],
+						),
+					];
 		});
 	}
 
@@ -610,7 +645,9 @@ export class ConnectionManager {
 
 	private _decodeDelta(delta: StoreDelta): StoreDelta {
 		const decodedOps = delta.ops.map((op) => {
-			const wirePath = op.path as unknown as Array<number | string>;
+			const wirePath = op.path as unknown as Array<
+				number | string | Uint8Array
+			>;
 			let decodedPath = op.path;
 			let tableIndex: number | null = null;
 			if (
@@ -640,6 +677,17 @@ export class ConnectionManager {
 						tableIndex,
 						op.value as unknown as Record<number, unknown>,
 					) as unknown as typeof op.value,
+				};
+			}
+			if (op.op === "set" && tableIndex !== null && wirePath.length === 3) {
+				return {
+					...op,
+					path: decodedPath,
+					value: this.schemaDictionary.decodeFieldValue(
+						tableIndex,
+						wirePath[2] as number,
+						op.value,
+					) as typeof op.value,
 				};
 			}
 			return { ...op, path: decodedPath };
