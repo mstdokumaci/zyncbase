@@ -10,7 +10,7 @@ const sqlite = @import("sqlite");
 
 // Feature: schema-aware-storage, Property 7: DDL contains all required columns and constraints
 // For any Table value t, the DDL string produced by DDL_Generator.generateDDL(t) SHALL contain:
-// id TEXT PRIMARY KEY, namespace_id TEXT NOT NULL, one correctly-typed column per field in t.fields
+// id BLOB NOT NULL CHECK(length(id) = 16), namespace_id TEXT NOT NULL, one correctly-typed column per field in t.fields
 // (with NOT NULL for required fields, FOREIGN KEY for referenced fields),
 // created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, and a CREATE INDEX on namespace_id.
 test "ddl_generator: DDL contains required columns and constraints" {
@@ -36,7 +36,8 @@ test "ddl_generator: DDL contains required columns and constraints" {
         for (0..n_fields) |fi| {
             const has_ref = rand.boolean();
             const ref_idx = rand.intRangeAtMost(usize, 0, ref_tables.len - 1);
-            const st = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
+            const base_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
+            const st = if (has_ref) FieldType.doc_id else base_type;
             fields[fi] = .{
                 .name = field_names[fi % field_names.len],
                 .sql_type = st,
@@ -58,7 +59,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
         defer allocator.free(ddl);
 
         // Assert required structural elements
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "id TEXT,") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "id BLOB NOT NULL CHECK(length(id) = 16),") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);

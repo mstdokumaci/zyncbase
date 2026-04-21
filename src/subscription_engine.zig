@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const query_parser = @import("query_parser.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
+const doc_id = @import("doc_id.zig");
 const types = @import("storage_engine/types.zig");
 const TypedRow = types.TypedRow;
 const TypedValue = types.TypedValue;
@@ -327,6 +328,10 @@ pub const SubscriptionEngine = struct {
         switch (value) {
             .nil => try list.append(allocator, 'n'),
             .scalar => |s| switch (s) {
+                .doc_id => |id| {
+                    var hex_buf: [32]u8 = undefined;
+                    try writer.print("d:{s}", .{doc_id.hexSlice(id, &hex_buf)});
+                },
                 .integer => |iv| try writer.print("i:{}", .{iv}),
                 .real => |rv| try writer.print("f:{}", .{rv}),
                 .text => |tv| {

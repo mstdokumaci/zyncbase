@@ -16,7 +16,7 @@ const schema_manager = sth.schema_manager;
 // - Error recovery and retry logic
 // - Resource cleanup after errors
 
-fn insertTestValue(ctx: *sth.EngineTestContext, id: []const u8, value: []const u8) !void {
+fn insertTestValue(ctx: *sth.EngineTestContext, id: u128, value: []const u8) !void {
     try ctx.insertText("test", id, "test", "val", value);
 }
 
@@ -47,10 +47,9 @@ test "storage: stability no crashes on concurrent errors" {
             const tbl_md = t_ctx.ctx.sm.getTable("test") orelse @panic("test table missing");
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
-                const key = std.fmt.allocPrint(t_ctx.allocator, "thread{}_key{}", .{ t_ctx.thread_id, i }) catch continue; // zwanzig-disable-line: swallowed-error
-                defer t_ctx.allocator.free(key);
+                const key: u128 = t_ctx.thread_id * 1_000 + i + 1;
                 // Try to set a value
-                t_ctx.ctx.insertText("test", key, "test", "val", key) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.insertText("test", key, "test", "val", "value") catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
                 var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
@@ -92,9 +91,9 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational - try normal operations
-    try insertTestValue(&ctx, "key1", "value1");
+    try insertTestValue(&ctx, 1, "value1");
     try storage.flushPendingWrites();
-    var doc1 = try tbl.getOne(allocator, "key1", "test");
+    var doc1 = try tbl.getOne(allocator, 1, "test");
     defer doc1.deinit();
     _ = try doc1.expectFieldString("val", "value1");
     // Cause another transaction error
@@ -102,9 +101,9 @@ test "storage: stability continues after transaction errors" {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Server should still be operational
-    try insertTestValue(&ctx, "key2", "value2");
+    try insertTestValue(&ctx, 2, "value2");
     try storage.flushPendingWrites();
-    var doc2 = try tbl.getOne(allocator, "key2", "test");
+    var doc2 = try tbl.getOne(allocator, 2, "test");
     defer doc2.deinit();
     _ = try doc2.expectFieldString("val", "value2");
 }
@@ -128,9 +127,9 @@ test "storage: stability handles rapid error conditions" {
         };
     }
     // Server should still be operational
-    try insertTestValue(&ctx, "key", "value");
+    try insertTestValue(&ctx, 1, "value");
     try storage.flushPendingWrites();
-    var doc = try tbl.getOne(allocator, "key", "test");
+    var doc = try tbl.getOne(allocator, 1, "test");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value");
 }
@@ -151,8 +150,7 @@ test "storage: stability error recovery with valid operations" {
     var i: usize = 0;
     while (i < 20) : (i += 1) {
         // Valid operation
-        const key = try std.fmt.allocPrint(allocator, "key{}", .{i});
-        defer allocator.free(key);
+        const key: u128 = i + 1;
         try insertTestValue(&ctx, key, "value");
         // Trigger an error
         _ = storage.commitTransaction() catch |err| {
@@ -165,7 +163,7 @@ test "storage: stability error recovery with valid operations" {
     // Flush and verify server is still operational
     try storage.flushPendingWrites();
     // Verify some data was persisted
-    var doc0 = try tbl.getOne(allocator, "key0", "test");
+    var doc0 = try tbl.getOne(allocator, 1, "test");
     defer doc0.deinit();
     _ = try doc0.expectFieldString("val", "value");
 }
@@ -185,18 +183,18 @@ test "storage: stability resource cleanup after errors" {
     // Begin a transaction
     try storage.beginTransaction();
     // Add some operations
-    try insertTestValue(&ctx, "key1", "value1");
-    try insertTestValue(&ctx, "key2", "value2");
+    try insertTestValue(&ctx, 1, "value1");
+    try insertTestValue(&ctx, 2, "value2");
     // Rollback (simulating an error scenario)
     try storage.rollbackTransaction();
     // Verify transaction state is cleaned up
     try testing.expect(!storage.isTransactionActive());
     // Verify we can start a new transaction
     try storage.beginTransaction();
-    try insertTestValue(&ctx, "key3", "value3");
+    try insertTestValue(&ctx, 3, "value3");
     try storage.commitTransaction();
     // Verify the committed data is there
-    var doc = try tbl.getOne(allocator, "key3", "test");
+    var doc = try tbl.getOne(allocator, 3, "test");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value3");
 }
@@ -215,29 +213,29 @@ test "storage: stability mixed error and success scenarios" {
     // Property: Server should handle mixed scenarios of errors and successes
     // Successful transaction
     try storage.beginTransaction();
-    try insertTestValue(&ctx, "key1", "value1");
+    try insertTestValue(&ctx, 1, "value1");
     try storage.commitTransaction();
     // Failed transaction (rollback)
     try storage.beginTransaction();
-    try insertTestValue(&ctx, "key2", "value2");
+    try insertTestValue(&ctx, 2, "value2");
     try storage.rollbackTransaction();
     // Error (no active transaction)
     _ = storage.commitTransaction() catch |err| {
         try testing.expectEqual(error.NoActiveTransaction, err);
     };
     // Successful operation without transaction
-    try insertTestValue(&ctx, "key3", "value3");
+    try insertTestValue(&ctx, 3, "value3");
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
-    var doc1 = try tbl.getOne(allocator, "key1", "test");
+    var doc1 = try tbl.getOne(allocator, 1, "test");
     defer doc1.deinit();
     _ = try doc1.expectFieldString("val", "value1");
     // Verify second transaction was rolled back
-    var managed2 = try tbl.selectDocument(allocator, "key2", "test");
+    var managed2 = try tbl.selectDocument(allocator, 2, "test");
     defer managed2.deinit();
     try testing.expect(managed2.rows.len == 0);
     // Verify third operation succeeded
-    var doc3 = try tbl.getOne(allocator, "key3", "test");
+    var doc3 = try tbl.getOne(allocator, 3, "test");
     defer doc3.deinit();
     _ = try doc3.expectFieldString("val", "value3");
 }
@@ -254,8 +252,8 @@ test "storage: stability concurrent reads during write errors" {
     const tbl = try ctx.table("test");
     // Property: Reads should continue working even when writes encounter errors
     // Set up some initial data
-    try insertTestValue(&ctx, "key1", "value1");
-    try insertTestValue(&ctx, "key2", "value2");
+    try insertTestValue(&ctx, 1, "value1");
+    try insertTestValue(&ctx, 2, "value2");
     try storage.flushPendingWrites();
     const num_reader_threads = 4;
     var reader_threads: [num_reader_threads]std.Thread = undefined;
@@ -268,10 +266,10 @@ test "storage: stability concurrent reads during write errors" {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, "key1", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 1, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed1.deinit();
                 _ = managed1.rows;
-                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, "key2", "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 2, "test") catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed2.deinit();
                 _ = managed2.rows;
                 // Small delay
@@ -300,7 +298,7 @@ test "storage: stability concurrent reads during write errors" {
         thread.join();
     }
     // Verify data is still intact
-    var doc = try tbl.getOne(allocator, "key1", "test");
+    var doc = try tbl.getOne(allocator, 1, "test");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value1");
 }

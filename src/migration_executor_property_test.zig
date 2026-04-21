@@ -6,6 +6,8 @@ const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const sqlite = @import("sqlite");
 
+const zero_doc_id = [_]u8{0} ** 16;
+
 fn openMemDb() !sqlite.Db {
     return sqlite.Db.init(.{
         .mode = .Memory,
@@ -73,12 +75,11 @@ test "migration_executor: additive migration preserves existing data" {
         try execMultiSql(&db, allocator, initial_ddl);
 
         // Insert a row
-        const row_id = "row-001";
         const row_title = "hello world";
         const insert_sql = try std.fmt.allocPrint(
             allocator,
-            "INSERT INTO {s} (id, namespace_id, title, created_at, updated_at) VALUES ('{s}', 'ns1', '{s}', 0, 0)",
-            .{ tname, row_id, row_title },
+            "INSERT INTO {s} (id, namespace_id, title, created_at, updated_at) VALUES (zeroblob(16), 'ns1', '{s}', 0, 0)",
+            .{ tname, row_title },
         );
         defer allocator.free(insert_sql);
         try execSql(&db, allocator, insert_sql);
@@ -132,8 +133,8 @@ test "migration_executor: additive migration preserves existing data" {
         // Verify the original row still exists with original values
         const check_sql = try std.fmt.allocPrint(
             allocator,
-            "SELECT id, title FROM {s} WHERE id = '{s}'",
-            .{ tname, row_id },
+            "SELECT id, title FROM {s} WHERE id = zeroblob(16)",
+            .{tname},
         );
         defer allocator.free(check_sql);
         const check_sql_z = try allocator.dupeZ(u8, check_sql);
@@ -153,7 +154,7 @@ test "migration_executor: additive migration preserves existing data" {
             allocator.free(row.?.id);
             allocator.free(row.?.title);
         }
-        try std.testing.expectEqualStrings(row_id, row.?.id);
+        try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
         try std.testing.expectEqualStrings(row_title, row.?.title);
     }
 }
@@ -189,7 +190,7 @@ test "migration_executor: destructive migration refused when not allowed" {
         // Insert a row to verify DB is unchanged after refused migration
         const insert_sql = try std.fmt.allocPrint(
             allocator,
-            "INSERT INTO {s} (id, namespace_id, col_a, created_at, updated_at) VALUES ('r1', 'ns1', 'val1', 0, 0)",
+            "INSERT INTO {s} (id, namespace_id, col_a, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'val1', 0, 0)",
             .{tname},
         );
         defer allocator.free(insert_sql);
@@ -241,7 +242,7 @@ test "migration_executor: destructive migration refused when not allowed" {
         // Verify DB is unchanged: original row still exists
         const check_sql = try std.fmt.allocPrint(
             allocator,
-            "SELECT id FROM {s} WHERE id = 'r1'",
+            "SELECT id FROM {s} WHERE id = zeroblob(16)",
             .{tname},
         );
         defer allocator.free(check_sql);
@@ -256,7 +257,7 @@ test "migration_executor: destructive migration refused when not allowed" {
         const row = try check_iter.nextAlloc(allocator, .{});
         try std.testing.expect(row != null);
         defer allocator.free(row.?.id);
-        try std.testing.expectEqualStrings("r1", row.?.id);
+        try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
     }
 }
 

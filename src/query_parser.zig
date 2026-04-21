@@ -3,7 +3,9 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
 const types = @import("storage_engine/types.zig");
+const doc_id = @import("doc_id.zig");
 const TypedValue = types.TypedValue;
+const DocId = types.DocId;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -52,11 +54,10 @@ pub const SortDescriptor = struct {
 
 pub const Cursor = struct {
     sort_value: TypedValue,
-    id: []const u8,
+    id: DocId,
 
     pub fn deinit(self: Cursor, allocator: std.mem.Allocator) void {
         self.sort_value.deinit(allocator);
-        allocator.free(self.id);
     }
 
     pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
@@ -64,7 +65,7 @@ pub const Cursor = struct {
         errdefer sort_value.deinit(allocator);
         return .{
             .sort_value = sort_value,
-            .id = try allocator.dupe(u8, self.id),
+            .id = self.id,
         };
     }
 };
@@ -135,8 +136,8 @@ pub const ParserError = error{
     OutOfMemory,
 };
 
-/// Parse a Base64-encoded JSON cursor tuple token into a Cursor.
-/// Expected decoded JSON shape: [sort_value, id]
+/// Parse a Base64-encoded MessagePack cursor tuple token into a Cursor.
+/// Expected decoded MessagePack shape: [sort_value, id_bin]
 pub fn parseCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
@@ -148,14 +149,14 @@ pub fn parseCursorToken(
     defer cursor_payload.free(allocator);
 
     if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
-    if (cursor_payload.arr[1] != .str) return error.InvalidMessageFormat;
+    if (cursor_payload.arr[1] != .bin) return error.InvalidMessageFormat;
 
     const sort_value = try parseCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
     errdefer sort_value.deinit(allocator);
 
     return Cursor{
         .sort_value = sort_value,
-        .id = try allocator.dupe(u8, cursor_payload.arr[1].str.value()),
+        .id = doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
     };
 }
 

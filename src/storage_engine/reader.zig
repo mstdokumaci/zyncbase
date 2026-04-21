@@ -3,10 +3,12 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 const query_parser = @import("../query_parser.zig");
+const doc_id = @import("../doc_id.zig");
 const types = @import("types.zig");
 const sql = @import("sql.zig");
 
 const TypedValue = types.TypedValue;
+const DocId = types.DocId;
 
 pub fn buildSelectDocumentSql(allocator: Allocator, table_metadata: *const schema_manager.TableMetadata) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -112,17 +114,12 @@ pub fn buildSelectQuery(
             }
 
             if (filter.order_by.field_index == 0) {
-                const ci = try allocator.dupe(u8, cursor.id);
-                errdefer allocator.free(ci);
-                try values.append(allocator, TypedValue{ .scalar = .{ .text = ci } });
+                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             } else {
                 const sv = try cursor.sort_value.clone(allocator);
                 errdefer sv.deinit(allocator);
                 try values.append(allocator, sv);
-
-                const ci = try allocator.dupe(u8, cursor.id);
-                errdefer allocator.free(ci);
-                try values.append(allocator, TypedValue{ .scalar = .{ .text = ci } });
+                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             }
         }
 
@@ -150,8 +147,9 @@ pub fn buildSelectQuery(
     };
 }
 
-pub fn getCacheKey(allocator: Allocator, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table, namespace, id });
+pub fn getCacheKey(allocator: Allocator, table: []const u8, namespace: []const u8, id: DocId) ![]u8 {
+    var id_hex_buf: [32]u8 = undefined;
+    return try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table, namespace, doc_id.hexSlice(id, &id_hex_buf) });
 }
 
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
@@ -298,11 +296,12 @@ pub fn execSelectDocumentTyped(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
-    id: []const u8,
+    id: DocId,
     namespace: []const u8,
     table_metadata: *const schema_manager.TableMetadata,
 ) !?types.TypedRow {
-    if (sql.bindTextTransient(stmt, 1, id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    const id_bytes = doc_id.toBytes(id);
+    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
     if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
@@ -349,10 +348,10 @@ pub fn execQueryTyped(
                 const last_row = rows.items[limit - 1];
                 const sort_val = last_row.values[sort_field_index];
                 const id_val = last_row.values[schema_manager.id_field_index];
-                if (id_val != .scalar or id_val.scalar != .text) return error.InvalidMessageFormat;
+                if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
                 next_cursor = types.TypedCursor{
                     .sort_value = try sort_val.clone(allocator),
-                    .id = try allocator.dupe(u8, id_val.scalar.text),
+                    .id = id_val.scalar.doc_id,
                 };
             }
 

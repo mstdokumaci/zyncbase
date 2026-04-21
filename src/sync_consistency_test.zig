@@ -29,7 +29,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 2) Queue a write BEFORE any subscription exists.
     //    This is the behavior that used to be dropped when capture was optional.
-    try ctx.insertText("items", "id1", "ns", "val", "task 1");
+    try ctx.insertText("items", 1, "ns", "val", "task 1");
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.

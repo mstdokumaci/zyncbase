@@ -20,9 +20,9 @@ test "StorageEngine: selectQuery basic equality" {
     const users = try ctx.table("users");
 
     // Seed data
-    try seedUser(allocator, users, "1", "Alice", 30);
-    try seedUser(allocator, users, "2", "Bob", 25);
-    try seedUser(allocator, users, "3", "Charlie", 35);
+    try seedUser(allocator, users, 1, "Alice", 30);
+    try seedUser(allocator, users, 2, "Bob", 25);
+    try seedUser(allocator, users, 3, "Charlie", 35);
     try users.flush();
     const name_index = try users.fieldIndex("name");
 
@@ -61,9 +61,9 @@ test "StorageEngine: selectQuery with OR and ordering" {
     defer ctx.deinit();
     const users = try ctx.table("users");
 
-    try seedUser(allocator, users, "1", "Alice", 30);
-    try seedUser(allocator, users, "2", "Bob", 25);
-    try seedUser(allocator, users, "3", "Charlie", 35);
+    try seedUser(allocator, users, 1, "Alice", 30);
+    try seedUser(allocator, users, 2, "Bob", 25);
+    try seedUser(allocator, users, 3, "Charlie", 35);
     try users.flush();
     const age_index = try users.fieldIndex("age");
 
@@ -110,10 +110,10 @@ test "StorageEngine: selectQuery pagination (after)" {
     const scores = try ctx.table("scores");
 
     // IDs are used as secondary sort key
-    try seedScore(scores, "id1", 100);
-    try seedScore(scores, "id2", 100);
-    try seedScore(scores, "id3", 200);
-    try seedScore(scores, "id4", 300);
+    try seedScore(scores, 1, 100);
+    try seedScore(scores, 2, 100);
+    try seedScore(scores, 3, 200);
+    try seedScore(scores, 4, 300);
     try scores.flush();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
@@ -125,27 +125,27 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
-    _ = try sth.expectFieldString(res1[0], scores.metadata, "id", "id1");
-    _ = try sth.expectFieldString(res1[1], scores.metadata, "id", "id2");
+    _ = try sth.expectFieldDocId(res1[0], scores.metadata, "id", 1);
+    _ = try sth.expectFieldDocId(res1[1], scores.metadata, "id", 2);
 
-    // Query 2: Same query but AFTER [100, "id2"]
+    // Query 2: Same query but AFTER [100, 2]
     var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
         .sort_value = tth.valInt(100),
-        .id = try allocator.dupe(u8, "id2"),
+        .id = 2,
     };
 
     var managed2 = try scores.selectQuery(allocator, "ns", filter2);
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
-    _ = try sth.expectFieldString(res2[0], scores.metadata, "id", "id3"); // 200
-    _ = try sth.expectFieldString(res2[1], scores.metadata, "id", "id4"); // 300
+    _ = try sth.expectFieldDocId(res2[0], scores.metadata, "id", 3); // 200
+    _ = try sth.expectFieldDocId(res2[1], scores.metadata, "id", 4); // 300
 }
 
-fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: []const u8, name: []const u8, age: i64) !void {
+fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: u128, name: []const u8, age: i64) !void {
     _ = allocator;
     try users.insertNamed(id, "ns", .{
         sth.named("name", tth.valText(name)),
@@ -153,7 +153,7 @@ fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: []const u
     });
 }
 
-fn seedScore(scores: sth.TableFixture, id: []const u8, score: i64) !void {
+fn seedScore(scores: sth.TableFixture, id: u128, score: i64) !void {
     try scores.insertInt(id, "ns", "score", score);
 }
 
@@ -176,7 +176,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
-    try items.insertNamed("id1", "ns", .{
+    try items.insertNamed(1, "ns", .{
         sth.named("name", tth.valText("Task 1")),
         sth.named("tags", tags_tv),
         sth.named("labels", labels_tv),
@@ -229,10 +229,10 @@ test "StorageEngine: LIKE wildcard escaping" {
 
     // Seed data
     const ns = "ns";
-    try seedData(allocator, wildcards, "1", "apple");
-    try seedData(allocator, wildcards, "2", "app%le");
-    try seedData(allocator, wildcards, "3", "ap_le");
-    try seedData(allocator, wildcards, "4", "a\\le");
+    try seedData(allocator, wildcards, 1, "apple");
+    try seedData(allocator, wildcards, 2, "app%le");
+    try seedData(allocator, wildcards, 3, "ap_le");
+    try seedData(allocator, wildcards, 4, "a\\le");
     try wildcards.flush();
 
     // 1. Contains '%' - should only match "app%le", not "apple"
@@ -252,7 +252,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
+        _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 2);
     }
 
     // 2. Contains '_' - should only match "ap_le", not "apple"
@@ -272,7 +272,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
+        _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 3);
     }
 
     // 3. StartsWith 'ap_' - should only match "ap_le"
@@ -292,7 +292,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "3");
+        _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 3);
     }
 
     // 4. EndsWith '%le' - should only match "app%le"
@@ -312,7 +312,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "2");
+        _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 2);
     }
 
     // 5. Contains '\' - should match "a\\le"
@@ -332,13 +332,13 @@ test "StorageEngine: LIKE wildcard escaping" {
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 1), results.len);
-        _ = try sth.expectFieldString(results[0], wildcards.metadata, "id", "4");
+        _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 4);
     }
 
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
     {
         // Add a document in a different namespace that we'll try to reach
-        try seedDataInNs(allocator, wildcards, "5", "secret", "other_ns");
+        try seedDataInNs(allocator, wildcards, 5, "secret", "other_ns");
         try wildcards.flush();
 
         var filter = try qth.makeDefaultFilter(allocator);
@@ -365,11 +365,11 @@ test "StorageEngine: LIKE wildcard escaping" {
     }
 }
 
-fn seedData(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: []const u8, data: []const u8) !void {
+fn seedData(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: u128, data: []const u8) !void {
     try seedDataInNs(allocator, wildcards, id, data, "ns");
 }
 
-fn seedDataInNs(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: []const u8, data: []const u8, namespace: []const u8) !void {
+fn seedDataInNs(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: u128, data: []const u8, namespace: []const u8) !void {
     _ = allocator;
     try wildcards.insertText(id, namespace, "data", data);
 }

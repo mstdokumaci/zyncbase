@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 
 pub const FieldType = enum {
     text,
+    doc_id,
     integer,
     real,
     boolean,
@@ -13,6 +14,7 @@ pub const FieldType = enum {
     pub fn toSqlType(self: FieldType) []const u8 {
         return switch (self) {
             .text => "TEXT",
+            .doc_id => "BLOB",
             .integer => "INTEGER",
             .real => "REAL",
             .boolean => "INTEGER",
@@ -24,7 +26,7 @@ pub const FieldType = enum {
 pub const OnDelete = enum { cascade, restrict, set_null };
 
 pub const built_in_columns = [_]Field{
-    .{ .name = "id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
     .{ .name = "namespace_id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
     .{ .name = "created_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
@@ -360,7 +362,7 @@ pub const SchemaParser = struct {
                 self.allocator.free(full_name); // prefix is no longer needed after recursion
             } else {
                 // Leaf field
-                const sql_type = try mapType(type_str);
+                var sql_type = try mapType(type_str);
                 const is_required = required_set.contains(full_name);
 
                 var items_type: ?FieldType = null;
@@ -380,6 +382,11 @@ pub const SchemaParser = struct {
                     break :blk null;
                 } else null;
                 errdefer if (refs) |r| self.allocator.free(r);
+
+                if (refs != null) {
+                    if (sql_type != .text) return error.InvalidFieldType;
+                    sql_type = .doc_id;
+                }
 
                 const on_del: ?OnDelete = if (field_def.object.get("onDelete")) |odv| blk: {
                     if (odv != .string) return error.InvalidOnDelete;
@@ -544,6 +551,7 @@ pub fn mapPrimitiveType(type_str: []const u8) !FieldType {
 pub fn fieldTypeName(ft: FieldType) []const u8 {
     return switch (ft) {
         .text => "string",
+        .doc_id => "string",
         .integer => "integer",
         .real => "number",
         .boolean => "boolean",

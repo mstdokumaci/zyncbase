@@ -4,6 +4,7 @@ pub const std_options = struct {
 };
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
+const doc_id = @import("doc_id.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const storage_mod = @import("storage_engine.zig");
 const StorageEngine = storage_mod.StorageEngine;
@@ -245,8 +246,8 @@ pub const MessageHandler = struct {
 
         const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        if (arr[1] != .str) return error.InvalidMessageFormat;
-        const doc_id = arr[1].str.value();
+        if (arr[1] != .bin) return error.InvalidMessageFormat;
+        const doc_id_value = try doc_id.fromBytes(arr[1].bin.value());
         const field_index: ?usize = if (arr.len >= 3) blk: {
             const fi = msgpack.extractPayloadUint(arr[2]) orelse return error.InvalidMessageFormat;
             if (fi >= tbl_md.fields.len) return error.UnknownField;
@@ -256,7 +257,7 @@ pub const MessageHandler = struct {
 
         try self.store_service.set(
             table_index,
-            doc_id,
+            doc_id_value,
             req.namespace,
             arr.len,
             field_index,
@@ -279,12 +280,12 @@ pub const MessageHandler = struct {
 
         const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
         _ = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        if (arr[1] != .str) return error.InvalidMessageFormat;
-        const doc_id = arr[1].str.value();
+        if (arr[1] != .bin) return error.InvalidMessageFormat;
+        const doc_id_value = try doc_id.fromBytes(arr[1].bin.value());
 
         try self.store_service.remove(
             table_index,
-            doc_id,
+            doc_id_value,
             req.namespace,
             arr.len,
         );

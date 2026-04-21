@@ -17,6 +17,7 @@ const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
 const sth = @import("storage_engine_test_helpers.zig");
+const storage_engine = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
@@ -194,7 +195,7 @@ pub const AppTestContext = struct {
     pub fn insertNamed(
         self: *AppTestContext,
         table_name: []const u8,
-        id: []const u8,
+        id: storage_engine.DocId,
         namespace: []const u8,
         columns: anytype,
     ) !void {
@@ -205,7 +206,7 @@ pub const AppTestContext = struct {
     pub fn insertField(
         self: *AppTestContext,
         table_name: []const u8,
-        id: []const u8,
+        id: storage_engine.DocId,
         namespace: []const u8,
         field: []const u8,
         value: @import("storage_engine.zig").TypedValue,
@@ -217,7 +218,7 @@ pub const AppTestContext = struct {
     pub fn insertText(
         self: *AppTestContext,
         table_name: []const u8,
-        id: []const u8,
+        id: storage_engine.DocId,
         namespace: []const u8,
         field: []const u8,
         value: []const u8,
@@ -228,7 +229,7 @@ pub const AppTestContext = struct {
     pub fn insertInt(
         self: *AppTestContext,
         table_name: []const u8,
-        id: []const u8,
+        id: storage_engine.DocId,
         namespace: []const u8,
         field: []const u8,
         value: i64,

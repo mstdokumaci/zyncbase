@@ -34,14 +34,14 @@ test "StorageEngine: insert and select basic" {
     const users = try ctx.table("users");
 
     // Insert
-    try users.insertNamed("id1", "ns", .{
+    try users.insertNamed(1, "ns", .{
         sth.named("name", tth.valText("Alice")),
         sth.named("age", tth.valInt(30)),
     });
     try users.flush();
 
     // Select
-    var doc = try users.getOne(allocator, "id1", "ns");
+    var doc = try users.getOne(allocator, 1, "ns");
     defer doc.deinit();
     _ = try doc.expectFieldString("name", "Alice");
     _ = try doc.expectFieldInt("age", 30);
@@ -59,13 +59,13 @@ test "StorageEngine: update document" {
     defer ctx.deinit();
     const docs = try ctx.table("test");
 
-    try docs.insertText("id1", "ns", "val", "v1");
+    try docs.insertText(1, "ns", "val", "v1");
     try docs.flush();
 
-    try docs.insertText("id1", "ns", "val", "v2");
+    try docs.insertText(1, "ns", "val", "v2");
     try docs.flush();
 
-    var doc = try docs.getOne(allocator, "id1", "ns");
+    var doc = try docs.getOne(allocator, 1, "ns");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "v2");
 }
@@ -82,13 +82,13 @@ test "StorageEngine: delete document" {
     defer ctx.deinit();
     const docs = try ctx.table("test");
 
-    try docs.insertText("id1", "ns", "val", "foo");
+    try docs.insertText(1, "ns", "val", "foo");
     try docs.flush();
 
-    try docs.deleteDocument("id1", "ns");
+    try docs.deleteDocument(1, "ns");
     try docs.flush();
 
-    var managed = try docs.selectDocument(allocator, "id1", "ns");
+    var managed = try docs.selectDocument(allocator, 1, "ns");
     defer managed.deinit();
     try testing.expect(managed.rows.len == 0);
 }
@@ -102,11 +102,11 @@ test "StorageEngine: insertOrReplace and selectDocument" {
     const items = try ctx.table("items");
 
     // Set a value
-    try items.insertText("id1", "test_namespace", "val", "test");
+    try items.insertText(1, "test_namespace", "val", "test");
     // Flush writes
     try items.flush();
     // Get the value
-    var doc = try items.getOne(allocator, "id1", "test_namespace");
+    var doc = try items.getOne(allocator, 1, "test_namespace");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "test");
 }
@@ -119,7 +119,7 @@ test "StorageEngine: selectDocument non-existent key" {
     defer ctx.deinit();
     const items = try ctx.table("items");
 
-    var managed = try items.selectDocument(allocator, "nonexistent", "test_namespace");
+    var managed = try items.selectDocument(allocator, 999, "test_namespace");
     defer managed.deinit();
     try testing.expect(managed.rows.len == 0);
 }
@@ -133,13 +133,13 @@ test "StorageEngine: update existing document" {
     const items = try ctx.table("items");
 
     // Set initial value
-    try items.insertText("id1", "test_namespace", "val", "initial");
+    try items.insertText(1, "test_namespace", "val", "initial");
     try items.flush();
     // Update value
-    try items.insertText("id1", "test_namespace", "val", "updated");
+    try items.insertText(1, "test_namespace", "val", "updated");
     try items.flush();
     // Get the value
-    var doc = try items.getOne(allocator, "id1", "test_namespace");
+    var doc = try items.getOne(allocator, 1, "test_namespace");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "updated");
 }
@@ -153,8 +153,8 @@ test "StorageEngine: query collection" {
     const users = try ctx.table("users");
 
     // Set multiple documents
-    try users.insertText("1", "test_namespace", "name", "Alice");
-    try users.insertText("2", "test_namespace", "name", "Bob");
+    try users.insertText(1, "test_namespace", "name", "Alice");
+    try users.insertText(2, "test_namespace", "name", "Bob");
     try users.flush();
     // Query for collection using empty filter
     const filter = try qth.makeDefaultFilter(allocator);
@@ -173,13 +173,13 @@ test "StorageEngine: multiple namespaces" {
     const items = try ctx.table("items");
 
     // Set values in different namespaces
-    try items.insertText("id1", "namespace1", "val", "ns1");
-    try items.insertText("id1", "namespace2", "val", "ns2");
+    try items.insertText(1, "namespace1", "val", "ns1");
+    try items.insertText(1, "namespace2", "val", "ns2");
     try items.flush();
     // Get values from different namespaces
-    var doc1 = try items.getOne(allocator, "id1", "namespace1");
+    var doc1 = try items.getOne(allocator, 1, "namespace1");
     defer doc1.deinit();
-    var doc2 = try items.getOne(allocator, "id1", "namespace2");
+    var doc2 = try items.getOne(allocator, 1, "namespace2");
     defer doc2.deinit();
     _ = try doc1.expectFieldString("val", "ns1");
     _ = try doc2.expectFieldString("val", "ns2");
@@ -223,18 +223,18 @@ test "StorageEngine: automatic rollback in batch operations" {
     const engine = &ctx.engine;
 
     // Queue some operations
-    try ctx.insertText("items", "id1", "test_ns", "val", "value1");
-    try ctx.insertText("items", "id2", "test_ns", "val", "value1");
+    try ctx.insertText("items", 1, "test_ns", "val", "value1");
+    try ctx.insertText("items", 2, "test_ns", "val", "value1");
     // Wait for operations to be processed
     try engine.flushPendingWrites();
     // Verify no transaction is active after batch completes
     try testing.expect(!engine.isTransactionActive());
     // Verify data was written
-    var managed1 = try (try ctx.table("items")).selectDocument(allocator, "id1", "test_ns");
+    var managed1 = try (try ctx.table("items")).selectDocument(allocator, 1, "test_ns");
     defer managed1.deinit();
     try testing.expect(managed1.rows.len > 0);
 
-    var managed2 = try (try ctx.table("items")).selectDocument(allocator, "id2", "test_ns");
+    var managed2 = try (try ctx.table("items")).selectDocument(allocator, 2, "test_ns");
     defer managed2.deinit();
     try testing.expect(managed2.rows.len > 0);
 }
@@ -248,12 +248,12 @@ test "StorageEngine: concurrent reads" {
     const engine = &ctx.engine;
 
     // Set some values
-    try ctx.insertInt("items", "id1", "test_namespace", "val", 1);
-    try ctx.insertInt("items", "id2", "test_namespace", "val", 1);
+    try ctx.insertInt("items", 1, "test_namespace", "val", 1);
+    try ctx.insertInt("items", 2, "test_namespace", "val", 1);
     try engine.flushPendingWrites();
     // Perform multiple concurrent reads
     const Thread = struct {
-        fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, id: []const u8) !void {
+        fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, id: u128) !void {
             var managed = try eng.selectDocument(alloc, 0, id, "test_namespace");
             defer managed.deinit();
             try testing.expect(managed.rows.len > 0);
@@ -261,7 +261,7 @@ test "StorageEngine: concurrent reads" {
     };
     var threads: [4]std.Thread = undefined;
     for (&threads, 0..) |*thread, i| {
-        const id = if (i % 2 == 0) "id1" else "id2";
+        const id: u128 = if (i % 2 == 0) 1 else 2;
         thread.* = try std.Thread.spawn(.{}, Thread.readKey, .{ engine, allocator, id });
     }
     for (threads) |thread| {
@@ -290,8 +290,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         // but we need it for the second part of the test.
         test_dir = try allocator.dupe(u8, ctx.test_context.test_dir);
         for (0..num_keys) |i| {
-            var id_buf: [32]u8 = undefined;
-            const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
+            const id: u128 = i + 1;
             try ctx.insertInt("items", id, "ns", "val", @intCast(i));
         }
         // deinitNoCleanup will stop the engine but NOT delete the files.
@@ -309,8 +308,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     defer verify_ctx.deinit();
 
     for (0..num_keys) |i| {
-        var id_buf: [32]u8 = undefined;
-        const id = try std.fmt.bufPrint(&id_buf, "id_{d}", .{i});
+        const id: u128 = i + 1;
         var managed = try (try verify_ctx.table("items")).selectDocument(allocator, id, "ns");
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
@@ -329,10 +327,10 @@ test "StorageEngine: client writes blocked during migration" {
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
     // insertOrReplace should be blocked
-    const err1 = ctx.insertField("items", "id1", "ns", "val", tth.valInt(1));
+    const err1 = ctx.insertField("items", 1, "ns", "val", tth.valInt(1));
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
-    const err3 = (try ctx.table("items")).deleteDocument("id1", "ns");
+    const err3 = (try ctx.table("items")).deleteDocument(1, "ns");
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
 test "StorageEngine: manual transaction MUST increment write_seq on commit" {
@@ -351,7 +349,7 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     // 2. Begin transaction
     try engine.beginTransaction();
     // 3. Write something
-    try ctx.insertText("items", "id1", "ns", "val", "updated");
+    try ctx.insertText("items", 1, "ns", "val", "updated");
     // 4. Flush batch. This should increment write_seq to 2.
     try engine.flushPendingWrites();
     const seq1 = engine.write_seq.load(.acquire);

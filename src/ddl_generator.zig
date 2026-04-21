@@ -21,7 +21,7 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, " (\n");
 
         // Fixed leading columns
-        try buf.appendSlice(self.allocator, "  id TEXT,\n");
+        try buf.appendSlice(self.allocator, "  id BLOB NOT NULL CHECK(length(id) = 16),\n");
         try buf.appendSlice(self.allocator, "  namespace_id TEXT NOT NULL");
         // One column per field
         for (table.fields) |field| {

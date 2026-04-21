@@ -2,19 +2,21 @@ const std = @import("std");
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
+const storage_engine = @import("storage_engine.zig");
+const doc_id = @import("doc_id.zig");
 
 pub fn createStoreSetMessage(
     allocator: std.mem.Allocator,
     id: u64,
     namespace: []const u8,
     table_index: usize,
-    doc_id: []const u8,
+    doc_id_value: storage_engine.DocId,
     value: []const u8,
 ) ![]u8 {
     // Compatibility helper for single-field test tables:
     // field index 0 is `id`, field index 1 is `namespace_id`.
     // The first custom user field sits at index 2.
-    return createStoreSetFieldMessage(allocator, id, namespace, table_index, doc_id, 2, value);
+    return createStoreSetFieldMessage(allocator, id, namespace, table_index, doc_id_value, 2, value);
 }
 
 pub fn createStoreSetFieldMessage(
@@ -22,13 +24,13 @@ pub fn createStoreSetFieldMessage(
     id: u64,
     namespace: []const u8,
     table_index: usize,
-    doc_id: []const u8,
+    doc_id_value: storage_engine.DocId,
     field_index: usize,
     value: []const u8,
 ) ![]u8 {
     const val_payload = try msgpack_utils.Payload.strToPayload(value, allocator);
     defer val_payload.free(allocator);
-    return createStoreSetMessageWithPayload(allocator, id, namespace, table_index, doc_id, field_index, val_payload);
+    return createStoreSetMessageWithPayload(allocator, id, namespace, table_index, doc_id_value, field_index, val_payload);
 }
 
 pub fn createStoreSetMessageWithPayload(
@@ -36,7 +38,7 @@ pub fn createStoreSetMessageWithPayload(
     id: u64,
     namespace: []const u8,
     table_index: usize,
-    doc_id: []const u8,
+    doc_id_value: storage_engine.DocId,
     field_index: ?usize,
     value: msgpack_utils.Payload,
 ) ![]u8 {
@@ -64,7 +66,8 @@ pub fn createStoreSetMessageWithPayload(
     try writer.writeInt(u64, table_index, .big);
 
     // 2. Doc ID
-    try msgpack_utils.writeMsgPackStr(writer, doc_id);
+    const doc_id_bytes = doc_id.toBytes(doc_id_value);
+    try msgpack_utils.writeMsgPackBin(writer, &doc_id_bytes);
 
     // 3. Optional Field Index
     if (field_index) |fi| {

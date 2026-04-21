@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
+const doc_id = @import("doc_id.zig");
 const Payload = msgpack.Payload;
 const storage_mod = @import("storage_engine.zig");
 const schema_manager = @import("schema_manager.zig");
@@ -401,7 +402,8 @@ pub fn encodeCursor(allocator: Allocator, cursor: storage_mod.TypedCursor) ![]co
     const writer = list.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
     try cursor.sort_value.writeMsgPack(writer);
-    try msgpack.writeMsgPackStr(writer, cursor.id);
+    const id_bytes = doc_id.toBytes(cursor.id);
+    try msgpack.writeMsgPackBin(writer, &id_bytes);
     const encoded_len = std.base64.standard.Encoder.calcSize(list.items.len);
     const dest = try allocator.alloc(u8, encoded_len);
     errdefer allocator.free(dest);
@@ -492,8 +494,8 @@ pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.Sc
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
 
-    // Top-level map: { "type": "SchemaSync", "tables": [...], "fields": [[...], ...] }
-    try msgpack.encodeMapHeader(writer, 3);
+    // Top-level map: { "type": "SchemaSync", "tables": [...], "fields": [[...], ...], "fieldFlags": [[...], ...] }
+    try msgpack.encodeMapHeader(writer, 4);
 
     // "type": "SchemaSync"
     try msgpack.writeMsgPackStr(writer, "type");
@@ -515,6 +517,19 @@ pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.Sc
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             try msgpack.writeMsgPackStr(writer, field.name);
+        }
+    }
+
+    try msgpack.writeMsgPackStr(writer, "fieldFlags");
+    try msgpack.encodeArrayHeader(writer, tables.len);
+    for (tables) |table| {
+        const tbl_md = sm.getTable(table.name) orelse return error.UnknownTable;
+        try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
+        for (tbl_md.fields) |field| {
+            var flags: u8 = 0;
+            if (schema_manager.isSystemColumn(field.name)) flags |= 0x01;
+            if (field.sql_type == .doc_id) flags |= 0x02;
+            try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
     }
 

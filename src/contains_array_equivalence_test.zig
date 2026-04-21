@@ -8,12 +8,12 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.StringHashMap(void) {
-    var ids = std.StringHashMap(void).init(allocator);
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.AutoHashMap(storage_engine.DocId, void) {
+    var ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
-        const id_text = sth.getFieldTextOrNull(row, metadata, "id") orelse continue;
-        try ids.put(id_text, {});
+        const id = sth.getFieldDocIdOrNull(row, metadata, "id") orelse continue;
+        try ids.put(id, {});
     }
     return ids;
 }
@@ -37,7 +37,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
         defer tags_tv.deinit(allocator);
-        try ctx.insertNamed("items", "1", ns, .{
+        try ctx.insertNamed("items", 1, ns, .{
             sth.named("name", tth.valText("Task 1")),
             sth.named("tags", tags_tv),
         });
@@ -46,7 +46,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
         defer tags_tv.deinit(allocator);
-        try ctx.insertNamed("items", "2", ns, .{
+        try ctx.insertNamed("items", 2, ns, .{
             sth.named("name", tth.valText("Task 2")),
             sth.named("tags", tags_tv),
         });
@@ -55,14 +55,14 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "work" } });
         defer tags_tv.deinit(allocator);
-        try ctx.insertNamed("items", "3", ns, .{
+        try ctx.insertNamed("items", 3, ns, .{
             sth.named("name", tth.valText("Task 3")),
             sth.named("tags", tags_tv),
         });
     }
 
     {
-        try ctx.insertField("items", "4", ns, "name", tth.valText("Task 4"));
+        try ctx.insertField("items", 4, ns, "name", tth.valText("Task 4"));
     }
 
     try engine.flushPendingWrites();
@@ -103,13 +103,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var all_managed = try engine.selectQuery(allocator, items_md.index, ns, all_filter);
     defer all_managed.deinit();
 
-    var mem_ids = std.StringHashMap(void).init(allocator);
+    var mem_ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_text = sth.getFieldTextOrNull(row, items_md, "id") orelse continue;
-            try mem_ids.put(id_text, {});
+            const id = sth.getFieldDocIdOrNull(row, items_md, "id") orelse continue;
+            try mem_ids.put(id, {});
         }
     }
 
@@ -140,7 +140,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } });
         defer arr_tv.deinit(allocator);
-        try ctx.insertNamed("players", "1", ns, .{
+        try ctx.insertNamed("players", 1, ns, .{
             sth.named("name", tth.valText("Alice")),
             sth.named("scores", arr_tv),
         });
@@ -149,7 +149,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 5 }, .{ .integer = 15 } });
         defer arr_tv.deinit(allocator);
-        try ctx.insertNamed("players", "2", ns, .{
+        try ctx.insertNamed("players", 2, ns, .{
             sth.named("name", tth.valText("Bob")),
             sth.named("scores", arr_tv),
         });
@@ -158,7 +158,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 20 }, .{ .integer = 40 } });
         defer arr_tv.deinit(allocator);
-        try ctx.insertNamed("players", "3", ns, .{
+        try ctx.insertNamed("players", 3, ns, .{
             sth.named("name", tth.valText("Carol")),
             sth.named("scores", arr_tv),
         });
@@ -202,13 +202,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var all_managed = try engine.selectQuery(allocator, players_md.index, ns, all_filter);
     defer all_managed.deinit();
 
-    var mem_ids = std.StringHashMap(void).init(allocator);
+    var mem_ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_managed.rows) |row| {
         if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
-            const id_text = sth.getFieldTextOrNull(row, players_md, "id") orelse continue;
-            try mem_ids.put(id_text, {});
+            const id = sth.getFieldDocIdOrNull(row, players_md, "id") orelse continue;
+            try mem_ids.put(id, {});
         }
     }
 
