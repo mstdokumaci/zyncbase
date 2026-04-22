@@ -110,6 +110,8 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 | `object` (nested) | Flattened columns | `address.city` → `address_city TEXT` |
 | `array` (primitives) | `BLOB` | Stored as canonical JSONB value (sorted, unique) |
 
+Built-in document IDs and schema `references` fields are stored as fixed-width `BLOB(16)` values and kept as packed 16-byte IDs throughout the storage engine.
+
 ### Array Canonicalization Pipeline
 
 For schema-defined array fields, write-path processing is:

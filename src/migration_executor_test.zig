@@ -6,6 +6,8 @@ const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const sqlite = @import("sqlite");
 
+const zero_doc_id = [_]u8{0} ** 16;
+
 fn openMemDb() !sqlite.Db {
     return sqlite.Db.init(.{
         .mode = .Memory,
@@ -57,7 +59,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     try execMultiSql(&db, allocator, initial_ddl);
 
     // Insert a row
-    try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, title, status, created_at, updated_at) VALUES ('t1', 'ns1', 'My Task', 'open', 0, 0)");
+    try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, title, status, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'My Task', 'open', 0, 0)");
 
     // Build change_type migration: status TEXT -> INTEGER
     const changes = try allocator.alloc(migration_detector.Change, 1);
@@ -100,7 +102,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     try executor.execute(plan, target_schema);
 
     // Verify the row still exists with title intact
-    var stmt = try db.prepare("SELECT id, title FROM tasks WHERE id = 't1'");
+    var stmt = try db.prepare("SELECT id, title FROM tasks WHERE id = zeroblob(16)");
     defer stmt.deinit();
 
     const Row = struct {
@@ -114,7 +116,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         allocator.free(row.?.id);
         allocator.free(row.?.title);
     }
-    try std.testing.expectEqualStrings("t1", row.?.id);
+    try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
     try std.testing.expectEqualStrings("My Task", row.?.title);
 }
 
@@ -135,7 +137,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     try execMultiSql(&db, allocator, ddl);
 
     // Insert a row
-    try execSql(&db, allocator, "INSERT INTO real_table (id, namespace_id, name, created_at, updated_at) VALUES ('r1', 'ns1', 'test', 0, 0)");
+    try execSql(&db, allocator, "INSERT INTO real_table (id, namespace_id, name, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'test', 0, 0)");
 
     // Build a plan with a bad table name that will fail DDL execution
     const changes = try allocator.alloc(migration_detector.Change, 1);
@@ -168,7 +170,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     try std.testing.expectError(error.TableNotFoundInSchema, result);
 
     // Verify DB is unchanged: original row still exists
-    var stmt = try db.prepare("SELECT id FROM real_table WHERE id = 'r1'");
+    var stmt = try db.prepare("SELECT id FROM real_table WHERE id = zeroblob(16)");
     defer stmt.deinit();
 
     const IdRow = struct { id: []const u8 };
@@ -176,7 +178,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     const row = try iter.nextAlloc(allocator, .{});
     try std.testing.expect(row != null);
     defer allocator.free(row.?.id);
-    try std.testing.expectEqualStrings("r1", row.?.id);
+    try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
 }
 
 // Unit test 5.7: empty schema_meta triggers full schema creation

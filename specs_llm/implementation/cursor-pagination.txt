@@ -1,7 +1,6 @@
-Cursor Pagination Implementation Spec v1 ZyncBase exposes cursor-driven pagination topology offset-based equivalents Cursor pagination scales provides deterministic sequence navigation positions document implementation specification `nextCursor` token encoding layout SQLite execution logic real-time cursor windowing Defining Determinism Tie-Breaking Cursors high-throughput queries ordered by singular column unsafe Millions rows share timestamp Standard cursors risk "infinite loops skipped pages collision overlap ZyncBase utilizes **Compound Cursors** compound cursor encodes primary sorting column unique Doc generated `nextCursor` string `StoreQuery` responses opaque Base64 literal tuple constraint```typescript
-const cursorTuple = [sort_value, document_id];
-const opaqueToken = btoa(JSON.stringify(cursorTuple)); 
-// "WzE3MTAwMDAwMDAsImRvYy0xIl0="
+Cursor Pagination Implementation Spec v1 ZyncBase exposes cursor-driven pagination topology offset-based equivalents Cursor pagination scales provides deterministic sequence navigation positions document implementation specification `nextCursor` token encoding layout SQLite execution logic real-time cursor windowing Defining Determinism Tie-Breaking Cursors high-throughput queries ordered by singular column unsafe Millions rows share timestamp Standard cursors risk "infinite loops skipped pages collision overlap ZyncBase utilizes **Compound Cursors** compound cursor encodes primary sorting column unique 16-byte document `nextCursor` string `StoreQuery responses opaque Base64 literal MessagePack tuple constraint```typescript
+const cursorTuple = [sort_value, docIdBin16];
+const opaqueToken = base64(msgpackEncode(cursorTuple));
 ```SQLite Execution `StorageEngine interprets `after string token Step 1: Cursor Decoding Base64 decodes token sort variable ID constraints 2: Compound Translation cursor compounded combination requires `OR` logic boundary tie-break skipping traversing`ascending sort sequence translation```sql
 SELECT * FROM collection
 WHERE ...
@@ -11,7 +10,7 @@ WHERE ...
   )
 ORDER BY sort_column ASC, id ASC
 LIMIT x
-```(Parameter matches `[sort_value document_id] navigating`descending sequence translation inverted```sql
+```(Parameter matches[sort_value, document_id_blob] navigating`descending sequence translation inverted```sql
 SELECT * FROM collection
 WHERE ...
   AND (

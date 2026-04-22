@@ -104,6 +104,21 @@ pub fn writeMsgPackStr(writer: anytype, s: []const u8) !void {
     try writer.writeAll(s);
 }
 
+/// Writes bytes to the output using MessagePack bin8/bin16/bin32 encoding.
+pub fn writeMsgPackBin(writer: anytype, bytes: []const u8) !void {
+    if (bytes.len <= 0xff) {
+        try writer.writeByte(0xc4);
+        try writer.writeByte(@as(u8, @intCast(bytes.len)));
+    } else if (bytes.len <= 0xffff) {
+        try writer.writeByte(0xc5);
+        try writer.writeInt(u16, @as(u16, @intCast(bytes.len)), .big);
+    } else {
+        try writer.writeByte(0xc6);
+        try writer.writeInt(u32, @as(u32, @intCast(bytes.len)), .big);
+    }
+    try writer.writeAll(bytes);
+}
+
 pub fn encodeArrayHeader(writer: anytype, len: usize) !void {
     if (len <= 15) {
         try writer.writeByte(0x90 | @as(u8, @intCast(len)));

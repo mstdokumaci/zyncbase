@@ -276,7 +276,7 @@ test "logging: error details" {
     {
         const tbl_md = app.schema_manager.getTable("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
-        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, "path", "nonexistent");
+        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, "nonexistent");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }

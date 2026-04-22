@@ -6,6 +6,8 @@
 
 import xxhash from "xxhash-wasm";
 import { SchemaError } from "./errors.js";
+import { ErrorCodes } from "./errors.js";
+import { packDocId, unpackDocId } from "./doc_id.js";
 
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
@@ -25,6 +27,7 @@ export class SchemaDictionary {
 	// ─── Raw positional arrays (from SchemaSync) ──────────────────────────
 	private tables: string[] = [];
 	private fields: string[][] = [];
+	private fieldFlags: number[][] = [];
 
 	// ─── Bidirectional maps ────────────────────────────────────────────────
 	private tableToIndex = new Map<string, number>();
@@ -52,13 +55,31 @@ export class SchemaDictionary {
 	async processSchemaSync(payload: {
 		tables: string[];
 		fields: string[][];
+		fieldFlags: number[][];
 	}): Promise<boolean> {
 		// Save previous hash for comparison
 		this.previousHash = this.hash;
 
+		if (!Array.isArray(payload.fieldFlags)) {
+			throw new Error("SchemaDictionary: SchemaSync missing fieldFlags");
+		}
+		if (payload.fieldFlags.length !== payload.fields.length) {
+			throw new Error(
+				"SchemaDictionary: SchemaSync fieldFlags table count mismatch",
+			);
+		}
+		for (let ti = 0; ti < payload.fields.length; ti++) {
+			if (payload.fieldFlags[ti]?.length !== payload.fields[ti]?.length) {
+				throw new Error(
+					`SchemaDictionary: SchemaSync fieldFlags length mismatch for table index ${ti}`,
+				);
+			}
+		}
+
 		// Store raw arrays
 		this.tables = payload.tables;
 		this.fields = payload.fields;
+		this.fieldFlags = payload.fieldFlags;
 
 		// Build table index map
 		this.tableToIndex.clear();
@@ -163,7 +184,7 @@ export class SchemaDictionary {
 	 * Segments at index 2+ are joined with "__" (matching the server's
 	 * flattened column naming) and then resolved to a field index.
 	 */
-	encodePath(segments: string[]): (number | string)[] {
+	encodePath(segments: string[]): (number | Uint8Array)[] {
 		if (segments.length === 0) {
 			throw new SchemaError("SchemaDictionary: empty path", "INVALID_PATH");
 		}
@@ -175,7 +196,7 @@ export class SchemaDictionary {
 			return [tableIndex];
 		}
 
-		const docId = segments[1];
+		const docId = packDocId(segments[1], ErrorCodes.INVALID_PATH);
 
 		if (segments.length === 2) {
 			return [tableIndex, docId];
@@ -196,7 +217,7 @@ export class SchemaDictionary {
 	 *   [0, "u1", 2]  → ["users", "u1", "name"]
 	 *   [0, "u1", 5]  → ["users", "u1", "address", "city"]  (if field 5 = "address__city")
 	 */
-	decodePath(wirePath: (number | string)[]): string[] {
+	decodePath(wirePath: (number | string | Uint8Array)[]): string[] {
 		if (wirePath.length === 0) {
 			throw new SchemaError(
 				"SchemaDictionary: empty wire path",
@@ -211,7 +232,9 @@ export class SchemaDictionary {
 			return [tableName];
 		}
 
-		const docId = wirePath[1] as string;
+		const rawDocId = wirePath[1];
+		const docId =
+			rawDocId instanceof Uint8Array ? unpackDocId(rawDocId) : String(rawDocId);
 
 		if (wirePath.length === 2) {
 			return [tableName, docId];
@@ -244,7 +267,7 @@ export class SchemaDictionary {
 		const result: Record<number, unknown> = {};
 		for (const [key, val] of Object.entries(value)) {
 			const fieldIndex = this.getFieldIndex(tableIndex, key);
-			result[fieldIndex] = val;
+			result[fieldIndex] = this.encodeFieldValue(tableIndex, fieldIndex, val);
 		}
 		return result;
 	}
@@ -263,13 +286,75 @@ export class SchemaDictionary {
 		for (const [key, val] of Object.entries(wireValue)) {
 			const fieldIndex = Number(key);
 			const fieldName = this.getFieldName(tableIndex, fieldIndex);
-			result[fieldName] = val;
+			result[fieldName] = this.decodeFieldValue(tableIndex, fieldIndex, val);
 		}
 		return result;
 	}
 
+	encodeFieldValue(
+		tableIndex: number,
+		fieldIndex: number,
+		value: unknown,
+	): unknown {
+		if (!this.isDocIdField(tableIndex, fieldIndex)) {
+			return value;
+		}
+
+		if (typeof value === "string") {
+			return packDocId(value, ErrorCodes.INVALID_MESSAGE);
+		}
+		if (Array.isArray(value)) {
+			return value.map((item) =>
+				typeof item === "string"
+					? packDocId(item, ErrorCodes.INVALID_MESSAGE)
+					: item,
+			);
+		}
+		return value;
+	}
+
+	decodeFieldValue(
+		tableIndex: number,
+		fieldIndex: number,
+		value: unknown,
+	): unknown {
+		if (!this.isDocIdField(tableIndex, fieldIndex)) {
+			return value;
+		}
+		if (value instanceof Uint8Array) {
+			return unpackDocId(value);
+		}
+		if (Array.isArray(value)) {
+			return value.map((item) =>
+				item instanceof Uint8Array ? unpackDocId(item) : item,
+			);
+		}
+		return value;
+	}
+
+	isDocIdField(tableIndex: number, fieldIndex: number): boolean {
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
+	}
+
 	// ─── Private helpers ───────────────────────────────────────────────────
 	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
+
+	private getFieldFlags(tableIndex: number, fieldIndex: number): number {
+		if (tableIndex < 0 || tableIndex >= this.fields.length) {
+			throw new SchemaError(
+				`SchemaDictionary: table index ${tableIndex} out of range`,
+				"TABLE_NOT_FOUND",
+			);
+		}
+		const flagsForTable = this.fieldFlags[tableIndex];
+		if (!flagsForTable || fieldIndex < 0 || fieldIndex >= flagsForTable.length) {
+			throw new SchemaError(
+				`SchemaDictionary: field index ${fieldIndex} out of range for table index ${tableIndex}`,
+				"FIELD_NOT_FOUND",
+			);
+		}
+		return flagsForTable[fieldIndex];
+	}
 
 	/**
 	 * Compute an xxHash64 of the canonical JSON representation of
@@ -278,6 +363,7 @@ export class SchemaDictionary {
 	private async computeHash(payload: {
 		tables: string[];
 		fields: string[][];
+		fieldFlags: number[][];
 	}): Promise<string> {
 		if (!SchemaDictionary.xxhashPromise) {
 			SchemaDictionary.xxhashPromise = xxhash();
@@ -286,6 +372,7 @@ export class SchemaDictionary {
 		const canonical = JSON.stringify({
 			tables: payload.tables,
 			fields: payload.fields,
+			fieldFlags: payload.fieldFlags,
 		});
 		return hasher.h64ToString(canonical).padStart(16, "0");
 	}

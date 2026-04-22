@@ -1,7 +1,7 @@
-Store API Reference handles synchronized data validated against [Schema.md persisted to SQLite synchronized across clients Table of Contents [Direct Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access (CRUD Target items properties using dot-notation arrays strict rules path Path Target Depth Allowed Operations Behavior **Collection**'users `1` `create` `query `listen` **Append-only `set `remove entire collection **Document**.u1 `2` `get` `set `remove `listen CRUD** `set` upserts `remove` deletes **Field**.u1.name `3+` `get` `set `listen **Updates clear field `set to `null` `remove` forbidden `store.create(collection value)` Creates new document SDK generates time-sortable ID (UUIDv7) calls `set````typescript
+Store API Reference handles synchronized data validated against [Schema/configuration.md persisted to SQLite synchronized across clients Table of Contents [Direct Path Access [Query API (Path Filtering [Batch Operations [Path Syntax]-strings-vs-arrays Direct Path Access (CRUD Target items properties using dot-notation arrays strict rules path Path Target Depth Allowed Operations Behavior **Collection**'users `1` `create` `query `listen` **Append-only `set `remove entire collection **Document**.u1 `2` `get` `set `remove `listen CRUD** `set` upserts `remove` deletes **Field**.u1.name `3+` `get` `set `listen **Updates only** clear field `set to `null` `remove` forbidden `store.create(collection value)` Creates new document SDK generates lowercase UUIDv7 string calls `set````typescript
 // ID is generated locally for immediate optimistic UI rendering
 const id = client.store.create('elements', { type: 'rect', x: 10 })
-````string generated ID `store.get(path value state tree```typescript
+````string generated ID Custom document IDs supported path match short-ID grammar `[a-z0-9_-]{1,24}` `store.get(path) value state tree```typescript
 const element = client.store.get('elements.rect-1')
 ```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar specific field `undefined path not found `store.set(path, value) Write value or upsert document **Optimistic applied locally synced Reverted if server rejects **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null triggers schema validation required **Typed Arrays** fields "array values normalized to canonical form before persistence returned canonical form on reads```typescript
 // Upsert a full document. ID is extracted from path if needed.
@@ -51,7 +51,7 @@ await client.store.batch([
   { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
   { op: 'remove', path: 'temporary_locks.123' }
 ])
-```Max 500 operations per batch `set `remove allowed Utilities `client.utils.id() Generates time-sortable UID or client Useful generating IDs batch operations `store.create` relational keys set```typescript
+```Max 500 operations per batch `set `remove allowed Utilities `client.utils.id() Generates lowercase UUIDv7 string client generating IDs batch operations `store.create` relational keys set```typescript
 const userId = client.utils.id();
 const profileId = client.utils.id();
 
@@ -59,7 +59,7 @@ client.store.batch([
   { op: 'set', path: `users.${userId}`, value: { name: 'Alice' } },
   { op: 'set', path: `profiles.${profileId}`, value: { user_id: userId } }
 ])
-```Path Syntax (Strings vs Arrays) methods accept dot-notation strings Arrays Array canonical format Logical vs. Wire-Format Paths Paths follow logical progression from collections to documents specific fields SDK supports variadic segments **wire protocol** (socket enforces compact structure using schema index dictionaries SDK resolves nested strings translates into mapped `table_index` `field_index` integers. Target  Logical Path (SDK) Flattened (SDK Internal)  Wire-Format Path (Socket) Pattern **Collection** `['users']`[table_index] **Document**['users', 'u1']_index id] **Field**['users', 'u1, 'name'][table_index, id field_index] **Nested Field**['users', 'u1 'address', 'city']`[0 5[table_index id field_index] Why use Arrays? Arrays preferred dealing with variables IDs dots```typescript
+```Path Syntax (Strings vs Arrays methods accept dot-notation strings Arrays Array canonical format Logical vs Wire-Format Paths follow logical progression collections documents fields SDK supports segments **wire compact structure schema index dictionaries SDK resolves nested strings translates_index_index integersTarget Logical Path (SDK Flattened (SDK Internal Wire-Format Path (Socket Pattern :--- **Collection** `['users']`[0`[table_index]` **Document** `['users', 'u1']` 'u1'][0 <bin16('u1')>[table_index id_bin16]` **Field**['users', 'u1' 'name']` `[0, <bin16('u1 2]`[table_index id_bin16 field_index]` **Nested Field**['users', 'u1' 'address' 'city'] 'address__city'[0, <bin16('u1>, 5]`[table_index id_bin16 field_index]` use Arrays preferred variables IDs dots```typescript
 const userId = 'alice.smith' // Dot in ID!
 
 // ❌ Dot-notation breaks (ambiguous)

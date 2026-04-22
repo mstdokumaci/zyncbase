@@ -130,23 +130,25 @@ From a declarative schema, ZyncBase generates optimized DDL:
 ```sql
 -- Projects table
 CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT NOT NULL,
     name TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (id)
 );
 
 -- Tasks table with foreign key
 CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT NOT NULL,
     title TEXT,
     status TEXT,
     priority INTEGER,
-    projectId TEXT,
+    projectId BLOB,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
+    PRIMARY KEY (id),
     FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -154,6 +156,8 @@ CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_projectId ON tasks(projectId);
 ```
+
+Public SDKs still expose IDs and references as strings, but the core system stores and transports them as packed 16-byte values.
 
 ---
 

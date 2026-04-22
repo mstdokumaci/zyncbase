@@ -35,11 +35,11 @@ test "StoreService: set - full document replacement" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("users"), "user-1", "public", 2, null, val);
+        try service.set(app.tableIndex("users"), 1, "public", 2, null, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
-        var doc = try users.getOne(allocator, "user-1", "public");
+        var doc = try users.getOne(allocator, 1, "public");
         defer doc.deinit();
         _ = try doc.expectFieldString("name", "Alice");
         const age = try doc.getFieldInt("age");
@@ -51,7 +51,7 @@ test "StoreService: set - full document replacement" {
         const val = try store_helpers.createDocumentMapPayload(allocator, users.metadata, .{});
         defer val.free(allocator);
 
-        const result = service.set(@as(usize, 999), "id", "ns", 2, null, val);
+        const result = service.set(@as(usize, 999), 1, "ns", 2, null, val);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -76,11 +76,11 @@ test "StoreService: set - field level update" {
         const val = try msgpack.Payload.strToPayload("active", allocator);
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("items"), "item-1", "public", 3, app.fieldIndex("items", "status"), val);
+        try service.set(app.tableIndex("items"), 1, "public", 3, app.fieldIndex("items", "status"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify
-        var doc = try items.getOne(allocator, "item-1", "public");
+        var doc = try items.getOne(allocator, 1, "public");
         defer doc.deinit();
         _ = try doc.expectFieldString("status", "active");
     }
@@ -109,38 +109,38 @@ test "StoreService: remove" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("users"), "user-1", "public", 2, null, val);
+        try service.set(app.tableIndex("users"), 1, "public", 2, null, val);
         try app.storage_engine.flushPendingWrites();
     }
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
         const tbl_md = app.schema_manager.metadata.getTable("users") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, "user-1", "public", 3);
+        const result = service.remove(tbl_md.index, 1, "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
     // 2. Success: Remove document (segments_len == 2)
     {
-        try service.remove(app.tableIndex("users"), "user-1", "public", 2);
+        try service.remove(app.tableIndex("users"), 1, "public", 2);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.metadata.getTable("users") orelse return error.UnknownTable;
-        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, "user-1", "public");
+        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, "public");
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
 
     // 3. Negative: Unknown table
     {
-        const result = service.remove(@as(usize, 999), "id", "ns", 2);
+        const result = service.remove(@as(usize, 999), 1, "ns", 2);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
         const tbl_md = app.schema_manager.metadata.getTable("users") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, "user-1", "public", 3);
+        const result = service.remove(tbl_md.index, 1, "public", 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }
@@ -176,7 +176,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), "id1", "public", 3, app.fieldIndex("collections", "tags"), val);
+        try service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
     }
 
     // 2. Negative: Element type mismatch (integer in string array)
@@ -186,7 +186,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), "id1", "public", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -197,7 +197,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), "id1", "public", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -208,7 +208,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), "id1", "public", 3, app.fieldIndex("collections", "scores"), val);
+        try service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "scores"), val);
     }
 }
 
@@ -228,32 +228,32 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("value1", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), "key1", "ns-a", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
-        var stored_doc = try test_table.getOne(allocator, "key1", "ns-a");
+        var stored_doc = try test_table.getOne(allocator, 1, "ns-a");
         defer stored_doc.deinit();
         _ = try stored_doc.expectFieldString("val", "value1");
     }
 
-    // 2. Namespace Isolation
+    // 2. Duplicate ids do not cross namespace boundaries
     {
         const val = try msgpack.Payload.strToPayload("value2", allocator);
         defer val.free(allocator);
 
         // Same table/id, different namespace
-        try service.set(app.tableIndex("test"), "key1", "ns-b", 3, app.fieldIndex("test", "val"), val);
+        try service.set(app.tableIndex("test"), 1, "ns-b", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify ns-a still has value1
-        var doc_a = try test_table.getOne(allocator, "key1", "ns-a");
+        var doc_a = try test_table.getOne(allocator, 1, "ns-a");
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
-        // Verify ns-b has value2
-        var doc_b = try test_table.getOne(allocator, "key1", "ns-b");
-        defer doc_b.deinit();
-        _ = try doc_b.expectFieldString("val", "value2");
+        // Verify ns-b did not get a second row with the same id.
+        var managed_b = try test_table.selectDocument(allocator, 1, "ns-b");
+        defer managed_b.deinit();
+        try testing.expectEqual(@as(usize, 0), managed_b.rows.len);
     }
 
     // 3. Updates
@@ -261,10 +261,10 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("updated", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), "key1", "ns-a", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
-        var doc = try test_table.getOne(allocator, "key1", "ns-a");
+        var doc = try test_table.getOne(allocator, 1, "ns-a");
         defer doc.deinit();
         _ = try doc.expectFieldString("val", "updated");
     }
@@ -280,14 +280,14 @@ test "StoreService: query - basic search" {
     const users = try app.table("users");
 
     // Seed data
-    try users.insertText("user-1", "ns", "name", "Alice");
-    try users.insertText("user-2", "ns", "name", "Bob");
+    try users.insertText(1, "ns", "name", "Alice");
+    try users.insertText(2, "ns", "name", "Bob");
     try users.flush();
 
-    // Build filter: { "conditions": [ ["id", 0, "user-1"] ] }
+    // Build filter: { "conditions": [ ["id", 0, 1] ] }
     const tbl_md = app.schema_manager.getTable("users") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
-        .conditions = .{.{ "id", 0, "user-1" }},
+        .conditions = .{.{ "id", 0, @as(u128, 1) }},
     });
     defer filter_map.free(allocator);
 
@@ -311,9 +311,7 @@ test "StoreService: query - orderBy and limit" {
 
     const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
     for (tasks, 0..) |t, i| {
-        const id = try std.fmt.allocPrint(allocator, "task-{}", .{i});
-        defer allocator.free(id);
-        try app.insertText("tasks", id, "ns", "title", t);
+        try app.insertText("tasks", i + 1, "ns", "title", t);
     }
     try app.storage_engine.flushPendingWrites();
 
@@ -381,7 +379,7 @@ test "StoreService: queryWithCursor - pagination" {
         defer allocator.free(str);
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
-        try data_table.insertText(id, "ns", "val", str);
+        try data_table.insertText(i + 1, "ns", "val", str);
     }
     try data_table.flush();
 
@@ -404,7 +402,7 @@ test "StoreService: queryWithCursor - pagination" {
     defer allocator.free(encoded_cursor);
 
     // Decode it back to a domain object (simulating what MessageHandler does)
-    const cursor = try query_parser.parseCursorToken(allocator, encoded_cursor, .text, null);
+    const cursor = try query_parser.parseCursorToken(allocator, encoded_cursor, .doc_id, null);
 
     // 2. Query with cursor: fetch next 2
     var next_results = try service.queryWithCursor(allocator, app.tableIndex("data"), "ns", &qr.filter, cursor);
@@ -416,12 +414,12 @@ test "StoreService: queryWithCursor - pagination" {
     // Verify results are different (pagination worked)
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
-    const first_page_id = try sth.getFieldText(first_doc, data_table.metadata, "id");
+    const first_page_id = try sth.getFieldDocId(first_doc, data_table.metadata, "id");
 
     const second_doc = next_results.rows[0];
-    const second_page_id = try sth.getFieldText(second_doc, data_table.metadata, "id");
+    const second_page_id = try sth.getFieldDocId(second_doc, data_table.metadata, "id");
 
-    try testing.expect(!std.mem.eql(u8, first_page_id, second_page_id));
+    try testing.expect(first_page_id != second_page_id);
 }
 
 test "StoreService: validateFieldWrite tests" {

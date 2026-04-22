@@ -1,0 +1,60 @@
+import { describe, expect, test } from "bun:test";
+import { packDocId } from "./doc_id.js";
+import { SchemaDictionary } from "./schema_dictionary.js";
+
+describe("SchemaDictionary doc IDs", () => {
+	test("encodes and decodes path doc IDs as bin(16)", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["users"],
+			fields: [["id", "namespace_id", "created_at", "updated_at", "name"]],
+			fieldFlags: [[0b11, 0b01, 0b01, 0b01, 0b00]],
+		});
+
+		const encoded = schema.encodePath(["users", "abc123", "name"]);
+		expect(encoded[1]).toBeInstanceOf(Uint8Array);
+		expect(schema.decodePath(encoded)).toEqual(["users", "abc123", "name"]);
+	});
+
+	test("encodes and decodes row id/reference fields using field flags", async () => {
+		const schema = new SchemaDictionary();
+		await schema.processSchemaSync({
+			tables: ["tasks"],
+			fields: [
+				["id", "namespace_id", "created_at", "updated_at", "title", "owner_id"],
+			],
+			fieldFlags: [[0b11, 0b01, 0b01, 0b01, 0b00, 0b10]],
+		});
+
+		const encoded = schema.encodeValue(0, {
+			title: "hello",
+			owner_id: "owner_1",
+		});
+		expect(encoded[5]).toBeInstanceOf(Uint8Array);
+
+		const decoded = schema.decodeValue(0, {
+			0: packDocId("task_1"),
+			4: "hello",
+			5: packDocId("owner_1"),
+		} as unknown as Record<number, unknown>);
+		expect(decoded).toEqual({
+			id: "task_1",
+			title: "hello",
+			owner_id: "owner_1",
+		});
+	});
+
+	test("rejects missing fieldFlags", async () => {
+		const schema = new SchemaDictionary();
+		await expect(
+			schema.processSchemaSync({
+				tables: ["users"],
+				fields: [["id", "name"]],
+			} as unknown as {
+				tables: string[];
+				fields: string[][];
+				fieldFlags: number[][];
+			}),
+		).rejects.toThrow("missing fieldFlags");
+	});
+});

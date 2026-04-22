@@ -21,8 +21,9 @@ This document defines the formal grammar and property specification for `schema.
 ### Table Name Constraints
 
 - Must be a valid JSON key.
-- Should avoid SQLite reserved keywords.
-- Recommended: lowercase snake_case.
+- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
+- Must not contain `__`.
+- SQLite reserved keywords are allowed because ZyncBase quotes identifiers in generated SQL.
 
 ---
 
@@ -47,7 +48,7 @@ A field definition MUST contain a `type` property.
 |:---|:---:|:---|:---|
 | `type` | `string` | - | One of the types listed above. |
 | `indexed` | `boolean` | `false` | Creates a SQLite index for this column. |
-| `references` | `string` | `null` | Target table name for a foreign key relationship. |
+| `references` | `string` | `null` | Target table name for a foreign key relationship. Referenced fields are stored internally as packed `doc_id` values (`BLOB(16)`), while the SDK still exposes them as strings. |
 | `onDelete` | `string` | `"restrict"` | `set_null`, `cascade`, `restrict`. Note: `set_null` requires the field to be optional (not in `required`). |
 
 ### Array Properties
@@ -75,7 +76,7 @@ For any field with `type: "array"`, ZyncBase enforces canonical sorted-set behav
 ZyncBase uses a **flat relational storage engine**. Nested objects are logically grouped in the schema but flattened in the database.
 
 - **Separator**: `__` (double underscore).
-- **Naming Restriction**: Field names cannot contain `__`.
+- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*` and cannot contain `__`.
 - **Recursion**: Unlimited depth is supported for `object` types with their own `fields` property.
 
 Example:
@@ -90,6 +91,8 @@ Example:
 Flattens to SQLite column: `profile__userId TEXT`.
 
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
+
+> *Document IDs*: Every table has a built-in `id` system column stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK is responsible for converting between user-facing string IDs (UUIDv7 or strict short IDs) and the packed 16-byte representation.
 
 ---
 
@@ -120,11 +123,12 @@ The following errors are returned by `SchemaParser`:
 | `InvalidVersion` | `version` is not a string. |
 | `MissingStore` | `store` key is missing. |
 | `InvalidStore` | `store` is not an object. |
+| `InvalidTableName` | Table name is empty, starts with a non-letter, contains a non-alphanumeric/non-underscore character, or contains `__`. |
 | `InvalidTableDefinition` | A table value in `store` is not an object. |
 | `MissingFieldType` | A field definition lacks the `type` property. |
 | `InvalidFieldDefinition` | A field value is not an object. |
 | `InvalidFieldType` | `type` value is not a string. |
-| `InvalidFieldName` | Field name is empty or contains `__`. |
+| `InvalidFieldName` | Field name is empty, starts with a non-letter, contains a non-alphanumeric/non-underscore character, or contains `__`. |
 | `UnknownFieldType` | `type` string is not recognized. |
 | `InvalidOnDelete` | `onDelete` value is not one of `cascade`, `restrict`, `set_null`; or `set_null` is used on a `required` field. |
 | `MissingArrayItems` | `items` property is missing for an `array` field. |

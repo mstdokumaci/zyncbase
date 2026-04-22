@@ -74,12 +74,7 @@ test "storage: thread-safe engine access" {
         fn run(t_ctx: ThreadContext, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
-                const key = try std.fmt.allocPrint(
-                    testing.allocator,
-                    "/thread{d}/key{d}",
-                    .{ thread_id, i },
-                );
-                defer testing.allocator.free(key);
+                const key: u128 = thread_id * 1_000 + i + 1;
                 const value = try std.fmt.allocPrint(
                     testing.allocator,
                     "{{\"thread\":{d},\"op\":{d}}}",
@@ -94,12 +89,7 @@ test "storage: thread-safe engine access" {
         fn run(eng: *StorageEngine, table_index: usize, thread_id: usize) !void {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
-                const key = try std.fmt.allocPrint(
-                    testing.allocator,
-                    "/thread{d}/key{d}",
-                    .{ thread_id % (num_threads / 2), i },
-                );
-                defer testing.allocator.free(key);
+                const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
                 var managed = try eng.selectDocument(testing.allocator, table_index, key, "test");
                 defer managed.deinit();
             }
@@ -127,7 +117,7 @@ test "storage: thread-safe engine access" {
     // Flush writes and verify data
     try engine.flushPendingWrites();
     // Verify some data was written
-    var managed = try test_table.selectDocument(allocator, "/thread0/key0", "test");
+    var managed = try test_table.selectDocument(allocator, 1, "test");
     defer managed.deinit();
     const doc = managed.rows;
     try testing.expect(doc.len > 0);
@@ -143,8 +133,8 @@ test "storage: connection pool reuse and release" {
 
     // Set some initial data
     {
-        try ctx.insertText("test", "key1", "test", "val", "test1");
-        try ctx.insertText("test", "key2", "test", "val", "test2");
+        try ctx.insertText("test", 1, "test", "val", "test1");
+        try ctx.insertText("test", 2, "test", "val", "test2");
     }
     try engine.flushPendingWrites();
     // Perform many read operations to ensure connections are being reused
@@ -153,7 +143,7 @@ test "storage: connection pool reuse and release" {
     var i: usize = 0;
     const test_table = try ctx.table("test");
     while (i < num_operations) : (i += 1) {
-        const key = if (i % 2 == 0) "key1" else "key2";
+        const key: u128 = if (i % 2 == 0) 1 else 2;
         var managed = try test_table.selectDocument(testing.allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
@@ -173,26 +163,26 @@ test "storage: persistence round-trip (various types)" {
     // Test various data types and values
     const test_cases = [_]struct {
         namespace: []const u8,
-        path: []const u8,
+        id: u128,
         value: []const u8,
     }{
-        .{ .namespace = "ns1", .path = "simple", .value = "{\"data\":\"simple\"}" },
-        .{ .namespace = "ns1", .path = "nested", .value = "{\"user\":{\"name\":\"Alice\",\"age\":30}}" },
-        .{ .namespace = "ns2", .path = "array", .value = "[1,2,3,4,5]" },
-        .{ .namespace = "ns2", .path = "empty", .value = "{}" },
-        .{ .namespace = "ns3", .path = "unicode", .value = "{\"text\":\"Hello 世界 🌍\"}" },
-        .{ .namespace = "ns3", .path = "special", .value = "{\"chars\":\"\\\"\\n\\t\\r\"}" },
+        .{ .namespace = "ns1", .id = 1, .value = "{\"data\":\"simple\"}" },
+        .{ .namespace = "ns1", .id = 2, .value = "{\"user\":{\"name\":\"Alice\",\"age\":30}}" },
+        .{ .namespace = "ns2", .id = 3, .value = "[1,2,3,4,5]" },
+        .{ .namespace = "ns2", .id = 4, .value = "{}" },
+        .{ .namespace = "ns3", .id = 5, .value = "{\"text\":\"Hello 世界 🌍\"}" },
+        .{ .namespace = "ns3", .id = 6, .value = "{\"chars\":\"\\\"\\n\\t\\r\"}" },
     };
     // Insert all test cases
     for (test_cases) |tc| {
-        try ctx.insertText("test", tc.path, "test", "val", tc.value);
+        try ctx.insertText("test", tc.id, "test", "val", tc.value);
     }
     // Flush writes
     try engine.flushPendingWrites();
     const test_table = try ctx.table("test");
     // Retrieve and verify all test cases
     for (test_cases) |tc| {
-        var managed = try test_table.selectDocument(allocator, tc.path, "test");
+        var managed = try test_table.selectDocument(allocator, tc.id, "test");
         defer managed.deinit();
         const doc = managed.rows;
         try testing.expect(doc.len > 0);
@@ -209,28 +199,28 @@ test "storage: insert/delete inverse consistency" {
 
     const test_cases = [_]struct {
         namespace: []const u8,
-        path: []const u8,
+        id: u128,
         value: []const u8,
     }{
-        .{ .namespace = "ns1", .path = "/key1", .value = "{\"data\":\"value1\"}" },
-        .{ .namespace = "ns1", .path = "/key2", .value = "{\"data\":\"value2\"}" },
-        .{ .namespace = "ns2", .path = "/key1", .value = "{\"data\":\"value3\"}" },
+        .{ .namespace = "ns1", .id = 1, .value = "{\"data\":\"value1\"}" },
+        .{ .namespace = "ns1", .id = 2, .value = "{\"data\":\"value2\"}" },
+        .{ .namespace = "ns2", .id = 3, .value = "{\"data\":\"value3\"}" },
     };
     const test_table = try ctx.table("test");
     for (test_cases) |tc| {
         // Insert
-        try ctx.insertText("test", tc.path, "test", "val", tc.value);
+        try ctx.insertText("test", tc.id, "test", "val", tc.value);
         try engine.flushPendingWrites();
         // Verify it exists
-        var managed1 = try test_table.selectDocument(allocator, tc.path, "test");
+        var managed1 = try test_table.selectDocument(allocator, tc.id, "test");
         defer managed1.deinit();
         const doc1 = managed1.rows;
         try testing.expect(doc1.len > 0);
         // Delete
-        try test_table.deleteDocument(tc.path, "test");
+        try test_table.deleteDocument(tc.id, "test");
         try engine.flushPendingWrites();
         // Verify it's gone
-        var managed2 = try test_table.selectDocument(allocator, tc.path, "test");
+        var managed2 = try test_table.selectDocument(allocator, tc.id, "test");
         defer managed2.deinit();
         const doc2 = managed2.rows;
         try testing.expect(doc2.len == 0);
@@ -249,38 +239,38 @@ test "storage: transaction isolation and consistency" {
     // The write thread uses transactions internally to ensure atomicity
     // Set up initial state
     {
-        try ctx.insertText("test", "/key1", "test", "val", "initial1");
-        try ctx.insertText("test", "/key2", "test", "val", "initial2");
+        try ctx.insertText("test", 1, "test", "val", "initial1");
+        try ctx.insertText("test", 2, "test", "val", "initial2");
     }
     try engine.flushPendingWrites();
     const test_table = try ctx.table("test");
     // Verify initial state
-    var managed1 = try test_table.selectDocument(allocator, "/key1", "test");
+    var managed1 = try test_table.selectDocument(allocator, 1, "test");
     defer managed1.deinit();
     const doc1 = managed1.rows;
-    var managed2 = try test_table.selectDocument(allocator, "/key2", "test");
+    var managed2 = try test_table.selectDocument(allocator, 2, "test");
     defer managed2.deinit();
     const doc2 = managed2.rows;
     try testing.expect(doc1.len > 0);
     try testing.expect(doc2.len > 0);
     // Queue multiple operations that should execute atomically in a batch
     {
-        try ctx.insertText("test", "/key1", "test", "val", "updated1");
-        try ctx.insertText("test", "/key2", "test", "val", "updated2");
-        try ctx.insertText("test", "/key3", "test", "val", "new3");
+        try ctx.insertText("test", 1, "test", "val", "updated1");
+        try ctx.insertText("test", 2, "test", "val", "updated2");
+        try ctx.insertText("test", 3, "test", "val", "new3");
     }
     // Flush to ensure operations are processed
     try engine.flushPendingWrites();
     // All operations should have been applied atomically
-    var managed_up1 = try test_table.selectDocument(allocator, "/key1", "test");
+    var managed_up1 = try test_table.selectDocument(allocator, 1, "test");
     defer managed_up1.deinit();
     const up1 = managed_up1.rows;
 
-    var managed_up2 = try test_table.selectDocument(allocator, "/key2", "test");
+    var managed_up2 = try test_table.selectDocument(allocator, 2, "test");
     defer managed_up2.deinit();
     const up2 = managed_up2.rows;
 
-    var managed_n3 = try test_table.selectDocument(allocator, "/key3", "test");
+    var managed_n3 = try test_table.selectDocument(allocator, 3, "test");
     defer managed_n3.deinit();
     const n3 = managed_n3.rows;
     try testing.expect(up1.len > 0);
@@ -288,20 +278,19 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(n3.len > 0);
     // Test concurrent reads during batch processing see consistent state
     // This tests that the write thread's transaction provides isolation
-    try ctx.insertText("test", "/concurrent_key", "test", "val", "before");
+    try ctx.insertText("test", 10_000, "test", "val", "before");
     try engine.flushPendingWrites();
     // Start a batch by queuing many operations
     const num_ops = 100;
     var i: usize = 0;
     while (i < num_ops) : (i += 1) {
-        const key = try std.fmt.allocPrint(allocator, "/batch_key{d}", .{i});
-        defer allocator.free(key);
+        const key: u128 = 20_000 + i;
         const value = try std.fmt.allocPrint(allocator, "{{\"batch\":{d}}}", .{i});
         defer allocator.free(value);
         try ctx.insertText("test", key, "test", "val", value);
     }
     // While the batch is being processed, concurrent reads should work
-    var managed_conc = try test_table.selectDocument(allocator, "/concurrent_key", "test");
+    var managed_conc = try test_table.selectDocument(allocator, 10_000, "test");
     defer managed_conc.deinit();
     const conc_read = managed_conc.rows;
     try testing.expect(conc_read.len > 0);
@@ -310,8 +299,7 @@ test "storage: transaction isolation and consistency" {
     // Verify all batch operations were applied atomically
     i = 0;
     while (i < num_ops) : (i += 1) {
-        const key = try std.fmt.allocPrint(allocator, "/batch_key{d}", .{i});
-        defer allocator.free(key);
+        const key: u128 = 20_000 + i;
         var managed = try test_table.selectDocument(allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
@@ -329,12 +317,12 @@ test "storage: automatic transaction rollback on failure" {
 
     // Set up initial state
     {
-        try ctx.insertText("test", "/key1", "test", "val", "initial");
+        try ctx.insertText("test", 1, "test", "val", "initial");
     }
     try engine.flushPendingWrites();
     const test_table = try ctx.table("test");
     // Verify initial state
-    var managed_init = try test_table.selectDocument(allocator, "/key1", "test");
+    var managed_init = try test_table.selectDocument(allocator, 1, "test");
     defer managed_init.deinit();
     const init_doc = managed_init.rows;
     try testing.expect(init_doc.len > 0);
@@ -343,8 +331,8 @@ test "storage: automatic transaction rollback on failure" {
     try testing.expect(engine.isTransactionActive());
     // Make changes within transaction
     {
-        try ctx.insertText("test", "/key1", "test", "val", "modified");
-        try ctx.insertText("test", "/key2", "test", "val", "new");
+        try ctx.insertText("test", 1, "test", "val", "modified");
+        try ctx.insertText("test", 2, "test", "val", "new");
     }
     // Rollback the transaction
     try engine.rollbackTransaction();
@@ -352,12 +340,12 @@ test "storage: automatic transaction rollback on failure" {
     // Flush any pending writes from before the transaction
     try engine.flushPendingWrites();
     // Verify changes were rolled back
-    var managed_arb1 = try test_table.selectDocument(allocator, "/key1", "test");
+    var managed_arb1 = try test_table.selectDocument(allocator, 1, "test");
     defer managed_arb1.deinit();
     const arb1 = managed_arb1.rows;
     try testing.expect(arb1.len > 0);
 
-    var managed_arb2 = try test_table.selectDocument(allocator, "/key2", "test");
+    var managed_arb2 = try test_table.selectDocument(allocator, 2, "test");
     defer managed_arb2.deinit();
     const arb2 = managed_arb2.rows;
     try testing.expect(arb2.len == 0);
@@ -366,11 +354,11 @@ test "storage: automatic transaction rollback on failure" {
     // First, set up a successful transaction
     try engine.beginTransaction();
     {
-        try ctx.insertText("test", "/key3", "test", "val", "test3");
+        try ctx.insertText("test", 3, "test", "val", "test3");
     }
     try engine.commitTransaction();
     try engine.flushPendingWrites();
-    var managed_comm = try test_table.selectDocument(allocator, "/key3", "test");
+    var managed_comm = try test_table.selectDocument(allocator, 3, "test");
     defer managed_comm.deinit();
     const comm = managed_comm.rows;
     try testing.expect(comm.len > 0);
@@ -388,8 +376,7 @@ test "storage: automatic transaction rollback on failure" {
     const batch_size = 50;
     var j: usize = 0;
     while (j < batch_size) : (j += 1) {
-        const key = try std.fmt.allocPrint(allocator, "/batch_test{d}", .{j});
-        defer allocator.free(key);
+        const key: u128 = 30_000 + j;
         const value = try std.fmt.allocPrint(allocator, "{{\"index\":{d}}}", .{j});
         defer allocator.free(value);
         try ctx.insertText("test", key, "test", "val", value);
@@ -398,8 +385,7 @@ test "storage: automatic transaction rollback on failure" {
     try engine.flushPendingWrites();
     j = 0;
     while (j < batch_size) : (j += 1) {
-        const key = try std.fmt.allocPrint(allocator, "/batch_test{d}", .{j});
-        defer allocator.free(key);
+        const key: u128 = 30_000 + j;
         var managed = try test_table.selectDocument(allocator, key, "test");
         defer managed.deinit();
         const doc = managed.rows;
@@ -423,8 +409,7 @@ test "storage: document set/get round-trip" {
     const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         const title_idx = rand.intRangeAtMost(usize, 0, scalar_values.len - 1);
         const title_str = scalar_values[title_idx];
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
@@ -458,8 +443,7 @@ test "storage: field set/get round-trip" {
     const tbl_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         try ctx.insertNamed("items", id, "ns-test", .{
             sth.named("title", tth.valText("initial")),
             sth.named("score", tth.valInt(0)),
@@ -499,14 +483,12 @@ test "storage: query is namespace-scoped" {
         const count_b = rand.intRangeAtMost(usize, 1, 5);
         var i: usize = 0;
         while (i < count_a) : (i += 1) {
-            const id = try std.fmt.allocPrint(allocator, "a-{d}-{d}", .{ iter, i });
-            defer allocator.free(id);
+            const id: u128 = iter * 1_000 + i + 1;
             try ctx.insertInt("items", id, ns_a, "val", @intCast(i));
         }
         i = 0;
         while (i < count_b) : (i += 1) {
-            const id = try std.fmt.allocPrint(allocator, "b-{d}-{d}", .{ iter, i });
-            defer allocator.free(id);
+            const id: u128 = 100_000 + iter * 1_000 + i + 1;
             try ctx.insertInt("items", id, ns_b, "val", @intCast(i + 100));
         }
         try engine.flushPendingWrites();
@@ -537,8 +519,7 @@ test "storage: remove then get returns null" {
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         const items_table = try ctx.table("items");
         try ctx.insertInt("items", id, "ns-test", "val", 42);
         try engine.flushPendingWrites();
@@ -562,8 +543,7 @@ test "storage: updated_at is always refreshed on write" {
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         const items_table = try ctx.table("items");
         const t_before_insert = std.time.timestamp();
         try ctx.insertInt("items", id, "ns-test", "val", 1);
@@ -603,8 +583,7 @@ test "storage: write/read round-trip for array fields" {
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         const n = rand.intRangeAtMost(usize, 0, 6);
         const elems = try allocator.alloc(msgpack.Payload, n);
         for (0..n) |i| {
@@ -658,8 +637,7 @@ test "storage: non-array fields are unaffected" {
 
     var iter: usize = 0;
     while (iter < 20) : (iter += 1) {
-        const id = try std.fmt.allocPrint(allocator, "doc-{d}", .{iter});
-        defer allocator.free(id);
+        const id: u128 = iter + 1;
         const title_str = if (rand.boolean()) "hello" else "world";
         const score_val: i64 = rand.intRangeAtMost(i64, 0, 9999);
         const rating_val: f64 = @as(f64, @floatFromInt(rand.intRangeAtMost(i32, 0, 100))) / 10.0;

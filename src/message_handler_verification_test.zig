@@ -8,6 +8,7 @@ const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
+const doc_id = @import("doc_id.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "_dummy", .fields = &.{"val"} },
@@ -67,7 +68,7 @@ test "Verification: StoreSet message processing" {
         1,
         "test_namespace",
         @intCast(tbl.index),
-        "key",
+        1,
         val_idx,
         "test_value",
     );
@@ -115,7 +116,7 @@ test "Verification: StoreSet message processing" {
     const data_table = try app.table("data_table");
 
     // Verify data was stored
-    var doc = try data_table.getOne(allocator, "key", "test_namespace");
+    var doc = try data_table.getOne(allocator, 1, "test_namespace");
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "test_value");
 }
@@ -129,10 +130,10 @@ test "Verification: StoreQuery message processing" {
     defer app.deinit();
 
     // First, store a value (typed storage)
-    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
+    try app.insertText("data_table", 1, "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
-    // Create a filter: { "conditions": [ ["id", 0, "key"] ] }
+    // Create a filter: { "conditions": [ ["id", 0, 1] ] }
     var filter_map = msgpack.Payload.mapPayload(allocator);
     defer filter_map.free(allocator);
 
@@ -142,7 +143,8 @@ test "Verification: StoreQuery message processing" {
     const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
     cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
     cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
-    cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
+    const query_id_bytes = doc_id.toBytes(1);
+    cond_arr[2] = try msgpack.Payload.binToPayload(&query_id_bytes, allocator);
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
     try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
@@ -211,8 +213,8 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer app.deinit();
 
     // Insert two rows so a limited query must return nextCursor
-    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
-    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
+    try app.insertText("data_table", 1, "test_namespace", "val", "value_a");
+    try app.insertText("data_table", 2, "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
@@ -269,7 +271,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     // Minimal validation to ensure it's a valid protocol token
     const cursor = try query_parser.parseCursorToken(allocator, next_cursor.str.value(), .integer, null);
     defer cursor.deinit(allocator);
-    try testing.expect(cursor.id.len > 0);
+    try testing.expectEqual(@as(usize, 16), doc_id.toBytes(cursor.id).len);
 }
 
 // Task 14 Verification: Error handling for invalid messages
@@ -404,12 +406,12 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
     // Store multiple values
     const test_data = [_]struct {
         namespace: []const u8,
-        id: []const u8,
+        id: u128,
         value: []const u8,
     }{
-        .{ .namespace = "app", .id = "user1", .value = "Alice" },
-        .{ .namespace = "app", .id = "user2", .value = "Bob" },
-        .{ .namespace = "config", .id = "theme", .value = "dark" },
+        .{ .namespace = "app", .id = 1, .value = "Alice" },
+        .{ .namespace = "app", .id = 2, .value = "Bob" },
+        .{ .namespace = "config", .id = 3, .value = "dark" },
     };
 
     for (test_data, 0..) |td, i| {
@@ -461,7 +463,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
             cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
             cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
-            cond_arr[2] = try msgpack.Payload.strToPayload(td.id, allocator);
+            const td_id_bytes = doc_id.toBytes(td.id);
+            cond_arr[2] = try msgpack.Payload.binToPayload(&td_id_bytes, allocator);
             conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
             try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
@@ -496,7 +499,8 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
             for (results.arr) |doc| {
                 const id_opt = try msgpack.getMapValueByName(doc, tbl, "id");
                 const id_payload = id_opt orelse continue;
-                if (std.mem.eql(u8, id_payload.str.value(), td.id)) {
+                const expected_id_bytes = doc_id.toBytes(td.id);
+                if (id_payload == .bin and std.mem.eql(u8, id_payload.bin.value(), &expected_id_bytes)) {
                     const val_opt = try msgpack.getMapValueByName(doc, tbl, "val");
                     const val_payload = val_opt orelse return error.TestExpectedError;
                     try testing.expectEqualStrings(td.value, val_payload.str.value());
@@ -526,7 +530,7 @@ test "Verification: StoreSubscribe message processing" {
     defer app.deinit();
 
     // 1. Store a value
-    try app.insertText("data_table", "key", "test_namespace", "val", "stored_value");
+    try app.insertText("data_table", 1, "test_namespace", "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
@@ -538,7 +542,8 @@ test "Verification: StoreSubscribe message processing" {
     const id_idx = tbl.getFieldIndex("id") orelse return error.UnknownField;
     cond_arr[0] = msgpack.Payload.uintToPayload(id_idx);
     cond_arr[1] = msgpack.Payload.uintToPayload(0); // eq
-    cond_arr[2] = try msgpack.Payload.strToPayload("key", allocator);
+    const subscribe_id_bytes = doc_id.toBytes(1);
+    cond_arr[2] = try msgpack.Payload.binToPayload(&subscribe_id_bytes, allocator);
     conds_arr[0] = msgpack.Payload{ .arr = cond_arr };
     try filter_map.mapPut("conditions", msgpack.Payload{ .arr = conds_arr });
 
@@ -609,8 +614,8 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer app.deinit();
 
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
-    try app.insertText("data_table", "doc-a", "test_namespace", "val", "value_a");
-    try app.insertText("data_table", "doc-b", "test_namespace", "val", "value_b");
+    try app.insertText("data_table", 1, "test_namespace", "val", "value_a");
+    try app.insertText("data_table", 2, "test_namespace", "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 

@@ -367,16 +367,17 @@ ZyncBase flattens nested objects into column names using a double underscore (`_
 
 ```sql
 CREATE TABLE users (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     preferences__notifications__email INTEGER, -- Boolean stored as int
     preferences__notifications__browser INTEGER,
     preferences__theme TEXT,
-    roles TEXT,  -- JSON: ["admin", "editor"]
+    roles BLOB,  -- canonical array storage
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (id)
 );
 ```
 
@@ -686,13 +687,14 @@ From this schema:
 ZyncBase generates:
 ```sql
 CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
+    id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id TEXT,
     title TEXT,
     status TEXT,
     priority INTEGER,
     created_at INTEGER,
-    updated_at INTEGER
+    updated_at INTEGER,
+    PRIMARY KEY (id)
 );
 
 CREATE INDEX idx_tasks_status ON tasks(status);

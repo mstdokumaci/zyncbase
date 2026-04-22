@@ -65,6 +65,10 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 				["id", "name"],
 				["name", "age"],
 			],
+			fieldFlags: [
+				[0b11, 0b00],
+				[0b00, 0b00],
+			],
 		});
 
 		// Dispatch N messages (they'll be pending since no responses come)

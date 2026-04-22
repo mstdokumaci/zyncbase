@@ -1,6 +1,7 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const schema_manager = @import("schema_manager.zig");
+const doc_id = @import("doc_id.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_parser.QueryFilter;
@@ -11,7 +12,7 @@ const Payload = msgpack_utils.Payload;
 /// Creates a QueryFilter with a default order_by = "id" ASC.
 /// Caller owns the memory and must call deinit(allocator).
 pub fn makeDefaultFilter(allocator: std.mem.Allocator) !QueryFilter {
-    return makeFilter(allocator, 0, false, .text, null);
+    return makeFilter(allocator, 0, false, .doc_id, null);
 }
 
 /// Creates a QueryFilter with a custom order_by field index.
@@ -93,7 +94,11 @@ pub fn createQueryFilterPayload(
                 cond_arr[0] = Payload.uintToPayload(f_idx);
                 cond_arr[1] = Payload.uintToPayload(@intCast(cond_src[1]));
                 if (cond_info.fields.len > 2) {
-                    cond_arr[2] = try mth.anyToPayload(allocator, cond_src[2]);
+                    if (f_idx < tbl_md.fields.len) {
+                        cond_arr[2] = try anyToFieldPayload(allocator, tbl_md.fields[f_idx].sql_type, cond_src[2]);
+                    } else {
+                        cond_arr[2] = try mth.anyToPayload(allocator, cond_src[2]);
+                    }
                 }
                 conds_arr[ci] = Payload{ .arr = cond_arr };
             }
@@ -126,4 +131,17 @@ pub fn createQueryFilterPayload(
     }
 
     return filter_map;
+}
+
+fn anyToFieldPayload(allocator: std.mem.Allocator, field_type: FieldType, value: anytype) !Payload {
+    if (field_type == .doc_id) {
+        switch (@typeInfo(@TypeOf(value))) {
+            .int, .comptime_int => {
+                const bytes = doc_id.toBytes(@intCast(value));
+                return Payload.binToPayload(&bytes, allocator);
+            },
+            else => {},
+        }
+    }
+    return mth.anyToPayload(allocator, value);
 }

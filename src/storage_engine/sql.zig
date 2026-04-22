@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
+const sql_identifier = @import("../sql_identifier.zig");
 const types = @import("types.zig");
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
@@ -142,13 +143,96 @@ pub fn appendProjectedColumnsSql(
         if (i > 0) try buf.appendSlice(allocator, ", ");
         if (f.sql_type == .array) {
             try buf.appendSlice(allocator, "json(");
-            try buf.appendSlice(allocator, f.name);
+            try sql_identifier.appendQuoted(allocator, buf, f.name);
             try buf.appendSlice(allocator, ") AS ");
-            try buf.appendSlice(allocator, f.name);
+            try sql_identifier.appendQuoted(allocator, buf, f.name);
         } else {
-            try buf.appendSlice(allocator, f.name);
+            try sql_identifier.appendQuoted(allocator, buf, f.name);
         }
     }
+}
+
+pub fn appendColumnIdentifierSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    field_name: []const u8,
+) !void {
+    try sql_identifier.appendQuoted(allocator, buf, field_name);
+}
+
+pub fn appendSelectFromTableSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema_manager.TableMetadata,
+) !void {
+    try buf.appendSlice(allocator, "SELECT ");
+    try appendProjectedColumnsSql(allocator, buf, table_metadata);
+    try buf.appendSlice(allocator, " FROM ");
+    try sql_identifier.appendQuoted(allocator, buf, table_metadata.table.name);
+}
+
+pub fn appendNamespaceFilterSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+) !void {
+    try appendColumnIdentifierSql(allocator, buf, "namespace_id");
+    try buf.appendSlice(allocator, " = ?");
+}
+
+pub fn appendCursorPredicateSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    sort_field_name: []const u8,
+    sort_field_is_id: bool,
+    desc: bool,
+) !void {
+    const op = if (desc) "<" else ">";
+
+    if (sort_field_is_id) {
+        try appendColumnIdentifierSql(allocator, buf, "id");
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, op);
+        try buf.appendSlice(allocator, " ?");
+        return;
+    }
+
+    try buf.append(allocator, '(');
+    try appendColumnIdentifierSql(allocator, buf, sort_field_name);
+    try buf.appendSlice(allocator, ", ");
+    try appendColumnIdentifierSql(allocator, buf, "id");
+    try buf.appendSlice(allocator, ") ");
+    try buf.appendSlice(allocator, op);
+    try buf.appendSlice(allocator, " (?, ?)");
+}
+
+pub fn appendOrderBySql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    sort_field_name: []const u8,
+    desc: bool,
+) !void {
+    try buf.appendSlice(allocator, " ORDER BY ");
+    try appendColumnIdentifierSql(allocator, buf, sort_field_name);
+    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
+    try buf.appendSlice(allocator, ", ");
+    try appendColumnIdentifierSql(allocator, buf, "id");
+    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
+}
+
+pub fn buildSelectDocumentSql(
+    allocator: Allocator,
+    table_metadata: *const schema_manager.TableMetadata,
+) ![]const u8 {
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+
+    try appendSelectFromTableSql(allocator, &sql_buf, table_metadata);
+    try sql_buf.appendSlice(allocator, " WHERE ");
+    try appendColumnIdentifierSql(allocator, &sql_buf, "id");
+    try sql_buf.appendSlice(allocator, "=? AND ");
+    try appendColumnIdentifierSql(allocator, &sql_buf, "namespace_id");
+    try sql_buf.appendSlice(allocator, "=?");
+    return sql_buf.toOwnedSlice(allocator);
 }
 
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
@@ -169,20 +253,28 @@ pub fn buildInsertOrReplaceSql(
 
     // Build SQL: INSERT INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
     // VALUES (?, ?, .., ?, ?)
-    // ON CONFLICT(id, namespace_id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
+    // ON CONFLICT(id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
+    // WHERE <table>.namespace_id = excluded.namespace_id
     // Array columns use jsonb(?) instead of ? as the placeholder.
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
 
     try sql_buf.appendSlice(allocator, "INSERT INTO ");
-    try sql_buf.appendSlice(allocator, table);
-    try sql_buf.appendSlice(allocator, " (id, namespace_id");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, table);
+    try sql_buf.appendSlice(allocator, " (");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "id");
+    try sql_buf.appendSlice(allocator, ", ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "namespace_id");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
-        try sql_buf.append(allocator, ',');
-        try sql_buf.appendSlice(allocator, field.name);
+        try sql_buf.appendSlice(allocator, ", ");
+        try sql_identifier.appendQuoted(allocator, &sql_buf, field.name);
     }
-    try sql_buf.appendSlice(allocator, ", created_at, updated_at) VALUES (?, ?");
+    try sql_buf.appendSlice(allocator, ", ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "created_at");
+    try sql_buf.appendSlice(allocator, ", ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "updated_at");
+    try sql_buf.appendSlice(allocator, ") VALUES (?, ?");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         if (field.sql_type == .array) {
@@ -192,19 +284,28 @@ pub fn buildInsertOrReplaceSql(
         }
     }
     // created_at and updated_at placeholders
-    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "id");
+    try sql_buf.appendSlice(allocator, ") DO UPDATE SET ");
 
     // Update each column provided
     for (columns, 0..) |col, i| {
         const field = try getColumnField(table_metadata, col);
         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-        try sql_buf.appendSlice(allocator, field.name);
+        try sql_identifier.appendQuoted(allocator, &sql_buf, field.name);
         try sql_buf.appendSlice(allocator, " = excluded.");
-        try sql_buf.appendSlice(allocator, field.name);
+        try sql_identifier.appendQuoted(allocator, &sql_buf, field.name);
     }
     // Always update updated_at
     if (columns.len > 0) try sql_buf.appendSlice(allocator, ", ");
-    try sql_buf.appendSlice(allocator, "updated_at = excluded.updated_at RETURNING ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "updated_at");
+    try sql_buf.appendSlice(allocator, " = excluded.");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "updated_at");
+    try sql_buf.appendSlice(allocator, " WHERE ");
+    try sql_identifier.appendQualified(allocator, &sql_buf, table, "namespace_id");
+    try sql_buf.appendSlice(allocator, " = excluded.");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "namespace_id");
+    try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     return sql_buf.toOwnedSlice(allocator);
@@ -226,8 +327,12 @@ pub fn buildDeleteDocumentSql(
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
     try sql_buf.appendSlice(allocator, "DELETE FROM ");
-    try sql_buf.appendSlice(allocator, table);
-    try sql_buf.appendSlice(allocator, " WHERE id=? AND namespace_id=? RETURNING ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, table);
+    try sql_buf.appendSlice(allocator, " WHERE ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "id");
+    try sql_buf.appendSlice(allocator, "=? AND ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "namespace_id");
+    try sql_buf.appendSlice(allocator, "=? RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     return sql_buf.toOwnedSlice(allocator);
 }

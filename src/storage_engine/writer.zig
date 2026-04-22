@@ -4,6 +4,7 @@ const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const types = @import("types.zig");
+const doc_id = @import("../doc_id.zig");
 const schema_manager = @import("../schema_manager.zig");
 const sql = @import("sql.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
@@ -18,13 +19,13 @@ fn getDocumentHelper(
     sm: *const schema_manager.SchemaManager,
     table_index: usize,
     namespace: []const u8,
-    id: []const u8,
+    id: types.DocId,
     sql_cache: *std.AutoHashMap(usize, []const u8),
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
     const table_metadata = sm.getTableByIndex(table_index) orelse return null;
     const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
-        const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        const s = try sql.buildSelectDocumentSql(allocator, table_metadata);
         try sql_cache.put(table_index, s);
         break :blk s;
     };
@@ -117,8 +118,11 @@ pub fn executeBatch(
                         r.deinit(allocator);
                     };
                 } else {
-                    // This is unexpected for an INSERT OR REPLACE.
-                    std.log.err("UPSERT for table index {d}/{s} returned no row via RETURNING", .{ iop.table_index, iop.id });
+                    // The upsert is guarded by namespace_id. A missing RETURNING row means
+                    // the id already exists in another namespace, which we surface as a
+                    // dropped write rather than silently mutating hidden data.
+                    var id_hex_buf: [32]u8 = undefined;
+                    std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, doc_id.hexSlice(iop.id, &id_hex_buf) });
                     if (old_row) |r| r.deinit(allocator);
                     continue;
                 }
@@ -141,7 +145,8 @@ pub fn executeBatch(
                 } else {
                     // If RETURNING * is empty, the row did not exist or was already deleted.
                     // This is a valid no-op state; we skip notifications for non-existent documents.
-                    std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, dop.id });
+                    var id_hex_buf: [32]u8 = undefined;
+                    std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, doc_id.hexSlice(dop.id, &id_hex_buf) });
                 }
             },
             .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable,
@@ -187,7 +192,7 @@ pub fn flushBatch(
         // SAFETY: initialized below in the switch statement
         var table_index: usize = undefined;
         // SAFETY: initialized below in the switch statement
-        var id: []const u8 = undefined;
+        var id: types.DocId = undefined;
         // SAFETY: initialized below in the switch statement
         var ns: []const u8 = undefined;
         const has_affected = switch (op) {
@@ -466,7 +471,8 @@ pub fn executeUpsert(
     const stmt = mstmt.stmt;
 
     var bind_idx: c_int = 1;
-    if (sql.bindTextTransient(stmt, bind_idx, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    const id_bytes = doc_id.toBytes(op.id);
+    if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
     if (sql.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
@@ -501,7 +507,8 @@ pub fn executeDelete(
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
-    if (sql.bindTextTransient(stmt, 1, op.id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    const id_bytes = doc_id.toBytes(op.id);
+    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     if (sql.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);

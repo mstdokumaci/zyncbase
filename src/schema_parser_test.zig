@@ -347,3 +347,46 @@ test "schema_parser: reject __ in table and field names" {
     ;
     try std.testing.expectError(error.InvalidFieldName, parser.parse(json_field));
 }
+
+test "schema_parser: reject non-identifier table, field, and reference names" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json_table_digit =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "1users": {
+        \\      "fields": { "name": { "type": "string" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidTableName, parser.parse(json_table_digit));
+
+    const json_field_dash =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": {
+        \\      "fields": { "display-name": { "type": "string" } }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidFieldName, parser.parse(json_field_dash));
+
+    const json_reference_dash =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "posts": {
+        \\      "fields": {
+        \\        "userId": { "type": "string", "references": "user-table" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try std.testing.expectError(error.InvalidTableName, parser.parse(json_reference_dash));
+}

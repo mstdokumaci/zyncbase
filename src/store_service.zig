@@ -6,9 +6,10 @@ const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
+const DocId = storage_mod.DocId;
 
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
-fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?[]const u8 {
+fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?DocId {
     // Must have: exactly 1 AND condition, no OR, no order, no cursor
     const conds = filter.conditions orelse return null;
     if (conds.len != 1) return null;
@@ -20,9 +21,9 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?[]const 
     if (cond.op != .eq) return null;
     if (cond.field_index != id_index) return null;
 
-    // Extract string value
     const val = cond.value orelse return null;
-    return val.scalar.text;
+    if (val != .scalar or val.scalar != .doc_id) return null;
+    return val.scalar.doc_id;
 }
 
 /// Validates a single field write operation.
@@ -82,7 +83,7 @@ pub const StoreService = struct {
     pub fn set(
         self: *StoreService,
         table_index: usize,
-        doc_id: []const u8,
+        doc_id: DocId,
         namespace: []const u8,
         segments_len: usize,
         field_index: ?usize,
@@ -146,7 +147,7 @@ pub const StoreService = struct {
     pub fn remove(
         self: *StoreService,
         table_index: usize,
-        doc_id: []const u8,
+        doc_id: DocId,
         namespace: []const u8,
         segments_len: usize,
     ) !void {

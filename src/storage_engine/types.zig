@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
+const doc_id = @import("../doc_id.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema_manager = @import("../schema_manager.zig");
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
@@ -8,6 +9,7 @@ const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const sql = @import("sql.zig");
 
 pub const typed_cache_type = lockFreeCache(TypedRow);
+pub const DocId = doc_id.DocId;
 
 /// Specific error types for different database failure scenarios
 pub const StorageError = error{
@@ -114,25 +116,23 @@ pub const TypedRow = struct {
 
 pub const TypedCursor = struct {
     sort_value: TypedValue,
-    id: []const u8, // Owned
+    id: DocId,
 
     pub fn deinit(self: *TypedCursor, allocator: Allocator) void {
         self.sort_value.deinit(allocator);
-        allocator.free(self.id);
     }
 
     pub fn clone(self: TypedCursor, allocator: Allocator) !TypedCursor {
-        const id = try allocator.dupe(u8, self.id);
-        errdefer allocator.free(id);
         return .{
             .sort_value = try self.sort_value.clone(allocator),
-            .id = id,
+            .id = self.id,
         };
     }
 };
 
 /// A simple scalar value for storage elements that don't support recursion or nil.
 pub const ScalarValue = union(enum) {
+    doc_id: DocId,
     integer: i64,
     real: f64,
     text: []const u8, // Owned
@@ -161,6 +161,7 @@ pub const ScalarValue = union(enum) {
             return std.math.order(@intFromEnum(self), @intFromEnum(other));
         }
         return switch (self) {
+            .doc_id => doc_id.order(self.doc_id, other.doc_id),
             .integer => std.math.order(self.integer, other.integer),
             .real => std.math.order(self.real, other.real),
             .text => std.mem.order(u8, self.text, other.text),
@@ -171,6 +172,10 @@ pub const ScalarValue = union(enum) {
     /// Writes this scalar value as MessagePack to the provided writer.
     pub fn writeMsgPack(self: ScalarValue, writer: anytype) !void {
         switch (self) {
+            .doc_id => |id| {
+                const bytes = doc_id.toBytes(id);
+                try msgpack.writeMsgPackBin(writer, &bytes);
+            },
             .integer => |iv| {
                 if (iv >= 0) {
                     try msgpack.encode(msgpack.Payload{ .uint = @intCast(iv) }, writer);
@@ -186,6 +191,10 @@ pub const ScalarValue = union(enum) {
 
     pub fn jsonStringify(self: ScalarValue, stream: anytype) !void {
         switch (self) {
+            .doc_id => |id| {
+                var hex_buf: [32]u8 = undefined;
+                try stream.print("\"{s}\"", .{doc_id.hexSlice(id, &hex_buf)});
+            },
             .integer => |v| try stream.write(v),
             .real => |v| {
                 var buf: [64]u8 = undefined;
@@ -204,6 +213,10 @@ pub const ScalarValue = union(enum) {
     /// Converts a msgpack.Payload to a ScalarValue based on the schema's FieldType.
     pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !ScalarValue {
         return switch (ft) {
+            .doc_id => switch (value) {
+                .bin => |b| ScalarValue{ .doc_id = try doc_id.fromBytes(b.value()) },
+                else => StorageError.TypeMismatch,
+            },
             .text => switch (value) {
                 .str => |s| ScalarValue{ .text = try allocator.dupe(u8, s.value()) },
                 else => StorageError.TypeMismatch,
@@ -218,6 +231,10 @@ pub const ScalarValue = union(enum) {
     /// Converts a JSON value to a ScalarValue based on the schema's FieldType.
     pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
         return switch (ft) {
+            .doc_id => switch (value) {
+                .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return StorageError.TypeMismatch },
+                else => StorageError.TypeMismatch,
+            },
             .text => switch (value) {
                 .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
                 else => StorageError.TypeMismatch,
@@ -316,6 +333,8 @@ pub const TypedValue = union(enum) {
     /// Reads and converts a SQLite result column into a TypedValue.
     pub fn fromSQLiteColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !TypedValue {
         const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+        // Array fields are stored as JSONB BLOBs at rest, but the read/query path
+        // projects them through `json(field) AS field`, so SQLite returns TEXT here.
         if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
@@ -325,6 +344,13 @@ pub const TypedValue = union(enum) {
             return TypedValue.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
         }
         return switch (col_type) {
+            sqlite.c.SQLITE_BLOB => blk: {
+                if (field == null or field.?.sql_type != .doc_id) break :blk .nil;
+                const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+                break :blk TypedValue{ .scalar = .{ .doc_id = try doc_id.fromBytes(bytes) } };
+            },
             sqlite.c.SQLITE_INTEGER => {
                 const val = sqlite.c.sqlite3_column_int64(stmt, i);
                 if (field != null and field.?.sql_type == .boolean) {
@@ -347,6 +373,7 @@ pub const TypedValue = union(enum) {
     pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
         if (value == .nil) return;
         const match = switch (ft) {
+            .doc_id => value == .bin,
             .text => value == .str,
             .integer => value == .int or value == .uint,
             .real => value == .float or value == .uint or value == .int,
@@ -408,6 +435,10 @@ pub const TypedValue = union(enum) {
     pub fn bindSQLite(self: TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
         const rc = switch (self) {
             .scalar => |s| switch (s) {
+                .doc_id => |id| blk: {
+                    const bytes = doc_id.toBytes(id);
+                    break :blk sql.bindBlobTransient(stmt, index, &bytes);
+                },
                 .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
                 .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
                 .text => |s_val| sql.bindTextTransient(stmt, index, s_val),
@@ -496,7 +527,7 @@ pub const WriteOp = union(enum) {
     checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
     upsert: struct {
         table_index: usize,
-        id: []const u8,
+        id: DocId,
         namespace: []const u8,
         sql: []const u8,
         values: []TypedValue,
@@ -505,7 +536,7 @@ pub const WriteOp = union(enum) {
     },
     delete: struct {
         table_index: usize,
-        id: []const u8,
+        id: DocId,
         namespace: []const u8,
         sql: []const u8,
         completion_signal: ?*CompletionSignal = null,
@@ -559,14 +590,12 @@ pub const WriteOp = union(enum) {
         switch (self) {
             .upsert => |op| {
                 allocator.free(op.namespace);
-                allocator.free(op.id);
                 allocator.free(op.sql);
                 for (op.values) |val| val.deinit(allocator);
                 allocator.free(op.values);
             },
             .delete => |op| {
                 allocator.free(op.namespace);
-                allocator.free(op.id);
                 allocator.free(op.sql);
             },
             else => {},

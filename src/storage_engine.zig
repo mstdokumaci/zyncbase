@@ -17,6 +17,7 @@ const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
 pub const StorageError = types.StorageError;
 pub const ColumnValue = types.ColumnValue;
+pub const DocId = types.DocId;
 pub const ManagedResult = types.ManagedResult;
 pub const TypedValue = types.TypedValue;
 pub const TypedRow = types.TypedRow;
@@ -424,7 +425,7 @@ pub const StorageEngine = struct {
         }
     }
 
-    fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: []const u8) ![]u8 {
+    fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: DocId) ![]u8 {
         return reader.getCacheKey(self.allocator, table, namespace, id);
     }
 
@@ -437,7 +438,7 @@ pub const StorageEngine = struct {
     pub fn insertOrReplace(
         self: *StorageEngine,
         table_index: usize,
-        id: []const u8,
+        id: DocId,
         namespace: []const u8,
         columns: []const ColumnValue,
     ) !void {
@@ -460,15 +461,13 @@ pub const StorageEngine = struct {
         }
 
         const now = std.time.timestamp();
-        const id_owned = try self.allocator.dupe(u8, id);
-        errdefer self.allocator.free(id_owned);
         const ns_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(ns_owned);
 
         const op = WriteOp{
             .upsert = .{
                 .table_index = table_index,
-                .id = id_owned,
+                .id = id,
                 .namespace = ns_owned,
                 .sql = sql_string,
                 .values = values,
@@ -486,7 +485,7 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         allocator: Allocator,
         table_index: usize,
-        id: []const u8,
+        id: DocId,
         namespace: []const u8,
     ) !ManagedResult {
         try self.ensureRunning();
@@ -512,7 +511,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql_query = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
@@ -581,7 +580,7 @@ pub const StorageEngine = struct {
     pub fn deleteDocument(
         self: *StorageEngine,
         table_index: usize,
-        id: []const u8,
+        id: DocId,
         namespace: []const u8,
     ) !void {
         try self.ensureRunning();
@@ -591,15 +590,13 @@ pub const StorageEngine = struct {
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
         errdefer self.allocator.free(sql_string);
 
-        const id_owned = try self.allocator.dupe(u8, id);
-        errdefer self.allocator.free(id_owned);
         const ns_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(ns_owned);
 
         const op = WriteOp{
             .delete = .{
                 .table_index = table_index,
-                .id = id_owned,
+                .id = id,
                 .namespace = ns_owned,
                 .sql = sql_string,
                 .completion_signal = null,

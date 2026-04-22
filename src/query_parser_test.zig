@@ -3,6 +3,8 @@ const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema_manager = @import("schema_manager.zig");
+const storage_engine = @import("storage_engine.zig");
+const doc_id = @import("doc_id.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
 
@@ -79,10 +81,12 @@ test "query with orderBy and after" {
     }});
     defer sm.deinit();
 
-    // cursor: Base64(MsgPack([42, "cursor_token"]))
+    // cursor: Base64(MsgPack([42, doc_id(2)]))
     var cursor_payload_arr = try allocator.alloc(msgpack.Payload, 2);
+    const cursor_id: storage_engine.DocId = 2;
+    const cursor_bytes = doc_id.toBytes(cursor_id);
     cursor_payload_arr[0] = msgpack.Payload.uintToPayload(42);
-    cursor_payload_arr[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
+    cursor_payload_arr[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
     const cursor_payload = msgpack.Payload{ .arr = cursor_payload_arr };
     defer cursor_payload.free(allocator);
     const after_token = try msgpack.encodeBase64(allocator, cursor_payload);
@@ -102,7 +106,7 @@ test "query with orderBy and after" {
     const created_at_index = items_md.field_index_map.get("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
-    try testing.expectEqualStrings("cursor_token", filter.after.?.id);
+    try testing.expectEqual(cursor_id, filter.after.?.id);
 }
 
 test "query rejects invalid Base64 after cursor token" {
@@ -415,8 +419,10 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     defer sm.deinit();
 
     var cursor_payload_arr = try allocator.alloc(msgpack.Payload, 2);
+    const cursor_id: storage_engine.DocId = 2;
+    const cursor_bytes = doc_id.toBytes(cursor_id);
     cursor_payload_arr[0] = msgpack.Payload.uintToPayload(42);
-    cursor_payload_arr[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
+    cursor_payload_arr[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
     const cursor_payload = msgpack.Payload{ .arr = cursor_payload_arr };
     defer cursor_payload.free(allocator);
     const after_token = try msgpack.encodeBase64(allocator, cursor_payload);
@@ -442,8 +448,10 @@ test "cursor token rejects wrong sort type" {
     const allocator = testing.allocator;
 
     var cursor_payload = try allocator.alloc(msgpack.Payload, 2);
+    const cursor_id: storage_engine.DocId = 2;
+    const cursor_bytes = doc_id.toBytes(cursor_id);
     cursor_payload[0] = try msgpack.Payload.strToPayload("not-an-int", allocator);
-    cursor_payload[1] = try msgpack.Payload.strToPayload("cursor_token", allocator);
+    cursor_payload[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
     const token_value = msgpack.Payload{ .arr = cursor_payload };
     defer token_value.free(allocator);
     const token = try msgpack.encodeBase64(allocator, token_value);

@@ -64,6 +64,7 @@ function triggerSchemaSync() {
 		type: "SchemaSync",
 		tables: ["users"],
 		fields: [["id", "namespace_id", "name", "created_at", "updated_at"]],
+		fieldFlags: [[0b11, 0b01, 0b00, 0b01, 0b01]],
 	});
 	const arrayBuffer = payload.buffer.slice(
 		payload.byteOffset,

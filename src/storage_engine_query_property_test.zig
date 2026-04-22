@@ -46,8 +46,7 @@ fn seedEntities(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, count
     const random = prng.random();
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        var id_buf: [16]u8 = undefined;
-        const id = try std.fmt.bufPrint(&id_buf, "id_{}", .{i});
+        const id: u128 = i + 1;
 
         var name_buf: [16]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "name_{}", .{random.intRangeAtMost(u8, 0, 10)});
@@ -68,8 +67,10 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
     const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
     const field_name = fields[field_idx];
-    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name") or std.mem.eql(u8, field_name, "id"))
+    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name"))
         .text
+    else if (std.mem.eql(u8, field_name, "id"))
+        .doc_id
     else if (std.mem.eql(u8, field_name, "score"))
         .real
     else
