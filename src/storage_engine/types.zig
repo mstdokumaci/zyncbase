@@ -231,7 +231,10 @@ pub const ScalarValue = union(enum) {
     /// Converts a JSON value to a ScalarValue based on the schema's FieldType.
     pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
         return switch (ft) {
-            .doc_id => StorageError.TypeMismatch,
+            .doc_id => switch (value) {
+                .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return StorageError.TypeMismatch },
+                else => StorageError.TypeMismatch,
+            },
             .text => switch (value) {
                 .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
                 else => StorageError.TypeMismatch,

@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const DocIdError = error{
     InvalidLength,
+    InvalidHex,
 };
 
 pub const DocId = u128;
@@ -18,6 +19,22 @@ pub fn fromBytes(bytes: []const u8) DocIdError!DocId {
 
 pub fn toBytes(id: DocId) [16]u8 {
     return std.mem.toBytes(std.mem.nativeToBig(u128, id));
+}
+
+pub fn fromHex(hex: []const u8) DocIdError!DocId {
+    if (hex.len != 32) return error.InvalidLength;
+
+    var value: u128 = 0;
+    for (hex) |char| {
+        const nibble: u8 = switch (char) {
+            '0'...'9' => char - '0',
+            'a'...'f' => char - 'a' + 10,
+            'A'...'F' => char - 'A' + 10,
+            else => return error.InvalidHex,
+        };
+        value = (value << 4) | @as(u128, nibble);
+    }
+    return value;
 }
 
 pub fn eql(a: DocId, b: DocId) bool {
