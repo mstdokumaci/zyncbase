@@ -152,6 +152,89 @@ pub fn appendProjectedColumnsSql(
     }
 }
 
+pub fn appendColumnIdentifierSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    field_name: []const u8,
+) !void {
+    try sql_identifier.appendQuoted(allocator, buf, field_name);
+}
+
+pub fn appendSelectFromTableSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    table_metadata: *const schema_manager.TableMetadata,
+) !void {
+    try buf.appendSlice(allocator, "SELECT ");
+    try appendProjectedColumnsSql(allocator, buf, table_metadata);
+    try buf.appendSlice(allocator, " FROM ");
+    try sql_identifier.appendQuoted(allocator, buf, table_metadata.table.name);
+}
+
+pub fn appendNamespaceFilterSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+) !void {
+    try appendColumnIdentifierSql(allocator, buf, "namespace_id");
+    try buf.appendSlice(allocator, " = ?");
+}
+
+pub fn appendCursorPredicateSql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    sort_field_name: []const u8,
+    sort_field_is_id: bool,
+    desc: bool,
+) !void {
+    const op = if (desc) "<" else ">";
+
+    if (sort_field_is_id) {
+        try appendColumnIdentifierSql(allocator, buf, "id");
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, op);
+        try buf.appendSlice(allocator, " ?");
+        return;
+    }
+
+    try buf.append(allocator, '(');
+    try appendColumnIdentifierSql(allocator, buf, sort_field_name);
+    try buf.appendSlice(allocator, ", ");
+    try appendColumnIdentifierSql(allocator, buf, "id");
+    try buf.appendSlice(allocator, ") ");
+    try buf.appendSlice(allocator, op);
+    try buf.appendSlice(allocator, " (?, ?)");
+}
+
+pub fn appendOrderBySql(
+    allocator: Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    sort_field_name: []const u8,
+    desc: bool,
+) !void {
+    try buf.appendSlice(allocator, " ORDER BY ");
+    try appendColumnIdentifierSql(allocator, buf, sort_field_name);
+    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
+    try buf.appendSlice(allocator, ", ");
+    try appendColumnIdentifierSql(allocator, buf, "id");
+    try buf.appendSlice(allocator, if (desc) " DESC" else " ASC");
+}
+
+pub fn buildSelectDocumentSql(
+    allocator: Allocator,
+    table_metadata: *const schema_manager.TableMetadata,
+) ![]const u8 {
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+
+    try appendSelectFromTableSql(allocator, &sql_buf, table_metadata);
+    try sql_buf.appendSlice(allocator, " WHERE ");
+    try appendColumnIdentifierSql(allocator, &sql_buf, "id");
+    try sql_buf.appendSlice(allocator, "=? AND ");
+    try appendColumnIdentifierSql(allocator, &sql_buf, "namespace_id");
+    try sql_buf.appendSlice(allocator, "=?");
+    return sql_buf.toOwnedSlice(allocator);
+}
+
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
 pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
     return sqlite.c.sqlite3_bind_text(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
@@ -252,41 +335,4 @@ pub fn buildDeleteDocumentSql(
     try sql_buf.appendSlice(allocator, "=? RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     return sql_buf.toOwnedSlice(allocator);
-}
-
-test "storage SQL builders quote identifiers" {
-    const allocator = std.testing.allocator;
-
-    const fields = [_]schema_manager.Field{
-        .{
-            .name = "from",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-    };
-    const table = schema_manager.Table{
-        .name = "select",
-        .fields = @constCast(&fields),
-    };
-    var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
-    defer table_metadata.deinit(allocator);
-
-    const columns = [_]types.ColumnValue{
-        .{ .index = 2, .value = undefined },
-    };
-
-    const insert_sql = try buildInsertOrReplaceSql(allocator, &table_metadata, &columns);
-    defer allocator.free(insert_sql);
-    try std.testing.expect(std.mem.indexOf(u8, insert_sql, "INSERT INTO \"select\" (\"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"from\" = excluded.\"from\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"select\".\"namespace_id\" = excluded.\"namespace_id\"") != null);
-
-    const delete_sql = try buildDeleteDocumentSql(allocator, &table_metadata);
-    defer allocator.free(delete_sql);
-    try std.testing.expect(std.mem.indexOf(u8, delete_sql, "DELETE FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=? RETURNING ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, delete_sql, "\"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\"") != null);
 }

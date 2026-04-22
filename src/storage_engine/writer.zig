@@ -25,7 +25,7 @@ fn getDocumentHelper(
 ) !?types.TypedRow {
     const table_metadata = sm.getTableByIndex(table_index) orelse return null;
     const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
-        const s = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        const s = try sql.buildSelectDocumentSql(allocator, table_metadata);
         try sql_cache.put(table_index, s);
         break :blk s;
     };

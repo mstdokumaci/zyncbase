@@ -511,7 +511,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql_query = try reader.buildSelectDocumentSql(allocator, table_metadata);
+        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
