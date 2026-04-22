@@ -333,7 +333,7 @@ export class SchemaDictionary {
 	}
 
 	isDocIdField(tableIndex: number, fieldIndex: number): boolean {
-		return (this.getFieldFlags(tableIndex, fieldIndex) & 0x02) !== 0;
+		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
 	}
 
 	// ─── Private helpers ───────────────────────────────────────────────────

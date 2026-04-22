@@ -8,7 +8,7 @@ describe("SchemaDictionary doc IDs", () => {
 		await schema.processSchemaSync({
 			tables: ["users"],
 			fields: [["id", "namespace_id", "created_at", "updated_at", "name"]],
-			fieldFlags: [[0x03, 0x01, 0x01, 0x01, 0x00]],
+			fieldFlags: [[0b11, 0b01, 0b01, 0b01, 0b00]],
 		});
 
 		const encoded = schema.encodePath(["users", "abc123", "name"]);
@@ -23,7 +23,7 @@ describe("SchemaDictionary doc IDs", () => {
 			fields: [
 				["id", "namespace_id", "created_at", "updated_at", "title", "owner_id"],
 			],
-			fieldFlags: [[0x03, 0x01, 0x01, 0x01, 0x00, 0x02]],
+			fieldFlags: [[0b11, 0b01, 0b01, 0b01, 0b00, 0b10]],
 		});
 
 		const encoded = schema.encodeValue(0, {

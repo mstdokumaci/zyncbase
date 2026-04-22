@@ -66,8 +66,8 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 				["name", "age"],
 			],
 			fieldFlags: [
-				[0x03, 0],
-				[0, 0],
+				[0b11, 0b00],
+				[0b00, 0b00],
 			],
 		});
 

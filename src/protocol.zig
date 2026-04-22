@@ -527,8 +527,8 @@ pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.Sc
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             var flags: u8 = 0;
-            if (schema_manager.isSystemColumn(field.name)) flags |= 0x01;
-            if (field.sql_type == .doc_id) flags |= 0x02;
+            if (schema_manager.isSystemColumn(field.name)) flags |= 0b01;
+            if (field.sql_type == .doc_id) flags |= 0b10;
             try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
     }
