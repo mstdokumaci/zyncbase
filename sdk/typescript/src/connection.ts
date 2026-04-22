@@ -448,10 +448,33 @@ export class ConnectionManager {
 		const payload = msg as {
 			tables: string[];
 			fields: string[][];
-			fieldFlags?: number[][];
+			fieldFlags: number[][];
 		};
-		const schemaChanged =
-			await this.schemaDictionary.processSchemaSync(payload);
+		let schemaChanged: boolean;
+		try {
+			schemaChanged = await this.schemaDictionary.processSchemaSync(payload);
+		} catch (err) {
+			const error =
+				err instanceof ZyncBaseError
+					? err
+					: new ZyncBaseError(
+							err instanceof Error
+								? err.message
+								: "Invalid SchemaSync payload",
+							{
+								code: ErrorCodes.INVALID_MESSAGE,
+								category: "validation",
+								retryable: false,
+							},
+						);
+			if (this.schemaSyncReject) {
+				this.schemaSyncReject(error);
+				this.schemaSyncResolve = null;
+				this.schemaSyncReject = null;
+			}
+			this.emit("error", error);
+			throw error;
+		}
 
 		if (schemaChanged) {
 			this.emit("schemaChange");

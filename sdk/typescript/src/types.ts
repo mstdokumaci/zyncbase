@@ -214,7 +214,7 @@ export interface SchemaSync {
 	type: "SchemaSync";
 	tables: string[];
 	fields: string[][];
-	fieldFlags?: number[][];
+	fieldFlags: number[][];
 }
 
 /** Union of all inbound message types. */

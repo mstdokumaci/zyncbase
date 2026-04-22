@@ -44,17 +44,17 @@ describe("SchemaDictionary doc IDs", () => {
 		});
 	});
 
-	test("infers the built-in id field as doc_id even without field flags", async () => {
+	test("rejects missing fieldFlags", async () => {
 		const schema = new SchemaDictionary();
-		await schema.processSchemaSync({
-			tables: ["users"],
-			fields: [["id", "name"]],
-		});
-
-		const decoded = schema.decodeValue(0, {
-			0: packDocId("u1"),
-			1: "Alice",
-		} as unknown as Record<number, unknown>);
-		expect(decoded).toEqual({ id: "u1", name: "Alice" });
+		await expect(
+			schema.processSchemaSync({
+				tables: ["users"],
+				fields: [["id", "name"]],
+			} as unknown as {
+				tables: string[];
+				fields: string[][];
+				fieldFlags: number[][];
+			}),
+		).rejects.toThrow("missing fieldFlags");
 	});
 });

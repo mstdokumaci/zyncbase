@@ -77,6 +77,11 @@ function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
 			["name", "age"],
 			["title", "meta"],
 		],
+		fieldFlags: [
+			[0, 0],
+			[0, 0],
+			[0, 0],
+		],
 	});
 	return { manager, mockWs };
 }
@@ -276,6 +281,7 @@ describe("ConnectionManager", () => {
 				type: "SchemaSync",
 				tables: ["users"],
 				fields: [["name", "age"]],
+				fieldFlags: [[0, 0]],
 			};
 			mockWs.triggerMessage(encodeToBuffer(schema));
 

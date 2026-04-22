@@ -55,19 +55,31 @@ export class SchemaDictionary {
 	async processSchemaSync(payload: {
 		tables: string[];
 		fields: string[][];
-		fieldFlags?: number[][];
+		fieldFlags: number[][];
 	}): Promise<boolean> {
 		// Save previous hash for comparison
 		this.previousHash = this.hash;
 
+		if (!Array.isArray(payload.fieldFlags)) {
+			throw new Error("SchemaDictionary: SchemaSync missing fieldFlags");
+		}
+		if (payload.fieldFlags.length !== payload.fields.length) {
+			throw new Error(
+				"SchemaDictionary: SchemaSync fieldFlags table count mismatch",
+			);
+		}
+		for (let ti = 0; ti < payload.fields.length; ti++) {
+			if (payload.fieldFlags[ti]?.length !== payload.fields[ti]?.length) {
+				throw new Error(
+					`SchemaDictionary: SchemaSync fieldFlags length mismatch for table index ${ti}`,
+				);
+			}
+		}
+
 		// Store raw arrays
 		this.tables = payload.tables;
 		this.fields = payload.fields;
-		this.fieldFlags =
-			payload.fieldFlags ??
-			payload.fields.map((tableFields) =>
-				tableFields.map((fieldName) => (fieldName === "id" ? 0x03 : 0)),
-			);
+		this.fieldFlags = payload.fieldFlags;
 
 		// Build table index map
 		this.tableToIndex.clear();
@@ -351,7 +363,7 @@ export class SchemaDictionary {
 	private async computeHash(payload: {
 		tables: string[];
 		fields: string[][];
-		fieldFlags?: number[][];
+		fieldFlags: number[][];
 	}): Promise<string> {
 		if (!SchemaDictionary.xxhashPromise) {
 			SchemaDictionary.xxhashPromise = xxhash();
@@ -360,7 +372,7 @@ export class SchemaDictionary {
 		const canonical = JSON.stringify({
 			tables: payload.tables,
 			fields: payload.fields,
-			fieldFlags: payload.fieldFlags ?? this.fieldFlags,
+			fieldFlags: payload.fieldFlags,
 		});
 		return hasher.h64ToString(canonical).padStart(16, "0");
 	}
