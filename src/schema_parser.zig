@@ -47,6 +47,18 @@ pub fn isSystemColumn(name: []const u8) bool {
     return getSystemColumn(name) != null;
 }
 
+fn isValidSchemaIdentifier(name: []const u8) bool {
+    if (name.len == 0) return false;
+    if (!std.ascii.isAlphabetic(name[0])) return false;
+    if (std.mem.containsAtLeast(u8, name, 1, "__")) return false;
+
+    for (name[1..]) |char| {
+        if (!std.ascii.isAlphanumeric(char) and char != '_') return false;
+    }
+
+    return true;
+}
+
 pub const Field = struct {
     name: []const u8, // flattened name, e.g. "address__city"
     sql_type: FieldType,
@@ -258,7 +270,7 @@ pub const SchemaParser = struct {
         var store_iter = store_val.object.iterator();
         while (store_iter.next()) |table_entry| {
             const table_name_raw = table_entry.key_ptr.*;
-            if (table_name_raw.len == 0 or std.mem.containsAtLeast(u8, table_name_raw, 1, "__")) return error.InvalidTableName;
+            if (!isValidSchemaIdentifier(table_name_raw)) return error.InvalidTableName;
 
             const table_name = try self.allocator.dupe(u8, table_name_raw);
             errdefer self.allocator.free(table_name);
@@ -344,8 +356,8 @@ pub const SchemaParser = struct {
             if (type_val != .string) return error.InvalidFieldType;
             const type_str = type_val.string;
 
-            // Validate field name before allocating: reject empty names and internal separator.
-            if (field_name.len == 0 or std.mem.containsAtLeast(u8, field_name, 1, "__")) return error.InvalidFieldName;
+            // Validate field name before allocating: reject invalid SQL identifiers and the internal separator.
+            if (!isValidSchemaIdentifier(field_name)) return error.InvalidFieldName;
 
             // Generate the flattened full name
             const full_name = if (prefix.len > 0)
@@ -378,7 +390,10 @@ pub const SchemaParser = struct {
                     false;
 
                 const refs = if (field_def.object.get("references")) |rv| blk: {
-                    if (rv == .string) break :blk try self.allocator.dupe(u8, rv.string);
+                    if (rv == .string) {
+                        if (!isValidSchemaIdentifier(rv.string)) return error.InvalidTableName;
+                        break :blk try self.allocator.dupe(u8, rv.string);
+                    }
                     break :blk null;
                 } else null;
                 errdefer if (refs) |r| self.allocator.free(r);

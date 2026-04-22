@@ -59,14 +59,14 @@ test "ddl_generator: DDL contains required columns and constraints" {
         defer allocator.free(ddl);
 
         // Assert required structural elements
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "id BLOB NOT NULL CHECK(length(id) = 16),") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "\"id\" BLOB NOT NULL CHECK(length(\"id\") = 16),") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "\"namespace_id\" TEXT NOT NULL") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "\"created_at\" INTEGER NOT NULL") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "\"updated_at\" INTEGER NOT NULL") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (\"id\")") != null);
 
         // Assert CREATE INDEX on namespace_id
-        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS idx_{s}_namespace_id ON {s}(namespace_id)", .{ table_name, table_name });
+        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS \"idx_{s}_namespace_id\" ON \"{s}\"(\"namespace_id\")", .{ table_name, table_name });
         defer allocator.free(ns_idx);
         try std.testing.expect(std.mem.indexOf(u8, ddl, ns_idx) != null);
 
@@ -75,19 +75,19 @@ test "ddl_generator: DDL contains required columns and constraints" {
             const expected_type = field.sql_type.toSqlType();
 
             // Check column definition exists
-            const col_def = try std.fmt.allocPrint(allocator, "  {s} {s}", .{ field.name, expected_type });
+            const col_def = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}", .{ field.name, expected_type });
             defer allocator.free(col_def);
             try std.testing.expect(std.mem.indexOf(u8, ddl, col_def) != null);
 
             // Check NOT NULL for required fields
             if (field.required) {
-                const not_null_def = try std.fmt.allocPrint(allocator, "  {s} {s} NOT NULL", .{ field.name, expected_type });
+                const not_null_def = try std.fmt.allocPrint(allocator, "  \"{s}\" {s} NOT NULL", .{ field.name, expected_type });
                 defer allocator.free(not_null_def);
                 try std.testing.expect(std.mem.indexOf(u8, ddl, not_null_def) != null);
             }
 
             if (field.sql_type == .doc_id) {
-                const doc_id_check = try std.fmt.allocPrint(allocator, "  {s} {s}{s} CHECK(length({s}) = 16)", .{
+                const doc_id_check = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}{s} CHECK(length(\"{s}\") = 16)", .{
                     field.name,
                     expected_type,
                     if (field.required) " NOT NULL" else "",
@@ -99,7 +99,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
 
             // Check FOREIGN KEY for referenced fields
             if (field.references) |ref| {
-                const fk_def = try std.fmt.allocPrint(allocator, "FOREIGN KEY ({s}) REFERENCES {s}(id)", .{ field.name, ref });
+                const fk_def = try std.fmt.allocPrint(allocator, "FOREIGN KEY (\"{s}\") REFERENCES \"{s}\"(\"id\")", .{ field.name, ref });
                 defer allocator.free(fk_def);
                 try std.testing.expect(std.mem.indexOf(u8, ddl, fk_def) != null);
             }
@@ -237,17 +237,17 @@ test "ddl_generator: DDL emits BLOB for array fields" {
 
         for (fields) |f| {
             const expected_type = f.sql_type.toSqlType();
-            const col_def = try std.fmt.allocPrint(allocator, "  {s} {s}", .{ f.name, expected_type });
+            const col_def = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}", .{ f.name, expected_type });
             defer allocator.free(col_def);
             try std.testing.expect(std.mem.indexOf(u8, ddl, col_def) != null);
         }
 
         // Specifically assert the array column uses BLOB, not TEXT
         const array_field = fields[array_idx];
-        const blob_def = try std.fmt.allocPrint(allocator, "  {s} BLOB", .{array_field.name});
+        const blob_def = try std.fmt.allocPrint(allocator, "  \"{s}\" BLOB", .{array_field.name});
         defer allocator.free(blob_def);
         try std.testing.expect(std.mem.indexOf(u8, ddl, blob_def) != null);
-        const text_def = try std.fmt.allocPrint(allocator, "  {s} TEXT", .{array_field.name});
+        const text_def = try std.fmt.allocPrint(allocator, "  \"{s}\" TEXT", .{array_field.name});
         defer allocator.free(text_def);
         try std.testing.expect(std.mem.indexOf(u8, ddl, text_def) == null);
     }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
+const sql_identifier = @import("sql_identifier.zig");
 
 pub const DDLGenerator = struct {
     allocator: std.mem.Allocator,
@@ -17,16 +18,22 @@ pub const DDLGenerator = struct {
 
         // ── CREATE TABLE ──────────────────────────────────────────────────────
         try buf.appendSlice(self.allocator, "CREATE TABLE IF NOT EXISTS ");
-        try buf.appendSlice(self.allocator, table.name);
+        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
         try buf.appendSlice(self.allocator, " (\n");
 
         // Fixed leading columns
-        try buf.appendSlice(self.allocator, "  id BLOB NOT NULL CHECK(length(id) = 16),\n");
-        try buf.appendSlice(self.allocator, "  namespace_id TEXT NOT NULL");
+        try buf.appendSlice(self.allocator, "  ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.appendSlice(self.allocator, " BLOB NOT NULL CHECK(length(");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.appendSlice(self.allocator, ") = 16),\n");
+        try buf.appendSlice(self.allocator, "  ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+        try buf.appendSlice(self.allocator, " TEXT NOT NULL");
         // One column per field
         for (table.fields) |field| {
             try buf.appendSlice(self.allocator, ",\n  ");
-            try buf.appendSlice(self.allocator, field.name);
+            try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
             try buf.append(self.allocator, ' ');
             try buf.appendSlice(self.allocator, field.sql_type.toSqlType());
             if (field.required) {
@@ -34,26 +41,34 @@ pub const DDLGenerator = struct {
             }
             if (field.sql_type == .doc_id) {
                 try buf.appendSlice(self.allocator, " CHECK(length(");
-                try buf.appendSlice(self.allocator, field.name);
+                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
                 try buf.appendSlice(self.allocator, ") = 16)");
             }
         }
 
         // Fixed trailing columns
-        try buf.appendSlice(self.allocator, ",\n  created_at INTEGER NOT NULL");
-        try buf.appendSlice(self.allocator, ",\n  updated_at INTEGER NOT NULL");
+        try buf.appendSlice(self.allocator, ",\n  ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "created_at");
+        try buf.appendSlice(self.allocator, " INTEGER NOT NULL");
+        try buf.appendSlice(self.allocator, ",\n  ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "updated_at");
+        try buf.appendSlice(self.allocator, " INTEGER NOT NULL");
 
         // Global document identity is keyed by id; namespace remains a scoped column.
-        try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (id)");
+        try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.append(self.allocator, ')');
 
         // FOREIGN KEY constraints
         for (table.fields) |field| {
             if (field.references) |ref| {
                 try buf.appendSlice(self.allocator, ",\n  FOREIGN KEY (");
-                try buf.appendSlice(self.allocator, field.name);
+                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
                 try buf.appendSlice(self.allocator, ") REFERENCES ");
-                try buf.appendSlice(self.allocator, ref);
-                try buf.appendSlice(self.allocator, "(id)");
+                try sql_identifier.appendQuoted(self.allocator, &buf, ref);
+                try buf.appendSlice(self.allocator, "(");
+                try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+                try buf.append(self.allocator, ')');
                 if (field.on_delete) |od| {
                     switch (od) {
                         .cascade => try buf.appendSlice(self.allocator, " ON DELETE CASCADE"),
@@ -67,23 +82,23 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, "\n)");
 
         // ── CREATE INDEX on namespace_id ──────────────────────────────────────
-        try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS idx_");
-        try buf.appendSlice(self.allocator, table.name);
-        try buf.appendSlice(self.allocator, "_namespace_id ON ");
-        try buf.appendSlice(self.allocator, table.name);
-        try buf.appendSlice(self.allocator, "(namespace_id)");
+        try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
+        try appendQuotedIndexName(self.allocator, &buf, table.name, "namespace_id");
+        try buf.appendSlice(self.allocator, " ON ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+        try buf.appendSlice(self.allocator, "(");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+        try buf.append(self.allocator, ')');
 
         // ── CREATE INDEX for each indexed field ───────────────────────────────
         for (table.fields) |field| {
             if (field.indexed) {
-                try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS idx_");
-                try buf.appendSlice(self.allocator, table.name);
-                try buf.append(self.allocator, '_');
-                try buf.appendSlice(self.allocator, field.name);
+                try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
+                try appendQuotedIndexName(self.allocator, &buf, table.name, field.name);
                 try buf.appendSlice(self.allocator, " ON ");
-                try buf.appendSlice(self.allocator, table.name);
+                try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
                 try buf.append(self.allocator, '(');
-                try buf.appendSlice(self.allocator, field.name);
+                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
                 try buf.append(self.allocator, ')');
             }
         }
@@ -93,3 +108,17 @@ pub const DDLGenerator = struct {
         return buf.toOwnedSlice(self.allocator);
     }
 };
+
+fn appendQuotedIndexName(
+    allocator: std.mem.Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    table_name: []const u8,
+    field_name: []const u8,
+) !void {
+    try buf.append(allocator, '"');
+    try buf.appendSlice(allocator, "idx_");
+    try buf.appendSlice(allocator, table_name);
+    try buf.append(allocator, '_');
+    try buf.appendSlice(allocator, field_name);
+    try buf.append(allocator, '"');
+}
