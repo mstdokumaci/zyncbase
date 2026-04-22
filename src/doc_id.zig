@@ -9,12 +9,7 @@ pub const DocId = u128;
 
 pub fn fromBytes(bytes: []const u8) DocIdError!DocId {
     if (bytes.len != 16) return error.InvalidLength;
-
-    var value: u128 = 0;
-    for (bytes) |b| {
-        value = (value << 8) | @as(u128, b);
-    }
-    return value;
+    return std.mem.readInt(DocId, bytes[0..16], .big);
 }
 
 pub fn toBytes(id: DocId) [16]u8 {
@@ -23,18 +18,7 @@ pub fn toBytes(id: DocId) [16]u8 {
 
 pub fn fromHex(hex: []const u8) DocIdError!DocId {
     if (hex.len != 32) return error.InvalidLength;
-
-    var value: u128 = 0;
-    for (hex) |char| {
-        const nibble: u8 = switch (char) {
-            '0'...'9' => char - '0',
-            'a'...'f' => char - 'a' + 10,
-            'A'...'F' => char - 'A' + 10,
-            else => return error.InvalidHex,
-        };
-        value = (value << 4) | @as(u128, nibble);
-    }
-    return value;
+    return std.fmt.parseInt(DocId, hex, 16) catch return error.InvalidHex;
 }
 
 pub fn eql(a: DocId, b: DocId) bool {
