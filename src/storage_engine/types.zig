@@ -333,6 +333,8 @@ pub const TypedValue = union(enum) {
     /// Reads and converts a SQLite result column into a TypedValue.
     pub fn fromSQLiteColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !TypedValue {
         const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+        // Array fields are stored as JSONB BLOBs at rest, but the read/query path
+        // projects them through `json(field) AS field`, so SQLite returns TEXT here.
         if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
