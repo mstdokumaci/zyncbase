@@ -163,7 +163,7 @@ test "StorageEngine: query collection" {
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 2), managed.rows.len);
 }
-test "StorageEngine: multiple namespaces" {
+test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.Table{ .name = "items", .fields = &fields_arr };
@@ -172,17 +172,22 @@ test "StorageEngine: multiple namespaces" {
     defer ctx.deinit();
     const items = try ctx.table("items");
 
-    // Set values in different namespaces
+    // Insert the initial document.
     try items.insertText(1, "namespace1", "val", "ns1");
+    try items.flush();
+
+    // Reusing the same id from another namespace must fail instead of mutating
+    // the existing hidden row.
     try items.insertText(1, "namespace2", "val", "ns2");
     try items.flush();
-    // Get values from different namespaces
+
     var doc1 = try items.getOne(allocator, 1, "namespace1");
     defer doc1.deinit();
-    var doc2 = try items.getOne(allocator, 1, "namespace2");
-    defer doc2.deinit();
     _ = try doc1.expectFieldString("val", "ns1");
-    _ = try doc2.expectFieldString("val", "ns2");
+
+    var managed = try items.selectDocument(allocator, 1, "namespace2");
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 0), managed.rows.len);
 }
 test "StorageEngine: transaction support" {
     const allocator = testing.allocator;

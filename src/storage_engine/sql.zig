@@ -169,7 +169,8 @@ pub fn buildInsertOrReplaceSql(
 
     // Build SQL: INSERT INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
     // VALUES (?, ?, .., ?, ?)
-    // ON CONFLICT(id, namespace_id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
+    // ON CONFLICT(id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
+    // WHERE <table>.namespace_id = excluded.namespace_id
     // Array columns use jsonb(?) instead of ? as the placeholder.
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -192,7 +193,7 @@ pub fn buildInsertOrReplaceSql(
         }
     }
     // created_at and updated_at placeholders
-    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id, namespace_id) DO UPDATE SET ");
+    try sql_buf.appendSlice(allocator, ", ?, ?) ON CONFLICT(id) DO UPDATE SET ");
 
     // Update each column provided
     for (columns, 0..) |col, i| {
@@ -204,7 +205,9 @@ pub fn buildInsertOrReplaceSql(
     }
     // Always update updated_at
     if (columns.len > 0) try sql_buf.appendSlice(allocator, ", ");
-    try sql_buf.appendSlice(allocator, "updated_at = excluded.updated_at RETURNING ");
+    try sql_buf.appendSlice(allocator, "updated_at = excluded.updated_at WHERE ");
+    try sql_buf.appendSlice(allocator, table);
+    try sql_buf.appendSlice(allocator, ".namespace_id = excluded.namespace_id RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
 
     return sql_buf.toOwnedSlice(allocator);

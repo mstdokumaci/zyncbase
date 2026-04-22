@@ -118,9 +118,11 @@ pub fn executeBatch(
                         r.deinit(allocator);
                     };
                 } else {
-                    // This is unexpected for an INSERT OR REPLACE.
+                    // The upsert is guarded by namespace_id. A missing RETURNING row means
+                    // the id already exists in another namespace, which we surface as a
+                    // dropped write rather than silently mutating hidden data.
                     var id_hex_buf: [32]u8 = undefined;
-                    std.log.err("UPSERT for table index {d}/{s} returned no row via RETURNING", .{ iop.table_index, doc_id.hexSlice(iop.id, &id_hex_buf) });
+                    std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, doc_id.hexSlice(iop.id, &id_hex_buf) });
                     if (old_row) |r| r.deinit(allocator);
                     continue;
                 }

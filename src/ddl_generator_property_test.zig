@@ -63,7 +63,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
         try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, ddl, "updated_at INTEGER NOT NULL") != null);
-        try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id, namespace_id)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id)") != null);
 
         // Assert CREATE INDEX on namespace_id
         const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS idx_{s}_namespace_id ON {s}(namespace_id)", .{ table_name, table_name });

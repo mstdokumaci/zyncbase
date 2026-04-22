@@ -43,8 +43,8 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, ",\n  created_at INTEGER NOT NULL");
         try buf.appendSlice(self.allocator, ",\n  updated_at INTEGER NOT NULL");
 
-        // Primary key constraint
-        try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (id, namespace_id)");
+        // Global document identity is keyed by id; namespace remains a scoped column.
+        try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (id)");
 
         // FOREIGN KEY constraints
         for (table.fields) |field| {

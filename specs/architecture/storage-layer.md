@@ -135,7 +135,7 @@ CREATE TABLE projects (
     name TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY (id, namespace_id)
+    PRIMARY KEY (id)
 );
 
 -- Tasks table with foreign key
@@ -148,7 +148,7 @@ CREATE TABLE tasks (
     projectId BLOB,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY (id, namespace_id),
+    PRIMARY KEY (id),
     FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
 );
 

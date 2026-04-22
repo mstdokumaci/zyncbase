@@ -236,7 +236,7 @@ test "StoreService: persistence and namespace isolation" {
         _ = try stored_doc.expectFieldString("val", "value1");
     }
 
-    // 2. Namespace Isolation
+    // 2. Duplicate ids do not cross namespace boundaries
     {
         const val = try msgpack.Payload.strToPayload("value2", allocator);
         defer val.free(allocator);
@@ -250,10 +250,10 @@ test "StoreService: persistence and namespace isolation" {
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
-        // Verify ns-b has value2
-        var doc_b = try test_table.getOne(allocator, 1, "ns-b");
-        defer doc_b.deinit();
-        _ = try doc_b.expectFieldString("val", "value2");
+        // Verify ns-b did not get a second row with the same id.
+        var managed_b = try test_table.selectDocument(allocator, 1, "ns-b");
+        defer managed_b.deinit();
+        try testing.expectEqual(@as(usize, 0), managed_b.rows.len);
     }
 
     // 3. Updates

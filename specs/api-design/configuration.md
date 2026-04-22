@@ -377,7 +377,7 @@ CREATE TABLE users (
     roles BLOB,  -- canonical array storage
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY (id, namespace_id)
+    PRIMARY KEY (id)
 );
 ```
 
@@ -694,7 +694,7 @@ CREATE TABLE tasks (
     priority INTEGER,
     created_at INTEGER,
     updated_at INTEGER,
-    PRIMARY KEY (id, namespace_id)
+    PRIMARY KEY (id)
 );
 
 CREATE INDEX idx_tasks_status ON tasks(status);
