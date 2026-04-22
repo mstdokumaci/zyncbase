@@ -86,6 +86,17 @@ test "ddl_generator: DDL contains required columns and constraints" {
                 try std.testing.expect(std.mem.indexOf(u8, ddl, not_null_def) != null);
             }
 
+            if (field.sql_type == .doc_id) {
+                const doc_id_check = try std.fmt.allocPrint(allocator, "  {s} {s}{s} CHECK(length({s}) = 16)", .{
+                    field.name,
+                    expected_type,
+                    if (field.required) " NOT NULL" else "",
+                    field.name,
+                });
+                defer allocator.free(doc_id_check);
+                try std.testing.expect(std.mem.indexOf(u8, ddl, doc_id_check) != null);
+            }
+
             // Check FOREIGN KEY for referenced fields
             if (field.references) |ref| {
                 const fk_def = try std.fmt.allocPrint(allocator, "FOREIGN KEY ({s}) REFERENCES {s}(id)", .{ field.name, ref });

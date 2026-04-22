@@ -91,7 +91,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "id BLOB NOT NULL CHECK(length(id) = 16),") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ddl, "user_id BLOB NOT NULL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ddl, "user_id BLOB NOT NULL CHECK(length(user_id) = 16)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (id, namespace_id)") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "namespace_id TEXT NOT NULL") != null);
     try std.testing.expect(std.mem.indexOf(u8, ddl, "created_at INTEGER NOT NULL") != null);

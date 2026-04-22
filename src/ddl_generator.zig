@@ -32,6 +32,11 @@ pub const DDLGenerator = struct {
             if (field.required) {
                 try buf.appendSlice(self.allocator, " NOT NULL");
             }
+            if (field.sql_type == .doc_id) {
+                try buf.appendSlice(self.allocator, " CHECK(length(");
+                try buf.appendSlice(self.allocator, field.name);
+                try buf.appendSlice(self.allocator, ") = 16)");
+            }
         }
 
         // Fixed trailing columns
