@@ -484,8 +484,8 @@ export class StoreImpl {
 		if (Array.isArray(value)) {
 			for (const item of value as JsonValue[]) {
 				const i = item as Record<string, JsonValue>;
-				const id = (i.id as string) || (segments[1] as string);
-				delta.ops.push({ op: "set", path: [collection, id], value: item });
+const id = (i.id as string) || (segments.length > 1 ? segments[1] : undefined);
+if (id) delta.ops.push({ op: "set", path: [collection, id], value: item });
 			}
 		} else if (value !== null) {
 			const val = value as Record<string, JsonValue>;
