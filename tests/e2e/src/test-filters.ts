@@ -137,6 +137,48 @@ function parseEventRecord(raw: JsonValue): EventRecord | null {
 	};
 }
 
+function processItemOp(state: ClientState, op: JsonValue) {
+	const opObj = op as Record<string, JsonValue>;
+	if (opObj.op === "set") {
+		const record = parseItemRecord(op);
+		if (record) state.itemsRecords.set(record.id, record);
+		return;
+	}
+	if (opObj.op === "remove") {
+		const path = opObj.path as string[];
+		if (path && path.length > 1) {
+			state.itemsRecords.delete(path[1]);
+		}
+	}
+}
+
+function processEventOp(state: ClientState, op: JsonValue) {
+	const opObj = op as Record<string, JsonValue>;
+	if (opObj.op === "set") {
+		const record = parseEventRecord(op);
+		if (record) state.eventsRecords.set(record.id, record);
+		return;
+	}
+	if (opObj.op === "remove") {
+		const path = opObj.path as string[];
+		if (path && path.length > 1) {
+			state.eventsRecords.delete(path[1]);
+		}
+	}
+}
+
+function handleItemOps(state: ClientState, ops: JsonValue[]) {
+	for (const op of ops) {
+		processItemOp(state, op);
+	}
+}
+
+function handleEventOps(state: ClientState, ops: JsonValue[]) {
+	for (const op of ops) {
+		processEventOp(state, op);
+	}
+}
+
 function subscribeClient(state: ClientState) {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
 	const eventsFilter =
@@ -145,23 +187,13 @@ function subscribeClient(state: ClientState) {
 	state.itemsSub = state.client.store.subscribe(
 		"items",
 		itemsFilter,
-		(ops: JsonValue[]) => {
-			for (const op of ops) {
-				const record = parseItemRecord(op);
-				if (record) state.itemsRecords.set(record.id, record);
-			}
-		},
+		(ops: JsonValue[]) => handleItemOps(state, ops),
 	);
 
 	state.eventsSub = state.client.store.subscribe(
 		"events",
 		eventsFilter,
-		(ops: JsonValue[]) => {
-			for (const op of ops) {
-				const record = parseEventRecord(op);
-				if (record) state.eventsRecords.set(record.id, record);
-			}
-		},
+		(ops: JsonValue[]) => handleEventOps(state, ops),
 	);
 }
 
@@ -283,6 +315,24 @@ function verifyClientState(
 	}
 	if (missingEvents.length > 0) {
 		errors.push(`Missing events: ${missingEvents.join(", ")}`);
+	}
+
+	const extraItems = [...actualItemIds].filter(
+		(id) => !expectedItemIds.has(id),
+	);
+	const extraEvents = [...actualEventIds].filter(
+		(id) => !expectedEventIds.has(id),
+	);
+
+	if (extraItems.length > 0) {
+		errors.push(
+			`Extra items (should be filtered out): ${extraItems.join(", ")}`,
+		);
+	}
+	if (extraEvents.length > 0) {
+		errors.push(
+			`Extra events (should be filtered out): ${extraEvents.join(", ")}`,
+		);
 	}
 
 	const matchesItemFilter =

@@ -243,9 +243,12 @@ pub const SubscriptionEngine = struct {
     }
 
     /// Finds all subscribers matching a row change. Returns matches through a Result struct.
+    pub const MatchOp = enum { set_op, remove };
+
     pub const Match = struct {
         connection_id: u64,
         subscription_id: SubscriptionId,
+        op: MatchOp,
     };
 
     pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
@@ -274,13 +277,26 @@ pub const SubscriptionEngine = struct {
             const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
             const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
 
-            if (matched_before or matches_after) {
-                // All subscribers in this group match
+            if (matched_before and !matches_after) {
+                // Row left the filter: send remove
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
                         .connection_id = sub.connection_id,
                         .subscription_id = sub.id,
+                        .op = .remove,
+                    });
+                }
+            } else if (matches_after) {
+                // Row now matches the filter: send set.
+                // Covers both "row entered the filter" (!matched_before)
+                // and "row changed within the filter" (matched_before).
+                var sub_it = group.subscribers.keyIterator();
+                while (sub_it.next()) |sub| {
+                    try matches.append(allocator, .{
+                        .connection_id = sub.connection_id,
+                        .subscription_id = sub.id,
+                        .op = .set_op,
                     });
                 }
             }
