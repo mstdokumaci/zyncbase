@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { packDocId, unpackDocId } from "./doc_id.js";
+import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { generateUUIDv7 } from "./uuid.js";
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

@@ -61,7 +61,7 @@ function formatUuidBytes(bytes: Uint8Array): string {
 function encodeShortDocId(id: string): Uint8Array {
 	let value = 0n;
 	for (let i = 0; i < SHORT_DIGITS; i += 1) {
-		const digit = i < id.length ? shortCharToDigit.get(id[i]) ?? 0 : 0;
+		const digit = i < id.length ? (shortCharToDigit.get(id[i]) ?? 0) : 0;
 		value = value * SHORT_BASE + BigInt(digit);
 	}
 	return bigIntToBytes(value);
@@ -75,7 +75,10 @@ function decodeShortDocId(value: bigint): string {
 		remaining /= SHORT_BASE;
 	}
 	if (remaining !== 0n || digits[0] === 0) {
-		throw invalidDocIdError("Invalid packed short document ID", ErrorCodes.INVALID_MESSAGE);
+		throw invalidDocIdError(
+			"Invalid packed short document ID",
+			ErrorCodes.INVALID_MESSAGE,
+		);
 	}
 
 	let result = "";

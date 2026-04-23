@@ -458,9 +458,7 @@ export class ConnectionManager {
 				err instanceof ZyncBaseError
 					? err
 					: new ZyncBaseError(
-							err instanceof Error
-								? err.message
-								: "Invalid SchemaSync payload",
+							err instanceof Error ? err.message : "Invalid SchemaSync payload",
 							{
 								code: ErrorCodes.INVALID_MESSAGE,
 								category: "validation",
