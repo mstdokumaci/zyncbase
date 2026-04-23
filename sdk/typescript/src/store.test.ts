@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
-import { flatten, unflatten } from "./store";
+import { flatten, unflatten } from "./path";
 
 /** Recursively check that no nested object is empty (would be lost in flatten/unflatten) */
 function hasNoEmptyObjects(val: unknown): boolean {

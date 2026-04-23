@@ -20,8 +20,14 @@ export class ZyncBaseClient {
 	/** Underlying SDK store — use for `store.listen`, `store.get`, etc. */
 	readonly store: Store;
 
-	constructor(url: string = "ws://127.0.0.1:3000") {
-		this.client = createClient({ url });
+	constructor(
+		urlOrOptions:
+			| string
+			| { url: string; debug?: boolean } = "ws://127.0.0.1:3000",
+	) {
+		const options =
+			typeof urlOrOptions === "string" ? { url: urlOrOptions } : urlOrOptions;
+		this.client = createClient(options);
 		this.store = this.client.store;
 	}
 

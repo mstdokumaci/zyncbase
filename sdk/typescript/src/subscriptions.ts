@@ -1,6 +1,6 @@
 // Subscription Tracker
 
-import { unflatten } from "./store.js";
+import { unflatten } from "./path.js";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13,6 +13,16 @@ export interface ListenProjection {
 	depth: number;
 }
 
+/** Client-side materialized view for store.subscribe() registrations. */
+export interface MaterializedView {
+	/** Current records keyed by document id. Values are unflattened. */
+	records: Map<string, JsonValue>;
+	/** Collection name — needed to extract id from delta op paths. */
+	collection: string;
+	/** Comparator for maintaining orderBy sort. Null = no ordering. */
+	comparator: ((a: JsonValue, b: JsonValue) => number) | null;
+}
+
 /** A single registered subscription entry. */
 export interface SubscriptionEntry {
 	/** Original StoreSubscribe params — used for replay on reconnect. */
@@ -21,6 +31,8 @@ export interface SubscriptionEntry {
 	callbacks: Array<(value: JsonValue) => void>;
 	/** Projection info; null for store.subscribe (collection-level) registrations. */
 	projection: ListenProjection | null;
+	/** Optional materialized view for collection-level subscriptions. */
+	materializedView?: MaterializedView;
 }
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
@@ -120,12 +132,27 @@ export class SubscriptionTracker {
 			this.subscriptions.set(id, entry);
 		}
 
+		// Clear materialized views — they'll be re-populated from fresh snapshots
+		this.clearMaterializedViews();
+
 		this.connected = true;
 
 		// Drain queued deltas
 		const queued = this.deltaQueue.splice(0);
 		for (const delta of queued) {
 			this._dispatchDelta(delta);
+		}
+	}
+
+	/**
+	 * Clear all materialized view records.
+	 * Called before reconnect to prevent stale data.
+	 */
+	clearMaterializedViews(): void {
+		for (const entry of this.subscriptions.values()) {
+			if (entry.materializedView) {
+				entry.materializedView.records.clear();
+			}
 		}
 	}
 
@@ -138,16 +165,24 @@ export class SubscriptionTracker {
 			return;
 		}
 
-		const projected = this._project(delta, entry.projection);
+		let value: JsonValue;
+
+		if (entry.materializedView) {
+			this._applyOpsToView(entry.materializedView, delta.ops);
+			value = this._snapshotView(entry.materializedView);
+		} else {
+			value = this._project(delta, entry.projection);
+		}
+
 		if (this.debug) {
 			console.log(
 				`[SDK] Dispatching delta to listener (subId=${delta.subId}):`,
-				JSON.stringify(projected),
+				JSON.stringify(value),
 			);
 		}
 
 		for (const cb of entry.callbacks) {
-			cb(projected);
+			cb(value);
 		}
 	}
 
@@ -158,8 +193,8 @@ export class SubscriptionTracker {
 		delta: StoreDelta,
 		projection: ListenProjection | null,
 	): JsonValue {
-		if (projection === null || projection.depth === 1) {
-			// store.subscribe — deliver raw ops
+		if (projection === null) {
+			// Fallback — should not normally be reached with materialized view in place
 			return delta.ops;
 		}
 
@@ -178,21 +213,24 @@ export class SubscriptionTracker {
 	private _reconstructRecord(ops: StoreDelta["ops"]): JsonValue {
 		const flat: Record<string, JsonValue> = {};
 		for (const op of ops) {
-			// Relative path starting from the record root
 			const relativePath = op.path.slice(2);
-
 			if (relativePath.length === 0) {
 				const rootResult = this._handleRootOp(op);
 				if (rootResult !== undefined) return rootResult;
 				continue;
 			}
-
-			const key = relativePath.join("__");
-			flat[key] = op.op === "set" ? op.value : null;
+			this._processRecordOp(op, flat, relativePath);
 		}
-
-		// Unflatten to restore nested structure for the caller
 		return unflatten(flat);
+	}
+
+	private _processRecordOp(
+		op: StoreDelta["ops"][number],
+		flat: Record<string, JsonValue>,
+		relativePath: string[],
+	): void {
+		const key = relativePath.join("__");
+		flat[key] = op.op === "set" ? op.value : null;
 	}
 
 	private _handleRootOp(op: StoreDelta["ops"][number]): JsonValue | undefined {
@@ -220,4 +258,75 @@ export class SubscriptionTracker {
 		}
 		return value;
 	}
+
+	/**
+	 * Apply delta ops to a materialized view.
+	 * Values arrive as flat string-keyed maps (e.g. { "address__city": "NYC" })
+	 * and are unflattened before storage.
+	 */
+	private _applyOpsToView(
+		view: MaterializedView,
+		ops: StoreDelta["ops"],
+	): void {
+		for (const op of ops) {
+			this._applyOpToView(view, op);
+		}
+	}
+
+	private _applyOpToView(
+		view: MaterializedView,
+		op: StoreDelta["ops"][number],
+	): void {
+		const id = op.path[1] as string;
+		if (op.op === "set") {
+			const record =
+				op.value !== null &&
+				typeof op.value === "object" &&
+				!Array.isArray(op.value)
+					? unflatten(op.value as Record<string, JsonValue>)
+					: op.value;
+
+			if (record && typeof record === "object" && !Array.isArray(record)) {
+				(record as Record<string, JsonValue>).id = id;
+			}
+			view.records.set(id, record);
+		} else if (op.op === "remove") {
+			view.records.delete(id);
+		}
+	}
+
+	/**
+	 * Create a sorted snapshot array from the materialized view.
+	 */
+	private _snapshotView(view: MaterializedView): JsonValue[] {
+		const arr = Array.from(view.records.values());
+		if (view.comparator) {
+			arr.sort(view.comparator);
+		}
+		return arr;
+	}
+}
+
+/**
+ * Build a sort comparator from QueryOptions.orderBy.
+ * Returns null if no ordering is specified.
+ */
+export function buildComparator(
+	orderBy?: Record<string, "asc" | "desc">,
+): ((a: JsonValue, b: JsonValue) => number) | null {
+	if (!orderBy) return null;
+	const entries = Object.entries(orderBy);
+	if (entries.length === 0) return null;
+	const [field, dir] = entries[0];
+	const mult = dir === "desc" ? -1 : 1;
+	return (a: JsonValue, b: JsonValue): number => {
+		const va = (a as Record<string, JsonValue>)?.[field];
+		const vb = (b as Record<string, JsonValue>)?.[field];
+		if (va === vb) return 0;
+		if (va == null) return 1;
+		if (vb == null) return -1;
+		if (va < vb) return -1 * mult;
+		if (va > vb) return 1 * mult;
+		return 0;
+	};
 }
