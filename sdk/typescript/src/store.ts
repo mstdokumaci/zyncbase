@@ -483,19 +483,37 @@ export class StoreImpl {
 
 		if (Array.isArray(value)) {
 			for (const item of value as JsonValue[]) {
-				const i = item as Record<string, JsonValue>;
-				const id =
-					(i.id as string) || (segments.length > 1 ? segments[1] : undefined);
-				if (id)
-					delta.ops.push({ op: "set", path: [collection, id], value: item });
+				const op = this._createInitialSnapshotOp(collection, segments, item);
+				if (op) delta.ops.push(op);
 			}
 		} else if (value !== null) {
-			const val = value as Record<string, JsonValue>;
-			const id = (val.id as string) || segments[1];
-			delta.ops.push({ op: "set", path: [collection, id], value: val });
+			const op = this._createInitialSnapshotOp(collection, segments, value);
+			if (op) delta.ops.push(op);
 		}
 
 		this.tracker.dispatch(delta);
+	}
+
+	private _createInitialSnapshotOp(
+		collection: string,
+		segments: string[],
+		item: JsonValue,
+	): { op: "set"; path: string[]; value: JsonValue } | null {
+		if (item === null || typeof item !== "object" || Array.isArray(item)) {
+			return null;
+		}
+
+		const val = item as Record<string, JsonValue>;
+		const id =
+			(val.id as string) || (segments.length > 1 ? segments[1] : undefined);
+
+		if (!id) return null;
+
+		return {
+			op: "set" as const,
+			path: [collection, id],
+			value: item,
+		};
 	}
 
 	listen(path: Path, callback: (value: JsonValue) => void): () => void {

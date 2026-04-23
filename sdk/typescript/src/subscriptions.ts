@@ -325,16 +325,45 @@ export function buildComparator(
 	if (!orderBy) return null;
 	const entries = Object.entries(orderBy);
 	if (entries.length === 0) return null;
-	const [field, dir] = entries[0];
-	const mult = dir === "desc" ? -1 : 1;
+
 	return (a: JsonValue, b: JsonValue): number => {
-		const va = (a as Record<string, JsonValue>)?.[field];
-		const vb = (b as Record<string, JsonValue>)?.[field];
-		if (va === vb) return 0;
-		if (va == null) return 1;
-		if (vb == null) return -1;
-		if (va < vb) return -1 * mult;
-		if (va > vb) return 1 * mult;
+		for (const [field, dir] of entries) {
+			const diff = compareFields(a, b, field, dir);
+			if (diff !== 0) return diff;
+		}
 		return 0;
 	};
+}
+
+function compareFields(
+	a: JsonValue,
+	b: JsonValue,
+	field: string,
+	dir: "asc" | "desc",
+): number {
+	const mult = dir === "desc" ? -1 : 1;
+	const va = getNestedValue(a, field);
+	const vb = getNestedValue(b, field);
+
+	if (va === vb) return 0;
+	if (va == null) return 1;
+	if (vb == null) return -1;
+	if (va < vb) return -1 * mult;
+	if (va > vb) return 1 * mult;
+	return 0;
+}
+
+function getNestedValue(obj: JsonValue, path: string): JsonValue | undefined {
+	const parts = path.split(".");
+	let current: JsonValue | undefined = obj;
+	for (const part of parts) {
+		if (
+			current == null ||
+			typeof current !== "object" ||
+			Array.isArray(current)
+		)
+			return undefined;
+		current = (current as Record<string, JsonValue>)[part];
+	}
+	return current;
 }
