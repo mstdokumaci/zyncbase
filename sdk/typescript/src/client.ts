@@ -128,12 +128,11 @@ export class ZyncBaseClient {
 			await this._replaySubscription(params, oldId, oldToNew, replaySnapshots);
 		});
 
-		this.tracker.reconnect(oldToNew);
-
-		// Feed initial snapshots for materialized views
-		for (const [newSubId, snapshot] of replaySnapshots) {
-			this._repopulateMaterializedView(newSubId, snapshot);
-		}
+		this.tracker.reconnect(oldToNew, () => {
+			for (const [newSubId, snapshot] of replaySnapshots) {
+				this._repopulateMaterializedView(newSubId, snapshot);
+			}
+		});
 	}
 
 	private async _replaySubscription(

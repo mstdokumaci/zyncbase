@@ -114,8 +114,12 @@ export class SubscriptionTracker {
 	 * responses, then drain any queued deltas in order.
 	 *
 	 * @param oldToNew - Map from old subId → new server-assigned subId after replay.
+	 * @param beforeDrain - Optional callback to run after remapping but before draining deltas.
 	 */
-	reconnect(oldToNew: Map<number, number>): void {
+	reconnect(
+		oldToNew: Map<number, number>,
+		beforeDrain?: (oldToNew: Map<number, number>) => void,
+	): void {
 		// Remap entries to new subIds
 		const remapped = new Map<number, SubscriptionEntry>();
 		for (const [oldId, entry] of this.subscriptions.entries()) {
@@ -136,6 +140,10 @@ export class SubscriptionTracker {
 		this.clearMaterializedViews();
 
 		this.connected = true;
+
+		if (beforeDrain) {
+			beforeDrain(oldToNew);
+		}
 
 		// Drain queued deltas
 		const queued = this.deltaQueue.splice(0);
