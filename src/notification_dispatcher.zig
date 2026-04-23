@@ -99,9 +99,9 @@ pub const NotificationDispatcher = struct {
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
 
-        // Pre-encode set suffix if any match needs it
+        // Pre-encode set and remove suffixes if any match needs them
         for (matches) |match| {
-            if (match.op == MatchOp.set_op) {
+            if (set_suffix == null and match.op == MatchOp.set_op) {
                 const new_row = change.new_row orelse {
                     std.log.err("NotificationDispatcher skipping set delta for {s}:{d} because new_row is missing", .{ change.namespace, change.table_index });
                     return;
@@ -116,13 +116,8 @@ pub const NotificationDispatcher = struct {
                     std.log.err("NotificationDispatcher failed to encode set suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
                     return;
                 };
-                break;
             }
-        }
-
-        // Pre-encode remove suffix if any match needs it
-        for (matches) |match| {
-            if (match.op == MatchOp.remove) {
+            if (remove_suffix == null and match.op == MatchOp.remove) {
                 remove_suffix = protocol.encodeDeleteDeltaSuffix(
                     alloc,
                     table_metadata.index,
@@ -131,8 +126,8 @@ pub const NotificationDispatcher = struct {
                     std.log.err("NotificationDispatcher failed to encode remove suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
                     return;
                 };
-                break;
             }
+            if (set_suffix != null and remove_suffix != null) break;
         }
 
         // === Phase 4: Per-subscriber send ===
