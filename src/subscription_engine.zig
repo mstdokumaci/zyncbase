@@ -273,7 +273,6 @@ pub const SubscriptionEngine = struct {
         for (group_ids.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
 
-            // ADR-023: Notify if row entered, left, or changed within filter
             const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
             const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
 

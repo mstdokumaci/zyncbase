@@ -19,7 +19,7 @@ There are strict rules on what you can write based on the depth of the path:
 
 | Path Target | Depth | Allowed Operations | Behavior |
 | :--- | :--- | :--- | :--- |
-| **Collection** (`'users'`) | `1` | `create`, `query`, `listen` | **Append-only for writes**. You cannot `set` or `remove` an entire collection. |
+| **Collection** (`'users'`) | `1` | `create`, `query`, `listen`, `subscribe` | **Append-only for writes**. You cannot `set` or `remove` an entire collection. |
 | **Document** (`'users.u1'`) | `2` | `get`, `set`, `remove`, `listen` | **Full CRUD**. `set` upserts the document, `remove` deletes it. |
 | **Field** (`'users.u1.name'`) | `3+` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
 
