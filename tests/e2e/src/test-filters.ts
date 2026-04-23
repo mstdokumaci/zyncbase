@@ -160,8 +160,8 @@ function processEventOp(state: ClientState, op: JsonValue) {
 		return;
 	}
 	if (opObj.op === "remove") {
-		const path = opObj.path as string[];
-		if (path && path.length > 1) {
+		const path = opObj.path;
+		if (Array.isArray(path) && path.length > 1) {
 			state.eventsRecords.delete(path[1]);
 		}
 	}
