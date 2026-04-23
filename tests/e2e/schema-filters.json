@@ -1,0 +1,36 @@
+{
+	"version": "0.0.1",
+	"store": {
+		"items": {
+			"fields": {
+				"name": {
+					"type": "string"
+				},
+				"priority": {
+					"type": "integer"
+				},
+				"active": {
+					"type": "boolean"
+				},
+				"tags": {
+					"type": "array",
+					"items": "string"
+				}
+			}
+		},
+		"events": {
+			"fields": {
+				"title": {
+					"type": "string"
+				},
+				"score": {
+					"type": "number"
+				},
+				"ratings": {
+					"type": "array",
+					"items": "integer"
+				}
+			}
+		}
+	}
+}

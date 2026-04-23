@@ -463,3 +463,102 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     defer allocator.free(matches);
     try testing.expectEqual(@as(usize, 1), matches.len);
 }
+
+test "SubscriptionEngine: filter removal notification when row leaves filter" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
+        .{
+            .name = "items",
+            .fields = &.{
+                sth.makeField("priority", .integer, false),
+            },
+        },
+    });
+    defer sm.deinit();
+
+    // Filter: priority >= 5 (user fields start at index 2)
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        .{ .field_index = 2, .op = .gte, .value = tth.valInt(5), .field_type = .integer, .items_type = null },
+    });
+    defer filter.deinit(allocator);
+
+    _ = try engine.subscribe("ns", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
+
+    // Case 1: Row leaves filter (priority 8 -> 2)
+    var old_row = try tth.rowFromTypedValues(allocator, &.{tth.valInt(8)});
+    defer old_row.deinit(allocator);
+    var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valInt(2)});
+    defer new_row.deinit(allocator);
+
+    const change_leave = subscription_engine.RowChange{
+        .namespace = "ns",
+        .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
+        .operation = .update,
+        .new_row = new_row,
+        .old_row = old_row,
+    };
+
+    const matches_leave = try engine.handleRowChange(change_leave, allocator);
+    defer allocator.free(matches_leave);
+    try testing.expectEqual(@as(usize, 1), matches_leave.len);
+    try testing.expectEqual(SubscriptionEngine.MatchOp.remove, matches_leave[0].op);
+
+    // Case 2: Row enters filter (priority 2 -> 8)
+    var old_row2 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(2)});
+    defer old_row2.deinit(allocator);
+    var new_row2 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(8)});
+    defer new_row2.deinit(allocator);
+
+    const change_enter = subscription_engine.RowChange{
+        .namespace = "ns",
+        .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
+        .operation = .update,
+        .new_row = new_row2,
+        .old_row = old_row2,
+    };
+
+    const matches_enter = try engine.handleRowChange(change_enter, allocator);
+    defer allocator.free(matches_enter);
+    try testing.expectEqual(@as(usize, 1), matches_enter.len);
+    try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_enter[0].op);
+
+    // Case 3: Row changes within filter (priority 6 -> 9)
+    var old_row3 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(6)});
+    defer old_row3.deinit(allocator);
+    var new_row3 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(9)});
+    defer new_row3.deinit(allocator);
+
+    const change_within = subscription_engine.RowChange{
+        .namespace = "ns",
+        .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
+        .operation = .update,
+        .new_row = new_row3,
+        .old_row = old_row3,
+    };
+
+    const matches_within = try engine.handleRowChange(change_within, allocator);
+    defer allocator.free(matches_within);
+    try testing.expectEqual(@as(usize, 1), matches_within.len);
+    try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_within[0].op);
+
+    // Case 4: Row stays outside filter (priority 1 -> 3)
+    var old_row4 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(1)});
+    defer old_row4.deinit(allocator);
+    var new_row4 = try tth.rowFromTypedValues(allocator, &.{tth.valInt(3)});
+    defer new_row4.deinit(allocator);
+
+    const change_outside = subscription_engine.RowChange{
+        .namespace = "ns",
+        .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
+        .operation = .update,
+        .new_row = new_row4,
+        .old_row = old_row4,
+    };
+
+    const matches_outside = try engine.handleRowChange(change_outside, allocator);
+    defer allocator.free(matches_outside);
+    try testing.expectEqual(@as(usize, 0), matches_outside.len);
+}

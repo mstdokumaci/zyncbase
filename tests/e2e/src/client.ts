@@ -1,4 +1,8 @@
-import type { JsonValue, ZyncBaseClient as SDKClient, Store } from "@zyncbase/client";
+import type {
+	JsonValue,
+	ZyncBaseClient as SDKClient,
+	Store,
+} from "@zyncbase/client";
 import { createClient } from "@zyncbase/client";
 
 /**

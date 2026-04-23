@@ -6,7 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["sdk/typescript/**", "tests/e2e/**"],
+		"includes": ["sdk/typescript/**", "tests/e2e/**", "!!vendor"],
 		"ignoreUnknown": true
 	},
 	"formatter": {

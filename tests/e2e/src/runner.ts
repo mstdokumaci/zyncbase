@@ -118,7 +118,11 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 async function start_server(configPath: string): Promise<Bun.Subprocess> {
 	// Kill any process on the port first to avoid stale connections
 	try {
-		Bun.spawnSync(["sh", "-c", `lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`]);
+		Bun.spawnSync([
+			"sh",
+			"-c",
+			`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`,
+		]);
 	} catch (_e) {}
 
 	const server = Bun.spawn([SERVER_BIN, "--config", configPath], {
@@ -137,6 +141,7 @@ async function stop_server(server: Bun.Subprocess) {
 }
 
 import { run as runErrors } from "./test-errors";
+import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
 import { run as runSync } from "./test-sync";
 
@@ -192,6 +197,26 @@ async function run_scenario_persistence() {
 	console.log("Scenario 2 passed.");
 }
 
+async function run_scenario_filters() {
+	log("--- Filtered Subscriptions ---");
+	const schemaPath = "tests/e2e/schema-filters.json";
+	const dataDir = path.join(DATA_DIR, "filters");
+	const config = {
+		server: { port: PORT },
+		dataDir: dataDir,
+		schema: schemaPath,
+	};
+	const configPath = path.join(ARTIFACT_DIR, "zyncbase-config-filters.json");
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	log(`Starting server with ${schemaPath}...`);
+	const server = await start_server(configPath);
+	try {
+		await runFilters(PORT);
+	} finally {
+		await stop_server(server);
+	}
+}
+
 async function main() {
 	log("=== ZyncBase E2E Test Suite (Optimized) ===");
 
@@ -206,6 +231,8 @@ async function main() {
 		await run_scenario_sync_and_errors();
 		await run_scenario_persistence();
 		log("Scenario 2 passed.");
+		await run_scenario_filters();
+		log("Scenario 3 passed.");
 		log("=== All E2E Tests Passed! ===");
 	} catch (err) {
 		console.error("E2E Test Suite Failed:", err);

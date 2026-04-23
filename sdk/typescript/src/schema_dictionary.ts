@@ -5,9 +5,8 @@
 // Built from the SchemaSync message pushed by the server on connect.
 
 import xxhash from "xxhash-wasm";
-import { SchemaError } from "./errors.js";
-import { ErrorCodes } from "./errors.js";
 import { packDocId, unpackDocId } from "./doc_id.js";
+import { ErrorCodes, SchemaError } from "./errors.js";
 
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
@@ -347,7 +346,11 @@ export class SchemaDictionary {
 			);
 		}
 		const flagsForTable = this.fieldFlags[tableIndex];
-		if (!flagsForTable || fieldIndex < 0 || fieldIndex >= flagsForTable.length) {
+		if (
+			!flagsForTable ||
+			fieldIndex < 0 ||
+			fieldIndex >= flagsForTable.length
+		) {
 			throw new SchemaError(
 				`SchemaDictionary: field index ${fieldIndex} out of range for table index ${tableIndex}`,
 				"FIELD_NOT_FOUND",

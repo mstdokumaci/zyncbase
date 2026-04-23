@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
+const MatchOp = SubscriptionEngine.MatchOp;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("change_buffer.zig").OwnedRowChange;
@@ -91,35 +92,43 @@ pub const NotificationDispatcher = struct {
 
         if (matches.len == 0) return;
 
-        // === Phase 3: Pre-encode suffix template (once per change) ===
-        // This encodes either:
-        //   "ops": [{"op": "remove", "path": [table, id]}]
-        // or:
-        //   "ops": [{"op": "set", "path": [table, id], "value": <row>}]
-        // The expensive part (msgpack.encode(new_row)) happens exactly once here.
-        const suffix = switch (change.operation) {
-            .delete => protocol.encodeDeleteDeltaSuffix(
-                alloc,
-                table_metadata.index,
-                id_val_actual,
-            ),
-            .insert, .update => blk: {
+        // === Phase 3: Pre-encode suffix templates (once per change) ===
+        // For updates, some subscribers may need "set" while others need "remove"
+        // (row left their filter). Pre-encode both and pick per-match.
+
+        var set_suffix: ?[]const u8 = null;
+        var remove_suffix: ?[]const u8 = null;
+
+        // Pre-encode set and remove suffixes if any match needs them
+        for (matches) |match| {
+            if (set_suffix == null and match.op == MatchOp.set_op) {
                 const new_row = change.new_row orelse {
-                    std.log.err("NotificationDispatcher skipping non-delete delta for {s}:{d} because new_row is missing", .{ change.namespace, change.table_index });
+                    std.log.err("NotificationDispatcher skipping set delta for {s}:{d} because new_row is missing", .{ change.namespace, change.table_index });
                     return;
                 };
-                break :blk protocol.encodeSetDeltaSuffix(
+                set_suffix = protocol.encodeSetDeltaSuffix(
                     alloc,
                     table_metadata.index,
                     id_val_actual,
                     new_row,
                     table_metadata,
-                );
-            },
-        } catch |err| {
-            std.log.err("NotificationDispatcher failed to encode delta suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
-            return;
-        };
+                ) catch |err| {
+                    std.log.err("NotificationDispatcher failed to encode set suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
+                    return;
+                };
+            }
+            if (remove_suffix == null and match.op == MatchOp.remove) {
+                remove_suffix = protocol.encodeDeleteDeltaSuffix(
+                    alloc,
+                    table_metadata.index,
+                    id_val_actual,
+                ) catch |err| {
+                    std.log.err("NotificationDispatcher failed to encode remove suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
+                    return;
+                };
+            }
+            if (set_suffix != null and remove_suffix != null) break;
+        }
 
         // === Phase 4: Per-subscriber send ===
         var out = std.ArrayListUnmanaged(u8).empty;
@@ -141,7 +150,12 @@ pub const NotificationDispatcher = struct {
                 continue;
             };
 
-            // Append pre-encoded suffix
+            // Append pre-encoded suffix based on match operation
+            const suffix = switch (match.op) {
+                MatchOp.set_op => set_suffix orelse continue,
+                MatchOp.remove => remove_suffix orelse continue,
+            };
+
             out.appendSlice(alloc, suffix) catch |err| {
                 std.log.err("NotificationDispatcher failed to append suffix: {}", .{err});
                 continue;

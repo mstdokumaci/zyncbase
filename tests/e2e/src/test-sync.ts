@@ -59,8 +59,8 @@ export async function run(port: number = 3000) {
 		console.log("Client B waiting for task 1 via store.listen...");
 		const task1 = await waitForListen(clientB, ["tasks", "1"], (val) =>
 			val?.title === "A's Task" &&
-				Array.isArray(val.tags) &&
-				val.tags.includes("urgent")
+			Array.isArray(val.tags) &&
+			val.tags.includes("urgent")
 				? val
 				: null,
 		);
@@ -77,8 +77,8 @@ export async function run(port: number = 3000) {
 		console.log("Client A waiting for task 2 via store.listen...");
 		const task2 = await waitForListen(clientA, ["tasks", "2"], (val) =>
 			val?.title === "B's Task" &&
-				Array.isArray(val.tags) &&
-				val.tags.includes("work")
+			Array.isArray(val.tags) &&
+			val.tags.includes("work")
 				? val
 				: null,
 		);
@@ -95,7 +95,7 @@ export async function run(port: number = 3000) {
 
 		const task3 = await waitForListen(clientB, ["tasks", "3"], (val) =>
 			val?.must_be_complete?.before === beforeTs &&
-				val?.must_be_complete?.after === afterTs
+			val?.must_be_complete?.after === afterTs
 				? val
 				: null,
 		);
