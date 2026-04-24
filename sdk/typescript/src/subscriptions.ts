@@ -17,6 +17,8 @@ export interface ListenProjection {
 export interface MaterializedView {
 	/** Current records keyed by document id. Values are unflattened. */
 	records: Map<string, JsonValue>;
+	/** Source of truth for sorted order. Kept in sync with records Map. */
+	sortedList: JsonValue[];
 	/** Collection name — needed to extract id from delta op paths. */
 	collection: string;
 	/** Comparator for maintaining orderBy sort. Null = no ordering. */
@@ -160,6 +162,7 @@ export class SubscriptionTracker {
 		for (const entry of this.subscriptions.values()) {
 			if (entry.materializedView) {
 				entry.materializedView.records.clear();
+				entry.materializedView.sortedList.length = 0;
 			}
 		}
 	}
@@ -286,32 +289,110 @@ export class SubscriptionTracker {
 		op: StoreDelta["ops"][number],
 	): void {
 		const id = op.path[1] as string;
-		if (op.op === "set") {
-			const record =
-				op.value !== null &&
-				typeof op.value === "object" &&
-				!Array.isArray(op.value)
-					? unflatten(op.value as Record<string, JsonValue>)
-					: op.value;
 
-			if (record && typeof record === "object" && !Array.isArray(record)) {
-				(record as Record<string, JsonValue>).id = id;
-			}
-			view.records.set(id, record);
+		if (op.op === "set") {
+			this._handleSetOp(view, id, op);
 		} else if (op.op === "remove") {
-			view.records.delete(id);
+			this._handleRemoveOp(view, id);
 		}
+	}
+
+	private _handleSetOp(
+		view: MaterializedView,
+		id: string,
+		op: Extract<StoreDelta["ops"][number], { op: "set" }>,
+	): void {
+		const record =
+			op.value !== null &&
+			typeof op.value === "object" &&
+			!Array.isArray(op.value)
+				? unflatten(op.value as Record<string, JsonValue>)
+				: op.value;
+
+		if (record && typeof record === "object" && !Array.isArray(record)) {
+			(record as Record<string, JsonValue>).id = id;
+		}
+
+		const oldRecord = view.records.get(id);
+
+		if (view.comparator === null) {
+			this._updateSortedListNoOrder(view, record, oldRecord);
+		} else {
+			this._updateSortedListWithOrder(view, record, oldRecord, view.comparator);
+		}
+
+		view.records.set(id, record);
+	}
+
+	private _updateSortedListNoOrder(
+		view: MaterializedView,
+		record: JsonValue,
+		oldRecord: JsonValue | undefined,
+	): void {
+		if (oldRecord !== undefined) {
+			const idx = view.sortedList.indexOf(oldRecord);
+			if (idx !== -1) {
+				view.sortedList.splice(idx, 1, record);
+				return;
+			}
+		}
+		view.sortedList.push(record);
+	}
+
+	private _updateSortedListWithOrder(
+		view: MaterializedView,
+		record: JsonValue,
+		oldRecord: JsonValue | undefined,
+		comparator: (a: JsonValue, b: JsonValue) => number,
+	): void {
+		if (oldRecord !== undefined) {
+			const oldIdx = view.sortedList.indexOf(oldRecord);
+			if (oldIdx !== -1) view.sortedList.splice(oldIdx, 1);
+		}
+		const newIdx = this._binarySearchInsertIndex(
+			view.sortedList,
+			record,
+			comparator,
+		);
+		view.sortedList.splice(newIdx, 0, record);
+	}
+
+	private _handleRemoveOp(view: MaterializedView, id: string): void {
+		const oldRecord = view.records.get(id);
+		if (oldRecord !== undefined) {
+			const idx = view.sortedList.indexOf(oldRecord);
+			if (idx !== -1) view.sortedList.splice(idx, 1);
+		}
+		view.records.delete(id);
 	}
 
 	/**
 	 * Create a sorted snapshot array from the materialized view.
 	 */
 	private _snapshotView(view: MaterializedView): JsonValue[] {
-		const arr = Array.from(view.records.values());
-		if (view.comparator) {
-			arr.sort(view.comparator);
+		return [...view.sortedList];
+	}
+
+	/**
+	 * Find insertion index for stable sort (O(log N)).
+	 */
+	private _binarySearchInsertIndex(
+		list: JsonValue[],
+		item: JsonValue,
+		comparator: (a: JsonValue, b: JsonValue) => number,
+	): number {
+		let low = 0;
+		let high = list.length;
+		while (low < high) {
+			const mid = (low + high) >>> 1;
+			// <= 0 ensures we insert AFTER equal elements (Stable Sort)
+			if (comparator(list[mid], item) <= 0) {
+				low = mid + 1;
+			} else {
+				high = mid;
+			}
 		}
-		return arr;
+		return low;
 	}
 }
 

@@ -644,6 +644,7 @@ export class StoreImpl {
 				projection: null,
 				materializedView: {
 					records: new Map(),
+					sortedList: [],
 					collection,
 					comparator: buildComparator(options.orderBy),
 				},
