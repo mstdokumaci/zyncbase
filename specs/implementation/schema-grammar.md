@@ -92,7 +92,11 @@ Flattens to SQLite column: `profile__userId TEXT`.
 
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
 
-> *Document IDs*: Every table has a built-in `id` system column stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK is responsible for converting between user-facing string IDs (UUIDv7 or strict short IDs) and the packed 16-byte representation.
+> *System Columns*: Every table automatically includes five built-in system columns:
+> - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation.
+> - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table) to guarantee flat, isolated multi-tenancy.
+> - `owner_id`: Stored as `TEXT`. Automatically populated by the server with `$session.userId` upon document creation.
+> - `created_at` & `updated_at`: Stored as `INTEGER` timestamps.
 
 ---
 

@@ -11,47 +11,36 @@
 ## 1. Core Principles
 
 1. **Deny by Default**: All access is denied unless explicitly allowed by a rule.
-2. **Variables Context**: Rules are evaluated against a context containing:
+2. **Variables Context**: Rules are evaluated against a strictly limited context containing:
    - `$session`: The resolved session context (enriched from JWT and/or Hook Server).
-   - `$namespace`: The current namespace string.
-   - `$path`: Array or string of the specific data path being accessed (for `store`).
-   - `$doc`: (Future) The existing document in the database, enabling attribute-based access control (ABAC).
-3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$session.role": { "eq": "admin" } }`), ensuring easy parsing and safe evaluation without `eval()`.
-4. **Separation of Concerns**: Namespaces handle coarse-grained isolation (e.g., tenant separation), while path rules handle fine-grained access (e.g., table/document level).
+   - `$namespace`: The current namespace string parts.
+   - `$doc`: The existing document in the database (compiled via AST Injection into SQL `WHERE` clauses).
+   - `$value`: The incoming mutation payload (evaluated in RAM).
+   - `$path`: The table name.
+   
+   **Hard Limit**: Any rule requiring a relational join (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server via a `"hook"` rule.
+3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$session.role": { "eq": "admin" } }`), ensuring easy parsing and AST injection.
+4. **Decoupled Configuration**: Namespaces handle horizontal isolation and presence, while store handles vertical collection-level access.
 
 ## 2. Rule Format Structure
 
-The file is organized by **Namespaces**, followed by **Paths** within those namespaces.
+The file is organized into two decoupled arrays: **`namespaces`** and **`store`**. For the full formal grammar, see [Auth Grammar](./auth-grammar.md).
 
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "public",
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "tasks",
       "read": true,
-      "write": false
-    },
-    {
-      "namespace": "tenant:${tenant_id}:*",
-      "condition": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
-      
-      "presence": {
-        "read": true,
-        "write": true
-      },
-
-      "paths": [
-        {
-          "path": "*",
-          "read": true,
-          "write": { "$session.role": { "in": ["admin", "editor"] } }
-        },
-        {
-          "path": "users.${user_id}",
-          "read": true,
-          "write": { "$session.sub": { "eq": "$path.user_id" } }
-        }
-      ]
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
     }
   ]
 }
@@ -59,9 +48,9 @@ The file is organized by **Namespaces**, followed by **Paths** within those name
 
 ## 3. Evaluation Order & Conflict Resolution
 
-- **Top-Down Evaluation**: Rules within the `rules` array, and `paths` arrays, are evaluated top-down. The first matching rule wins.
+- **Top-Down Evaluation**: Rules within the `namespaces` and `store` arrays are evaluated top-down independently. The first matching pattern wins.
 - **Early Exit**: As soon as a rule explicitly grants access (`true` or matching condition), evaluation stops and access is permitted.
-- **Namespace-First**: The frame's namespace is checked first. If no namespace rule matches or the namespace `condition` fails, the frame is rejected immediately, bypassing path evaluation.
+- **Namespace-First**: A frame's namespace is always evaluated via `StoreSetNamespace` or `PresenceSetNamespace` first. If no namespace rule matches, the connection context is not set, and subsequent path evaluations are irrelevant.
 
 ## 4. Namespace Wildcard Behavior & Session Expectations
 
@@ -76,13 +65,12 @@ Any hierarchical namespace authorization requires that data to be present in the
 - Rule: `{ "$namespace.tenant_id": { "eq": "$session.tenant_id" } }`
 - *How it works*: User connects to namespace `tenant:acme`. ZyncBase extracts `acme` as `$namespace.tenant_id`. It compares it to `$session.tenant_id`. If they match, access is granted.
 
-**Example 2: Workspace Isolation (Complex)**
+**Example 2: Workspace Isolation (Stateless Arrays)**
 - If you use a namespace like `tenant:acme:workspace:123`, how does ZyncBase know the user is allowed in `workspace:123`?
-- **Option A (Injected arrays)**: The `$session` (via `onConnect`) contains an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
+- The `$session` (via `onConnect`) contains an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
   - Rule: `{ "$namespace.workspace": { "in": "$session.workspaces" } }`
-- **Option B (Document-level check)**: If the `$session` only has the user ID, ZyncBase would need to check the database (`$doc`) to see if the user is a member of the workspace. This requires Hook Server delegation (see Section 7).
 
-To keep the initial implementation focused and performant, we should prioritize **Namespace matching against the resolved `$session`**, keeping the hierarchy shallow until we decide on the necessity of `$doc` evaluation.
+By using arrays in the JWT/Session, ZyncBase can perform complex scope validation statelessly without hitting the Hook Server.
 
 ## 5. Presence API Authorization
 
@@ -95,12 +83,17 @@ Therefore, presence authorization is defined directly at the `namespace` level a
 Because presence is ephemeral, there is no `$doc` equivalent and no path-level routing. 
 
 **Hook Server Support:**
-Presence rules fully support Hook Server Delegation (see **Section 7: The Bun Hook Server** for details). If you need relational lookups before letting a user join a presence channel (e.g., "is this user a paid subscriber?"), you can delegate it exactly like a path rule:
+Presence rules fully support Hook Server Delegation. If you need relational lookups before letting a user join a presence channel (e.g., "is this user a paid subscriber?"), you can delegate it:
 
 ```json
-"presence": {
-  "read": { "hook": "checkPresenceAccess" },
-  "write": { "$session.role": { "in": ["admin", "paid"] } }
+{
+  "namespaces": [
+    {
+      "pattern": "premium:*",
+      "presenceRead": { "hook": "checkPresenceAccess" },
+      "presenceWrite": { "$session.role": { "in": ["admin", "paid"] } }
+    }
+  ]
 }
 ```
 
@@ -140,10 +133,9 @@ We do *not* attempt to build a Turing-complete database lookup engine into `auth
 **Example `authorization.json` delegation:**
 ```json
 {
-  "namespace": "tenant:*",
-  "paths": [
+  "store": [
     {
-      "path": "documents.*",
+      "collection": "documents",
       "write": { "hook": "checkDocumentAccess" } 
     }
   ]

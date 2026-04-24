@@ -26,7 +26,6 @@ This document defines the formal grammar and property specification for `zyncbas
 | `schema` | `string \| object` | `"./schema.json"` | Path to schema file or schema config object. |
 | `authorization` | `string` | `null` | `[PLANNED]` Path to `authorization.json`. If omitted, the server runs without rule enforcement (UNSAFE). |
 | `environment` | `string` | `"development"` | `[PLANNED]` Engine mode (`development`, `production`). |
-| `namespaces` | `object` | `{}` | `[PLANNED]` Advanced namespace patterns. |
 
 ---
 

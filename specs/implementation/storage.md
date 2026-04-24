@@ -112,6 +112,10 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 
 Built-in document IDs and schema `references` fields are stored as fixed-width `BLOB(16)` values and kept as packed 16-byte IDs throughout the storage engine.
 
+### System Tables
+The storage engine maintains internal system tables that are not defined in `schema.json`:
+- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026).
+
 ### Array Canonicalization Pipeline
 
 For schema-defined array fields, write-path processing is:
@@ -146,7 +150,8 @@ const SchemaParser = struct {
         
         // Always include these fields
         try fields.append(.{ .name = "id", .type = .text, .required = true, .primary_key = true });
-        try fields.append(.{ .name = "namespace_id", .type = .text, .required = true });
+        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Logical FK to _zync_namespaces
+        try fields.append(.{ .name = "owner_id", .type = .text, .required = true });
         
         // Parse schema fields
         for (fields_obj.object.items) |field_entry| {

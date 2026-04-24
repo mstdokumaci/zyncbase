@@ -76,23 +76,6 @@ Main server configuration file.
   
   "dataDir": "./data",
   
-  "namespaces": { // [PLANNED]
-    "patterns": [
-      {
-        "pattern": "public",
-        "description": "Default public namespace"
-      },
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      },
-      {
-        "pattern": "tenant:*",
-        "description": "Tenant-isolated data"
-      }
-    ]
-  },
-  
   "security": {
     "allowedOrigins": [
       "https://yourdomain.com",
@@ -140,7 +123,7 @@ Path to JSON Schema file and migration settings.
 
 ```json
 {
-  "schema": { // [PLANNED]
+  "schema": {
     "file": "./schema.json",
     "version": "1.0.0",
     "autoMigrate": true,
@@ -172,12 +155,9 @@ Or simple string format:
   - Major version changes require migrations
   - Minor/patch versions can auto-migrate
 
-#### `authorization` [PLANNED] / [UNENFORCED]
+#### `authorization`
 
-Path to the `authorization.json` file.
-
-> [!WARNING]
-> The current engine does not yet enforce authorization rules. The server will boot and operate without rule enforcement even if aspecified.
+Path to the `authorization.json` file. If omitted or the file is missing, the server boots with a safe "public playground" default.
 
 ```json
 {
@@ -199,23 +179,6 @@ Directory for SQLite database and other data files.
 ```json
 {
   "dataDir": "./data"
-}
-```
-
-#### `namespaces` [PLANNED]
-
-Namespace pattern definitions.
-
-```json
-{
-  "namespaces": {
-    "patterns": [
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      }
-    ]
-  }
 }
 ```
 
@@ -368,7 +331,8 @@ ZyncBase flattens nested objects into column names using a double underscore (`_
 ```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL,
+    owner_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     preferences__notifications__email INTEGER, -- Boolean stored as int
@@ -688,7 +652,8 @@ ZyncBase generates:
 ```sql
 CREATE TABLE tasks (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT,
+    namespace_id INTEGER NOT NULL,
+    owner_id TEXT NOT NULL,
     title TEXT,
     status TEXT,
     priority INTEGER,

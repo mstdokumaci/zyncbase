@@ -648,3 +648,51 @@ Replace all schema-defined string identifiers with dense integer mappings over t
 - #8 Predictable Performance
 - #1 Real-time First
 - #5 TypeScript-First
+
+---
+
+## ADR-026: Internal Namespace Dictionary (Integer Routing for Namespaces)
+
+**Date**: 2026-04-24  
+**Status**: Accepted  
+
+**Context**:  
+Namespaces are highly dynamic strings (e.g., `tenant:acme:project-123`). Storing these strings directly in SQLite for every row wastes massive amounts of space (up to 300MB per 10 million rows) and makes index lookups much slower than integers. However, pushing namespace mapping to `config.json` is impossible due to their dynamic nature.
+
+**Decision**:  
+Implement a hidden internal system table `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`. The wire protocol remains untouched (the client sends the string namespace once via `StoreSetNamespace` or `PresenceSetNamespace`). The Zig engine implicitly upserts the namespace string into this table on connection, caches the integer ID on the WebSocket connection state, and uses this integer for all SQLite `namespace_id` reads and writes.
+
+**Rationale**:
+- Drastically reduces database size.
+- Significant performance gain on SQLite index lookups.
+- Zero added friction for the developer or the Client SDK (strings are still used externally).
+- Wire protocol remains stateful and optimized (no strings sent per data message).
+
+**Principles Alignment**:  
+- #8 Predictable Performance  
+- #5 TypeScript-First
+
+---
+
+## ADR-027: The `owner_id` System Column and Stateless Authorization Limits
+
+**Date**: 2026-04-24  
+**Status**: Accepted  
+
+**Context**:  
+Need to provide secure multi-tenancy and object-level ownership authorization out of the box without forcing the developer to immediately write Hook Server code. We also need to draw a hard line on the complexity of JSON-based authorization rules to maintain real-time performance.
+
+**Decision**:  
+1. Add `owner_id` as a built-in system column to all user-defined tables, alongside `id`, `namespace_id`, `created_at`, and `updated_at`.
+2. Automatically populate `owner_id` with the client's `$session.userId` upon document creation.
+3. Strictly limit `authorization.json` evaluation in Zig to four variables: `$session` (JWT context), `$namespace` (the active string), `$doc` (existing database row for writes/updates), and `$value` (incoming mutation). 
+4. Any rule requiring a relational join (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+
+**Rationale**:
+- `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
+- Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation, preventing the "slow query" problem in the auth layer.
+- Clarifies exactly when to use `authorization.json` vs. the Hook Server.
+
+**Principles Alignment**:  
+- #8 Predictable Performance  
+- #9 Secure by Default
