@@ -104,81 +104,6 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 	return configs[index];
 }
 
-function parseItemRecord(raw: JsonValue): ItemRecord | null {
-	const op = raw as Record<string, JsonValue>;
-	if (op.op !== "set") return null;
-	const value = op.value;
-	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-	const record = value as Record<string, JsonValue>;
-	const id = record.id as string;
-	if (!id) return null;
-	return {
-		id,
-		name: (record.name as string) ?? "",
-		priority: (record.priority as number) ?? 0,
-		active: (record.active as boolean) ?? false,
-		tags: (record.tags as string[]) ?? [],
-	};
-}
-
-function parseEventRecord(raw: JsonValue): EventRecord | null {
-	const op = raw as Record<string, JsonValue>;
-	if (op.op !== "set") return null;
-	const value = op.value;
-	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-	const record = value as Record<string, JsonValue>;
-	const id = record.id as string;
-	if (!id) return null;
-	return {
-		id,
-		title: (record.title as string) ?? "",
-		score: (record.score as number) ?? 0,
-		ratings: (record.ratings as number[]) ?? [],
-	};
-}
-
-function processItemOp(state: ClientState, op: JsonValue) {
-	const opObj = op as Record<string, JsonValue>;
-	if (opObj.op === "set") {
-		const record = parseItemRecord(op);
-		if (record) state.itemsRecords.set(record.id, record);
-		return;
-	}
-	if (opObj.op === "remove") {
-		const path = opObj.path;
-		if (Array.isArray(path) && path.length > 1) {
-			state.itemsRecords.delete(path[1]);
-		}
-	}
-}
-
-function processEventOp(state: ClientState, op: JsonValue) {
-	const opObj = op as Record<string, JsonValue>;
-	if (opObj.op === "set") {
-		const record = parseEventRecord(op);
-		if (record) state.eventsRecords.set(record.id, record);
-		return;
-	}
-	if (opObj.op === "remove") {
-		const path = opObj.path;
-		if (Array.isArray(path) && path.length > 1) {
-			state.eventsRecords.delete(path[1]);
-		}
-	}
-}
-
-function handleItemOps(state: ClientState, ops: JsonValue[]) {
-	for (const op of ops) {
-		processItemOp(state, op);
-	}
-}
-
-function handleEventOps(state: ClientState, ops: JsonValue[]) {
-	for (const op of ops) {
-		processEventOp(state, op);
-	}
-}
-
 function subscribeClient(state: ClientState) {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
 	const eventsFilter =
@@ -187,13 +112,23 @@ function subscribeClient(state: ClientState) {
 	state.itemsSub = state.client.store.subscribe(
 		"items",
 		itemsFilter,
-		(ops: JsonValue[]) => handleItemOps(state, ops),
+		(items: JsonValue[]) => {
+			state.itemsRecords.clear();
+			for (const item of items as unknown as ItemRecord[]) {
+				state.itemsRecords.set(item.id, item);
+			}
+		},
 	);
 
 	state.eventsSub = state.client.store.subscribe(
 		"events",
 		eventsFilter,
-		(ops: JsonValue[]) => handleEventOps(state, ops),
+		(events: JsonValue[]) => {
+			state.eventsRecords.clear();
+			for (const event of events as unknown as EventRecord[]) {
+				state.eventsRecords.set(event.id, event);
+			}
+		},
 	);
 }
 
@@ -205,6 +140,7 @@ function waitForFilteredState(
 ): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
 		const timer = setTimeout(() => {
+			clearInterval(interval);
 			const missingItems = [...expectedItemIds].filter(
 				(id) => !state.itemsRecords.has(id),
 			);
@@ -227,10 +163,12 @@ function waitForFilteredState(
 			);
 			if (hasAllItems && hasAllEvents) {
 				clearTimeout(timer);
+				clearInterval(interval);
 				resolve();
 			}
 		};
 
+		const interval = setInterval(check, 100);
 		check();
 	});
 }
@@ -387,7 +325,10 @@ async function createClients(
 	const clients: ClientState[] = [];
 
 	for (let i = 0; i < totalClients; i++) {
-		const client = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
+		const client = new ZyncBaseClient({
+			url: `ws://127.0.0.1:${port}`,
+			debug: i === 0,
+		});
 		await client.connect();
 		clients.push({
 			client,

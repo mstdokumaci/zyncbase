@@ -4,7 +4,14 @@ import { ConnectionManager } from "./connection.js";
 import type { ZyncBaseError } from "./errors.js";
 import { StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
-import type { ClientOptions, LifecycleEvent, Store } from "./types.js";
+import type {
+	ClientOptions,
+	JsonValue,
+	LifecycleEvent,
+	Store,
+	StoreDelta,
+	StoreSubscribe,
+} from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
 export class ZyncBaseClient {
@@ -107,32 +114,80 @@ export class ZyncBaseClient {
 	 * Called each time the ConnectionManager emits "connected" or after a namespace switch.
 	 */
 	private async _handleReconnect(): Promise<void> {
-		// If it's the very first connect, and no subs exist, skip.
-		// (Actual re-subscription logic relies on tracker.allSubIds())
 		const subIds = this.tracker.allSubIds();
-		if (subIds.length === 0) {
-			return;
-		}
+		if (subIds.length === 0) return;
 
 		const oldToNew = new Map<number, number>();
+		const replaySnapshots = new Map<
+			number,
+			{ collection: string; value: JsonValue[] }
+		>();
 
 		// Replay all subscriptions and map old subIds to new ones.
 		await this.tracker.replayAll(async (params, oldId) => {
-			try {
-				const ok = await this.conn.dispatch({ ...params });
-				if (ok.subId !== undefined) {
-					oldToNew.set(oldId, ok.subId);
-				}
-			} catch (err) {
-				// Replay for this specific subscription failed — log it to aid debugging.
-				console.error(
-					`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
-					err,
-				);
-			}
+			await this._replaySubscription(params, oldId, oldToNew, replaySnapshots);
 		});
 
-		this.tracker.reconnect(oldToNew);
+		this.tracker.reconnect(oldToNew, () => {
+			for (const [newSubId, snapshot] of replaySnapshots) {
+				this._repopulateMaterializedView(newSubId, snapshot);
+			}
+		});
+	}
+
+	private async _replaySubscription(
+		params: Omit<StoreSubscribe, "id">,
+		oldId: number,
+		oldToNew: Map<number, number>,
+		replaySnapshots: Map<number, { collection: string; value: JsonValue[] }>,
+	): Promise<void> {
+		try {
+			const ok = await this.conn.dispatch({ ...params });
+			if (ok.subId !== undefined) {
+				oldToNew.set(oldId, ok.subId);
+				if (Array.isArray(ok.value)) {
+					const collection =
+						typeof params.table_index === "string"
+							? (params.table_index as string)
+							: String(params.table_index);
+					replaySnapshots.set(ok.subId, {
+						collection,
+						value: ok.value as JsonValue[],
+					});
+				}
+			}
+		} catch (err) {
+			console.error(
+				`[ZyncBase SDK] Failed to replay subscription (oldId=${oldId}) on reconnect:`,
+				err,
+			);
+		}
+	}
+
+	private _repopulateMaterializedView(
+		newSubId: number,
+		snapshot: { collection: string; value: JsonValue[] },
+	): void {
+		const entry = this.tracker.get(newSubId);
+		if (!entry?.materializedView) return;
+
+		const delta: StoreDelta = { type: "StoreDelta", subId: newSubId, ops: [] };
+		for (const row of snapshot.value) {
+			if (row && typeof row === "object" && !Array.isArray(row)) {
+				const r = row as Record<string, JsonValue>;
+				const id = r.id as string;
+				if (id) {
+					delta.ops.push({
+						op: "set",
+						path: [snapshot.collection, id],
+						value: row,
+					});
+				}
+			}
+		}
+		if (delta.ops.length > 0) {
+			this.tracker.dispatch(delta);
+		}
 	}
 }
 

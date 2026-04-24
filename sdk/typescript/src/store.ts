@@ -2,11 +2,12 @@
 
 import type { ConnectionManager } from "./connection.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
-import { encodeWirePath, normalizePath } from "./path.js";
-import type { SubscriptionTracker } from "./subscriptions.js";
+import { encodeWirePath, flatten, normalizePath, unflatten } from "./path.js";
+import { buildComparator, type SubscriptionTracker } from "./subscriptions.js";
 import type {
 	BatchOperation,
 	JsonValue,
+	OkResponse,
 	Path,
 	QueryOptions,
 	StoreDelta,
@@ -14,62 +15,6 @@ import type {
 	SubscriptionHandle,
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
-
-/**
- * Recursively flatten a nested object using `__` as the key separator.
- * Arrays are stored as-is (not flattened).
- *
- * Example:
- *   flatten({ a: { b: 1, c: 2 } }) → { "a__b": 1, "a__c": 2 }
- */
-export function flatten(
-	obj: Record<string, JsonValue>,
-	prefix = "",
-): Record<string, JsonValue> {
-	const result: Record<string, JsonValue> = {};
-	for (const key of Object.keys(obj)) {
-		const fullKey = prefix ? `${prefix}__${key}` : key;
-		const value = obj[key];
-		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			const nested = flatten(value as Record<string, JsonValue>, fullKey);
-			for (const nestedKey of Object.keys(nested)) {
-				result[nestedKey] = nested[nestedKey];
-			}
-		} else {
-			result[fullKey] = value;
-		}
-	}
-	return result;
-}
-
-/**
- * Reconstruct a nested object from `__`-separated flat keys.
- *
- * Example:
- *   unflatten({ "a__b": 1, "a__c": 2 }) → { a: { b: 1, c: 2 } }
- */
-export function unflatten(
-	obj: Record<string, JsonValue>,
-): Record<string, JsonValue> {
-	const result: Record<string, JsonValue> = {};
-	for (const key of Object.keys(obj)) {
-		const parts = key.split("__");
-		let current = result;
-		for (let i = 0; i < parts.length - 1; i++) {
-			const part = parts[i];
-			if (
-				current[part] === undefined ||
-				typeof current[part] !== "object" ||
-				Array.isArray(current[part])
-			) {
-				current[part] = {};
-			}
-			current = current[part] as Record<string, JsonValue>;
-		}
-		current[parts[parts.length - 1]] = obj[key];
-	}
-	return result;
-}
 
 // ─── Operator codes ───────────────────────────────────────────────────────────
 
@@ -538,41 +483,57 @@ export class StoreImpl {
 
 		if (Array.isArray(value)) {
 			for (const item of value as JsonValue[]) {
-				const i = item as Record<string, JsonValue>;
-				const id = (i.id as string) || segments[1];
-				delta.ops.push({ op: "set", path: [collection, id], value: item });
+				const op = this._createInitialSnapshotOp(collection, segments, item);
+				if (op) delta.ops.push(op);
 			}
 		} else if (value !== null) {
-			const val = value as Record<string, JsonValue>;
-			const id = (val.id as string) || segments[1];
-			delta.ops.push({ op: "set", path: [collection, id], value: val });
+			const op = this._createInitialSnapshotOp(collection, segments, value);
+			if (op) delta.ops.push(op);
 		}
 
 		this.tracker.dispatch(delta);
 	}
 
+	private _createInitialSnapshotOp(
+		collection: string,
+		segments: string[],
+		item: JsonValue,
+	): { op: "set"; path: string[]; value: JsonValue } | null {
+		if (item === null || typeof item !== "object" || Array.isArray(item)) {
+			return null;
+		}
+
+		const val = item as Record<string, JsonValue>;
+		const id =
+			(val.id as string) || (segments.length > 1 ? segments[1] : undefined);
+
+		if (!id) return null;
+
+		return {
+			op: "set" as const,
+			path: [collection, id],
+			value: item,
+		};
+	}
+
 	listen(path: Path, callback: (value: JsonValue) => void): () => void {
 		const segments = normalizePath(path);
-		let subscribeParams: Omit<StoreSubscribe, "id">;
-		let projection: import("./subscriptions.js").ListenProjection;
 
 		if (segments.length === 1) {
-			subscribeParams = {
-				type: "StoreSubscribe",
-				namespace: this.conn.getStoreNamespace(),
-				table_index: segments[0],
-			};
-			projection = { field: null, depth: 1 };
-		} else {
-			subscribeParams = {
-				type: "StoreSubscribe",
-				namespace: this.conn.getStoreNamespace(),
-				table_index: segments[0],
-				conditions: [["id", 0, segments[1]]],
-			};
-			const field = segments.length === 2 ? null : segments.slice(2).join(".");
-			projection = { field, depth: segments.length };
+			throw new ZyncBaseError(
+				"store.listen at collection level is not supported. Use store.subscribe() instead.",
+				{ code: ErrorCodes.INVALID_PATH, category: "client", retryable: false },
+			);
 		}
+
+		const subscribeParams: Omit<StoreSubscribe, "id"> = {
+			type: "StoreSubscribe",
+			namespace: this.conn.getStoreNamespace(),
+			table_index: segments[0],
+			conditions: [["id", 0, segments[1]]],
+		};
+		const field = segments.length === 2 ? null : segments.slice(2).join(".");
+		const projection = { field, depth: segments.length };
 
 		const unlistenState = {
 			unlistenCalled: false,
@@ -621,65 +582,126 @@ export class StoreImpl {
 			...encoded,
 		};
 
-		let subId: number | null = null;
-		let nextCursor: string | null = null;
-		let hasMore = false;
-		let unsubscribeCalled = false;
+		const state = {
+			subId: null as number | null,
+			nextCursor: null as string | null,
+			hasMore: false,
+			unsubscribeCalled: false,
+		};
+
+		const handle = this._createSubscriptionHandle(state, collection);
 
 		this.conn
 			.dispatch({ ...subscribeParams })
 			.then((ok) => {
-				if (unsubscribeCalled) {
-					if (ok.subId !== undefined) {
-						this.conn
-							.dispatch({ type: "StoreUnsubscribe", subId: ok.subId })
-							.catch(() => {});
-					}
-					return;
-				}
-				subId = ok.subId ?? null;
-				nextCursor = ok.nextCursor ?? null;
-				hasMore = ok.hasMore ?? false;
-				handle.hasMore = hasMore;
-
-				if (subId !== null) {
-					this.tracker.register(subId, {
-						params: subscribeParams,
-						callbacks: [callback as (v: unknown) => void],
-						projection: null,
-					});
-				}
+				this._handleSubscribeSuccess(
+					ok,
+					state,
+					handle,
+					collection,
+					subscribeParams,
+					options,
+					callback,
+				);
 			})
 			.catch(() => {});
 
+		return handle;
+	}
+
+	private _handleSubscribeSuccess(
+		ok: OkResponse,
+		state: {
+			subId: number | null;
+			nextCursor: string | null;
+			hasMore: boolean;
+			unsubscribeCalled: boolean;
+		},
+		handle: SubscriptionHandle,
+		collection: string,
+		subscribeParams: Omit<StoreSubscribe, "id">,
+		options: QueryOptions,
+		callback: (results: JsonValue[]) => void,
+	): void {
+		if (state.unsubscribeCalled) {
+			if (ok.subId !== undefined) {
+				this.conn
+					.dispatch({ type: "StoreUnsubscribe", subId: ok.subId })
+					.catch(() => {});
+			}
+			return;
+		}
+
+		state.subId = ok.subId ?? null;
+		state.nextCursor = ok.nextCursor ?? null;
+		state.hasMore = ok.hasMore ?? false;
+		handle.hasMore = state.hasMore;
+
+		if (state.subId !== null) {
+			this.tracker.register(state.subId, {
+				params: subscribeParams,
+				callbacks: [callback as (v: JsonValue) => void],
+				projection: null,
+				materializedView: {
+					records: new Map(),
+					sortedList: [],
+					collection,
+					comparator: buildComparator(options.orderBy),
+				},
+			});
+
+			if (ok.value !== undefined) {
+				this._dispatchInitialSnapshot(state.subId, [collection], ok.value);
+			}
+		}
+	}
+
+	private _createSubscriptionHandle(
+		state: {
+			subId: number | null;
+			nextCursor: string | null;
+			hasMore: boolean;
+			unsubscribeCalled: boolean;
+		},
+		collection: string,
+	): SubscriptionHandle {
 		const handle: SubscriptionHandle = {
 			hasMore: false,
 			unsubscribe: () => {
-				unsubscribeCalled = true;
-				if (subId !== null) {
-					this.tracker.unregister(subId);
+				state.unsubscribeCalled = true;
+				if (state.subId !== null) {
+					this.tracker.unregister(state.subId);
 					this.conn
-						.dispatch({ type: "StoreUnsubscribe", subId })
+						.dispatch({ type: "StoreUnsubscribe", subId: state.subId })
 						.catch(() => {});
-					subId = null;
+					state.subId = null;
 				}
 			},
 			loadMore: (): Promise<void> => {
-				if (subId === null || nextCursor === null) {
+				if (state.subId === null || state.nextCursor === null) {
 					return Promise.resolve();
 				}
-				const cursor = nextCursor;
+				const cursor = state.nextCursor;
 				return this.conn
 					.dispatch({
 						type: "StoreLoadMore",
-						subId,
+						subId: state.subId,
 						nextCursor: cursor,
 						table_index: collection,
 					})
 					.then((ok) => {
-						nextCursor = ok.nextCursor ?? null;
-						hasMore = ok.hasMore ?? false;
-						handle.hasMore = hasMore;
+						state.nextCursor = ok.nextCursor ?? null;
+						state.hasMore = ok.hasMore ?? false;
+						handle.hasMore = state.hasMore;
+
+						// Feed loaded rows into the materialized view
+						if (state.subId !== null && ok.value !== undefined) {
+							this._dispatchInitialSnapshot(
+								state.subId,
+								[collection],
+								ok.value,
+							);
+						}
 					});
 			},
 		};
