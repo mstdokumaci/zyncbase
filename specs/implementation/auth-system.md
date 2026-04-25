@@ -65,12 +65,20 @@ Any hierarchical namespace authorization requires that data to be present in the
 - Rule: `{ "$namespace.tenant_id": { "eq": "$session.tenant_id" } }`
 - *How it works*: User connects to namespace `tenant:acme`. ZyncBase extracts `acme` as `$namespace.tenant_id`. It compares it to `$session.tenant_id`. If they match, access is granted.
 
-**Example 2: Workspace Isolation (Stateless Arrays)**
-- If you use a namespace like `tenant:acme:workspace:123`, how does ZyncBase know the user is allowed in `workspace:123`?
-- The `$session` (via `onConnect`) contains an array of allowed workspaces: `{ "workspaces": ["123", "456"] }`. 
-  - Rule: `{ "$namespace.workspace": { "in": "$session.workspaces" } }`
+**Example 2: Project Isolation (Stateless Arrays)**
+- If you use a namespace like `project:a`, how does ZyncBase know the user is allowed in that project?
+- The `$session` (via JWT or Hook Server) contains an array of allowed project IDs: `{ "projects": ["a", "b", "c"] }`. 
+- Rule: 
+  ```json
+  "namespaces": [
+    {
+      "pattern": "project:{project_id}",
+      "storeFilter": { "$namespace.project_id": { "in": "$session.projects" } }
+    }
+  ]
+  ```
 
-By using arrays in the JWT/Session, ZyncBase can perform complex scope validation statelessly without hitting the Hook Server.
+By using arrays in the JWT/Session, ZyncBase can perform complex scope validation statelessly in RAM without hitting the Hook Server or database.
 
 ## 5. Presence API Authorization
 
