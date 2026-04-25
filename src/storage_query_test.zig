@@ -117,7 +117,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     try scores.flush();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = try qth.makeFilter(allocator, 2, false, .integer, null);
+    const score_index = try scores.fieldIndex("score");
+    var filter1 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
@@ -129,7 +130,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     _ = try sth.expectFieldDocId(res1[1], scores.metadata, "id", 2);
 
     // Query 2: Same query but AFTER [100, 2]
-    var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
+    var filter2 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{

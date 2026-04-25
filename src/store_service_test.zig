@@ -35,7 +35,7 @@ test "StoreService: set - full document replacement" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("users"), 1, "public", 2, null, val);
+        try service.set(app.tableIndex("users"), 1, "public", "test-owner", 2, null, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
@@ -51,7 +51,7 @@ test "StoreService: set - full document replacement" {
         const val = try store_helpers.createDocumentMapPayload(allocator, users.metadata, .{});
         defer val.free(allocator);
 
-        const result = service.set(@as(usize, 999), 1, "ns", 2, null, val);
+        const result = service.set(@as(usize, 999), 1, "ns", "test-owner", 2, null, val);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -76,7 +76,7 @@ test "StoreService: set - field level update" {
         const val = try msgpack.Payload.strToPayload("active", allocator);
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("items"), 1, "public", 3, app.fieldIndex("items", "status"), val);
+        try service.set(app.tableIndex("items"), 1, "public", "test-owner", 3, app.fieldIndex("items", "status"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify
@@ -109,7 +109,7 @@ test "StoreService: remove" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("users"), 1, "public", 2, null, val);
+        try service.set(app.tableIndex("users"), 1, "public", "test-owner", 2, null, val);
         try app.storage_engine.flushPendingWrites();
     }
 
@@ -176,7 +176,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
+        try service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
     }
 
     // 2. Negative: Element type mismatch (integer in string array)
@@ -186,7 +186,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -197,7 +197,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -208,7 +208,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, "public", 3, app.fieldIndex("collections", "scores"), val);
+        try service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "scores"), val);
     }
 }
 
@@ -228,7 +228,7 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("value1", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", "test-owner", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
         var stored_doc = try test_table.getOne(allocator, 1, "ns-a");
@@ -242,7 +242,7 @@ test "StoreService: persistence and namespace isolation" {
         defer val.free(allocator);
 
         // Same table/id, different namespace
-        try service.set(app.tableIndex("test"), 1, "ns-b", 3, app.fieldIndex("test", "val"), val);
+        try service.set(app.tableIndex("test"), 1, "ns-b", "test-owner", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify ns-a still has value1
@@ -261,7 +261,7 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("updated", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", "test-owner", 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
         var doc = try test_table.getOne(allocator, 1, "ns-a");

@@ -433,7 +433,7 @@ fn insertNamedWithMetadata(
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace, &resolved);
+    try engine.insertOrReplace(table_metadata.index, id, namespace, "test-owner", &resolved);
 }
 
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───

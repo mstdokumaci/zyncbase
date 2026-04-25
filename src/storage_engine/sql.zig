@@ -244,6 +244,53 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
 }
 
+pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
+    db.exec(
+        "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
+        .{},
+        .{},
+    ) catch |err| return types.classifyError(err);
+}
+
+pub fn resolveNamespaceId(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt_cache: *StatementCache,
+    namespace: []const u8,
+) !i64 {
+    const sql_text =
+        \\INSERT INTO _zync_namespaces (name)
+        \\VALUES (?)
+        \\ON CONFLICT(name) DO UPDATE SET name = excluded.name
+        \\RETURNING id
+    ;
+    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
+    defer mstmt.release();
+
+    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
+    if (rc != sqlite.c.SQLITE_DONE) return types.classifyStepError(db);
+    return types.StorageError.InvalidOperation;
+}
+
+pub fn lookupNamespaceId(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt_cache: *StatementCache,
+    namespace: []const u8,
+) !?i64 {
+    const sql_text = "SELECT id FROM _zync_namespaces WHERE name = ?";
+    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
+    defer mstmt.release();
+
+    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+    if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
+    if (rc == sqlite.c.SQLITE_DONE) return null;
+    return types.classifyStepError(db);
+}
+
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
     table_metadata: *const schema_manager.TableMetadata,
@@ -251,8 +298,8 @@ pub fn buildInsertOrReplaceSql(
 ) ![]const u8 {
     const table = table_metadata.table.name;
 
-    // Build SQL: INSERT INTO <table> (id, namespace_id, col1, .., created_at, updated_at)
-    // VALUES (?, ?, .., ?, ?)
+    // Build SQL: INSERT INTO <table> (id, namespace_id, owner_id, col1, .., created_at, updated_at)
+    // VALUES (?, ?, ?, .., ?, ?)
     // ON CONFLICT(id) DO UPDATE SET col1 = excluded.col1, .., updated_at = excluded.updated_at
     // WHERE <table>.namespace_id = excluded.namespace_id
     // Array columns use jsonb(?) instead of ? as the placeholder.
@@ -265,6 +312,8 @@ pub fn buildInsertOrReplaceSql(
     try sql_identifier.appendQuoted(allocator, &sql_buf, "id");
     try sql_buf.appendSlice(allocator, ", ");
     try sql_identifier.appendQuoted(allocator, &sql_buf, "namespace_id");
+    try sql_buf.appendSlice(allocator, ", ");
+    try sql_identifier.appendQuoted(allocator, &sql_buf, "owner_id");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         try sql_buf.appendSlice(allocator, ", ");
@@ -274,7 +323,7 @@ pub fn buildInsertOrReplaceSql(
     try sql_identifier.appendQuoted(allocator, &sql_buf, "created_at");
     try sql_buf.appendSlice(allocator, ", ");
     try sql_identifier.appendQuoted(allocator, &sql_buf, "updated_at");
-    try sql_buf.appendSlice(allocator, ") VALUES (?, ?");
+    try sql_buf.appendSlice(allocator, ") VALUES (?, ?, ?");
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         if (field.sql_type == .array) {

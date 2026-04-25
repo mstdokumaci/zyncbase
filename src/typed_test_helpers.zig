@@ -43,14 +43,14 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
 
 /// Creates a TypedRow without schema metadata.
 /// Initializes all slots to nil, sets canonical trailing system timestamps
-/// (`created_at`, `updated_at`) to 0 when present, then applies values starting at index 2.
+/// (`created_at`, `updated_at`) to 0 when present, then applies values starting at index 3.
 pub fn rowFromTypedValues(
     allocator: std.mem.Allocator,
     typed_values: []const TypedValue,
 ) !TypedRow {
     // Canonical minimum shape:
-    // [id, namespace_id, created_at, updated_at]
-    const value_count: usize = @max(4, typed_values.len + 4);
+    // [id, namespace_id, owner_id, created_at, updated_at]
+    const value_count: usize = @max(5, typed_values.len + 5);
 
     const values = try allocator.alloc(TypedValue, value_count);
     errdefer allocator.free(values);
@@ -58,7 +58,7 @@ pub fn rowFromTypedValues(
     for (values) |*value| value.* = valNil();
 
     // Canonical layout is:
-    // [id, namespace_id, user fields..., created_at, updated_at]
+    // [id, namespace_id, owner_id, user fields..., created_at, updated_at]
     // In metadata-free tests, treat the trailing two slots as timestamps.
     if (values.len >= 2) {
         values[values.len - 2] = valInt(0);
@@ -66,7 +66,7 @@ pub fn rowFromTypedValues(
     }
 
     for (typed_values, 0..) |value, index| {
-        values[index + 2] = try value.clone(allocator);
+        values[index + 3] = try value.clone(allocator);
     }
 
     return .{ .values = values };

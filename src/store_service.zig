@@ -35,10 +35,9 @@ pub fn validateFieldWrite(
 ) !schema_manager.Field {
     if (field_index >= tbl_md.fields.len) return StorageError.UnknownField;
 
-    // Indices 0 (id) and 1 (namespace_id) are immutable.
+    // Leading system columns and trailing timestamps are immutable.
     // The last two fields are created_at and updated_at, which are also immutable by the client.
-    if (field_index == schema_manager.id_field_index or
-        field_index == schema_manager.namespace_id_field_index or
+    if (field_index < schema_manager.first_user_field_index or
         field_index >= tbl_md.fields.len - 2) return StorageError.ImmutableField;
     const field = tbl_md.fields[field_index];
 
@@ -85,6 +84,7 @@ pub const StoreService = struct {
         table_index: usize,
         doc_id: DocId,
         namespace: []const u8,
+        owner_id: []const u8,
         segments_len: usize,
         field_index: ?usize,
         value: msgpack.Payload,
@@ -124,7 +124,7 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, columns.items);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, owner_id, columns.items);
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const f_index = field_index orelse return StorageError.InvalidPath;
@@ -136,7 +136,7 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed,
             }};
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, &col);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, owner_id, &col);
         } else {
             return StorageError.InvalidPath;
         }

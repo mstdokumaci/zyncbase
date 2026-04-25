@@ -29,6 +29,8 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, ") = 16),\n");
         try buf.appendSlice(self.allocator, "  ");
         try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+        try buf.appendSlice(self.allocator, " INTEGER NOT NULL,\n  ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
         try buf.appendSlice(self.allocator, " TEXT NOT NULL");
         // One column per field
         for (table.fields) |field| {
