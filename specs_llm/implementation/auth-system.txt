@@ -1,39 +1,37 @@
-ZyncBase Authorization Format.json v1 Stable Replaces row-level security with high-performance JSON-declarative model by ZyncBase Zig core Evaluated on MessagePack frame [Configuration API Design/configuration.md Authorization rules hook management requirements Core Principles **Deny by Default** access denied unless allowed by rule **Variables Context** Rules evaluated against context$session resolved session context JWT Hook$namespace current string$path specific data path$doc` existing document database attribute-based access control **Query Language Conditions use same JSON structure as ZyncBase Query Language explicit `or`$session.role easy parsing safe evaluation without `eval() **Separation of Concerns** Namespaces handle path rules handle fine access Rule Format Structure file organized by **Namespaces** followed by **Paths** within namespaces```json
+ZyncBase Authorization Format.json v1 Stable Replaces row-level security with high-performance JSON-declarative model ZyncBase Zig core Evaluated on MessagePack frame [Configuration API Design/configuration.md Authorization rules hook management requirements Core Principles **Deny by Default** access denied unless allowed by rule **Variables Rules evaluated against limited context$session resolved session context JWT Hook$namespace current namespace string parts$doc` Columns existing target row AST Injection SQL$value incoming mutation payload$path table name `$doc` constrain same selected updated deleted rule requiring relationship traversal relational join lookup table forbidden in JSON delegated to Hook Server via"hook rule Language Conditions use same JSON structure as ZyncBase Query Language (implicit ANDs explicit `or`$session.role easy parsing AST injection **Decoupled Configuration** Namespaces handle horizontal presence store handles vertical collection-level access2. Rule Format Structure file organized two arrays`namespaces full grammar see [Auth Grammar-grammar.md).```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "public",
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "tasks",
       "read": true,
-      "write": false
-    },
-    {
-      "namespace": "tenant:${tenant_id}:*",
-      "condition": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
-      
-      "presence": {
-        "read": true,
-        "write": true
-      },
-
-      "paths": [
-        {
-          "path": "*",
-          "read": true,
-          "write": { "$session.role": { "in": ["admin", "editor"] } }
-        },
-        {
-          "path": "users.${user_id}",
-          "read": true,
-          "write": { "$session.sub": { "eq": "$path.user_id" } }
-        }
-      ]
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
     }
   ]
 }
-```Evaluation Order Conflict Resolution **Top-Down Evaluation** Rules evaluated top-down first matching rule wins **Early Exit** rule grants access evaluation stops access permitted **Namespace-First** frame namespace checked first no namespace rule matches fails frame rejected bypassing path evaluation Namespace Wildcard Behavior Session Expectations Namespaces use colon-separated segment model Wildcards match segments extract variables$namespace context ZyncBase stateless for authorization hierarchical namespace authorization requires data in$session **Example 1: Tenant Isolation Session contains "tenant_id "acme Namespace `tenant:${tenant_id Rule$namespace.tenant_id$session.tenant_id User connects to namespace `tenant:acme ZyncBase extracts `acme$namespace.tenant_id compares to$session.tenant_id If match access granted **Example 2: Workspace Isolation namespace `tenant:acme:workspace:123` ZyncBase know user allowed in `workspace:123? A (Injected arrays `$session contains array allowed workspaces Rule$namespace.workspace$session.workspaces **Option B (Document-level check If `$session` user ID ZyncBase check database`$doc user member workspace requires Hook Server delegation Section 7) initial implementation prioritize **Namespace matching against `$session hierarchy shallow until necessity `$doc` evaluation Presence API Authorization Unlike Store API Presence API flat-wide concept Users join presence namespace broadcast state listen others presence authorization defined at `namespace` level `paths``read`** subscribe presence channel see online`write broadcast presence object (schema validation applies). presence ephemeral no `$doc` equivalent no path-level routing **Hook Server Support Presence rules support Hook Server Delegation **Section 7 Hook relational lookups before user join presence channel paid subscriber?"), delegate like path rule```json
-"presence": {
-  "read": { "hook": "checkPresenceAccess" },
-  "write": { "$session.role": { "in": ["admin", "paid"] } }
+```Evaluation Order Conflict Resolution-Down Evaluation** Rules `namespaces arrays evaluated first matching pattern wins **Early Exit** rule grants access evaluation stops access permitted **Namespace-First** frame namespace evaluated via `StoreSetNamespace `PresenceSetNamespace first If no namespace rule matches connection context not set subsequent path evaluations irrelevant Namespace Wildcard Behavior Session Expectations Namespaces use colon-separated segment model Wildcards match segments extract variables into$namespace context ZyncBase stateless for authorization hierarchical namespace authorization requires data in$session **Example 1: Tenant Isolation Session contains "tenant_id "acme Namespace `tenant:$_id Rule$namespace.tenant_id$session.tenant_id User connects to `tenant:acme ZyncBase extracts `acme as$namespace.tenant_id compares to$session.tenant_id If match access granted 2: Project Isolation (Stateless Arrays namespace `project:a` ZyncBase user project$session contains allowed project IDs Rule```json
+  "namespaces": [
+    {
+      "pattern": "project:{project_id}",
+      "storeFilter": { "$namespace.project_id": { "in": "$session.projects" } }
+    }
+  ]
+  ```using arrays JWT/Session ZyncBase scope validation RAM without Hook Server database Presence API Authorization Unlike Store API data paths Presence API flat namespace-wide concept Users join presence namespace broadcast state listen others presence authorization defined at `namespace` level alongside `paths`read subscribe presence channel see online`write broadcast presence object (schema validation presence ephemeral no `$doc` equivalent no path-level routing **Hook Server Support Presence rules support Hook Server Delegation relational lookups before user channel paid delegate```json
+{
+  "namespaces": [
+    {
+      "pattern": "premium:*",
+      "presenceRead": { "hook": "checkPresenceAccess" },
+      "presenceWrite": { "$session.role": { "in": ["admin", "paid"] } }
+    }
+  ]
 }
 ```Composition Model (Conditions mirror `QUERY_LANGUAGE.md` operators evaluation engine Zig **Boolean Values** `true (allow `false `eq `ne `in `contains `and` `or````json
 "write": {
@@ -41,16 +39,16 @@ ZyncBase Authorization Format.json v1 Stable Replaces row-level security with hi
     { "$session.role": { "eq": "admin" } },
     { 
       "$session.role": { "eq": "editor" },
-      "$session.sub": { "eq": "$path.user_id" }
+      "$path": { "eq": "tasks" },
+      "$doc.owner_id": { "eq": "$session.userId" }
     }
   ]
 }
-```Bun Hook Server (Managing Complexity tension in authorization between **stateless **complex relational permissions** user workspace folder ZyncBase line`authorization.json` for stateless checks$namespace.tenant $session.tenant_id fast evaluated in Zig. rule database lookup delegated to Bun Hook Server Turing-complete database lookup engine into `authorization.json ZyncBase provides out-of-box Bun WebSocket server Developers write TypeScript function handle complex auth logic **Example `authorization.json` delegation```json
+```Bun Hook Server (Managing Complexity tension in authorization between relational permissions** user workspace folder ZyncBase`authorization.json` for RAM checks same-row SQL predicates$namespace.tenant $session.tenant_id$doc.owner_id.userId fast evaluated natively in Zig. rule relationship traversal join lookup outside target delegated to Bun Hook Server Turing-complete database lookup engine into `authorization.json ZyncBase provides out-of-box Bun WebSocket server Developers write TypeScript function handle complex auth logic `authorization.json` delegation```json
 {
-  "namespace": "tenant:*",
-  "paths": [
+  "store": [
     {
-      "path": "documents.*",
+      "collection": "documents",
       "write": { "hook": "checkDocumentAccess" } 
     }
   ]
@@ -69,7 +67,7 @@ export async function checkDocumentAccess({ session, namespace, path, value }) {
   // Use the exact same Query API you use on the frontend
   const memberships = await client.store.query('workspace_members', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       workspaceId: { eq: workspaceId }
     }
   });

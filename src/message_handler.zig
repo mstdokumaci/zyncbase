@@ -181,7 +181,7 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(arena_allocator, msg_info.id, parsed);
+            return try self.handleStoreSet(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
             return try self.handleStoreSubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreUnsubscribe")) {
@@ -236,6 +236,7 @@ pub const MessageHandler = struct {
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
+        conn: *Connection,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
@@ -254,11 +255,13 @@ pub const MessageHandler = struct {
             break :blk fi;
         } else null;
         const value = req.value orelse return error.MissingRequiredFields;
+        const owner_id = conn.user_id orelse "anonymous";
 
         try self.store_service.set(
             table_index,
             doc_id_value,
             req.namespace,
+            owner_id,
             arr.len,
             field_index,
             value,

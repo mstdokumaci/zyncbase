@@ -1,0 +1,21 @@
+ZyncBase Authorization Grammar defines JSON grammar `authorization.json` Root Structure `authorization.json` two decoupled arrays `namespaces `array` Rules for horizontal partitioning access presence operations `store` `array` Rules vertical partitioning (table access document ownership 1. Namespace Definition namespace definition governs access namespace presence channels `pattern` `string` namespace pattern `tenant:{tenant_id} Segments `{}` extracted into `$namespace` context `storeFilter` `Condition Evaluated `StoreSetNamespace` If `false` client rejected from namespace `presenceRead` `Condition Evaluated `PresenceSetNamespace` `PresenceSubscribe` `presenceWrite` `Condition Evaluated `PresenceSet` 2. Store Definition governs read write access to specific table `collection` `string` table name rules apply `tasks `*` catch-all rule collection not matched `read` `Condition` Evaluated on `StoreQuery` `StoreSubscribe``write `Condition` Evaluated `StoreSet `StoreRemove `StoreBatch Condition Grammar **Boolean `true or `false **Hook "hook "functionName **Logical [Condition **Comparison "LHS" "Operator "RHS" Comparison Object **LHS (Left-Hand Side context variable$session.userId$doc.owner_id **Operator** `eq` `ne `gt `gte `lt `in `notIn `contains` **RHS (Right-Hand Side raw literal (string number boolean array or context variable Variable Scope Evaluation Matrix predictability sub-microsecond performance ZyncBase restricts variables wire command Variables evaluated two execution paths **RAM Evaluation** Instant stateless check memory**AST Injection** Compiled into SQLite `WHERE` clause (Zero N+1 database reads). Wire Command  `$session` `$namespace` `$path` (table) `$value` (payload) `$doc`  :--- `StoreSetNamespace`  ✅ RAM `PresenceSetNamespace`  ✅ RAM `StoreQuery` / `StoreSubscribe`  ✅ RAM AST Injection  `StoreSet`  ✅ RAM Injection `StoreRemove` | ✅ RAM AST Injection `PresenceSet`  ✅ RAM `PresenceSubscribe`  ✅ RAM If rule references forbidden variable for specific command evaluation fails access denied. `StoreLoadMore` and `StoreUnsubscribe` inherit authorization established during `StoreSubscribe`. For `StoreSet`, `$doc` predicates applied to existing-row update branch. create has no existing `$doc` server injects `owner_id` from `$session.userId evaluates RAM-available variables$session$namespace$path$value Injection Strategy$doc` variable fetch document RAM before authorization Zig engine translates condition into SQL query filter```json
+"write": { "$doc.owner_id": { "eq": "$session.userId" } }
+```updating document Zig evaluates$session.userId internal `BLOB(16) user ID recognizes$doc.owner_id column reference injects into SQL operation bound binary parameter `UPDATE tasks SET id ? owner_id = ? If user own document 0 rows affected operation fails Zero-Config Default (Implicit Rules `authorization.json missing ZyncBase boots implicit "public playground" rule set guarantees frictionless developer experience prototyping destroying data JSON```json
+{
+  "namespaces": [
+    {
+      "pattern": "public",
+      "storeFilter": true,
+      "presenceRead": true,
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
+    }
+  ]
+}
+```default means accessible namespace `public` anonymous users read data broadcast in `public` namespace Users create records owned by$session.userId` modify or delete records (enforced via AST Injection$doc.owner_id == $session.userId` on rows).

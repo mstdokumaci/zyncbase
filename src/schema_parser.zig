@@ -27,7 +27,8 @@ pub const OnDelete = enum { cascade, restrict, set_null };
 
 pub const built_in_columns = [_]Field{
     .{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
-    .{ .name = "namespace_id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "namespace_id", .sql_type = .integer, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "owner_id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
     .{ .name = "created_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
@@ -35,6 +36,8 @@ pub const built_in_columns = [_]Field{
 /// Fixed positions of leading system columns in TableMetadata.fields.
 pub const id_field_index: usize = 0;
 pub const namespace_id_field_index: usize = 1;
+pub const owner_id_field_index: usize = 2;
+pub const first_user_field_index: usize = 3;
 
 pub fn getSystemColumn(name: []const u8) ?Field {
     for (built_in_columns) |col| {
@@ -121,16 +124,17 @@ pub const TableMetadata = struct {
 
     pub fn init(allocator: Allocator, table: *const Table, table_index: usize) !TableMetadata {
         // Canonical order:
-        // id, namespace_id, <declared schema fields>, created_at, updated_at
-        const total = table.fields.len + 4;
+        // id, namespace_id, owner_id, <declared schema fields>, created_at, updated_at
+        const total = table.fields.len + built_in_columns.len;
         var fields = try allocator.alloc(Field, total);
         errdefer allocator.free(fields);
 
         fields[id_field_index] = built_in_columns[id_field_index];
         fields[namespace_id_field_index] = built_in_columns[namespace_id_field_index];
-        @memcpy(fields[2 .. 2 + table.fields.len], table.fields);
-        fields[2 + table.fields.len] = built_in_columns[2];
-        fields[2 + table.fields.len + 1] = built_in_columns[3];
+        fields[owner_id_field_index] = built_in_columns[owner_id_field_index];
+        @memcpy(fields[first_user_field_index .. first_user_field_index + table.fields.len], table.fields);
+        fields[first_user_field_index + table.fields.len] = built_in_columns[3];
+        fields[first_user_field_index + table.fields.len + 1] = built_in_columns[4];
 
         var field_index_map = std.StringHashMap(usize).init(allocator);
         errdefer field_index_map.deinit();
@@ -358,6 +362,7 @@ pub const SchemaParser = struct {
 
             // Validate field name before allocating: reject invalid SQL identifiers and the internal separator.
             if (!isValidSchemaIdentifier(field_name)) return error.InvalidFieldName;
+            if (isSystemColumn(field_name)) return error.ReservedFieldName;
 
             // Generate the flattened full name
             const full_name = if (prefix.len > 0)

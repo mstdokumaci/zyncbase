@@ -24,19 +24,19 @@ test "storage SQL builders quote identifiers" {
     defer table_metadata.deinit(allocator);
 
     const columns = [_]types.ColumnValue{
-        .{ .index = 2, .value = undefined },
+        .{ .index = schema_manager.first_user_field_index, .value = undefined },
     };
 
     const insert_sql = try sql.buildInsertOrReplaceSql(allocator, &table_metadata, &columns);
     defer allocator.free(insert_sql);
-    try std.testing.expect(std.mem.indexOf(u8, insert_sql, "INSERT INTO \"select\" (\"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, insert_sql, "INSERT INTO \"select\" (\"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"from\" = excluded.\"from\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"select\".\"namespace_id\" = excluded.\"namespace_id\"") != null);
 
     const delete_sql = try sql.buildDeleteDocumentSql(allocator, &table_metadata);
     defer allocator.free(delete_sql);
     try std.testing.expect(std.mem.indexOf(u8, delete_sql, "DELETE FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=? RETURNING ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, delete_sql, "\"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, delete_sql, "\"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\"") != null);
 }
 
 test "storage SELECT SQL helpers quote and compose identifiers" {
@@ -62,7 +62,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     const select_document_sql = try sql.buildSelectDocumentSql(allocator, &table_metadata);
     defer allocator.free(select_document_sql);
     try std.testing.expectEqualStrings(
-        "SELECT \"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=?",
+        "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=?",
         select_document_sql,
     );
 
@@ -76,7 +76,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     try sql.appendOrderBySql(allocator, &sql_buf, "from", false);
 
     try std.testing.expectEqualStrings(
-        "SELECT \"id\", \"namespace_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",
+        "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",
         sql_buf.items,
     );
 }

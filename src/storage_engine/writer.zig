@@ -18,7 +18,7 @@ fn getDocumentHelper(
     conn: *sqlite.Db,
     sm: *const schema_manager.SchemaManager,
     table_index: usize,
-    namespace: []const u8,
+    namespace_id: i64,
     id: types.DocId,
     sql_cache: *std.AutoHashMap(usize, []const u8),
     stmt_cache: *sql.StatementCache,
@@ -31,7 +31,7 @@ fn getDocumentHelper(
     };
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
-    return reader.execSelectDocumentTyped(allocator, conn, mstmt.stmt, id, namespace, table_metadata);
+    return reader.execSelectDocumentTyped(allocator, conn, mstmt.stmt, id, namespace_id, table_metadata);
 }
 
 fn pushOwnedChange(
@@ -95,14 +95,15 @@ pub fn executeBatch(
         switch (op) {
             .upsert => |iop| {
                 const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
+                const namespace_id = try sql.resolveNamespaceId(allocator, conn, stmt_cache, iop.namespace);
                 var old_row: ?types.TypedRow = null;
-                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, iop.namespace, iop.id, &sql_cache, stmt_cache);
+                const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, namespace_id, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
                 } else |err| {
                     std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ iop.table_index, err });
                 }
-                const maybe_new_row = executeUpsert(allocator, conn, iop, table_metadata, stmt_cache) catch |err| {
+                const maybe_new_row = executeUpsert(allocator, conn, iop, namespace_id, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |r| r.deinit(allocator);
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
@@ -129,7 +130,8 @@ pub fn executeBatch(
             },
             .delete => |dop| {
                 const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-                const maybe_old_row = executeDelete(allocator, conn, dop, table_metadata, stmt_cache) catch |err| {
+                const namespace_id = try sql.lookupNamespaceId(allocator, conn, stmt_cache, dop.namespace) orelse continue;
+                const maybe_old_row = executeDelete(allocator, conn, dop, namespace_id, table_metadata, stmt_cache) catch |err| {
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
                     return classified_err;
@@ -462,6 +464,7 @@ pub fn executeUpsert(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
+    namespace_id: i64,
     table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
@@ -474,7 +477,9 @@ pub fn executeUpsert(
     const id_bytes = doc_id.toBytes(op.id);
     if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (sql.bindTextTransient(stmt, bind_idx, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    bind_idx += 1;
+    if (sql.bindTextTransient(stmt, bind_idx, op.owner_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
 
     for (op.values) |val| {
@@ -499,6 +504,7 @@ pub fn executeDelete(
     allocator: Allocator,
     conn: *sqlite.Db,
     op: anytype,
+    namespace_id: i64,
     table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
@@ -509,7 +515,7 @@ pub fn executeDelete(
 
     const id_bytes = doc_id.toBytes(op.id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sql.bindTextTransient(stmt, 2, op.namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {

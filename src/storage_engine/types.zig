@@ -529,6 +529,7 @@ pub const WriteOp = union(enum) {
         table_index: usize,
         id: DocId,
         namespace: []const u8,
+        owner_id: []const u8,
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
@@ -590,6 +591,7 @@ pub const WriteOp = union(enum) {
         switch (self) {
             .upsert => |op| {
                 allocator.free(op.namespace);
+                allocator.free(op.owner_id);
                 allocator.free(op.sql);
                 for (op.values) |val| val.deinit(allocator);
                 allocator.free(op.values);

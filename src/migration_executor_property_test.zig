@@ -78,7 +78,7 @@ test "migration_executor: additive migration preserves existing data" {
         const row_title = "hello world";
         const insert_sql = try std.fmt.allocPrint(
             allocator,
-            "INSERT INTO {s} (id, namespace_id, title, created_at, updated_at) VALUES (zeroblob(16), 'ns1', '{s}', 0, 0)",
+            "INSERT INTO {s} (id, namespace_id, owner_id, title, created_at, updated_at) VALUES (zeroblob(16), 1, 'test-owner', '{s}', 0, 0)",
             .{ tname, row_title },
         );
         defer allocator.free(insert_sql);
@@ -190,7 +190,7 @@ test "migration_executor: destructive migration refused when not allowed" {
         // Insert a row to verify DB is unchanged after refused migration
         const insert_sql = try std.fmt.allocPrint(
             allocator,
-            "INSERT INTO {s} (id, namespace_id, col_a, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'val1', 0, 0)",
+            "INSERT INTO {s} (id, namespace_id, owner_id, col_a, created_at, updated_at) VALUES (zeroblob(16), 1, 'test-owner', 'val1', 0, 0)",
             .{tname},
         );
         defer allocator.free(insert_sql);

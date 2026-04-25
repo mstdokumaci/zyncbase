@@ -126,6 +126,7 @@ pub const StorageEngine = struct {
 
         // Configure WAL mode and pragmas
         try connection.configureDatabase(&writer_conn, true);
+        try sql.ensureNamespaceTable(&writer_conn);
 
         // Create reader pool (one per CPU core)
         const configured_reader_pool_size = if (options.reader_pool_size == 0)
@@ -440,6 +441,7 @@ pub const StorageEngine = struct {
         table_index: usize,
         id: DocId,
         namespace: []const u8,
+        owner_id: []const u8,
         columns: []const ColumnValue,
     ) !void {
         try self.ensureRunning();
@@ -463,12 +465,15 @@ pub const StorageEngine = struct {
         const now = std.time.timestamp();
         const ns_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(ns_owned);
+        const owner_owned = try self.allocator.dupe(u8, owner_id);
+        errdefer self.allocator.free(owner_owned);
 
         const op = WriteOp{
             .upsert = .{
                 .table_index = table_index,
                 .id = id,
                 .namespace = ns_owned,
+                .owner_id = owner_owned,
                 .sql = sql_string,
                 .values = values,
                 .timestamp = now,
@@ -511,6 +516,10 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
+        const namespace_id = try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace) orelse {
+            return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
+        };
+
         const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql_query);
 
@@ -520,7 +529,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, namespace, table_metadata);
+        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, namespace_id, table_metadata);
         if (result) |row| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -551,7 +560,11 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace, filter);
+        const namespace_id = try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace) orelse {
+            return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
+        };
+
+        const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace_id, filter);
         defer query_res.deinit(allocator);
 
         const sort_field_index = filter.order_by.field_index;

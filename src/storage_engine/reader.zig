@@ -24,7 +24,7 @@ pub const QueryResult = struct {
 pub fn buildSelectQuery(
     allocator: Allocator,
     table_metadata: *const schema_manager.TableMetadata,
-    namespace: []const u8,
+    namespace_id: i64,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -43,9 +43,7 @@ pub fn buildSelectQuery(
     // 2.. WHERE clause
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
-    const ns_val = try allocator.dupe(u8, namespace);
-    errdefer allocator.free(ns_val);
-    try values.append(allocator, TypedValue{ .scalar = .{ .text = ns_val } });
+    try values.append(allocator, TypedValue{ .scalar = .{ .integer = namespace_id } });
 
     const conds = filter.conditions orelse @as([]const query_parser.Condition, &.{});
     const or_conds = filter.or_conditions orelse @as([]const query_parser.Condition, &.{});
@@ -273,12 +271,12 @@ pub fn execSelectDocumentTyped(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     id: DocId,
-    namespace: []const u8,
+    namespace_id: i64,
     table_metadata: *const schema_manager.TableMetadata,
 ) !?types.TypedRow {
     const id_bytes = doc_id.toBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sql.bindTextTransient(stmt, 2, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
