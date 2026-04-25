@@ -17,7 +17,7 @@ This document defines the formal grammar and property specification for `schema.
 |:---|:---:|:---|
 | `fields` | `object` | Map of field names to field definitions. |
 | `required` | `array<string>` | List of required field names (supports dot notation for nested fields). |
-| `namespaced` | `boolean` | If `true` (default), the table is partitioned by namespaces. If `false`, the table transcends namespaces (global master data). The `users` collection defaults to `false`. |
+| `namespaced` | `boolean` | If `true` (default), rows are scoped to the active namespace. If `false`, rows are stored under reserved global namespace ID `0` and are visible across namespaces. The `users` collection defaults to `false`. |
 
 ### Table Name Constraints
 
@@ -43,9 +43,11 @@ The `users` collection is a special hybrid system table. It is always present in
 }
 ```
 
-- **Implicitly Global:** It defaults to `"namespaced": false`.
-- **Special Columns:** It possesses an implicitly created `external_id` (`TEXT UNIQUE`) column. Its `id` column is a standard `BLOB(16)` UUIDv7. It completely omits the `namespace_id` and `owner_id` columns.
-- **Auto-Upsert:** When a WebSocket authenticates, Zig automatically looks up the JWT's `sub` in `external_id`, generating a new UUIDv7 row if missing. This ensures any relational Foreign Keys to `users.id` are always satisfied.
+- **Implicitly Global:** It defaults to `"namespaced": false`, which stores rows under reserved global namespace ID `0`.
+- **Special Columns:** It possesses an implicitly created `external_id` (`TEXT`) column. Its `id` column is a standard `BLOB(16)` UUIDv7, and its `owner_id` column is always equal to `id`.
+- **Identity Key:** The identity mapping is unique by `(namespace_id, external_id)`. With the default global mode this is effectively global uniqueness; with `"namespaced": true`, the same external identity string may resolve to different internal users in different namespaces.
+- **Auto-Upsert:** When a WebSocket authenticates, Zig looks up the JWT's `sub` in `external_id` for the applicable namespace, generating a new UUIDv7 row if missing. This ensures any relational Foreign Keys to `users.id` are always satisfied.
+- **Namespaced Users:** If `users` is configured with `"namespaced": true`, `$session.userId` is resolved for the active namespace. Namespace switching requires re-resolving or re-authenticating the session so ownership checks continue to use the namespace-local user ID.
 - **Extensible:** You can define `users` in your `schema.json` to append custom fields (like `avatar` or `language`). If omitted entirely, the engine treats it as the implicit JSON above.
 
 ---
@@ -59,6 +61,7 @@ A field definition MUST contain a `type` property.
 - Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
 - Must not contain `__`; this separator is reserved for flattened nested object paths.
 - Must not use reserved system field names: `id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`.
+- In the `users` collection, must not use `external_id`; it is reserved for identity-provider subject mapping.
 
 ### Supported Types
 
@@ -121,10 +124,10 @@ Flattens to SQLite column: `profile__userId TEXT`.
 
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
 
-> *System Columns*: Every table automatically includes five built-in system columns:
+> *System Columns*: Every storage table automatically includes five built-in system columns:
 > - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation.
-> - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table) to guarantee flat, isolated multi-tenancy.
-> - `owner_id`: Stored as `TEXT`. Automatically populated by the server with `$session.userId` upon document creation.
+> - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table). Namespaced tables use the active namespace ID; global tables (`"namespaced": false`) use reserved global namespace ID `0`.
+> - `owner_id`: Stored internally as `BLOB(16)`. Automatically populated by the server with `$session.userId` upon document creation. For `users`, `owner_id` is equal to `id`.
 > - `created_at` & `updated_at`: Stored as `INTEGER` timestamps.
 
 ---

@@ -114,7 +114,7 @@ Built-in document IDs and schema `references` fields are stored as fixed-width `
 
 ### System Tables
 The storage engine maintains internal system tables that are not defined in `schema.json`:
-- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026).
+- `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
 
 ### Array Canonicalization Pipeline
 
@@ -129,7 +129,7 @@ This guarantees deterministic on-disk representation and deterministic read/quer
 
 ### Implementation Logic
 
-A schema must be provided during `StorageEngine` initialization. 
+`StorageEngine` initialization always receives a parsed `Schema`. If the configured `schema.json` file is omitted or missing, the configuration layer synthesizes the implicit users-only schema before storage initialization.
 
 > [!IMPORTANT]
 > **Strict Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
@@ -150,17 +150,13 @@ const SchemaParser = struct {
         const is_users = std.mem.eql(u8, name, "users");
         const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
         
-        // Always include ID
+        // Always include uniform system columns.
         try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
-        
-        if (namespaced) {
-            try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Logical FK to _zync_namespaces
-        }
+        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Active namespace or reserved global namespace 0.
+        try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
         
         if (is_users) {
-            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .unique = true });
-        } else {
-            try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
+            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .indexed = true });
         }
         
         // Parse schema fields
@@ -184,6 +180,7 @@ const SchemaParser = struct {
         
         return Table{
             .name = name,
+            .namespaced = namespaced,
             .fields = fields.toOwnedSlice(),
         };
     }
@@ -240,10 +237,17 @@ const DDLGenerator = struct {
                 try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "CREATE INDEX idx_{s}_{s} ON {s}({s});\n", .{table.name, field.name, table.name, field.name}));
             }
         }
+        if (std.mem.eql(u8, table.name, "users")) {
+            try buf.appendSlice("CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);\n");
+        }
         return buf.toOwnedSlice();
     }
 };
 ```
+
+At write/query time, `namespaced` controls the namespace predicate, not the table shape:
+- For `namespaced: true`, writes store the active namespace ID and queries use `namespace_id = :active_namespace_id`.
+- For `namespaced: false`, writes store namespace ID `0` and queries use `namespace_id = 0`.
 
 ### Relational Features
 - **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.

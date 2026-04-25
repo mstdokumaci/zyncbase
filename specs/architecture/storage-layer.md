@@ -108,9 +108,9 @@ The first segment of a path (e.g., `tasks`) maps to a database table. This simpl
 
 > [!IMPORTANT]
 > **Mandatory Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
-> 1. A valid JSON schema file is **mandatory** for server startup.
-> 2. The server will fail to initialize if no schema is provided or if the schema is invalid.
-> 3. All database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
+> 1. All user database tables and columns are strictly derived from `schema.json`; ad-hoc table creation is prohibited.
+> 2. If `schema.json` is omitted or missing, the server boots with a synthesized users-only schema.
+> 3. The server fails to initialize if a provided schema exists but is invalid.
 > 4. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
 
 ### Relational Patterns

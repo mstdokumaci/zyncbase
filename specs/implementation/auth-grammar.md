@@ -75,8 +75,8 @@ The `$doc` variable does NOT fetch the document into RAM before authorization. I
 ```json
 "write": { "$doc.owner_id": { "eq": "$session.userId" } }
 ```
-When updating a document (`StoreSet`), Zig evaluates `$session.userId` in RAM (e.g., `"user123"`). It recognizes `$doc.owner_id` as a column reference and injects it into the SQL operation:
-`UPDATE tasks SET ... WHERE id = ? AND owner_id = 'user123'`
+When updating a document (`StoreSet`), Zig evaluates `$session.userId` in RAM as the internal `BLOB(16)` user ID resolved through the `users` table. It recognizes `$doc.owner_id` as a column reference and injects it into the SQL operation using a bound binary parameter:
+`UPDATE tasks SET ... WHERE id = ? AND owner_id = ?`
 
 If the user does not own the document, 0 rows are affected, and the operation fails naturally without an extra `SELECT` overhead.
 

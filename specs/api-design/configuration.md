@@ -119,7 +119,7 @@ Server network configuration.
 
 #### `schema`
 
-Path to JSON Schema file and migration settings.
+Path to JSON Schema file and migration settings. If omitted or the configured file is missing, the server boots with the implicit users-only schema; if a provided schema exists but is invalid, startup fails.
 
 ```json
 {
@@ -310,13 +310,14 @@ Define your data structure using ZyncBase store-based schema format.
 
 ### Example: The Reserved `users` Collection
 
-The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false` and its `id` column maps to the external identity token (e.g. Auth0 `sub`). You can easily extend it with custom fields:
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps to the external identity token (e.g. Auth0 `sub`), while its `id` column is the internal `BLOB(16)` UUIDv7 used by `owner_id` and foreign keys. You can easily extend it with custom fields:
 
 ```json
 {
   "version": "1.0.0",
   "store": {
     "users": {
+      "namespaced": false,
       "fields": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
@@ -351,8 +352,9 @@ ZyncBase flattens nested objects into column names using a double underscore (`_
 ```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id INTEGER NOT NULL,
-    owner_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL, -- 0 for the default global users collection
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16), -- equal to id for users
+    external_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     preferences__notifications__email INTEGER, -- Boolean stored as int
@@ -363,6 +365,8 @@ CREATE TABLE users (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
+
+CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
 ```
 
 ### Schema Structure
@@ -673,12 +677,12 @@ ZyncBase generates:
 CREATE TABLE tasks (
     id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id INTEGER NOT NULL,
-    owner_id TEXT NOT NULL,
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
     title TEXT,
     status TEXT,
     priority INTEGER,
-    created_at INTEGER,
-    updated_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
 
