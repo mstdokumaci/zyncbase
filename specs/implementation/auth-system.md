@@ -14,11 +14,11 @@
 2. **Variables Context**: Rules are evaluated against a strictly limited context containing:
    - `$session`: The resolved session context (enriched from JWT and/or Hook Server).
    - `$namespace`: The current namespace string parts.
-   - `$doc`: The existing document in the database (compiled via AST Injection into SQL `WHERE` clauses).
+   - `$doc`: Columns on the existing target row (compiled via AST Injection into SQL `WHERE` clauses).
    - `$value`: The incoming mutation payload (evaluated in RAM).
    - `$path`: The table name.
    
-   **Hard Limit**: Any rule requiring a relational join (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server via a `"hook"` rule.
+   **Hard Limit**: `$doc` can only constrain the same row being selected, updated, or deleted. Any rule requiring relationship traversal, a relational join, or a lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server via a `"hook"` rule.
 3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$session.role": { "eq": "admin" } }`), ensuring easy parsing and AST injection.
 4. **Decoupled Configuration**: Namespaces handle horizontal isolation and presence, while store handles vertical collection-level access.
 
@@ -112,7 +112,8 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
     { "$session.role": { "eq": "admin" } },
     { 
       "$session.role": { "eq": "editor" },
-      "$session.sub": { "eq": "$path.user_id" }
+      "$path": { "eq": "tasks" },
+      "$doc.owner_id": { "eq": "$session.userId" }
     }
   ]
 }
@@ -125,8 +126,8 @@ Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation
 The core tension in authorization is between **stateless performance** and **complex relational permissions** (e.g., "does this user belong to the workspace that owns the folder containing this document?").
 
 To solve this, ZyncBase draws a hard line:
-1. **`authorization.json` is strictly for stateless checks.** (e.g., `$namespace.tenant == $session.tenant_id`). It is exceptionally fast and evaluated natively in Zig.
-2. **Any rule requiring a database lookup (`$doc` or external tables) is delegated to the Bun Hook Server.**
+1. **`authorization.json` is strictly for RAM checks and same-row SQL predicates.** (e.g., `$namespace.tenant == $session.tenant_id`, `$doc.owner_id == $session.userId`). It is exceptionally fast and evaluated natively in Zig.
+2. **Any rule requiring a relationship traversal, join, or lookup outside the target row is delegated to the Bun Hook Server.**
 
 We do *not* attempt to build a Turing-complete database lookup engine into `authorization.json`. Instead, ZyncBase provides an out-of-the-box Bun WebSocket server. Developers simply write a TypeScript function to handle complex auth logic.
 
@@ -167,7 +168,7 @@ export async function checkDocumentAccess({ session, namespace, path, value }) {
   // Use the exact same Query API you use on the frontend
   const memberships = await client.store.query('workspace_members', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       workspaceId: { eq: workspaceId }
     }
   });

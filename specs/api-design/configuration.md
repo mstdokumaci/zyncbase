@@ -236,7 +236,7 @@ Performance tuning.
 Define your data structure using ZyncBase store-based schema format.
 
 > [!IMPORTANT]
-> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`). This sequence is reserved for internal flattening of nested objects. Any schema containing `__` in a field name will be rejected by the server with `error.InvalidFieldName`.
+> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`) or using reserved system field names (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`). The `__` sequence is reserved for internal flattening of nested objects. Invalid names are rejected by the server with `error.InvalidFieldName`.
 
 ### Example: Collaborative Canvas
 
@@ -908,70 +908,77 @@ For detailed migration guides, see the ZyncBase documentation (MIGRATIONS.md was
 
 ## authorization.json
 
-Define authorization rules using a simple expression language.
+Define authorization rules using the declarative JSON condition grammar documented in [Auth Grammar](../implementation/auth-grammar.md). If `authorization.json` is omitted or missing, the server boots with the implicit safe public playground rules from that grammar.
 
 ### Simple Rules
 
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)"
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "tasks",
+      "read": true,
+      "write": {
+        "or": [
+          { "$session.role": { "eq": "admin" } },
+          { "$doc.owner_id": { "eq": "$session.userId" } }
+        ]
       }
     },
     {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role === 'admin'"
-      }
+      "collection": "audit_logs",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": false
     }
-  ],
-  
-  "functions": {
-    "isRoomMember": {
-      "type": "sql",
-      "query": "SELECT 1 FROM room_members WHERE user_id = $1 AND room_id = $2",
-      "params": ["userId", "roomId"]
-    }
-  }
+  ]
 }
 ```
 
-### Expression Language
+### Condition Grammar
 
 **Available variables:**
-- `jwt.*` - Claims from JWT token (e.g., `jwt.userId`, `jwt.tenantId`, `jwt.role`)
-- `namespace.*` - Parsed namespace parts (e.g., `namespace.tenantId`, `namespace.roomId`)
-- `operation` - The operation being performed (`"read"` or `"write"`)
+- `$session.*` - Resolved session context from JWT and/or hooks (e.g., `$session.userId`, `$session.tenantId`, `$session.role`)
+- `$namespace.*` - Parsed namespace parts (e.g., `$namespace.tenant_id`, `$namespace.room_id`)
+- `$path` - Target table/collection name
+- `$value.*` - Incoming mutation payload, available for writes
+- `$doc.*` - Same-row SQLite columns, injected into SQL for reads and existing-row updates/removes
 
 **Operators:**
-- `===`, `!==` - Equality
-- `&&`, `||` - Logical AND/OR
-- `in` - Check if value is in array
-- `!` - Logical NOT
+- `eq`, `ne` - Equality
+- `in`, `notIn` - Set membership
+- `contains` - Array/string containment
+- `and`, `or` - Explicit logical composition; object fields compose with implicit AND
 
 **Examples:**
 
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "public:*",
-      "allow": {
-        "read": "true",
-        "write": "jwt.userId !== null"
-      }
+      "pattern": "public",
+      "storeFilter": true,
+      "presenceRead": true,
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
     },
     {
-      "namespace": "private:*",
-      "allow": {
-        "read": "isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "isRoomMember(jwt.userId, namespace.roomId) && jwt.role in ['admin', 'editor']"
-      }
+      "collection": "admin_notes",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": { "$session.role": { "eq": "admin" } }
     }
   ]
 }
@@ -995,7 +1002,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
   // Use the same Query API as your frontend
   const memberships = await client.store.query('room_members', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       roomId: { eq: roomId }
     }
   });
@@ -1006,7 +1013,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
 export async function hasPermission({ session, namespace, path, value }) {
   const permissions = await client.store.query('permissions', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       permission: { eq: value.permission }
     }
   });
@@ -1018,15 +1025,19 @@ export async function hasPermission({ session, namespace, path, value }) {
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "paths": [
-        {
-          "path": "messages.*",
-          "write": { "hook": "isRoomMember" }
-        }
-      ]
+      "pattern": "room:{room_id}",
+      "storeFilter": { "hook": "isRoomMember" },
+      "presenceRead": { "hook": "isRoomMember" },
+      "presenceWrite": { "hook": "isRoomMember" }
+    }
+  ],
+  "store": [
+    {
+      "collection": "messages",
+      "read": { "hook": "isRoomMember" },
+      "write": { "hook": "isRoomMember" }
     }
   ]
 }
@@ -1117,13 +1128,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId",
-        "write": "jwt.userId"
-      }
+      "pattern": "room:{room_id}",
+      "storeFilter": { "$session.userId": { "ne": null } },
+      "presenceRead": true,
+      "presenceWrite": { "$session.userId": { "ne": null } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "elements",
+      "read": true,
+      "write": { "$session.userId": { "ne": null } }
     }
   ]
 }
@@ -1151,13 +1168,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role in ['admin', 'editor']"
-      }
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ]
 }

@@ -149,7 +149,7 @@ const SchemaParser = struct {
         var fields = ArrayList(Field).init(self.allocator);
         
         // Always include these fields
-        try fields.append(.{ .name = "id", .type = .text, .required = true, .primary_key = true });
+        try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
         try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Logical FK to _zync_namespaces
         try fields.append(.{ .name = "owner_id", .type = .text, .required = true });
         

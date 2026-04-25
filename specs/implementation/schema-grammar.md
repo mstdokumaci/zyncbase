@@ -23,6 +23,7 @@ This document defines the formal grammar and property specification for `schema.
 - Must be a valid JSON key.
 - Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
 - Must not contain `__`.
+- Must not start with `_zync_`; that prefix is reserved for internal system tables.
 - SQLite reserved keywords are allowed because ZyncBase quotes identifiers in generated SQL.
 
 ---
@@ -30,6 +31,12 @@ This document defines the formal grammar and property specification for `schema.
 ## Field Definition
 
 A field definition MUST contain a `type` property.
+
+### Field Name Constraints
+
+- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
+- Must not contain `__`; this separator is reserved for flattened nested object paths.
+- Must not use reserved system field names: `id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`.
 
 ### Supported Types
 
@@ -76,7 +83,7 @@ For any field with `type: "array"`, ZyncBase enforces canonical sorted-set behav
 ZyncBase uses a **flat relational storage engine**. Nested objects are logically grouped in the schema but flattened in the database.
 
 - **Separator**: `__` (double underscore).
-- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*` and cannot contain `__`.
+- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*`, cannot contain `__`, and cannot use reserved system field names.
 - **Recursion**: Unlimited depth is supported for `object` types with their own `fields` property.
 
 Example:

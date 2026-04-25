@@ -685,12 +685,12 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 **Decision**:  
 1. Add `owner_id` as a built-in system column to all user-defined tables, alongside `id`, `namespace_id`, `created_at`, and `updated_at`.
 2. Automatically populate `owner_id` with the client's `$session.userId` upon document creation.
-3. Strictly limit `authorization.json` evaluation in Zig to four variables: `$session` (JWT context), `$namespace` (the active string), `$doc` (existing database row for writes/updates), and `$value` (incoming mutation). 
-4. Any rule requiring a relational join (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+3. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
+4. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
 
 **Rationale**:
 - `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
-- Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation, preventing the "slow query" problem in the auth layer.
+- Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation and same-row SQL predicate injection, preventing the "slow query" problem in the auth layer.
 - Clarifies exactly when to use `authorization.json` vs. the Hook Server.
 
 **Principles Alignment**:  

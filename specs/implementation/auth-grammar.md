@@ -65,6 +65,8 @@ Variables are evaluated using two distinct execution paths:
 
 *(Note: If a rule references a forbidden variable for a specific command, evaluation fails safely, and access is denied. `StoreLoadMore` and `StoreUnsubscribe` inherit authorization established during `StoreSubscribe`.)*
 
+For `StoreSet`, `$doc` predicates are applied only to the existing-row update branch. A create has no existing `$doc`; the server injects `owner_id` from `$session.userId` and evaluates only the RAM-available variables (`$session`, `$namespace`, `$path`, `$value`).
+
 ## AST Injection Strategy
 
 The `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the Zig engine translates the condition into a SQL query filter.
@@ -106,4 +108,4 @@ If `authorization.json` is missing or not provided in the server configuration, 
 **What this default means:**
 1. The only accessible namespace is `public`.
 2. Anyone (including anonymous users via the SDK's auto-generated `anon_id`) can read all data and broadcast presence in the `public` namespace.
-3. Users can strictly only modify or delete records they created (enforced via AST Injection of `$doc.owner_id == $session.userId`).
+3. Users can create records owned by their own `$session.userId`, and can strictly only modify or delete records they created (enforced via AST Injection of `$doc.owner_id == $session.userId` on existing rows).
