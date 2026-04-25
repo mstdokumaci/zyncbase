@@ -132,11 +132,10 @@ This guarantees deterministic on-disk representation and deterministic read/quer
 A schema must be provided during `StorageEngine` initialization. 
 
 > [!IMPORTANT]
-> **Mandatory Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
-> 1. A valid JSON schema file is **mandatory** for server startup.
-> 2. The server will fail to initialize if no schema is provided or if the schema is invalid.
-> 3. All database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
-> 4. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
+> **Strict Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
+> 1. All user database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
+> 2. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
+> 3. If the specified `schema.json` file is missing or omitted, the server will still boot successfully, but **only the implicitly defined `users` collection will be available** for data storage. Any mutations to other collections will be safely rejected.
 
 ```zig
 const SchemaParser = struct {
@@ -148,10 +147,21 @@ const SchemaParser = struct {
         
         var fields = ArrayList(Field).init(self.allocator);
         
-        // Always include these fields
+        const is_users = std.mem.eql(u8, name, "users");
+        const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
+        
+        // Always include ID
         try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
-        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Logical FK to _zync_namespaces
-        try fields.append(.{ .name = "owner_id", .type = .text, .required = true });
+        
+        if (namespaced) {
+            try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Logical FK to _zync_namespaces
+        }
+        
+        if (is_users) {
+            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .unique = true });
+        } else {
+            try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
+        }
         
         // Parse schema fields
         for (fields_obj.object.items) |field_entry| {
@@ -219,13 +229,14 @@ const DDLGenerator = struct {
             try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "    {s} {s}", .{field.name, self.sqlType(field.type)}));
             if (field.required) try buf.appendSlice(" NOT NULL");
             if (field.primary_key) try buf.appendSlice(" PRIMARY KEY");
+            if (std.meta.hasFn(field, "unique") and field.unique) try buf.appendSlice(" UNIQUE");
             if (i < table.fields.len - 1) try buf.appendSlice(",\n");
         }
         try buf.appendSlice("\n);\n");
         
         // Auto-generate indexes
         for (table.fields) |field| {
-            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id")) {
+            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id") or std.mem.eql(u8, field.name, "owner_id") or std.mem.eql(u8, field.name, "external_id")) {
                 try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "CREATE INDEX idx_{s}_{s} ON {s}({s});\n", .{table.name, field.name, table.name, field.name}));
             }
         }

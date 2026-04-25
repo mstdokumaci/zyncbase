@@ -17,6 +17,7 @@ This document defines the formal grammar and property specification for `schema.
 |:---|:---:|:---|
 | `fields` | `object` | Map of field names to field definitions. |
 | `required` | `array<string>` | List of required field names (supports dot notation for nested fields). |
+| `namespaced` | `boolean` | If `true` (default), the table is partitioned by namespaces. If `false`, the table transcends namespaces (global master data). The `users` collection defaults to `false`. |
 
 ### Table Name Constraints
 
@@ -24,7 +25,28 @@ This document defines the formal grammar and property specification for `schema.
 - Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
 - Must not contain `__`.
 - Must not start with `_zync_`; that prefix is reserved for internal system tables.
+- The name `users` is reserved for the hybrid system collection.
 - SQLite reserved keywords are allowed because ZyncBase quotes identifiers in generated SQL.
+
+### Reserved System Collections
+
+#### `users`
+The `users` collection is a special hybrid system table. It is always present in the database to map external identity claims (e.g., Auth0 `sub`) to internal `BLOB(16)` UUIDv7s, ensuring `owner_id` on all tables remains a compact binary format.
+
+**Implicit JSON:**
+```json
+{
+  "users": {
+    "namespaced": false,
+    "fields": {}
+  }
+}
+```
+
+- **Implicitly Global:** It defaults to `"namespaced": false`.
+- **Special Columns:** It possesses an implicitly created `external_id` (`TEXT UNIQUE`) column. Its `id` column is a standard `BLOB(16)` UUIDv7. It completely omits the `namespace_id` and `owner_id` columns.
+- **Auto-Upsert:** When a WebSocket authenticates, Zig automatically looks up the JWT's `sub` in `external_id`, generating a new UUIDv7 row if missing. This ensures any relational Foreign Keys to `users.id` are always satisfied.
+- **Extensible:** You can define `users` in your `schema.json` to append custom fields (like `avatar` or `language`). If omitted entirely, the engine treats it as the implicit JSON above.
 
 ---
 

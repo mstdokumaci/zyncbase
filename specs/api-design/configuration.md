@@ -290,7 +290,27 @@ Define your data structure using ZyncBase store-based schema format.
 }
 ```
 
-### Example: Deeply Nested Fields and Simple Arrays
+### Example: Global Master Data (`namespaced: false`)
+
+```json
+{
+  "version": "1.0.0",
+  "store": {
+    "pricing_tiers": {
+      "namespaced": false,
+      "fields": {
+        "tier_name": { "type": "string" },
+        "monthly_price": { "type": "number" },
+        "features": { "type": "array", "items": "string" }
+      }
+    }
+  }
+}
+```
+
+### Example: The Reserved `users` Collection
+
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false` and its `id` column maps to the external identity token (e.g. Auth0 `sub`). You can easily extend it with custom fields:
 
 ```json
 {

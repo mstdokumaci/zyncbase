@@ -23,7 +23,7 @@ This document defines the formal grammar and property specification for `zyncbas
 | `logging` | `object` | `{}` | Log verbosity and formatting. |
 | `performance` | `object` | `{}` | Tuning for throughput and latency. |
 | `dataDir` | `string` | `"./data"` | Directory for persistence (SQLite, WAL). |
-| `schema` | `string \| object` | `"./schema.json"` | Path to schema file or schema config object. |
+| `schema` | `string \| object` | `"./schema.json"` | Path to schema file or schema config object. If missing, server boots with only the implicit `users` collection. |
 | `authorization` | `string` | `null` | `[PLANNED]` Path to `authorization.json`. If omitted or the file is missing, the server boots with the safe implicit public playground rules defined in `auth-grammar.md`. |
 | `environment` | `string` | `"development"` | `[PLANNED]` Engine mode (`development`, `production`). |
 
@@ -90,8 +90,7 @@ The following checks are performed during `validateConfig`:
 |:---|:---|
 | `InvalidPort` | Port is 0 or > 65535. |
 | `InvalidDataDir` | Parent directory relative to `dataDir` does not exist or is not writable. |
-| `InvalidSchemaFile` | `schema` path is empty. |
-| `SchemaFileNotFound` | Specified schema file does not exist. |
+| `InvalidSchemaFile` | `schema` object/path is malformed or invalid JSON. |
 | `InvalidAuthorizationFile` | Specified `authorization` file exists but cannot be parsed or fails authorization grammar validation. |
 | `InvalidBufferSize` | `messageBufferSize` is 0. |
 | `InvalidMaxMessageSize` | `maxMessageSize` is 0. |

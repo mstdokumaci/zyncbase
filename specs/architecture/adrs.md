@@ -684,15 +684,43 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 
 **Decision**:  
 1. Add `owner_id` as a built-in system column to all user-defined tables, alongside `id`, `namespace_id`, `created_at`, and `updated_at`.
-2. Automatically populate `owner_id` with the client's `$session.userId` upon document creation.
-3. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
-4. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+2. Implement an implicit `users` system table that maps external string identity claims (e.g., Auth0 `sub`) in its `external_id` (`TEXT`) column to an internal ZyncBase `id` (`BLOB(16)` UUIDv7).
+3. On WebSocket connection, the Zig engine maps the JWT's `sub` to this internal UUIDv7, storing it in `$session.userId` to ensure `owner_id` on all tables is safely typed as `BLOB(16)`.
+4. Automatically populate `owner_id` with the internal `$session.userId` upon document creation.
+5. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
+6. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
 
 **Rationale**:
 - `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
+- The `users` mapping table guarantees `owner_id` remains a compact 16-byte binary format, perfectly matching ZyncBase's standard `doc_id` representation and saving ~20 bytes per row compared to storing external string IDs.
 - Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation and same-row SQL predicate injection, preventing the "slow query" problem in the auth layer.
-- Clarifies exactly when to use `authorization.json` vs. the Hook Server.
 
 **Principles Alignment**:  
+- #1 Primitives over Magic (Exposing `users` as a standard collection instead of a hidden config)
 - #8 Predictable Performance  
 - #9 Secure by Default
+
+---
+
+## ADR-028: Global Master Data (namespaced: false)
+
+**Date**: 2026-04-25  
+**Status**: Accepted  
+
+**Context**:  
+By default, all ZyncBase collections are horizontally partitioned by a `namespace_id`. However, SaaS applications frequently require master data tables (e.g. `users`, `pricing_tiers`, `global_settings`) that must transcend namespace boundaries and be visible globally.
+
+**Decision**:  
+1. Introduce a `"namespaced": boolean` primitive in `schema.json` collection definitions.
+2. If `namespaced` is omitted, it defaults to `true`, and Zig auto-injects `namespace_id` columns and SQL filters.
+3. If `namespaced` is set to `false`, Zig omits the `namespace_id` column and bypasses namespace filtering in the `QueryParser`.
+4. The reserved `users` system collection is hardcoded to default to `"namespaced": false`.
+
+**Rationale**:  
+- Provides developers with the flexibility to define multiple global data collections without opinionated server-side logic.
+- Avoids the anti-pattern of duplicating static master data across thousands of tenant namespaces.
+- Maintains strict "Secure by Default" semantics by enforcing namespacing unless explicitly opted-out.
+
+**Principles Alignment**:  
+- #1 Primitives over Magic
+- #3 SQLite as the Source of Truth
