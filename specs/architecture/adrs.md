@@ -689,13 +689,15 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 4. Keep `owner_id` on `users` for table-shape consistency; for each `users` row, `owner_id` is equal to `id`.
 5. On WebSocket connection, the Zig engine maps the JWT's `sub` to this internal UUIDv7, storing it in `$session.userId` to ensure `owner_id` on all tables is safely typed as `BLOB(16)`.
 6. Automatically populate `owner_id` with the internal `$session.userId` upon document creation.
-7. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
-8. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+7. Treat `id` as the document identity for a collection. It is expected to be unique across the whole collection/table; `namespace_id` is not part of the primary key and is only a routing/filtering column.
+8. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
+9. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
 
 **Rationale**:
 - `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
 - The `users` mapping table guarantees `owner_id` remains a compact 16-byte binary format, perfectly matching ZyncBase's standard `doc_id` representation and saving ~20 bytes per row compared to storing external string IDs.
 - Keeping `owner_id` on `users` avoids table-shape exceptions in DDL generation, authorization defaults, replication payloads, and query planning while preserving self-ownership semantics.
+- Keeping identity as `PRIMARY KEY(id)` avoids composite key fan-out in foreign keys, caches, cursor tie-breakers, and SDK APIs. Namespaces constrain visibility; they do not redefine document identity.
 - Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation and same-row SQL predicate injection, preventing the "slow query" problem in the auth layer.
 
 **Principles Alignment**:  

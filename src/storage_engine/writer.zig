@@ -54,6 +54,26 @@ fn pushOwnedChange(
     });
 }
 
+fn resolveOwnerDocId(
+    allocator: Allocator,
+    conn: *sqlite.Db,
+    sm: *const schema_manager.SchemaManager,
+    stmt_cache: *sql.StatementCache,
+    table_metadata: *const schema_manager.TableMetadata,
+    namespace: []const u8,
+    external_owner_id: []const u8,
+    row_id: types.DocId,
+    timestamp: i64,
+) !types.DocId {
+    if (table_metadata.table.is_users_table) return row_id;
+
+    const users_table = sm.getTable("users") orelse {
+        return doc_id.fromStableString(external_owner_id);
+    };
+    const users_namespace_id = try sql.resolveEffectiveNamespaceId(allocator, conn, stmt_cache, users_table, namespace);
+    return try sql.resolveUserId(allocator, conn, stmt_cache, users_namespace_id, external_owner_id, timestamp);
+}
+
 pub fn executeBatch(
     allocator: Allocator,
     conn: *sqlite.Db,
@@ -95,7 +115,8 @@ pub fn executeBatch(
         switch (op) {
             .upsert => |iop| {
                 const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = try sql.resolveNamespaceId(allocator, conn, stmt_cache, iop.namespace);
+                const namespace_id = try sql.resolveEffectiveNamespaceId(allocator, conn, stmt_cache, table_metadata, iop.namespace);
+                const owner_doc_id = try resolveOwnerDocId(allocator, conn, sm, stmt_cache, table_metadata, iop.namespace, iop.owner_id, iop.id, iop.timestamp);
                 var old_row: ?types.TypedRow = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, namespace_id, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
@@ -103,7 +124,7 @@ pub fn executeBatch(
                 } else |err| {
                     std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ iop.table_index, err });
                 }
-                const maybe_new_row = executeUpsert(allocator, conn, iop, namespace_id, table_metadata, stmt_cache) catch |err| {
+                const maybe_new_row = executeUpsert(allocator, conn, iop, namespace_id, owner_doc_id, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |r| r.deinit(allocator);
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
@@ -112,7 +133,8 @@ pub fn executeBatch(
 
                 if (maybe_new_row) |new_row| {
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                    pushOwnedChange(allocator, pending_changes, iop.namespace, iop.table_index, op_type, old_row, new_row) catch |err| {
+                    const change_namespace = schema_manager.effectiveNamespaceLabel(table_metadata, iop.namespace);
+                    pushOwnedChange(allocator, pending_changes, change_namespace, iop.table_index, op_type, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         if (old_row) |r| r.deinit(allocator);
                         var r = new_row;
@@ -130,7 +152,7 @@ pub fn executeBatch(
             },
             .delete => |dop| {
                 const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = try sql.lookupNamespaceId(allocator, conn, stmt_cache, dop.namespace) orelse continue;
+                const namespace_id = try sql.lookupEffectiveNamespaceId(allocator, conn, stmt_cache, table_metadata, dop.namespace) orelse continue;
                 const maybe_old_row = executeDelete(allocator, conn, dop, namespace_id, table_metadata, stmt_cache) catch |err| {
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
@@ -139,7 +161,8 @@ pub fn executeBatch(
 
                 // For DELETE, the RETURNING * result IS the old row.
                 if (maybe_old_row) |old_row| {
-                    pushOwnedChange(allocator, pending_changes, dop.namespace, dop.table_index, .delete, old_row, null) catch |err| {
+                    const change_namespace = schema_manager.effectiveNamespaceLabel(table_metadata, dop.namespace);
+                    pushOwnedChange(allocator, pending_changes, change_namespace, dop.table_index, .delete, old_row, null) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         var r = old_row;
                         r.deinit(allocator);
@@ -214,7 +237,7 @@ pub fn flushBatch(
         };
         if (has_affected) {
             const table_metadata = sm.getTableByIndex(table_index) orelse continue;
-            const key = reader.getCacheKey(allocator, table_metadata.table.name, ns, id) catch |err| {
+            const key = reader.getCacheKey(allocator, table_metadata, ns, id) catch |err| {
                 std.log.err("Failed to create cache key for eviction: {}", .{err});
                 continue;
             };
@@ -465,6 +488,7 @@ pub fn executeUpsert(
     conn: *sqlite.Db,
     op: anytype,
     namespace_id: i64,
+    owner_id: types.DocId,
     table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
 ) !?types.TypedRow {
@@ -479,8 +503,13 @@ pub fn executeUpsert(
     bind_idx += 1;
     if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
-    if (sql.bindTextTransient(stmt, bind_idx, op.owner_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    const owner_id_bytes = doc_id.toBytes(owner_id);
+    if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
+    if (table_metadata.table.is_users_table) {
+        if (sql.bindTextTransient(stmt, bind_idx, op.owner_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+        bind_idx += 1;
+    }
 
     for (op.values) |val| {
         try val.bindSQLite(conn, stmt, bind_idx, allocator);

@@ -310,7 +310,7 @@ Define your data structure using ZyncBase store-based schema format.
 
 ### Example: The Reserved `users` Collection
 
-The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps to the external identity token (e.g. Auth0 `sub`), while its `id` column is the internal `BLOB(16)` UUIDv7 used by `owner_id` and foreign keys. You can easily extend it with custom fields:
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps to the external identity token (e.g. Auth0 `sub`), while its `id` column is the internal `BLOB(16)` UUIDv7 used by `owner_id` and foreign keys. You can extend it with optional custom fields:
 
 ```json
 {
@@ -338,12 +338,13 @@ The `users` collection is a reserved hybrid table that is automatically managed 
           "type": "array",
           "items": "string"
         }
-      },
-      "required": ["name", "email"]
+      }
     }
   }
 }
 ```
+
+Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as an authenticated connection needs an internal user ID, before application profile data is available.
 
 **What ZyncBase generates (automatic flattening):**
 
@@ -368,6 +369,8 @@ CREATE TABLE users (
 
 CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
 ```
+
+`id` is the primary key by itself. It is expected to be unique across the whole collection/table; `namespace_id` scopes visibility and identity-provider lookup, but it does not permit duplicate document IDs in different namespaces.
 
 ### Schema Structure
 
@@ -689,6 +692,8 @@ CREATE TABLE tasks (
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 ```
+
+The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables still require collection-wide unique document IDs; this keeps references, cursors, caches, and SDK addressing single-key.
 
 ### Auto-Migration (Happy Path)
 

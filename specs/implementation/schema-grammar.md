@@ -48,7 +48,7 @@ The `users` collection is a special hybrid system table. It is always present in
 - **Identity Key:** The identity mapping is unique by `(namespace_id, external_id)`. With the default global mode this is effectively global uniqueness; with `"namespaced": true`, the same external identity string may resolve to different internal users in different namespaces.
 - **Auto-Upsert:** When a WebSocket authenticates, Zig looks up the JWT's `sub` in `external_id` for the applicable namespace, generating a new UUIDv7 row if missing. This ensures any relational Foreign Keys to `users.id` are always satisfied.
 - **Namespaced Users:** If `users` is configured with `"namespaced": true`, `$session.userId` is resolved for the active namespace. Namespace switching requires re-resolving or re-authenticating the session so ownership checks continue to use the namespace-local user ID.
-- **Extensible:** You can define `users` in your `schema.json` to append custom fields (like `avatar` or `language`). If omitted entirely, the engine treats it as the implicit JSON above.
+- **Extensible:** You can define `users` in your `schema.json` to append optional custom fields (like `avatar` or `language`). Custom `users` fields cannot be listed in `required`, because identity rows are auto-created before profile data exists. If omitted entirely, the engine treats it as the implicit JSON above.
 
 ---
 
@@ -125,7 +125,7 @@ Flattens to SQLite column: `profile__userId TEXT`.
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
 
 > *System Columns*: Every storage table automatically includes five built-in system columns:
-> - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation.
+> - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation. It is the collection-wide document identity (`PRIMARY KEY(id)`); `namespace_id` is not part of the document key.
 > - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table). Namespaced tables use the active namespace ID; global tables (`"namespaced": false`) use reserved global namespace ID `0`.
 > - `owner_id`: Stored internally as `BLOB(16)`. Automatically populated by the server with `$session.userId` upon document creation. For `users`, `owner_id` is equal to `id`.
 > - `created_at` & `updated_at`: Stored as `INTEGER` timestamps.

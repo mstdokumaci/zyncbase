@@ -4,6 +4,7 @@ const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 const sql_identifier = @import("../sql_identifier.zig");
 const types = @import("types.zig");
+const doc_id = @import("../doc_id.zig");
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
@@ -250,6 +251,33 @@ pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
         .{},
         .{},
     ) catch |err| return types.classifyError(err);
+    db.exec(
+        "INSERT OR IGNORE INTO _zync_namespaces (id, name) VALUES (0, '$global')",
+        .{},
+        .{},
+    ) catch |err| return types.classifyError(err);
+}
+
+pub fn resolveEffectiveNamespaceId(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt_cache: *StatementCache,
+    table_metadata: *const schema_manager.TableMetadata,
+    namespace: []const u8,
+) !i64 {
+    if (!table_metadata.table.namespaced) return schema_manager.global_namespace_id;
+    return resolveNamespaceId(allocator, db, stmt_cache, namespace);
+}
+
+pub fn lookupEffectiveNamespaceId(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt_cache: *StatementCache,
+    table_metadata: *const schema_manager.TableMetadata,
+    namespace: []const u8,
+) !?i64 {
+    if (!table_metadata.table.namespaced) return schema_manager.global_namespace_id;
+    return lookupNamespaceId(allocator, db, stmt_cache, namespace);
 }
 
 pub fn resolveNamespaceId(
@@ -291,6 +319,43 @@ pub fn lookupNamespaceId(
     return types.classifyStepError(db);
 }
 
+pub fn resolveUserId(
+    allocator: Allocator,
+    db: *sqlite.Db,
+    stmt_cache: *StatementCache,
+    namespace_id: i64,
+    external_id: []const u8,
+    timestamp: i64,
+) !doc_id.DocId {
+    const new_user_id = doc_id.generateUuidV7();
+    const id_bytes = doc_id.toBytes(new_user_id);
+    const sql_text =
+        \\INSERT INTO "users" ("id", "namespace_id", "owner_id", "external_id", "created_at", "updated_at")
+        \\VALUES (?, ?, ?, ?, ?, ?)
+        \\ON CONFLICT("namespace_id", "external_id") DO UPDATE SET "external_id" = excluded."external_id"
+        \\RETURNING "id"
+    ;
+    var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
+    defer mstmt.release();
+
+    if (bindBlobTransient(mstmt.stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (bindBlobTransient(mstmt.stmt, 3, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (bindTextTransient(mstmt.stmt, 4, external_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 5, timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 6, timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+
+    const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+    if (rc == sqlite.c.SQLITE_ROW) {
+        const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
+        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
+        const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+        return doc_id.fromBytes(bytes) catch return types.StorageError.TypeMismatch;
+    }
+    if (rc != sqlite.c.SQLITE_DONE) return types.classifyStepError(db);
+    return types.StorageError.InvalidOperation;
+}
+
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
     table_metadata: *const schema_manager.TableMetadata,
@@ -314,6 +379,10 @@ pub fn buildInsertOrReplaceSql(
     try sql_identifier.appendQuoted(allocator, &sql_buf, "namespace_id");
     try sql_buf.appendSlice(allocator, ", ");
     try sql_identifier.appendQuoted(allocator, &sql_buf, "owner_id");
+    if (table_metadata.table.is_users_table) {
+        try sql_buf.appendSlice(allocator, ", ");
+        try sql_identifier.appendQuoted(allocator, &sql_buf, "external_id");
+    }
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         try sql_buf.appendSlice(allocator, ", ");
@@ -324,6 +393,9 @@ pub fn buildInsertOrReplaceSql(
     try sql_buf.appendSlice(allocator, ", ");
     try sql_identifier.appendQuoted(allocator, &sql_buf, "updated_at");
     try sql_buf.appendSlice(allocator, ") VALUES (?, ?, ?");
+    if (table_metadata.table.is_users_table) {
+        try sql_buf.appendSlice(allocator, ", ?");
+    }
     for (columns) |col| {
         const field = try getColumnField(table_metadata, col);
         if (field.sql_type == .array) {

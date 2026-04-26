@@ -28,6 +28,11 @@ fn typesMatch(target: schema_manager.FieldType, db_type: []const u8) bool {
     return false;
 }
 
+fn isManagedColumn(table: schema_manager.Table, name: []const u8) bool {
+    return schema_manager.isSystemColumn(name) or
+        (table.is_users_table and std.mem.eql(u8, name, "external_id"));
+}
+
 pub const MigrationDetector = struct {
     allocator: std.mem.Allocator,
     db: *sqlite.Db,
@@ -83,7 +88,7 @@ pub const MigrationDetector = struct {
                     if (row.dflt_value) |dv| self.allocator.free(dv);
                 }
                 table_exists = true;
-                if (!schema_manager.isSystemColumn(row.name)) {
+                if (!isManagedColumn(table, row.name)) {
                     const owned_name = try self.allocator.dupe(u8, row.name);
                     errdefer self.allocator.free(owned_name);
                     const owned_type = try self.allocator.dupe(u8, row.type);
@@ -104,7 +109,7 @@ pub const MigrationDetector = struct {
             }
 
             for (table.fields) |field| {
-                if (schema_manager.isSystemColumn(field.name)) continue;
+                if (isManagedColumn(table, field.name)) continue;
                 if (existing.get(field.name)) |db_type| {
                     if (!typesMatch(field.sql_type, db_type)) {
                         const owned_table = try self.allocator.dupe(u8, table.name);

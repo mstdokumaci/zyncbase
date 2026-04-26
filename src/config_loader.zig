@@ -424,8 +424,9 @@ pub const ConfigLoader = struct {
                 return error.InvalidSchemaFile;
             }
 
-            std.fs.cwd().access(config.schema_file, .{}) catch {
-                return error.SchemaFileNotFound;
+            std.fs.cwd().access(config.schema_file, .{}) catch |err| {
+                if (err != error.FileNotFound) return error.SchemaFileNotFound;
+                std.log.info("Schema file not found, using implicit users-only schema", .{});
             };
         }
 

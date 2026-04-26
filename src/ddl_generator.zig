@@ -31,7 +31,14 @@ pub const DDLGenerator = struct {
         try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
         try buf.appendSlice(self.allocator, " INTEGER NOT NULL,\n  ");
         try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
-        try buf.appendSlice(self.allocator, " TEXT NOT NULL");
+        try buf.appendSlice(self.allocator, " BLOB NOT NULL CHECK(length(");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
+        try buf.appendSlice(self.allocator, ") = 16)");
+        if (table.is_users_table) {
+            try buf.appendSlice(self.allocator, ",\n  ");
+            try sql_identifier.appendQuoted(self.allocator, &buf, "external_id");
+            try buf.appendSlice(self.allocator, " TEXT NOT NULL");
+        }
         // One column per field
         for (table.fields) |field| {
             try buf.appendSlice(self.allocator, ",\n  ");
@@ -91,6 +98,27 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, "(");
         try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
         try buf.append(self.allocator, ')');
+
+        // ── CREATE INDEX on owner_id ──────────────────────────────────────────
+        try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
+        try appendQuotedIndexName(self.allocator, &buf, table.name, "owner_id");
+        try buf.appendSlice(self.allocator, " ON ");
+        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+        try buf.appendSlice(self.allocator, "(");
+        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
+        try buf.append(self.allocator, ')');
+
+        if (table.is_users_table) {
+            try buf.appendSlice(self.allocator, ";\nCREATE UNIQUE INDEX IF NOT EXISTS ");
+            try appendQuotedIndexName(self.allocator, &buf, table.name, "namespace_external_id");
+            try buf.appendSlice(self.allocator, " ON ");
+            try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+            try buf.appendSlice(self.allocator, "(");
+            try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+            try buf.appendSlice(self.allocator, ", ");
+            try sql_identifier.appendQuoted(self.allocator, &buf, "external_id");
+            try buf.append(self.allocator, ')');
+        }
 
         // ── CREATE INDEX for each indexed field ───────────────────────────────
         for (table.fields) |field| {

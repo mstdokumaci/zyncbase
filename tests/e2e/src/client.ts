@@ -35,6 +35,10 @@ export class ZyncBaseClient {
 		return this.client.connect();
 	}
 
+	async setNamespace(ns: string): Promise<void> {
+		await this.client.setStoreNamespace(ns);
+	}
+
 	/**
 	 * Set a value at the given path.
 	 * Now natively awaits the server's acknowledgement.

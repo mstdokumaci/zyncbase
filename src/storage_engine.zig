@@ -426,8 +426,8 @@ pub const StorageEngine = struct {
         }
     }
 
-    fn getCacheKey(self: *const StorageEngine, table: []const u8, namespace: []const u8, id: DocId) ![]u8 {
-        return reader.getCacheKey(self.allocator, table, namespace, id);
+    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema_manager.TableMetadata, namespace: []const u8, id: DocId) ![]u8 {
+        return reader.getCacheKey(self.allocator, table_metadata, namespace, id);
     }
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
@@ -496,7 +496,7 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
 
-        const cache_key = try reader.getCacheKey(allocator, table_metadata.table.name, namespace, id);
+        const cache_key = try reader.getCacheKey(allocator, table_metadata, namespace, id);
         defer allocator.free(cache_key);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
@@ -516,7 +516,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const namespace_id = try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace) orelse {
+        const namespace_id = try sql.lookupEffectiveNamespaceId(self.allocator, &node.conn, &node.stmt_cache, table_metadata, namespace) orelse {
             return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
         };
 
@@ -560,7 +560,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const namespace_id = try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace) orelse {
+        const namespace_id = try sql.lookupEffectiveNamespaceId(self.allocator, &node.conn, &node.stmt_cache, table_metadata, namespace) orelse {
             return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
         };
 

@@ -112,6 +112,8 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 
 Built-in document IDs and schema `references` fields are stored as fixed-width `BLOB(16)` values and kept as packed 16-byte IDs throughout the storage engine.
 
+Document identity is `id` alone. Each collection/table expects `id` to be globally unique within that collection, and generated DDL uses `PRIMARY KEY(id)`. `namespace_id` is retained on every row for namespace routing and authorization predicates, but it is not part of the document key.
+
 ### System Tables
 The storage engine maintains internal system tables that are not defined in `schema.json`:
 - `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
@@ -149,6 +151,11 @@ const SchemaParser = struct {
         
         const is_users = std.mem.eql(u8, name, "users");
         const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
+        if (is_users) {
+            if (required) |req| if (req.array.items.len > 0) {
+                return error.InvalidSchema; // Identity rows are auto-created before profile fields exist.
+            };
+        }
         
         // Always include uniform system columns.
         try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
@@ -248,6 +255,7 @@ const DDLGenerator = struct {
 At write/query time, `namespaced` controls the namespace predicate, not the table shape:
 - For `namespaced: true`, writes store the active namespace ID and queries use `namespace_id = :active_namespace_id`.
 - For `namespaced: false`, writes store namespace ID `0` and queries use `namespace_id = 0`.
+- In both modes, `id` remains collection-wide unique. The engine does not support namespace-local duplicate IDs via a composite `(namespace_id, id)` key.
 
 ### Relational Features
 - **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.
