@@ -14,6 +14,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
+const schema_mod = @import("schema_manager.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
@@ -103,18 +104,27 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
         );
 
-        const schema_path = config.schema_file;
         {
-            std.log.info("Loading schema from: {s}", .{schema_path});
-            const json_text = std.fs.cwd().readFileAlloc(
-                self.memory_strategy.generalAllocator(),
-                schema_path,
-                10 * 1024 * 1024,
-            ) catch |err| {
-                std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
-                return err;
+            const json_text = if (config.schema_content) |content|
+                content
+            else blk: {
+                const schema_path = config.schema_file;
+                std.log.info("Loading schema from: {s}", .{schema_path});
+                const loaded = std.fs.cwd().readFileAlloc(
+                    self.memory_strategy.generalAllocator(),
+                    schema_path,
+                    10 * 1024 * 1024,
+                ) catch |err| {
+                    if (err == error.FileNotFound) {
+                        std.log.info("Schema file '{s}' not found, using implicit users-only schema", .{schema_path});
+                        break :blk schema_mod.implicit_users_schema_json;
+                    }
+                    std.log.err("Failed to read schema file '{s}': {}", .{ schema_path, err });
+                    return err;
+                };
+                break :blk loaded;
             };
-            defer self.memory_strategy.generalAllocator().free(json_text);
+            defer if (config.schema_content == null and json_text.ptr != schema_mod.implicit_users_schema_json.ptr) self.memory_strategy.generalAllocator().free(json_text);
 
             try self.schema_manager.init(self.memory_strategy.generalAllocator(), json_text);
             errdefer self.schema_manager.deinit();

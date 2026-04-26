@@ -108,9 +108,9 @@ The first segment of a path (e.g., `tasks`) maps to a database table. This simpl
 
 > [!IMPORTANT]
 > **Mandatory Schema Architecture**: ZyncBase enforces a strict-schema architecture. 
-> 1. A valid JSON schema file is **mandatory** for server startup.
-> 2. The server will fail to initialize if no schema is provided or if the schema is invalid.
-> 3. All database tables and columns are strictly derived from the schema; ad-hoc table creation is prohibited.
+> 1. All user database tables and columns are strictly derived from `schema.json`; ad-hoc table creation is prohibited.
+> 2. If `schema.json` is omitted or missing, the server boots with a synthesized users-only schema.
+> 3. The server fails to initialize if a provided schema exists but is invalid.
 > 4. Dynamic/schemaless storage fallbacks (like a global KV store) have been removed in favor of typed relational integrity.
 
 ### Relational Patterns
@@ -131,7 +131,8 @@ From a declarative schema, ZyncBase generates optimized DDL:
 -- Projects table
 CREATE TABLE projects (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL,
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
     name TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -141,7 +142,8 @@ CREATE TABLE projects (
 -- Tasks table with foreign key
 CREATE TABLE tasks (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL,
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
     title TEXT,
     status TEXT,
     priority INTEGER,
@@ -157,7 +159,7 @@ CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_projectId ON tasks(projectId);
 ```
 
-Public SDKs still expose IDs and references as strings, but the core system stores and transports them as packed 16-byte values.
+Public SDKs still expose IDs and references as strings, but the core system stores and transports them as packed 16-byte values. `id` is collection-wide unique and remains the sole primary key; `namespace_id` is an integer routing/filtering column, not part of a composite document key.
 
 ---
 

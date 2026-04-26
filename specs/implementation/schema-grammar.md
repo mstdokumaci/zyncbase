@@ -17,19 +17,51 @@ This document defines the formal grammar and property specification for `schema.
 |:---|:---:|:---|
 | `fields` | `object` | Map of field names to field definitions. |
 | `required` | `array<string>` | List of required field names (supports dot notation for nested fields). |
+| `namespaced` | `boolean` | If `true` (default), rows are scoped to the active namespace. If `false`, rows are stored under reserved global namespace ID `0` and are visible across namespaces. The `users` collection defaults to `false`. |
 
 ### Table Name Constraints
 
 - Must be a valid JSON key.
 - Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
 - Must not contain `__`.
+- Must not start with `_zync_`; that prefix is reserved for internal system tables.
+- The name `users` is reserved for the hybrid system collection.
 - SQLite reserved keywords are allowed because ZyncBase quotes identifiers in generated SQL.
+
+### Reserved System Collections
+
+#### `users`
+The `users` collection is a special hybrid system table. It is always present in the database to map external identity claims (e.g., Auth0 `sub`) to internal `BLOB(16)` UUIDv7s, ensuring `owner_id` on all tables remains a compact binary format.
+
+**Implicit JSON:**
+```json
+{
+  "users": {
+    "namespaced": false,
+    "fields": {}
+  }
+}
+```
+
+- **Implicitly Global:** It defaults to `"namespaced": false`, which stores rows under reserved global namespace ID `0`.
+- **Special Columns:** It possesses an implicitly created `external_id` (`TEXT`) column. Its `id` column is a standard `BLOB(16)` UUIDv7, and its `owner_id` column is always equal to `id`.
+- **Identity Key:** The identity mapping is unique by `(namespace_id, external_id)`. With the default global mode this is effectively global uniqueness; with `"namespaced": true`, the same external identity string may resolve to different internal users in different namespaces.
+- **Auto-Upsert:** When a WebSocket authenticates, Zig looks up the JWT's `sub` in `external_id` for the applicable namespace, generating a new UUIDv7 row if missing. This ensures any relational Foreign Keys to `users.id` are always satisfied.
+- **Namespaced Users:** If `users` is configured with `"namespaced": true`, `$session.userId` is resolved for the active namespace. Namespace switching requires re-resolving or re-authenticating the session so ownership checks continue to use the namespace-local user ID.
+- **Extensible:** You can define `users` in your `schema.json` to append optional custom fields (like `avatar` or `language`). Custom `users` fields cannot be listed in `required`, because identity rows are auto-created before profile data exists. If omitted entirely, the engine treats it as the implicit JSON above.
 
 ---
 
 ## Field Definition
 
 A field definition MUST contain a `type` property.
+
+### Field Name Constraints
+
+- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
+- Must not contain `__`; this separator is reserved for flattened nested object paths.
+- Must not use reserved system field names: `id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`.
+- In the `users` collection, must not use `external_id`; it is reserved for identity-provider subject mapping.
 
 ### Supported Types
 
@@ -76,7 +108,7 @@ For any field with `type: "array"`, ZyncBase enforces canonical sorted-set behav
 ZyncBase uses a **flat relational storage engine**. Nested objects are logically grouped in the schema but flattened in the database.
 
 - **Separator**: `__` (double underscore).
-- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*` and cannot contain `__`.
+- **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*`, cannot contain `__`, and cannot use reserved system field names.
 - **Recursion**: Unlimited depth is supported for `object` types with their own `fields` property.
 
 Example:
@@ -92,7 +124,11 @@ Flattens to SQLite column: `profile__userId TEXT`.
 
 > *Note: On the wire, these flattened string names are fully bypassed. The SDK maps them transparently into integer `field_index` routing payloads.*
 
-> *Document IDs*: Every table has a built-in `id` system column stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK is responsible for converting between user-facing string IDs (UUIDv7 or strict short IDs) and the packed 16-byte representation.
+> *System Columns*: Every storage table automatically includes five built-in system columns:
+> - `id`: Stored internally as `BLOB(16)` and transmitted over the wire as MessagePack `bin(16)`. The SDK converts user-facing string IDs (UUIDv7) to this representation. It is the collection-wide document identity (`PRIMARY KEY(id)`); `namespace_id` is not part of the document key.
+> - `namespace_id`: Stored as `INTEGER` (a logical foreign key to the internal `_zync_namespaces` table). Namespaced tables use the active namespace ID; global tables (`"namespaced": false`) use reserved global namespace ID `0`.
+> - `owner_id`: Stored internally as `BLOB(16)`. Automatically populated by the server with `$session.userId` upon document creation. For `users`, `owner_id` is equal to `id`.
+> - `created_at` & `updated_at`: Stored as `INTEGER` timestamps.
 
 ---
 

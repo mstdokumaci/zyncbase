@@ -32,8 +32,9 @@ test "schema_parser: object field flattening" {
         const schema = try parser.parse(buf.items);
         defer parser.deinit(schema);
 
-        try std.testing.expectEqual(@as(usize, 1), schema.tables.len);
-        const table = schema.tables[0];
+        try std.testing.expectEqual(@as(usize, 2), schema.tables.len);
+        const table = if (std.mem.eql(u8, schema.tables[0].name, "t")) schema.tables[0] else schema.tables[1];
+        try std.testing.expectEqualStrings("t", table.name);
         try std.testing.expectEqual(n_props, table.fields.len);
 
         for (0..n_props) |pi| {

@@ -27,7 +27,8 @@ pub const OnDelete = enum { cascade, restrict, set_null };
 
 pub const built_in_columns = [_]Field{
     .{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
-    .{ .name = "namespace_id", .sql_type = .text, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "namespace_id", .sql_type = .integer, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "owner_id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
     .{ .name = "created_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
     .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
@@ -35,6 +36,8 @@ pub const built_in_columns = [_]Field{
 /// Fixed positions of leading system columns in TableMetadata.fields.
 pub const id_field_index: usize = 0;
 pub const namespace_id_field_index: usize = 1;
+pub const owner_id_field_index: usize = 2;
+pub const first_user_field_index: usize = 3;
 
 pub fn getSystemColumn(name: []const u8) ?Field {
     for (built_in_columns) |col| {
@@ -90,6 +93,8 @@ pub const Field = struct {
 pub const Table = struct {
     name: []const u8,
     fields: []const Field,
+    namespaced: bool = true,
+    is_users_table: bool = false,
 
     pub fn clone(self: Table, allocator: Allocator) !Table {
         const cloned_name = try allocator.dupe(u8, self.name);
@@ -109,6 +114,8 @@ pub const Table = struct {
         return .{
             .name = cloned_name,
             .fields = cloned_fields,
+            .namespaced = self.namespaced,
+            .is_users_table = self.is_users_table,
         };
     }
 };
@@ -121,16 +128,17 @@ pub const TableMetadata = struct {
 
     pub fn init(allocator: Allocator, table: *const Table, table_index: usize) !TableMetadata {
         // Canonical order:
-        // id, namespace_id, <declared schema fields>, created_at, updated_at
-        const total = table.fields.len + 4;
+        // id, namespace_id, owner_id, <declared schema fields>, created_at, updated_at
+        const total = table.fields.len + built_in_columns.len;
         var fields = try allocator.alloc(Field, total);
         errdefer allocator.free(fields);
 
         fields[id_field_index] = built_in_columns[id_field_index];
         fields[namespace_id_field_index] = built_in_columns[namespace_id_field_index];
-        @memcpy(fields[2 .. 2 + table.fields.len], table.fields);
-        fields[2 + table.fields.len] = built_in_columns[2];
-        fields[2 + table.fields.len + 1] = built_in_columns[3];
+        fields[owner_id_field_index] = built_in_columns[owner_id_field_index];
+        @memcpy(fields[first_user_field_index .. first_user_field_index + table.fields.len], table.fields);
+        fields[first_user_field_index + table.fields.len] = built_in_columns[3];
+        fields[first_user_field_index + table.fields.len + 1] = built_in_columns[4];
 
         var field_index_map = std.StringHashMap(usize).init(allocator);
         errdefer field_index_map.deinit();
@@ -233,6 +241,16 @@ pub const SchemaMetadata = struct {
     }
 };
 
+pub const global_namespace_id: i64 = 0;
+pub const global_namespace_name = "$global";
+pub const implicit_users_schema_json =
+    \\{"version":"1.0.0","store":{"users":{"namespaced":false,"fields":{}}}}
+;
+
+pub fn effectiveNamespaceLabel(table_metadata: *const TableMetadata, namespace: []const u8) []const u8 {
+    return if (table_metadata.table.namespaced) namespace else global_namespace_name;
+}
+
 // ─── SchemaParser ────────────────────────────────────────────────────────────
 
 pub const SchemaParser = struct {
@@ -267,10 +285,13 @@ pub const SchemaParser = struct {
             tables.deinit(self.allocator);
         }
 
+        var has_users_table = false;
         var store_iter = store_val.object.iterator();
         while (store_iter.next()) |table_entry| {
             const table_name_raw = table_entry.key_ptr.*;
             if (!isValidSchemaIdentifier(table_name_raw)) return error.InvalidTableName;
+            const is_users_table = std.mem.eql(u8, table_name_raw, "users");
+            if (is_users_table) has_users_table = true;
 
             const table_name = try self.allocator.dupe(u8, table_name_raw);
             errdefer self.allocator.free(table_name);
@@ -282,10 +303,15 @@ pub const SchemaParser = struct {
             var def_iter = table_def.object.iterator();
             while (def_iter.next()) |kv| {
                 const key = kv.key_ptr.*;
-                if (!std.mem.eql(u8, key, "fields") and !std.mem.eql(u8, key, "required")) {
+                if (!std.mem.eql(u8, key, "fields") and !std.mem.eql(u8, key, "required") and !std.mem.eql(u8, key, "namespaced")) {
                     std.log.warn("schema: unknown key \"{s}\" in table \"{s}\" definition — ignoring", .{ key, table_name });
                 }
             }
+
+            const namespaced = if (table_def.object.get("namespaced")) |namespaced_val| blk: {
+                if (namespaced_val != .bool) return error.InvalidTableDefinition;
+                break :blk namespaced_val.bool;
+            } else !is_users_table;
 
             // required list
             var required_set = std.StringHashMap(void).init(self.allocator);
@@ -299,6 +325,7 @@ pub const SchemaParser = struct {
                 if (req_val == .array) {
                     for (req_val.array.items) |item| {
                         if (item == .string) {
+                            if (is_users_table) return error.InvalidTableDefinition;
                             const normalized = try std.mem.replaceOwned(u8, self.allocator, item.string, ".", "__");
                             try required_set.put(normalized, {});
                         }
@@ -314,12 +341,14 @@ pub const SchemaParser = struct {
             }
 
             if (table_def.object.get("fields")) |fields_val| {
-                try self.parseFields(fields_val, &fields, &required_set, "");
+                try self.parseFields(fields_val, &fields, &required_set, "", is_users_table);
             }
 
             try tables.append(self.allocator, .{
                 .name = table_name,
                 .fields = try fields.toOwnedSlice(self.allocator),
+                .namespaced = namespaced,
+                .is_users_table = is_users_table,
             });
 
             // Clean up normalized required names
@@ -327,6 +356,17 @@ pub const SchemaParser = struct {
             while (req_it.next()) |k| {
                 self.allocator.free(k.*);
             }
+        }
+
+        if (!has_users_table) {
+            const users_name = try self.allocator.dupe(u8, "users");
+            errdefer self.allocator.free(users_name);
+            try tables.append(self.allocator, .{
+                .name = users_name,
+                .fields = try self.allocator.alloc(Field, 0),
+                .namespaced = false,
+                .is_users_table = true,
+            });
         }
 
         const tables_slice = try tables.toOwnedSlice(self.allocator);
@@ -342,6 +382,7 @@ pub const SchemaParser = struct {
         fields: *std.ArrayListUnmanaged(Field),
         required_set: *std.StringHashMap(void),
         prefix: []const u8,
+        reserve_external_id: bool,
     ) !void {
         if (fields_val != .object) return error.InvalidSchema;
 
@@ -358,6 +399,8 @@ pub const SchemaParser = struct {
 
             // Validate field name before allocating: reject invalid SQL identifiers and the internal separator.
             if (!isValidSchemaIdentifier(field_name)) return error.InvalidFieldName;
+            if (isSystemColumn(field_name)) return error.ReservedFieldName;
+            if (reserve_external_id and std.mem.eql(u8, field_name, "external_id")) return error.ReservedFieldName;
 
             // Generate the flattened full name
             const full_name = if (prefix.len > 0)
@@ -370,7 +413,7 @@ pub const SchemaParser = struct {
 
             if (std.mem.eql(u8, type_str, "object")) {
                 const nested_fields = field_def.object.get("fields") orelse return error.MissingFields;
-                try self.parseFields(nested_fields, fields, required_set, full_name);
+                try self.parseFields(nested_fields, fields, required_set, full_name, reserve_external_id);
                 self.allocator.free(full_name); // prefix is no longer needed after recursion
             } else {
                 // Leaf field
@@ -443,6 +486,7 @@ pub const SchemaParser = struct {
             if (ti > 0) try buf.append(self.allocator, ',');
             try writeJsonString(&buf, self.allocator, table.name);
             try buf.appendSlice(self.allocator, ":{");
+            if (!table.namespaced) try buf.appendSlice(self.allocator, "\"namespaced\":false,");
             try self.printObjectContent(&buf, table.fields, "");
             try buf.append(self.allocator, '}');
         }

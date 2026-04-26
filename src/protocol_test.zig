@@ -8,17 +8,19 @@ const storage_types = @import("storage_engine/types.zig");
 const tth = @import("typed_test_helpers.zig");
 
 fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, namespace: []const u8, name: []const u8) !storage_types.TypedRow {
-    const values = try allocator.alloc(storage_types.TypedValue, 5);
+    const values = try allocator.alloc(storage_types.TypedValue, 6);
     errdefer allocator.free(values);
 
     values[0] = try tth.valTextOwned(allocator, id);
     errdefer values[0].deinit(allocator);
-    values[1] = try tth.valTextOwned(allocator, namespace);
-    errdefer values[1].deinit(allocator);
-    values[2] = try tth.valTextOwned(allocator, name);
+    _ = namespace;
+    values[1] = tth.valInt(1);
+    values[2] = try tth.valTextOwned(allocator, "test-owner");
     errdefer values[2].deinit(allocator);
-    values[3] = tth.valInt(0);
+    values[3] = try tth.valTextOwned(allocator, name);
+    errdefer values[3].deinit(allocator);
     values[4] = tth.valInt(0);
+    values[5] = tth.valInt(0);
 
     return .{ .values = values };
 }
@@ -226,12 +228,12 @@ test "encodeSetDeltaSuffix: set operation" {
     const value = try op_obj.mapGet("value");
     try testing.expect(value != null);
     try testing.expect(value.? == .map);
-    // Integer key 0 = id field, key 1 = namespace_id, key 2 = name
+    // Integer key 0 = id field, key 1 = namespace_id, key 2 = owner_id, key 3 = name
     // Verify the map has entries with integer keys
     var val_it = value.?.map.iterator();
     var found_entries: usize = 0;
     while (val_it.next()) |_| found_entries += 1;
-    try testing.expectEqual(@as(usize, 5), found_entries);
+    try testing.expectEqual(@as(usize, 6), found_entries);
 }
 
 test "encodeDeleteDeltaSuffix: delete operation" {

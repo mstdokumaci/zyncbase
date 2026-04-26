@@ -12,12 +12,14 @@ interface MockTask {
  * Wait for a store.listen callback to satisfy a predicate within a timeout.
  * Resolves with the value when the predicate returns truthy, rejects on timeout.
  */
-function waitForListen<T>(
+async function waitForListen<T>(
 	client: ZyncBaseClient,
+	namespace: string,
 	path: string[],
 	predicate: (val: MockTask) => T | null | undefined | false,
 	timeoutMs = 2000,
 ): Promise<T> {
+	await client.setNamespace(namespace);
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			unlisten();
@@ -57,12 +59,16 @@ export async function run(port: number = 3000) {
 
 		// 2. Client B listens for task 1 via store.listen (bi-directional sync: A sets → B fires)
 		console.log("Client B waiting for task 1 via store.listen...");
-		const task1 = await waitForListen(clientB, ["tasks", "1"], (val) =>
-			val?.title === "A's Task" &&
-			Array.isArray(val.tags) &&
-			val.tags.includes("urgent")
-				? val
-				: null,
+		const task1 = await waitForListen(
+			clientB,
+			namespace,
+			["tasks", "1"],
+			(val) =>
+				val?.title === "A's Task" &&
+				Array.isArray(val.tags) &&
+				val.tags.includes("urgent")
+					? val
+					: null,
 		);
 		console.log("Client B received task 1:", task1);
 
@@ -75,12 +81,16 @@ export async function run(port: number = 3000) {
 
 		// 4. Client A listens for task 2 via store.listen (bi-directional sync: B sets → A fires)
 		console.log("Client A waiting for task 2 via store.listen...");
-		const task2 = await waitForListen(clientA, ["tasks", "2"], (val) =>
-			val?.title === "B's Task" &&
-			Array.isArray(val.tags) &&
-			val.tags.includes("work")
-				? val
-				: null,
+		const task2 = await waitForListen(
+			clientA,
+			namespace,
+			["tasks", "2"],
+			(val) =>
+				val?.title === "B's Task" &&
+				Array.isArray(val.tags) &&
+				val.tags.includes("work")
+					? val
+					: null,
 		);
 		console.log("Client A received task 2:", task2);
 
@@ -93,11 +103,15 @@ export async function run(port: number = 3000) {
 			must_be_complete: { before: beforeTs, after: afterTs },
 		});
 
-		const task3 = await waitForListen(clientB, ["tasks", "3"], (val) =>
-			val?.must_be_complete?.before === beforeTs &&
-			val?.must_be_complete?.after === afterTs
-				? val
-				: null,
+		const task3 = await waitForListen(
+			clientB,
+			namespace,
+			["tasks", "3"],
+			(val) =>
+				val?.must_be_complete?.before === beforeTs &&
+				val?.must_be_complete?.after === afterTs
+					? val
+					: null,
 		);
 		console.log(
 			"Client B received task 3 with nested fields:",
@@ -113,8 +127,11 @@ export async function run(port: number = 3000) {
 			newAfterTs,
 		);
 
-		const finalTask3 = await waitForListen(clientA, ["tasks", "3"], (val) =>
-			val?.must_be_complete?.after === newAfterTs ? val : null,
+		const finalTask3 = await waitForListen(
+			clientA,
+			namespace,
+			["tasks", "3"],
+			(val) => (val?.must_be_complete?.after === newAfterTs ? val : null),
 		);
 		console.log(
 			"Client A received field-level update for task 3 with nested fields:",

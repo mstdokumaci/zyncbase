@@ -76,23 +76,6 @@ Main server configuration file.
   
   "dataDir": "./data",
   
-  "namespaces": { // [PLANNED]
-    "patterns": [
-      {
-        "pattern": "public",
-        "description": "Default public namespace"
-      },
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      },
-      {
-        "pattern": "tenant:*",
-        "description": "Tenant-isolated data"
-      }
-    ]
-  },
-  
   "security": {
     "allowedOrigins": [
       "https://yourdomain.com",
@@ -136,11 +119,11 @@ Server network configuration.
 
 #### `schema`
 
-Path to JSON Schema file and migration settings.
+Path to JSON Schema file and migration settings. If omitted or the configured file is missing, the server boots with the implicit users-only schema; if a provided schema exists but is invalid, startup fails.
 
 ```json
 {
-  "schema": { // [PLANNED]
+  "schema": {
     "file": "./schema.json",
     "version": "1.0.0",
     "autoMigrate": true,
@@ -172,12 +155,9 @@ Or simple string format:
   - Major version changes require migrations
   - Minor/patch versions can auto-migrate
 
-#### `authorization` [PLANNED] / [UNENFORCED]
+#### `authorization`
 
-Path to the `authorization.json` file.
-
-> [!WARNING]
-> The current engine does not yet enforce authorization rules. The server will boot and operate without rule enforcement even if aspecified.
+Path to the `authorization.json` file. If omitted or the file is missing, the server boots with a safe "public playground" default.
 
 ```json
 {
@@ -199,23 +179,6 @@ Directory for SQLite database and other data files.
 ```json
 {
   "dataDir": "./data"
-}
-```
-
-#### `namespaces` [PLANNED]
-
-Namespace pattern definitions.
-
-```json
-{
-  "namespaces": {
-    "patterns": [
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      }
-    ]
-  }
 }
 ```
 
@@ -273,7 +236,7 @@ Performance tuning.
 Define your data structure using ZyncBase store-based schema format.
 
 > [!IMPORTANT]
-> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`). This sequence is reserved for internal flattening of nested objects. Any schema containing `__` in a field name will be rejected by the server with `error.InvalidFieldName`.
+> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`) or using reserved system field names (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`). The `__` sequence is reserved for internal flattening of nested objects. Invalid names are rejected by the server with `error.InvalidFieldName`.
 
 ### Example: Collaborative Canvas
 
@@ -327,13 +290,34 @@ Define your data structure using ZyncBase store-based schema format.
 }
 ```
 
-### Example: Deeply Nested Fields and Simple Arrays
+### Example: Global Master Data (`namespaced: false`)
+
+```json
+{
+  "version": "1.0.0",
+  "store": {
+    "pricing_tiers": {
+      "namespaced": false,
+      "fields": {
+        "tier_name": { "type": "string" },
+        "monthly_price": { "type": "number" },
+        "features": { "type": "array", "items": "string" }
+      }
+    }
+  }
+}
+```
+
+### Example: The Reserved `users` Collection
+
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps to the external identity token (e.g. Auth0 `sub`), while its `id` column is the internal `BLOB(16)` UUIDv7 used by `owner_id` and foreign keys. You can extend it with optional custom fields:
 
 ```json
 {
   "version": "1.0.0",
   "store": {
     "users": {
+      "namespaced": false,
       "fields": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
@@ -354,12 +338,13 @@ Define your data structure using ZyncBase store-based schema format.
           "type": "array",
           "items": "string"
         }
-      },
-      "required": ["name", "email"]
+      }
     }
   }
 }
 ```
+
+Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as an authenticated connection needs an internal user ID, before application profile data is available.
 
 **What ZyncBase generates (automatic flattening):**
 
@@ -368,7 +353,9 @@ ZyncBase flattens nested objects into column names using a double underscore (`_
 ```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL, -- 0 for the default global users collection
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16), -- equal to id for users
+    external_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     preferences__notifications__email INTEGER, -- Boolean stored as int
@@ -379,7 +366,11 @@ CREATE TABLE users (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
+
+CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
 ```
+
+`id` is the primary key by itself. It is expected to be unique across the whole collection/table; `namespace_id` scopes visibility and identity-provider lookup, but it does not permit duplicate document IDs in different namespaces.
 
 ### Schema Structure
 
@@ -688,18 +679,21 @@ ZyncBase generates:
 ```sql
 CREATE TABLE tasks (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT,
+    namespace_id INTEGER NOT NULL,
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
     title TEXT,
     status TEXT,
     priority INTEGER,
-    created_at INTEGER,
-    updated_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
 
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
 ```
+
+The primary key remains `id`, not `(namespace_id, id)`. Namespace-aware tables still require collection-wide unique document IDs; this keeps references, cursors, caches, and SDK addressing single-key.
 
 ### Auto-Migration (Happy Path)
 
@@ -943,70 +937,77 @@ For detailed migration guides, see the ZyncBase documentation (MIGRATIONS.md was
 
 ## authorization.json
 
-Define authorization rules using a simple expression language.
+Define authorization rules using the declarative JSON condition grammar documented in [Auth Grammar](../implementation/auth-grammar.md). If `authorization.json` is omitted or missing, the server boots with the implicit safe public playground rules from that grammar.
 
 ### Simple Rules
 
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)"
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "tasks",
+      "read": true,
+      "write": {
+        "or": [
+          { "$session.role": { "eq": "admin" } },
+          { "$doc.owner_id": { "eq": "$session.userId" } }
+        ]
       }
     },
     {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role === 'admin'"
-      }
+      "collection": "audit_logs",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": false
     }
-  ],
-  
-  "functions": {
-    "isRoomMember": {
-      "type": "sql",
-      "query": "SELECT 1 FROM room_members WHERE user_id = $1 AND room_id = $2",
-      "params": ["userId", "roomId"]
-    }
-  }
+  ]
 }
 ```
 
-### Expression Language
+### Condition Grammar
 
 **Available variables:**
-- `jwt.*` - Claims from JWT token (e.g., `jwt.userId`, `jwt.tenantId`, `jwt.role`)
-- `namespace.*` - Parsed namespace parts (e.g., `namespace.tenantId`, `namespace.roomId`)
-- `operation` - The operation being performed (`"read"` or `"write"`)
+- `$session.*` - Resolved session context from JWT and/or hooks (e.g., `$session.userId`, `$session.tenantId`, `$session.role`)
+- `$namespace.*` - Parsed namespace parts (e.g., `$namespace.tenant_id`, `$namespace.room_id`)
+- `$path` - Target table/collection name
+- `$value.*` - Incoming mutation payload, available for writes
+- `$doc.*` - Same-row SQLite columns, injected into SQL for reads and existing-row updates/removes
 
 **Operators:**
-- `===`, `!==` - Equality
-- `&&`, `||` - Logical AND/OR
-- `in` - Check if value is in array
-- `!` - Logical NOT
+- `eq`, `ne` - Equality
+- `in`, `notIn` - Set membership
+- `contains` - Array/string containment
+- `and`, `or` - Explicit logical composition; object fields compose with implicit AND
 
 **Examples:**
 
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "public:*",
-      "allow": {
-        "read": "true",
-        "write": "jwt.userId !== null"
-      }
+      "pattern": "public",
+      "storeFilter": true,
+      "presenceRead": true,
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
     },
     {
-      "namespace": "private:*",
-      "allow": {
-        "read": "isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "isRoomMember(jwt.userId, namespace.roomId) && jwt.role in ['admin', 'editor']"
-      }
+      "collection": "admin_notes",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": { "$session.role": { "eq": "admin" } }
     }
   ]
 }
@@ -1030,7 +1031,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
   // Use the same Query API as your frontend
   const memberships = await client.store.query('room_members', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       roomId: { eq: roomId }
     }
   });
@@ -1041,7 +1042,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
 export async function hasPermission({ session, namespace, path, value }) {
   const permissions = await client.store.query('permissions', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       permission: { eq: value.permission }
     }
   });
@@ -1053,15 +1054,19 @@ export async function hasPermission({ session, namespace, path, value }) {
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "paths": [
-        {
-          "path": "messages.*",
-          "write": { "hook": "isRoomMember" }
-        }
-      ]
+      "pattern": "room:{room_id}",
+      "storeFilter": { "hook": "isRoomMember" },
+      "presenceRead": { "hook": "isRoomMember" },
+      "presenceWrite": { "hook": "isRoomMember" }
+    }
+  ],
+  "store": [
+    {
+      "collection": "messages",
+      "read": { "hook": "isRoomMember" },
+      "write": { "hook": "isRoomMember" }
     }
   ]
 }
@@ -1152,13 +1157,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId",
-        "write": "jwt.userId"
-      }
+      "pattern": "room:{room_id}",
+      "storeFilter": { "$session.userId": { "ne": null } },
+      "presenceRead": true,
+      "presenceWrite": { "$session.userId": { "ne": null } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "elements",
+      "read": true,
+      "write": { "$session.userId": { "ne": null } }
     }
   ]
 }
@@ -1186,13 +1197,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 **authorization.json:**
 ```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role in ['admin', 'editor']"
-      }
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ]
 }

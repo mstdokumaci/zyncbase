@@ -33,23 +33,6 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   
   "dataDir": "./data",
   
-  "namespaces": { // [PLANNED]
-    "patterns": [
-      {
-        "pattern": "public",
-        "description": "Default public namespace"
-      },
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      },
-      {
-        "pattern": "tenant:*",
-        "description": "Tenant-isolated data"
-      }
-    ]
-  },
-  
   "security": {
     "allowedOrigins": [
       "https://yourdomain.com",
@@ -81,9 +64,9 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     "host": "0.0.0.0"          // Host to bind to
   }
 }
-````schema Path JSON migration settings```json
+````schema Path JSON file migration settings If omitted file missing server boots users-only schema schema invalid startup fails```json
 {
-  "schema": { // [PLANNED]
+  "schema": {
     "file": "./schema.json",
     "version": "1.0.0",
     "autoMigrate": true,
@@ -94,24 +77,13 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 {
   "schema": "./schema.json"
 }
-```**Migration `autoMigrate `true Auto-migrate all changes"additive-only auto-migrate additive changes `false Require migrations `allowDestructive `true Allow destructive changes with confirmation `false` Block destructive changes `version` Semantic version schema Major changes require migrations Minor/patch versions auto-migrate `authorization` [PLANNED [UNENFORCED] `authorization.json file current engine enforce authorization rules server boot without rule enforcement```json
+```**Migration `autoMigrate `true Auto-migrate all changes"additive-only auto-migrate additive changes `false Require migrations `allowDestructive `true Allow destructive changes with confirmation `false` Block destructive changes `version Semantic version schema Major changes require migrations Minor/patch versions auto-migrate `authorization.json file If omitted missing server boots safe "public playground default```json
 {
   "authorization": "./authorization.json"
 }
 ```See [README API overview entry point API Reference-api.md use store configured [Presence API Reference-api.md presence configuration context `dataDir` Directory SQLite database data files```json
 {
   "dataDir": "./data"
-}
-````namespaces Namespace definitions```json
-{
-  "namespaces": {
-    "patterns": [
-      {
-        "pattern": "room:*",
-        "description": "Collaborative rooms"
-      }
-    ]
-  }
 }
 ````security settings```json
 {
@@ -142,7 +114,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     "statementCacheSize": 100
   }
 }
-```schema.json Define data structure ZyncBase schema format **Naming Restriction** Field names double underscore sequence (`__`). sequence internal flattening nested objects schema `__` rejected `error.InvalidFieldName` Example Collaborative Canvas```json
+```schema.json Define data structure ZyncBase schema format **Naming Restriction** Field names forbidden double underscore sequence`__` reserved system field names `__` sequence reserved internal flattening nested objects Invalid names `error.InvalidFieldName` Example Collaborative Canvas```json
 {
   "version": "1.0.0",
   "store": {
@@ -186,11 +158,26 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Nested Fields Simple Arrays```json
+```Global Master Data false```json
+{
+  "version": "1.0.0",
+  "store": {
+    "pricing_tiers": {
+      "namespaced": false,
+      "fields": {
+        "tier_name": { "type": "string" },
+        "monthly_price": { "type": "number" },
+        "features": { "type": "array", "items": "string" }
+      }
+    }
+  }
+}
+```Reserved `users` Collection hybrid table managed by ZyncBase defaults to"namespaced false `external_id column maps external identity token `id` column internal `BLOB(16) UUIDv7 `owner_id foreign keys extend with custom fields```json
 {
   "version": "1.0.0",
   "store": {
     "users": {
+      "namespaced": false,
       "fields": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
@@ -219,7 +206,9 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 ```ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries natural document structure```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT NOT NULL,
+    namespace_id INTEGER NOT NULL, -- 0 for the default global users collection
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16), -- equal to id for users
+    external_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     preferences__notifications__email INTEGER, -- Boolean stored as int
@@ -230,6 +219,8 @@ CREATE TABLE users (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
+
+CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
 ```Schema ZyncBase format Define data store structure```json
 {
   "version": "1.0.0",
@@ -438,12 +429,13 @@ ZyncBase generates:
 ```sql
 CREATE TABLE tasks (
     id BLOB NOT NULL CHECK(length(id) = 16),
-    namespace_id TEXT,
+    namespace_id INTEGER NOT NULL,
+    owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
     title TEXT,
     status TEXT,
     priority INTEGER,
-    created_at INTEGER,
-    updated_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     PRIMARY KEY (id)
 );
 
@@ -615,49 +607,54 @@ $ zyncbase migrate up
 $ zyncbase-server start
 ✓ Migrations applied
 ✓ Server started
-```migration guides ZyncBase.md removed aspirational authorization.json Define authorization rules simple expression language Simple Rules```json
+```migration guides ZyncBase documentation.md removed aspirational authorization.json Define rules declarative JSON condition grammar [Auth Grammar/auth-grammar `authorization.json omitted missing server boots safe playground rules Simple Rules```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "jwt.userId && isRoomMember(jwt.userId, namespace.roomId)"
-      }
-    },
-    {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role === 'admin'"
-      }
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ],
-  
-  "functions": {
-    "isRoomMember": {
-      "type": "sql",
-      "query": "SELECT 1 FROM room_members WHERE user_id = $1 AND room_id = $2",
-      "params": ["userId", "roomId"]
-    }
-  }
-}
-```Expression Language variables `jwt.` Claims JWT token.userId.tenantId.role `namespace.` Parsed namespace parts.tenantId.roomId `operation` operation"read or"write `===` `!==` - Equality `&&` `||` Logical AND/OR `in` Check value array `!` - Logical **Examples```json
-{
-  "rules": [
+  "store": [
     {
-      "namespace": "public:*",
-      "allow": {
-        "read": "true",
-        "write": "jwt.userId !== null"
+      "collection": "tasks",
+      "read": true,
+      "write": {
+        "or": [
+          { "$session.role": { "eq": "admin" } },
+          { "$doc.owner_id": { "eq": "$session.userId" } }
+        ]
       }
     },
     {
-      "namespace": "private:*",
-      "allow": {
-        "read": "isRoomMember(jwt.userId, namespace.roomId)",
-        "write": "isRoomMember(jwt.userId, namespace.roomId) && jwt.role in ['admin', 'editor']"
-      }
+      "collection": "audit_logs",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": false
+    }
+  ]
+}
+```Condition Grammar variables$session. Resolved session context JWT hooks.userId.tenantId.role$namespace. Parsed parts_id_id$path` Target table/collection name$value. Incoming mutation payload writes$doc.` Same-row SQLite columns injected SQL reads updates/removes **Operators `eq` `ne` Equality `in` `notIn` Set membership `contains` Array/string containment `and` `or` Explicit logical composition object fields implicit```json
+{
+  "namespaces": [
+    {
+      "pattern": "public",
+      "storeFilter": true,
+      "presenceRead": true,
+      "presenceWrite": true
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$doc.owner_id": { "eq": "$session.userId" } }
+    },
+    {
+      "collection": "admin_notes",
+      "read": { "$session.role": { "eq": "admin" } },
+      "write": { "$session.role": { "eq": "admin" } }
     }
   ]
 }
@@ -674,7 +671,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
   // Use the same Query API as your frontend
   const memberships = await client.store.query('room_members', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       roomId: { eq: roomId }
     }
   });
@@ -685,7 +682,7 @@ export async function isRoomMember({ session, namespace, path, value }) {
 export async function hasPermission({ session, namespace, path, value }) {
   const permissions = await client.store.query('permissions', {
     where: { 
-      userId: { eq: session.sub },
+      userId: { eq: session.userId },
       permission: { eq: value.permission }
     }
   });
@@ -694,15 +691,19 @@ export async function hasPermission({ session, namespace, path, value }) {
 }
 ```.json```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "paths": [
-        {
-          "path": "messages.*",
-          "write": { "hook": "isRoomMember" }
-        }
-      ]
+      "pattern": "room:{room_id}",
+      "storeFilter": { "hook": "isRoomMember" },
+      "presenceRead": { "hook": "isRoomMember" },
+      "presenceWrite": { "hook": "isRoomMember" }
+    }
+  ],
+  "store": [
+    {
+      "collection": "messages",
+      "read": { "hook": "isRoomMember" },
+      "write": { "hook": "isRoomMember" }
     }
   ]
 }
@@ -769,13 +770,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 }
 ```.json```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "room:*",
-      "allow": {
-        "read": "jwt.userId",
-        "write": "jwt.userId"
-      }
+      "pattern": "room:{room_id}",
+      "storeFilter": { "$session.userId": { "ne": null } },
+      "presenceRead": true,
+      "presenceWrite": { "$session.userId": { "ne": null } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "elements",
+      "read": true,
+      "write": { "$session.userId": { "ne": null } }
     }
   ]
 }
@@ -793,13 +800,19 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 }
 ```.json```json
 {
-  "rules": [
+  "namespaces": [
     {
-      "namespace": "tenant:*",
-      "allow": {
-        "read": "jwt.tenantId === namespace.tenantId",
-        "write": "jwt.tenantId === namespace.tenantId && jwt.role in ['admin', 'editor']"
-      }
+      "pattern": "tenant:{tenant_id}",
+      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "*",
+      "read": true,
+      "write": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ]
 }

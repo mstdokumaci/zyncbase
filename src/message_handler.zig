@@ -14,6 +14,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const Connection = @import("connection.zig").Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
+const schema_mod = @import("schema_manager.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
@@ -181,7 +182,7 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(arena_allocator, msg_info.id, parsed);
+            return try self.handleStoreSet(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
             return try self.handleStoreSubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreUnsubscribe")) {
@@ -236,6 +237,7 @@ pub const MessageHandler = struct {
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
+        conn: *Connection,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
@@ -254,11 +256,13 @@ pub const MessageHandler = struct {
             break :blk fi;
         } else null;
         const value = req.value orelse return error.MissingRequiredFields;
+        const owner_id = conn.user_id orelse "anonymous";
 
         try self.store_service.set(
             table_index,
             doc_id_value,
             req.namespace,
+            owner_id,
             arr.len,
             field_index,
             value,
@@ -308,7 +312,8 @@ pub const MessageHandler = struct {
         var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);
         defer qr.deinit(arena_allocator);
 
-        _ = try self.subscription_engine.subscribe(req.namespace, table_index, qr.filter, conn.id, sub_id);
+        const subscription_namespace = schema_mod.effectiveNamespaceLabel(tbl_md, req.namespace);
+        _ = try self.subscription_engine.subscribe(subscription_namespace, table_index, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
         return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);

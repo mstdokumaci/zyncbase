@@ -53,7 +53,7 @@ const StorageLayer = struct {
         return &self.read_pool[reader_idx];
     }
 };
-```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite Type `string` to UTF-8 text `integer 64-bit signed integer `number 64-bit float `boolean` Stored as 0 or 1 `object` Flattened columns `address.city` `address_city TEXT` `array` `BLOB` Stored canonical JSONB value unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs storage engine Array Canonicalization Pipeline schema-defined array fields Validate element against type Reject invalid elements Normalize to sorted unique form Persist canonicalized array value guarantees deterministic on-disk representation read/query semantics for arrays Implementation schema during `StorageEngine initialization ZyncBase strict-schema architecture valid JSON schema for server startup if no schema or invalid database tables columns derived from schema ad-hoc table creation prohibitedDynamic storage global KV store removed typed relational integrity```zig
+```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object` Flattened columns `address.city` `address_city TEXT `array` `BLOB` canonical JSONB value (sorted unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs System Tables storage engine maintains internal system tables not.json_zync_namespaces (id INTEGER KEY TEXT UNIQUE integer routing dynamic namespaces `0` for global namespace client-created/runtime use positive IDs Array Canonicalization Pipeline schema-defined array fields Validate element against type Reject invalid elements Normalize to sorted unique form Persist canonicalized array value guarantees deterministic on-disk representation read/query semantics for arraysImplementation `StorageEngine initialization receives parsed `Schema If `schema.json file omitted missing synthesizes users-only schema before storage initialization Schema ZyncBase enforces strict-schema architecture user database tables columns derived from schema ad-hoc creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing or omitted server boot defined `users collection for data storage mutations to other collections rejected```zig
 const SchemaParser = struct {
     allocator: Allocator,
     
@@ -63,9 +63,17 @@ const SchemaParser = struct {
         
         var fields = ArrayList(Field).init(self.allocator);
         
-        // Always include these fields
-        try fields.append(.{ .name = "id", .type = .text, .required = true, .primary_key = true });
-        try fields.append(.{ .name = "namespace_id", .type = .text, .required = true });
+        const is_users = std.mem.eql(u8, name, "users");
+        const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
+        
+        // Always include uniform system columns.
+        try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
+        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Active namespace or reserved global namespace 0.
+        try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
+        
+        if (is_users) {
+            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .indexed = true });
+        }
         
         // Parse schema fields
         for (fields_obj.object.items) |field_entry| {
@@ -88,6 +96,7 @@ const SchemaParser = struct {
         
         return Table{
             .name = name,
+            .namespaced = namespaced,
             .fields = fields.toOwnedSlice(),
         };
     }
@@ -133,20 +142,24 @@ const DDLGenerator = struct {
             try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "    {s} {s}", .{field.name, self.sqlType(field.type)}));
             if (field.required) try buf.appendSlice(" NOT NULL");
             if (field.primary_key) try buf.appendSlice(" PRIMARY KEY");
+            if (std.meta.hasFn(field, "unique") and field.unique) try buf.appendSlice(" UNIQUE");
             if (i < table.fields.len - 1) try buf.appendSlice(",\n");
         }
         try buf.appendSlice("\n);\n");
         
         // Auto-generate indexes
         for (table.fields) |field| {
-            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id")) {
+            if (field.indexed or std.mem.eql(u8, field.name, "namespace_id") or std.mem.eql(u8, field.name, "owner_id") or std.mem.eql(u8, field.name, "external_id")) {
                 try buf.appendSlice(try std.fmt.allocPrint(self.allocator, "CREATE INDEX idx_{s}_{s} ON {s}({s});\n", .{table.name, field.name, table.name, field.name}));
             }
+        }
+        if (std.mem.eql(u8, table.name, "users")) {
+            try buf.appendSlice("CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);\n");
         }
         return buf.toOwnedSlice();
     }
 };
-```Relational Features **Foreign Generated `references Supports `cascade `restrict_null Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current state target schema Execution Strategy```zig
+```write/query `namespaced controls namespace predicate not table shape `namespaced true active namespace ID queries false namespace ID `0_id = 0 Relational Features **Foreign Keys** `references Supports `cascade `restrict_null **FTS5** Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current state target schema Execution Strategy```zig
 const MigrationDetector = struct {
     pub fn detectChanges(old_schema: Schema, new_schema: Schema) ![]Change {
         var changes = ArrayList(Change).init(allocator);

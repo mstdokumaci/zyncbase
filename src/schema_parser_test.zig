@@ -11,7 +11,7 @@ test "schema_parser: parse known fixture" {
         \\{
         \\  "version": "1.0.0",
         \\  "store": {
-        \\    "users": {
+        \\    "people": {
         \\      "fields": {
         \\        "name":    { "type": "string" },
         \\        "age":     { "type": "integer" },
@@ -36,10 +36,10 @@ test "schema_parser: parse known fixture" {
     defer parser.deinit(schema);
 
     try std.testing.expectEqualStrings("1.0.0", schema.version);
-    try std.testing.expectEqual(@as(usize, 1), schema.tables.len);
+    try std.testing.expectEqual(@as(usize, 2), schema.tables.len);
 
     const table = schema.tables[0];
-    try std.testing.expectEqualStrings("users", table.name);
+    try std.testing.expectEqualStrings("people", table.name);
 
     // 5 scalar fields + 2 flattened object fields = 7
     try std.testing.expectEqual(@as(usize, 7), table.fields.len);
@@ -94,7 +94,7 @@ test "schema_parser: print() reconstructs nested objects" {
     var parser = SchemaParser.init(allocator);
 
     const json =
-        \\{"version":"1.0.0","store":{"users":{"fields":{"address":{"type":"object","fields":{"city":{"type":"string"}}},"name":{"type":"string"}},"required":["address","name"]}}}
+        \\{"version":"1.0.0","store":{"profiles":{"fields":{"address":{"type":"object","fields":{"city":{"type":"string"}}},"name":{"type":"string"}},"required":["address","name"]}}}
     ;
 
     const schema = try parser.parse(json);
@@ -107,6 +107,17 @@ test "schema_parser: print() reconstructs nested objects" {
     try std.testing.expect(std.mem.indexOf(u8, printed, "address\":{\"type\":\"object\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "city\":{\"type\":\"string\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "__") == null);
+}
+
+test "schema_parser: users custom fields cannot be required" {
+    const allocator = std.testing.allocator;
+    var parser = SchemaParser.init(allocator);
+
+    const json =
+        \\{"version":"1.0.0","store":{"users":{"fields":{"name":{"type":"string"}},"required":["name"]}}}
+    ;
+
+    try std.testing.expectError(error.InvalidTableDefinition, parser.parse(json));
 }
 
 test "schema_parser: missing file path returns error" {
@@ -127,7 +138,7 @@ test "schema_parser: unknown field types produce hard error" {
         \\  "store": {
         \\    "users": {
         \\      "fields": {
-        \\        "external_id": { "type": "uuid" }
+        \\        "legacy_id": { "type": "uuid" }
         \\      }
         \\    }
         \\  }

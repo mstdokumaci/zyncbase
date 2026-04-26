@@ -263,9 +263,8 @@ test "config: validation - invalid max message size" {
 }
 
 // Logging configuration properties
-// Invariant: File existence validation
-// For any file path in configuration, validation should verify the file exists.
-test "config: file existence validation - schema file not found" {
+// Invariant: Missing schema file falls back to the implicit users-only schema.
+test "config: missing schema file is allowed" {
     const allocator = std.testing.allocator;
 
     var context = try schema_helpers.TestContext.init(allocator, "config-missing-schema");
@@ -281,8 +280,10 @@ test "config: file existence validation - schema file not found" {
     ;
 
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file_path, .data = config_content });
-    const result = ConfigLoader.load(allocator, temp_file_path);
-    try std.testing.expectError(error.SchemaFileNotFound, result);
+    var config = try ConfigLoader.load(allocator, temp_file_path);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("/nonexistent/schema.json", config.schema_file);
+    try std.testing.expect(config.schema_content == null);
 }
 
 test "config: file existence validation - auth rules file not found" {

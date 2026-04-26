@@ -59,7 +59,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     try execMultiSql(&db, allocator, initial_ddl);
 
     // Insert a row
-    try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, title, status, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'My Task', 'open', 0, 0)");
+    try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, owner_id, title, status, created_at, updated_at) VALUES (zeroblob(16), 1, zeroblob(16), 'My Task', 'open', 0, 0)");
 
     // Build change_type migration: status TEXT -> INTEGER
     const changes = try allocator.alloc(migration_detector.Change, 1);
@@ -137,7 +137,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
     try execMultiSql(&db, allocator, ddl);
 
     // Insert a row
-    try execSql(&db, allocator, "INSERT INTO real_table (id, namespace_id, name, created_at, updated_at) VALUES (zeroblob(16), 'ns1', 'test', 0, 0)");
+    try execSql(&db, allocator, "INSERT INTO real_table (id, namespace_id, owner_id, name, created_at, updated_at) VALUES (zeroblob(16), 1, zeroblob(16), 'test', 0, 0)");
 
     // Build a plan with a bad table name that will fail DDL execution
     const changes = try allocator.alloc(migration_detector.Change, 1);

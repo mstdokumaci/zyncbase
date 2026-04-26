@@ -648,3 +648,88 @@ Replace all schema-defined string identifiers with dense integer mappings over t
 - #8 Predictable Performance
 - #1 Real-time First
 - #5 TypeScript-First
+
+---
+
+## ADR-026: Internal Namespace Dictionary (Integer Routing for Namespaces)
+
+**Date**: 2026-04-24  
+**Status**: Accepted  
+
+**Context**:  
+Namespaces are highly dynamic strings (e.g., `tenant:acme:project-123`). Storing these strings directly in SQLite for every row wastes massive amounts of space (up to 300MB per 10 million rows) and makes index lookups much slower than integers. However, pushing namespace mapping to `config.json` is impossible due to their dynamic nature.
+
+**Decision**:  
+Implement a hidden internal system table `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`. Reserve ID `0` for the global namespace (`$global`); client-created/runtime namespaces use positive IDs. The wire protocol remains untouched (the client sends the string namespace once via `StoreSetNamespace` or `PresenceSetNamespace`). The Zig engine implicitly upserts the namespace string into this table on connection, caches the integer ID on the WebSocket connection state, and uses this integer for all SQLite `namespace_id` reads and writes.
+
+**Rationale**:
+- Drastically reduces database size.
+- Significant performance gain on SQLite index lookups.
+- Zero added friction for the developer or the Client SDK (strings are still used externally).
+- Wire protocol remains stateful and optimized (no strings sent per data message).
+
+**Principles Alignment**:  
+- #8 Predictable Performance  
+- #5 TypeScript-First
+
+---
+
+## ADR-027: The `owner_id` System Column and Stateless Authorization Limits
+
+**Date**: 2026-04-24  
+**Status**: Accepted  
+
+**Context**:  
+Need to provide secure multi-tenancy and object-level ownership authorization out of the box without forcing the developer to immediately write Hook Server code. We also need to draw a hard line on the complexity of JSON-based authorization rules to maintain real-time performance.
+
+**Decision**:  
+1. Add `owner_id` as a built-in system column to all storage tables, alongside `id`, `namespace_id`, `created_at`, and `updated_at`.
+2. Store `owner_id` as the same packed `doc_id` representation as `id` (`BLOB(16)` UUIDv7), never as an external identity string.
+3. Implement an implicit `users` system table that maps external string identity claims (e.g., Auth0 `sub`) in its `external_id` (`TEXT`) column to an internal ZyncBase `id` (`BLOB(16)` UUIDv7).
+4. Keep `owner_id` on `users` for table-shape consistency; for each `users` row, `owner_id` is equal to `id`.
+5. On WebSocket connection, the Zig engine maps the JWT's `sub` to this internal UUIDv7, storing it in `$session.userId` to ensure `owner_id` on all tables is safely typed as `BLOB(16)`.
+6. Automatically populate `owner_id` with the internal `$session.userId` upon document creation.
+7. Treat `id` as the document identity for a collection. It is expected to be unique across the whole collection/table; `namespace_id` is not part of the primary key and is only a routing/filtering column.
+8. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
+9. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+
+**Rationale**:
+- `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
+- The `users` mapping table guarantees `owner_id` remains a compact 16-byte binary format, perfectly matching ZyncBase's standard `doc_id` representation and saving ~20 bytes per row compared to storing external string IDs.
+- Keeping `owner_id` on `users` avoids table-shape exceptions in DDL generation, authorization defaults, replication payloads, and query planning while preserving self-ownership semantics.
+- Keeping identity as `PRIMARY KEY(id)` avoids composite key fan-out in foreign keys, caches, cursor tie-breakers, and SDK APIs. Namespaces constrain visibility; they do not redefine document identity.
+- Strict limits on the evaluation context guarantee predictable nanosecond/microsecond rule evaluation and same-row SQL predicate injection, preventing the "slow query" problem in the auth layer.
+
+**Principles Alignment**:  
+- #1 Primitives over Magic (Exposing `users` as a standard collection instead of a hidden config)
+- #8 Predictable Performance  
+- #9 Secure by Default
+
+---
+
+## ADR-028: Global Master Data (namespaced: false)
+
+**Date**: 2026-04-25  
+**Status**: Accepted  
+
+**Context**:  
+By default, all ZyncBase collections are horizontally partitioned by a `namespace_id`. However, SaaS applications frequently require master data tables (e.g. `users`, `pricing_tiers`, `global_settings`) that must transcend namespace boundaries and be visible globally.
+
+**Decision**:  
+1. Introduce a `"namespaced": boolean` primitive in `schema.json` collection definitions.
+2. All storage tables retain the standard system columns, including `namespace_id` and `owner_id`; `namespaced` changes how `namespace_id` is assigned and filtered, not whether the column exists.
+3. If `namespaced` is omitted, it defaults to `true`, and Zig stores the active namespace ID in `namespace_id` and filters reads/writes by that active namespace.
+4. If `namespaced` is set to `false`, Zig stores reserved global namespace ID `0` in `namespace_id` and routes queries through that global namespace instead of the client's active namespace.
+5. The reserved `users` system collection defaults to `"namespaced": false`.
+6. `users` MAY be configured with `"namespaced": true` for tenant-isolated identity realms. In that mode, external identity mapping is scoped by `(namespace_id, external_id)`, `$session.userId` is resolved for the active namespace, and namespace switching requires re-resolving or re-authenticating the session.
+
+**Rationale**:  
+- Provides developers with the flexibility to define multiple global data collections without opinionated server-side logic.
+- Avoids the anti-pattern of duplicating static master data across thousands of tenant namespaces.
+- Maintains strict "Secure by Default" semantics by enforcing namespacing unless explicitly opted-out.
+- Preserves a uniform physical table shape, avoiding null-heavy special cases and keeping field indexes, DDL generation, migrations, and authorization predicates consistent.
+- Avoids broad `namespace_id = :active_namespace_id OR namespace_id = 0` predicates in hot paths. Each table has exactly one namespace predicate selected from schema metadata: active namespace for namespaced tables, `0` for global tables.
+
+**Principles Alignment**:  
+- #1 Primitives over Magic
+- #3 SQLite as the Source of Truth

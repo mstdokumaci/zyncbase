@@ -13,18 +13,18 @@ test "StorageEngine: selectQuery basic equality" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
+    const table = schema_manager.Table{ .name = "people", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-basic", table);
     defer ctx.deinit();
-    const users = try ctx.table("users");
+    const people = try ctx.table("people");
 
     // Seed data
-    try seedUser(allocator, users, 1, "Alice", 30);
-    try seedUser(allocator, users, 2, "Bob", 25);
-    try seedUser(allocator, users, 3, "Charlie", 35);
-    try users.flush();
-    const name_index = try users.fieldIndex("name");
+    try seedPerson(allocator, people, 1, "Alice", 30);
+    try seedPerson(allocator, people, 2, "Bob", 25);
+    try seedPerson(allocator, people, 3, "Charlie", 35);
+    try people.flush();
+    const name_index = try people.fieldIndex("name");
 
     // Query: name == "Bob"
     var filter = try qth.makeDefaultFilter(allocator);
@@ -40,12 +40,12 @@ test "StorageEngine: selectQuery basic equality" {
     };
     filter.conditions = conds;
 
-    var managed = try users.selectQuery(allocator, "ns", filter);
+    var managed = try people.selectQuery(allocator, "ns", filter);
     defer managed.deinit();
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 1), res.len);
-    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Bob");
+    _ = try sth.expectFieldString(res[0], people.metadata, "name", "Bob");
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -55,17 +55,17 @@ test "StorageEngine: selectQuery with OR and ordering" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = schema_manager.Table{ .name = "users", .fields = &fields_arr };
+    const table = schema_manager.Table{ .name = "people", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-complex", table);
     defer ctx.deinit();
-    const users = try ctx.table("users");
+    const people = try ctx.table("people");
 
-    try seedUser(allocator, users, 1, "Alice", 30);
-    try seedUser(allocator, users, 2, "Bob", 25);
-    try seedUser(allocator, users, 3, "Charlie", 35);
-    try users.flush();
-    const age_index = try users.fieldIndex("age");
+    try seedPerson(allocator, people, 1, "Alice", 30);
+    try seedPerson(allocator, people, 2, "Bob", 25);
+    try seedPerson(allocator, people, 3, "Charlie", 35);
+    try people.flush();
+    const age_index = try people.fieldIndex("age");
 
     // Query: age < 30 OR age > 30, ORDER BY age DESC
     var filter = try qth.makeFilter(allocator, 3, true, .integer, null);
@@ -88,13 +88,13 @@ test "StorageEngine: selectQuery with OR and ordering" {
     };
     filter.or_conditions = or_conds;
 
-    var managed = try users.selectQuery(allocator, "ns", filter);
+    var managed = try people.selectQuery(allocator, "ns", filter);
     defer managed.deinit();
     const res = managed.rows;
 
     try testing.expectEqual(@as(usize, 2), res.len);
-    _ = try sth.expectFieldString(res[0], users.metadata, "name", "Charlie"); // 35
-    _ = try sth.expectFieldString(res[1], users.metadata, "name", "Bob"); // 25
+    _ = try sth.expectFieldString(res[0], people.metadata, "name", "Charlie"); // 35
+    _ = try sth.expectFieldString(res[1], people.metadata, "name", "Bob"); // 25
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -117,7 +117,8 @@ test "StorageEngine: selectQuery pagination (after)" {
     try scores.flush();
 
     // Query 1: LIMIT 2, ORDER BY score ASC
-    var filter1 = try qth.makeFilter(allocator, 2, false, .integer, null);
+    const score_index = try scores.fieldIndex("score");
+    var filter1 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
@@ -129,7 +130,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     _ = try sth.expectFieldDocId(res1[1], scores.metadata, "id", 2);
 
     // Query 2: Same query but AFTER [100, 2]
-    var filter2 = try qth.makeFilter(allocator, 2, false, .integer, null);
+    var filter2 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
     filter2.after = query_parser.Cursor{
@@ -145,9 +146,9 @@ test "StorageEngine: selectQuery pagination (after)" {
     _ = try sth.expectFieldDocId(res2[1], scores.metadata, "id", 4); // 300
 }
 
-fn seedUser(allocator: std.mem.Allocator, users: sth.TableFixture, id: u128, name: []const u8, age: i64) !void {
+fn seedPerson(allocator: std.mem.Allocator, people: sth.TableFixture, id: u128, name: []const u8, age: i64) !void {
     _ = allocator;
-    try users.insertNamed(id, "ns", .{
+    try people.insertNamed(id, "ns", .{
         sth.named("name", tth.valText(name)),
         sth.named("age", tth.valInt(age)),
     });

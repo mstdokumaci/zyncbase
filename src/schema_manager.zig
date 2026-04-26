@@ -16,8 +16,14 @@ pub const freeField = schema_parser.freeField;
 pub const built_in_columns = schema_parser.built_in_columns;
 pub const id_field_index = schema_parser.id_field_index;
 pub const namespace_id_field_index = schema_parser.namespace_id_field_index;
+pub const owner_id_field_index = schema_parser.owner_id_field_index;
+pub const first_user_field_index = schema_parser.first_user_field_index;
 pub const getSystemColumn = schema_parser.getSystemColumn;
 pub const isSystemColumn = schema_parser.isSystemColumn;
+pub const global_namespace_id = schema_parser.global_namespace_id;
+pub const global_namespace_name = schema_parser.global_namespace_name;
+pub const implicit_users_schema_json = schema_parser.implicit_users_schema_json;
+pub const effectiveNamespaceLabel = schema_parser.effectiveNamespaceLabel;
 
 /// SchemaManager centralizes schema metadata and provides efficient lookup and validation.
 /// It is initialized once at startup and remains immutable for the lifetime of the server.

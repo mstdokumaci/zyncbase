@@ -26,22 +26,22 @@ test "StorageEngine: insert and select basic" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = sth.Table{ .name = "users", .fields = &fields_arr };
+    const table = sth.Table{ .name = "people", .fields = &fields_arr };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-basic", table);
     defer ctx.deinit();
-    const users = try ctx.table("users");
+    const people = try ctx.table("people");
 
     // Insert
-    try users.insertNamed(1, "ns", .{
+    try people.insertNamed(1, "ns", .{
         sth.named("name", tth.valText("Alice")),
         sth.named("age", tth.valInt(30)),
     });
-    try users.flush();
+    try people.flush();
 
     // Select
-    var doc = try users.getOne(allocator, 1, "ns");
+    var doc = try people.getOne(allocator, 1, "ns");
     defer doc.deinit();
     _ = try doc.expectFieldString("name", "Alice");
     _ = try doc.expectFieldInt("age", 30);
@@ -146,20 +146,20 @@ test "StorageEngine: update existing document" {
 test "StorageEngine: query collection" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("name", .text, false)};
-    const table = sth.Table{ .name = "users", .fields = &fields_arr };
+    const table = sth.Table{ .name = "people", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-query", table);
     defer ctx.deinit();
-    const users = try ctx.table("users");
+    const people = try ctx.table("people");
 
     // Set multiple documents
-    try users.insertText(1, "test_namespace", "name", "Alice");
-    try users.insertText(2, "test_namespace", "name", "Bob");
-    try users.flush();
+    try people.insertText(1, "test_namespace", "name", "Alice");
+    try people.insertText(2, "test_namespace", "name", "Bob");
+    try people.flush();
     // Query for collection using empty filter
     const filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try users.selectQuery(allocator, "test_namespace", filter);
+    var managed = try people.selectQuery(allocator, "test_namespace", filter);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 2), managed.rows.len);
 }
