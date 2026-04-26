@@ -53,7 +53,7 @@ const StorageLayer = struct {
         return &self.read_pool[reader_idx];
     }
 };
-```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object` Flattened columns `address.city` `address_city TEXT `array` `BLOB` canonical JSONB value (sorted unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs System Tables storage engine maintains internal system tables not.json_zync_namespaces (id INTEGER KEY TEXT UNIQUE integer routing dynamic namespaces `0` for global namespace client-created/runtime use positive IDs Array Canonicalization Pipeline schema-defined array fields Validate element against type Reject invalid elements Normalize to sorted unique form Persist canonicalized array value guarantees deterministic on-disk representation read/query semantics for arraysImplementation `StorageEngine initialization receives parsed `Schema If `schema.json file omitted missing synthesizes users-only schema before storage initialization Schema ZyncBase enforces strict-schema architecture user database tables columns derived from schema ad-hoc creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing or omitted server boot defined `users collection for data storage mutations to other collections rejected```zig
+```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object Flattened columns `address.city` `address_city TEXT `array` `BLOB` JSONB value unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs Document identity is `id` collection expects `id unique DDL uses `PRIMARY KEY(id) `namespace_id` retained for namespace routing authorization not part of document key System Tables storage engine maintains internal system tables not.json_zync_namespaces (id PRIMARY KEY UNIQUE integer routing dynamic namespaces ID `0` for global namespace client-created/runtime namespaces use positive IDs Array Canonicalization Pipeline schema-defined array fields Validate each element against `items` primitive typeReject invalid elements Normalize sorted form Persist canonicalized array value guarantees deterministic-disk representation read/query semantics for typed arrays `StorageEngine initialization receives parsed `Schema If `schema.json file omitted missing synthesizes users-only schema before storage initialization ZyncBase enforces strict-schema architecture user database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing omitted server boot defined `users collection for data storage mutations to other collections rejected```zig
 const SchemaParser = struct {
     allocator: Allocator,
     
@@ -65,6 +65,11 @@ const SchemaParser = struct {
         
         const is_users = std.mem.eql(u8, name, "users");
         const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
+        if (is_users) {
+            if (required) |req| if (req.array.items.len > 0) {
+                return error.InvalidSchema; // Identity rows are auto-created before profile fields exist.
+            };
+        }
         
         // Always include uniform system columns.
         try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
@@ -159,7 +164,7 @@ const DDLGenerator = struct {
         return buf.toOwnedSlice();
     }
 };
-```write/query `namespaced controls namespace predicate not table shape `namespaced true active namespace ID queries false namespace ID `0_id = 0 Relational Features **Foreign Keys** `references Supports `cascade `restrict_null **FTS5** Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current state target schema Execution Strategy```zig
+```write/query `namespaced controls namespace predicate not table shape `namespaced true active namespace ID queries_id false namespace ID `0_id = 0 modes `id` collection-wide unique support namespace-local duplicate IDs composite(namespace_id id) key Relational Features **Foreign `references Supports `cascade `restrict `set_null **FTS5** Virtual tables full-text search paths Auto-Migration ZyncBase manages schema evolution current state target schema Execution Strategy```zig
 const MigrationDetector = struct {
     pub fn detectChanges(old_schema: Schema, new_schema: Schema) ![]Change {
         var changes = ArrayList(Change).init(allocator);

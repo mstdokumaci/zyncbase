@@ -172,7 +172,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Reserved `users` Collection hybrid table managed by ZyncBase defaults to"namespaced false `external_id column maps external identity token `id` column internal `BLOB(16) UUIDv7 `owner_id foreign keys extend with custom fields```json
+```Reserved `users` Collection hybrid table managed by ZyncBase defaults to"namespaced false `external_id column maps external identity token `id column internal `BLOB(16) UUIDv7 `owner_id foreign keys extend optional custom fields```json
 {
   "version": "1.0.0",
   "store": {
@@ -198,12 +198,11 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
           "type": "array",
           "items": "string"
         }
-      },
-      "required": ["name", "email"]
+      }
     }
   }
 }
-```ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries natural document structure```sql
+```Custom fields `users `required server auto-creates identity authenticated connection needs internal user ID before application profile data ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries document structure```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id INTEGER NOT NULL, -- 0 for the default global users collection
@@ -221,7 +220,7 @@ CREATE TABLE users (
 );
 
 CREATE UNIQUE INDEX idx_users_namespace_external_id ON users(namespace_id, external_id);
-```Schema ZyncBase format Define data store structure```json
+````id` primary key unique collection/table `namespace_id` visibility identity-provider lookup permit duplicate document IDs namespaces Schema Structure ZyncBase schema format Define data store structure```json
 {
   "version": "1.0.0",
   "store": {
@@ -441,7 +440,7 @@ CREATE TABLE tasks (
 
 CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_tasks_namespace ON tasks(namespace_id);
-```Auto-Migration Path changes-migrate zero friction```json
+```primary key `id not Namespace-aware tables require document IDs references cursors caches SDK single-key Auto-Migration changes auto-migrate zero friction```json
 // schema.json v1
 {
   "store": {
