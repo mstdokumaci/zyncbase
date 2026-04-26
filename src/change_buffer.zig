@@ -3,8 +3,8 @@ const Allocator = std.mem.Allocator;
 const TypedRow = @import("storage_engine/types.zig").TypedRow;
 
 pub const OwnedRowChange = struct {
-    namespace: []const u8,
     table_index: usize,
+    namespace_id: i64,
     operation: Operation,
     old_row: ?TypedRow,
     new_row: ?TypedRow,
@@ -12,7 +12,6 @@ pub const OwnedRowChange = struct {
     pub const Operation = enum { insert, update, delete };
 
     pub fn deinit(self: *OwnedRowChange, allocator: Allocator) void {
-        allocator.free(self.namespace);
         if (self.old_row) |r| r.deinit(allocator);
         if (self.new_row) |r| r.deinit(allocator);
     }

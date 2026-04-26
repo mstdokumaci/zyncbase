@@ -7,13 +7,12 @@ const schema_helpers = @import("schema_test_helpers.zig");
 const storage_types = @import("storage_engine/types.zig");
 const tth = @import("typed_test_helpers.zig");
 
-fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, namespace: []const u8, name: []const u8) !storage_types.TypedRow {
+fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !storage_types.TypedRow {
     const values = try allocator.alloc(storage_types.TypedValue, 6);
     errdefer allocator.free(values);
 
     values[0] = try tth.valTextOwned(allocator, id);
     errdefer values[0].deinit(allocator);
-    _ = namespace;
     values[1] = tth.valInt(1);
     values[2] = try tth.valTextOwned(allocator, "test-owner");
     errdefer values[2].deinit(allocator);
@@ -58,12 +57,10 @@ test "extractAs: StorePathRequest from valid map" {
     path_arr[2] = Payload.uintToPayload(2); // field index
 
     var map = Payload.mapPayload(allocator);
-    try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
     try map.mapPut("path", Payload{ .arr = path_arr });
     try map.mapPut("value", Payload{ .bool = true });
 
     const result = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, map);
-    try testing.expectEqualStrings("default", result.namespace);
     try testing.expect(result.path == .arr);
     try testing.expectEqual(@as(usize, 3), result.path.arr.len);
     try testing.expectEqual(@as(u64, 0), result.path.arr[0].uint);
@@ -85,7 +82,6 @@ test "extractAs: StorePathRequest without value" {
     path_arr[1] = try Payload.strToPayload("doc1", allocator);
 
     var map = Payload.mapPayload(allocator);
-    try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
     try map.mapPut("path", Payload{ .arr = path_arr });
 
     const result = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, map);
@@ -99,11 +95,9 @@ test "extractAs: StoreCollectionRequest from valid map" {
 
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("namespace", try Payload.strToPayload("default", allocator));
     try map.mapPut("table_index", Payload.uintToPayload(0));
 
     const result = try protocol.extractAs(protocol.StoreCollectionRequest, undefined, map);
-    try testing.expectEqualStrings("default", result.namespace);
     try testing.expect(result.table_index == .uint);
     try testing.expectEqual(@as(u64, 0), result.table_index.uint);
 }
@@ -194,7 +188,7 @@ test "encodeSetDeltaSuffix: set operation" {
     defer sm.deinit();
 
     const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
-    const row = try makeDeltaTestRow(allocator, "user-123", "default", "Ada");
+    const row = try makeDeltaTestRow(allocator, "user-123", "Ada");
     defer row.deinit(allocator);
 
     const suffix = try protocol.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), row, table_metadata);

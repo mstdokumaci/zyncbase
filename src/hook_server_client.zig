@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const doc_id = @import("doc_id.zig");
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 
 /// Connection state for the Hook Server client
@@ -147,10 +148,11 @@ pub const WebSocketConnection = struct {
 
 /// Authorization request structure
 pub const AuthRequest = struct {
-    user_id: []const u8,
-    namespace: []const u8,
+    user_doc_id: doc_id.DocId,
+    namespace_id: i64,
     operation: Operation,
-    resource: []const u8,
+    table_index: usize,
+    target_doc_id: doc_id.DocId = doc_id.zero,
     timestamp: i64,
 
     pub const Operation = enum {
@@ -269,8 +271,8 @@ pub const HookServerClient = struct {
     }
 
     pub fn authorize(self: *HookServerClient, req: AuthRequest) !AuthResponse {
-        if (req.user_id.len == 0) return error.InvalidUserId;
-        if (req.namespace.len == 0) return error.InvalidNamespace;
+        if (req.user_doc_id == doc_id.zero) return error.InvalidUserId;
+        if (req.namespace_id < 0) return error.InvalidNamespace;
 
         if (self.auth_cache) |cache| {
             if (cache.get(req)) |cached_response| return cached_response;
@@ -372,7 +374,7 @@ const CachedAuth = struct {
 
 /// Authorization cache with TTL support
 pub const AuthCache = struct {
-    const lfc_type = lockFreeCache(CachedAuth);
+    const lfc_type = lockFreeCache(CachedAuth, AuthRequest);
     allocator: Allocator,
     lfc: lfc_type,
     max_size: usize,
@@ -408,24 +410,13 @@ pub const AuthCache = struct {
         self.allocator.destroy(self);
     }
 
-    fn buildKey(allocator: Allocator, req: AuthRequest) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{s}:{s}:{s}:{s}",
-            .{ req.user_id, req.namespace, @tagName(req.operation), req.resource },
-        );
-    }
-
     pub fn get(self: *AuthCache, req: AuthRequest) ?AuthResponse {
-        const key = buildKey(self.allocator, req) catch return null;
-        defer self.allocator.free(key);
-
-        const handle = self.lfc.get(key) catch return null;
+        const handle = self.lfc.get(req) catch return null;
         defer handle.release();
 
         const auth = handle.data();
         if (std.time.timestamp() >= auth.expires_at) {
-            _ = self.lfc.evict(key);
+            _ = self.lfc.evict(req);
             return null;
         }
 
@@ -440,9 +431,6 @@ pub const AuthCache = struct {
     }
 
     pub fn put(self: *AuthCache, req: AuthRequest, response: AuthResponse) !void {
-        const key = try buildKey(self.allocator, req);
-        defer self.allocator.free(key);
-
         var stored_resp = response;
         if (response.reason) |r| {
             stored_resp.reason = try self.allocator.dupe(u8, r);
@@ -453,7 +441,7 @@ pub const AuthCache = struct {
             .expires_at = std.time.timestamp() + @as(i64, @intCast(response.cache_ttl_sec)),
         };
 
-        try self.lfc.updateExt(key, auth, .{
+        try self.lfc.updateExt(req, auth, .{
             .max_capacity = self.max_size,
             .evict_batch_size = self.max_size / 4,
         });
@@ -464,31 +452,22 @@ pub const AuthCache = struct {
     }
 
     pub fn remove(self: *AuthCache, req: AuthRequest) void {
-        const key = buildKey(self.allocator, req) catch return;
-        defer self.allocator.free(key);
-        _ = self.lfc.evict(key);
+        _ = self.lfc.evict(req);
     }
 
     pub fn evictExpired(self: *AuthCache) void {
-        const map = self.lfc.getSnapshot();
-        defer map.deinit();
+        const snapshot = self.lfc.getSnapshot();
+        defer snapshot.deinit();
 
         const now = std.time.timestamp();
-        var to_evict = std.ArrayListUnmanaged([]const u8){};
-        defer {
-            for (to_evict.items) |k| self.allocator.free(k);
-            to_evict.deinit(self.allocator);
-        }
+        var to_evict = std.ArrayListUnmanaged(AuthRequest).empty;
+        defer to_evict.deinit(self.allocator);
 
-        var it = map.map.iterator();
+        var it = snapshot.map.iterator();
         while (it.next()) |entry| {
             if (now >= entry.value_ptr.*.data.expires_at) {
-                const k = self.allocator.dupe(u8, entry.key_ptr.*) catch |err| {
-                    std.log.debug("failed to dupe key for eviction: {}", .{err});
-                    continue;
-                };
-                to_evict.append(self.allocator, k) catch {
-                    self.allocator.free(k);
+                to_evict.append(self.allocator, entry.key_ptr.*) catch |err| {
+                    std.log.err("Failed to append to eviction list: {}", .{err});
                     continue;
                 };
             }

@@ -21,14 +21,14 @@ const OwnedString = struct {
 
 test "cache: concurrent reads never block" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(U32Value);
+    const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
     try cache.init(allocator, .{});
     defer cache.deinit();
 
-    const namespace = "test-namespace";
-    try cache.update(namespace, .{ .value = 42 });
+    const key: i64 = 12345;
+    try cache.update(key, .{ .value = 42 });
 
     const num_threads = 8;
     const reads_per_thread = 1000;
@@ -36,14 +36,14 @@ test "cache: concurrent reads never block" {
 
     const ThreadContext = struct {
         cache: *u32_cache,
-        namespace: []const u8,
+        key: i64,
         reads: usize,
         counter: *std.atomic.Value(usize),
 
         fn readerThread(ctx: @This()) void {
             var i: usize = 0;
             while (i < ctx.reads) : (i += 1) {
-                const handle = ctx.cache.get(ctx.namespace) catch |err| {
+                const handle = ctx.cache.get(ctx.key) catch |err| {
                     std.log.debug("Read failed: {}", .{err});
                     continue;
                 };
@@ -58,7 +58,7 @@ test "cache: concurrent reads never block" {
     for (&threads) |*thread| {
         thread.* = try std.Thread.spawn(.{}, ThreadContext.readerThread, .{ThreadContext{
             .cache = &cache,
-            .namespace = namespace,
+            .key = key,
             .reads = reads_per_thread,
             .counter = &successful_reads,
         }});
@@ -71,68 +71,69 @@ test "cache: concurrent reads never block" {
 
 test "cache: ref_count lifecycle" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(U32Value);
+    const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
     try cache.init(allocator, .{});
     defer cache.deinit();
 
-    const namespace = "test-namespace";
-    try cache.update(namespace, .{ .value = 100 });
+    const key: i64 = 999;
+    try cache.update(key, .{ .value = 100 });
 
-    const handle = try cache.get(namespace);
+    const handle = try cache.get(key);
     const entries = cache.entries.load(.acquire);
-    const entry = entries.get(namespace) orelse return error.KeyNotFound;
+    const entry = entries.get(key) orelse return error.KeyNotFound;
     try testing.expect(entry.ref_count.load(.acquire) > 0);
 
     handle.release();
-    try testing.expectEqual(@as(u32, 0), entry.ref_count.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), entry.ref_count.load(.acquire));
 }
 
 test "cache: update increments version" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(U32Value);
+    const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
     try cache.init(allocator, .{});
     defer cache.deinit();
 
-    const namespace = "test";
-    try cache.update(namespace, .{ .value = 1 });
-    try cache.update(namespace, .{ .value = 2 });
+    const key: i64 = 1;
+    try cache.update(key, .{ .value = 1 });
+    try cache.update(key, .{ .value = 2 });
 
-    const handle = try cache.get(namespace);
+    const handle = try cache.get(key);
     defer handle.release();
     try testing.expectEqual(@as(u32, 2), handle.data().value);
 }
 
 test "cache: eviction" {
     const allocator = testing.allocator;
-    const u32_cache = lockFreeCache(U32Value);
+    const u32_cache = lockFreeCache(U32Value, i64);
 
     var cache: u32_cache = undefined;
     try cache.init(allocator, .{});
     defer cache.deinit();
 
-    try cache.update("to-evict", .{ .value = 99 });
-    _ = cache.evict("to-evict");
+    const key: i64 = 777;
+    try cache.update(key, .{ .value = 99 });
+    _ = cache.evict(key);
 
-    const result = cache.get("to-evict");
+    const result = cache.get(key);
     try testing.expectError(error.NotFound, result);
 }
 
 test "cache: deep free via value deinit" {
     const allocator = testing.allocator;
-    const string_cache = lockFreeCache(OwnedString);
+    const string_cache = lockFreeCache(OwnedString, i64);
 
     var cache: string_cache = undefined;
     try cache.init(allocator, .{});
     defer cache.deinit();
 
     const val = try allocator.dupe(u8, "hello world");
-    try cache.update("key", .{ .value = val });
+    try cache.update(42, .{ .value = val });
 
     // Evict should trigger deinit eventually (during reclaim).
-    _ = cache.evict("key");
+    _ = cache.evict(42);
     cache.reclaim(true); // Force reclaim to run deinit.
 }

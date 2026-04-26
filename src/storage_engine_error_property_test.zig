@@ -14,7 +14,7 @@ test "storage: error handling invalid database path" {
     // Try to create storage engine with invalid path
     var sm = try sth.createSchemaManager(allocator, &.{
         .{ .name = "_dummy", .fields = &.{sth.makeField("val", .text, false)} },
-        .{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} },
+        .{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} },
     });
     defer sm.deinit();
 
@@ -46,12 +46,12 @@ test "storage: error handling read-only filesystem" {
 
     // Try to set a value
     {
-        try ctx.insertText("data_table", 1, "data_table", "val", "value1");
+        try ctx.insertText("data_table", 1, 1, "val", "value1");
     }
     try storage.flushPendingWrites();
     // Verify we can read it back
     {
-        var managed = try tbl.selectDocument(allocator, 1, "data_table");
+        var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
@@ -67,17 +67,17 @@ test "storage: error handling constraint violations" {
 
     // Set a value
     {
-        try ctx.insertText("data_table", 1, "data_table", "val", "value1");
+        try ctx.insertText("data_table", 1, 1, "val", "value1");
     }
     try storage.flushPendingWrites();
     // Update the same key (this should work with UPSERT)
     {
-        try ctx.insertText("data_table", 1, "data_table", "val", "value2");
+        try ctx.insertText("data_table", 1, 1, "val", "value2");
     }
     try storage.flushPendingWrites();
     // Verify the value was updated
     {
-        var doc = try tbl.getOne(allocator, 1, "data_table");
+        var doc = try tbl.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("val", "value2");
     }
@@ -93,11 +93,11 @@ test "storage: error handling transaction rollback on error" {
 
     try storage.beginTransaction();
     {
-        try ctx.insertText("data_table", 1, "data_table", "val", "value1");
+        try ctx.insertText("data_table", 1, 1, "val", "value1");
     }
     try storage.rollbackTransaction();
     {
-        var managed = try tbl.selectDocument(allocator, 1, "data_table");
+        var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -111,7 +111,7 @@ test "storage: error handling concurrent access safety" {
     const storage = &ctx.engine;
 
     {
-        try ctx.insertText("data_table", 1, "data_table", "val", "value1");
+        try ctx.insertText("data_table", 1, 1, "val", "value1");
     }
     try storage.flushPendingWrites();
     const ThreadContext = struct {
@@ -120,7 +120,7 @@ test "storage: error handling concurrent access safety" {
     };
     const runRead = struct {
         fn run(t_ctx: ThreadContext, table_index: usize) void {
-            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, "data_table") catch return; // zwanzig-disable-line: swallowed-error
+            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, 1) catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
             _ = managed.rows;
         }
@@ -141,51 +141,49 @@ test "storage: error handling empty paths" {
     const storage = &ctx.engine;
     const tbl = try ctx.table("data_table");
 
-    {
-        try ctx.insertText("data_table", 1, "", "val", "value");
-    }
+    try ctx.insertText("data_table", 1, 1, "val", "value");
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 1, "");
+        var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
 }
 test "storage: error handling large values" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
-    const tbl = try ctx.table("test");
+    const tbl = try ctx.table("data_table");
 
     const large_value = try allocator.alloc(u8, 1024 * 1024);
     defer allocator.free(large_value);
     @memset(large_value, 'A');
     {
-        try ctx.insertText("test", 1, "test", "val", large_value);
+        try ctx.insertText("data_table", 1, 1, "val", large_value);
     }
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 1, "test");
+        var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len > 0);
     }
 }
 test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "test", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.Table{ .name = "data_table", .fields = &.{sth.makeField("val", .text, false)} };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
     defer ctx.deinit();
     const storage = &ctx.engine;
-    const tbl = try ctx.table("test");
+    const tbl = try ctx.table("data_table");
 
-    try tbl.deleteDocument(999, "test");
+    try tbl.deleteDocument(999, 1);
     try storage.flushPendingWrites();
     {
-        var managed = try tbl.selectDocument(allocator, 999, "test");
+        var managed = try tbl.selectDocument(allocator, 999, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }

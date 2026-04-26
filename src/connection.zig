@@ -1,6 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const doc_id = @import("doc_id.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+
+/// Deterministic owner for unauthenticated connections with no clientId.
+pub const anonymous_owner_doc_id: doc_id.DocId = doc_id.fromStableString("anonymous");
+pub const unset_namespace_id: i64 = -1;
 
 /// Connection represents a single client session.
 /// It is ref-counted and decoupled from the network/storage infrastructure.
@@ -14,8 +19,11 @@ pub const Connection = struct {
     /// Optional user identity after authentication
     user_id: ?[]const u8,
 
-    /// Namespace this connection is currently operating in
-    namespace: []const u8,
+    /// Resolved namespace ID for this connection's active namespace
+    namespace_id: i64,
+
+    /// Resolved owner doc ID for writes on this connection
+    user_doc_id: doc_id.DocId,
 
     /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
@@ -46,6 +54,8 @@ pub const Connection = struct {
     pub fn initPool(self: *Connection, allocator: Allocator) void {
         self.allocator = allocator;
         self.user_id = null;
+        self.namespace_id = unset_namespace_id;
+        self.user_doc_id = anonymous_owner_doc_id;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
         self.mutex = .{};
@@ -64,14 +74,36 @@ pub const Connection = struct {
         self.last_request_time = null;
     }
 
-    /// Reset session-specific state and free dynamic memory (user_id).
+    /// Reset session-specific state and free dynamic memory.
     /// Retains capacity in subscription_ids for future reuse.
     pub fn resetSession(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.user_id = null;
-        self.namespace = "default";
+        self.namespace_id = unset_namespace_id;
+        self.user_doc_id = anonymous_owner_doc_id;
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
+    }
+
+    /// Set unauthenticated identity from a client-provided stable ID.
+    pub fn setAnonymousUserId(self: *Connection, user_id: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, user_id);
+        errdefer self.allocator.free(owned);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.user_id) |old| self.allocator.free(old);
+        self.user_id = owned;
+        self.user_doc_id = doc_id.fromStableString(user_id);
+    }
+
+    /// Replace the active store namespace ID.
+    pub fn setNamespaceId(self: *Connection, namespace_id: i64) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.namespace_id = namespace_id;
     }
 
     /// Allocate the next subscription ID in O(1) time.

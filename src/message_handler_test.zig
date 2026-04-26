@@ -24,7 +24,7 @@ test "Connection - init and deinit" {
 
     try testing.expectEqual(sc.ws.getConnId(), state.id);
     try testing.expectEqual(@as(?[]const u8, null), state.user_id);
-    try testing.expectEqualStrings("default", state.namespace);
+    try testing.expectEqual(@as(i64, 1), state.namespace_id);
     try testing.expectEqual(@as(usize, 0), state.subscription_ids.items.len);
 }
 
@@ -69,6 +69,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
+    conn.namespace_id = 1; // Set default namespace
 
     // 1. Success path: Valid literal array
     {
@@ -80,7 +81,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
 
         const tbl = try app.tableMetadata("items");
         const field_idx = tbl.getFieldIndex("tags") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", tbl.index, 1, field_idx, val);
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, tbl.index, 1, field_idx, val);
         defer allocator.free(msg);
 
         var reader: std.Io.Reader = .fixed(msg);
@@ -106,7 +107,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
 
         const tbl = try app.tableMetadata("items");
         const field_idx = tbl.getFieldIndex("tags") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, "default", tbl.index, 1, field_idx, val);
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, 1, tbl.index, 1, field_idx, val);
         defer allocator.free(msg);
 
         var reader: std.Io.Reader = .fixed(msg);
@@ -174,7 +175,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         defer val_payload.free(allocator);
         const tbl = try app.tableMetadata("items");
         const field_idx = tbl.getFieldIndex("name") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", tbl.index, 1, field_idx, val_payload);
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, tbl.index, 1, field_idx, val_payload);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -199,7 +200,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         }
         const tbl = try app.tableMetadata("items");
         const field_idx = tbl.getFieldIndex("metadata__tags") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, "default", tbl.index, 1, field_idx, .{ .arr = tags });
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, 1, tbl.index, 1, field_idx, .{ .arr = tags });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -223,7 +224,7 @@ test "MessageHandler - flattened field path via StoreSet" {
         }
         const tbl = try app.tableMetadata("items");
         const field_idx = tbl.getFieldIndex("metadata__tags") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 3, "default", tbl.index, 1, field_idx, .{ .arr = inner_arr });
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 31, 1, tbl.index, 1, field_idx, .{ .arr = inner_arr });
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -276,7 +277,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
         defer val_payload.free(allocator);
         const tbl = try app.tableMetadata("deep");
         const field_idx = tbl.getFieldIndex("a__b__c") orelse return error.UnknownField;
-        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, "default", tbl.index, 1, field_idx, val_payload);
+        const msg = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, tbl.index, 1, field_idx, val_payload);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -300,7 +301,7 @@ test "MessageHandler - deep nested schema round-trip (3+ levels)" {
     // 2. Get document and verify flat response: Expect { "a__b__c": "value" } (stay flat architecture)
     {
         const tbl = try app.tableMetadata("deep");
-        const msg = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, "default", tbl.index);
+        const msg = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, 1, tbl.index);
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -344,7 +345,7 @@ test "MessageHandler: StoreSet field extraction" {
     // Test 1: Basic StoreSet message field extraction
     {
         const tbl = try app.tableMetadata("test");
-        const msg = try store_helpers.createStoreSetMessage(allocator, 1, "test_ns", tbl.index, 1, "test_value");
+        const msg = try store_helpers.createStoreSetMessage(allocator, 1, 1, tbl.index, 1, "test_value");
         defer allocator.free(msg);
         var reader: std.Io.Reader = .fixed(msg);
         const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -368,7 +369,7 @@ test "MessageHandler: StoreSet field extraction" {
         };
         for (test_cases, 0..) |tc, i| {
             const tbl = try app.tableMetadata("test");
-            const message = try store_helpers.createStoreSetMessage(allocator, @intCast(i), tc.namespace, tbl.index, tc.id, tc.value);
+            const message = try store_helpers.createStoreSetMessage(allocator, i, 1, tbl.index, tc.id, tc.value);
             defer allocator.free(message);
             var reader: std.Io.Reader = .fixed(message);
             const parsed = try msgpack_utils.decode(allocator, &reader);
@@ -410,7 +411,7 @@ test "MessageHandler: StoreSet field extraction" {
             if (res_parsed.code) |c| allocator.free(c);
         }
         try testing.expectEqualStrings("error", res_parsed.resp_type);
-        try testing.expectEqualStrings("INVALID_MESSAGE_FORMAT", res_parsed.code.?);
+        try testing.expectEqualStrings("INVALID_MESSAGE", res_parsed.code.?);
     }
 }
 
@@ -430,7 +431,7 @@ test "MessageHandler: StoreSet success response format" {
     const doc_p = try store_helpers.createDocumentMapPayload(allocator, tbl, .{.{ "val", "val" }});
     defer doc_p.free(allocator);
 
-    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, "test", tbl.index, 1, null, doc_p);
+    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, tbl.index, 1, null, doc_p);
     defer allocator.free(message);
     var reader_msg: std.Io.Reader = .fixed(message);
     const parsed = try msgpack_utils.decode(allocator, &reader_msg);

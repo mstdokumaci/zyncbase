@@ -4,6 +4,9 @@ const SchemaManager = schema_manager.SchemaManager;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const ddl_generator = @import("ddl_generator.zig");
 const schema_parser = @import("schema_parser.zig");
+const migration_detector = @import("migration_detector.zig");
+const migration_executor = @import("migration_executor.zig");
+const MigrationExecutor = migration_executor.MigrationExecutor;
 
 pub const TableDef = struct {
     name: []const u8,
@@ -143,5 +146,22 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
         defer allocator.free(ddl_z);
         try engine.execSetupSQL(ddl_z);
     }
+
+    // Detect and execute migrations
+    const setup_conn = try engine.getSetupConn();
+    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn);
+    const plan = try detector.detectChanges(sm.schema);
+    defer detector.deinit(plan);
+
+    if (plan.changes.len > 0) {
+        var executor = MigrationExecutor.init(
+            allocator,
+            setup_conn,
+            &gen,
+            .{},
+        );
+        try executor.execute(plan, sm.schema);
+    }
+
     try engine.start();
 }

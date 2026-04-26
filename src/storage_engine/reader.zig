@@ -121,10 +121,13 @@ pub fn buildSelectQuery(
     };
 }
 
-pub fn getCacheKey(allocator: Allocator, table_metadata: *const schema_manager.TableMetadata, namespace: []const u8, id: DocId) ![]u8 {
-    var id_hex_buf: [32]u8 = undefined;
-    const effective_namespace = schema_manager.effectiveNamespaceLabel(table_metadata, namespace);
-    return try std.fmt.allocPrint(allocator, "{s}:{s}:{s}", .{ table_metadata.table.name, effective_namespace, doc_id.hexSlice(id, &id_hex_buf) });
+pub fn getCacheKey(table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) types.MetadataCacheKey {
+    const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+    return types.MetadataCacheKey{
+        .namespace_id = effective_namespace_id,
+        .table_index = table_metadata.index,
+        .id = id,
+    };
 }
 
 pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {

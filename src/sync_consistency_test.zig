@@ -29,7 +29,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 2) Queue a write BEFORE any subscription exists.
     //    This is the behavior that used to be dropped when capture was optional.
-    try ctx.insertText("items", 1, "ns", "val", "task 1");
+    try ctx.insertText("items", 1, 1, "val", "task 1");
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.
@@ -48,7 +48,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     filter.conditions = conditions;
     defer filter.deinit(allocator);
 
-    _ = try sub_engine.subscribe("ns", (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
+    _ = try sub_engine.subscribe(1, (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
 
     // 4) Flush queued writes into DB + change buffer.
     try engine.flushPendingWrites();
@@ -66,7 +66,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     // 6) Feed the captured change into subscription engine and verify delivery.
     const captured = drain_buf.items[0];
     const row_change = RowChange{
-        .namespace = captured.namespace,
+        .namespace_id = captured.namespace_id,
         .table_index = captured.table_index,
         .operation = @enumFromInt(@intFromEnum(captured.operation)),
         .new_row = captured.new_row,

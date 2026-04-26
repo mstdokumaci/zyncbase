@@ -36,7 +36,7 @@ test "Verification: WebSocket connection lifecycle" {
     const state = try app.connection_manager.acquireConnection(conn_id);
     defer if (state.release()) app.memory_strategy.releaseConnection(state);
     try testing.expectEqual(conn_id, state.id);
-    try testing.expectEqualStrings("default", state.namespace);
+    try testing.expectEqual(@as(i64, -1), state.namespace_id);
 
     // Test connection close
     app.connection_manager.onClose(&ws);
@@ -66,7 +66,7 @@ test "Verification: StoreSet message processing" {
     const message = try store_helpers.createStoreSetFieldMessage(
         allocator,
         1,
-        "test_namespace",
+        1,
         @intCast(tbl.index),
         1,
         val_idx,
@@ -116,7 +116,7 @@ test "Verification: StoreSet message processing" {
     const data_table = try app.table("data_table");
 
     // Verify data was stored
-    var doc = try data_table.getOne(allocator, 1, "test_namespace");
+    var doc = try data_table.getOne(allocator, 1, 1);
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "test_value");
 }
@@ -130,7 +130,7 @@ test "Verification: StoreQuery message processing" {
     defer app.deinit();
 
     // First, store a value (typed storage)
-    try app.insertText("data_table", 1, "test_namespace", "val", "stored_value");
+    try app.insertText("data_table", 1, 1, "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // Create a filter: { "conditions": [ ["id", 0, 1] ] }
@@ -152,7 +152,7 @@ test "Verification: StoreQuery message processing" {
     const message = try store_helpers.createStoreQueryMessage(
         allocator,
         2,
-        "test_namespace",
+        1,
         @intCast(tbl.index),
         filter_map,
     );
@@ -213,8 +213,8 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     defer app.deinit();
 
     // Insert two rows so a limited query must return nextCursor
-    try app.insertText("data_table", 1, "test_namespace", "val", "value_a");
-    try app.insertText("data_table", 2, "test_namespace", "val", "value_b");
+    try app.insertText("data_table", 1, 1, "val", "value_a");
+    try app.insertText("data_table", 2, 1, "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
@@ -233,7 +233,7 @@ test "Verification: StoreQuery includes opaque nextCursor token when more data e
     const message = try store_helpers.createStoreQueryMessage(
         allocator,
         42,
-        "test_namespace",
+        1,
         @intCast(tbl.index),
         filter_map,
     );
@@ -405,13 +405,13 @@ test "Verification: End-to-end StoreSet and StoreQuery flow" {
 
     // Store multiple values
     const test_data = [_]struct {
-        namespace: []const u8,
+        namespace: i64,
         id: u128,
         value: []const u8,
     }{
-        .{ .namespace = "app", .id = 1, .value = "Alice" },
-        .{ .namespace = "app", .id = 2, .value = "Bob" },
-        .{ .namespace = "config", .id = 3, .value = "dark" },
+        .{ .namespace = 1, .id = 1, .value = "Alice" },
+        .{ .namespace = 1, .id = 2, .value = "Bob" },
+        .{ .namespace = 1, .id = 3, .value = "dark" },
     };
 
     for (test_data, 0..) |td, i| {
@@ -530,7 +530,7 @@ test "Verification: StoreSubscribe message processing" {
     defer app.deinit();
 
     // 1. Store a value
-    try app.insertText("data_table", 1, "test_namespace", "val", "stored_value");
+    try app.insertText("data_table", 1, 1, "val", "stored_value");
     try app.storage_engine.flushPendingWrites();
 
     // 2. Create a StoreSubscribe message
@@ -550,7 +550,7 @@ test "Verification: StoreSubscribe message processing" {
     const message = try store_helpers.createStoreSubscribeMessage(
         allocator,
         3,
-        "test_namespace",
+        1,
         @intCast(tbl.index),
         filter_map,
         12345,
@@ -614,8 +614,8 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     defer app.deinit();
 
     // Seed two docs so subscribe(limit=1) returns hasMore + nextCursor
-    try app.insertText("data_table", 1, "test_namespace", "val", "value_a");
-    try app.insertText("data_table", 2, "test_namespace", "val", "value_b");
+    try app.insertText("data_table", 1, 1, "val", "value_a");
+    try app.insertText("data_table", 2, 1, "val", "value_b");
 
     try app.storage_engine.flushPendingWrites();
 
@@ -635,7 +635,7 @@ test "Verification: StoreLoadMore uses subId and opaque nextCursor token" {
     const subscribe_message = try store_helpers.createStoreSubscribeMessage(
         allocator,
         77,
-        "test_namespace",
+        1,
         @intCast(tbl.index),
         filter_map,
         9999,

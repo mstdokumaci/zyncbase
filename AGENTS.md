@@ -2,7 +2,7 @@
 
 High-performance, multi-threaded real-time database built with Zig.
 
-Important: Project is still in early development stage. Give no consideration to legacy support or backward compatibility, assume green field.
+Important: Project is still in early development stage. Give no consideration to legacy support or backward compatibility, assume green field. Implement everything as a clean cut-off!
 
 ## Tech Stack
 - **Core:** Zig (0.15.2 or later)

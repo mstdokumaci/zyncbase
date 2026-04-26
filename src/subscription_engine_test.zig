@@ -31,14 +31,14 @@ test "SubscriptionEngine: basic subscribe and match" {
     defer filter.deinit(allocator);
 
     // Subscribe
-    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Create a matching row change
     var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valText("active")});
     defer new_row.deinit(allocator);
 
     const change = subscription_engine.RowChange{
-        .namespace = "default",
+        .namespace_id = 1,
         .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = new_row,
@@ -75,8 +75,8 @@ test "SubscriptionEngine: group sharing" {
     defer sm.deinit();
 
     // Two different subscribers for EXACTLY the same filter
-    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
-    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
+    const first = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 1, 101);
+    const second = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter, 2, 102);
 
     try testing.expect(first); // First one should create group
     try testing.expect(!second); // Second one should join existing group
@@ -99,10 +99,10 @@ test "SubscriptionEngine: unsubscribe clean up" {
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe("n", (sm.getTable("c") orelse return error.TestExpectedValue).index, filter, 1, 1);
+    _ = try engine.subscribe(3, (sm.getTable("c") orelse return error.TestExpectedValue).index, filter, 1, 1);
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 
-    try engine.unsubscribe(1, 1);
+    engine.unsubscribe(1, 1);
     try testing.expectEqual(@as(u32, 0), engine.groups.count());
     try testing.expectEqual(@as(u32, 0), engine.groups_by_filter.count());
 }
@@ -146,8 +146,8 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer sm.deinit();
 
     // Subscribe with different values
-    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    _ = try engine.subscribe("default", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    _ = try engine.subscribe(1, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe(1, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     // If they share the same key, they will be in the same group.
     // They SHOULD be in different groups because the values are different.
@@ -183,8 +183,8 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -209,8 +209,8 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe("default", (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_int, 1, 201);
-    _ = try engine.subscribe("default", (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_real, 2, 202);
+    _ = try engine.subscribe(1, (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_int, 1, 201);
+    _ = try engine.subscribe(1, (sm.getTable("scores") orelse return error.TestExpectedValue).index, filter_real, 2, 202);
 
     try testing.expectEqual(@as(u32, 2), engine.groups.count());
 }
@@ -219,7 +219,6 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
-    const long_ns = "a" ** 150;
     const long_coll = "b" ** 150;
     // combined length (150 + 1 + 150 = 301) will be > 256 stack buffer
 
@@ -230,13 +229,13 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe(long_ns, (sm.getTable(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(999, (sm.getTable(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var new_row = try tth.rowFromTypedValues(allocator, &.{});
     defer new_row.deinit(allocator);
 
     const change = subscription_engine.RowChange{
-        .namespace = long_ns,
+        .namespace_id = 999,
         .table_index = (sm.getTable(long_coll) orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = new_row,
@@ -324,8 +323,8 @@ test "SubscriptionEngine: group sharing with different condition order" {
     });
     defer sm.deinit();
 
-    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    const first = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second); // Should share group!
@@ -360,13 +359,13 @@ test "SubscriptionEngine: in operator subscribe and match" {
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("admin")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RowChange{
-        .namespace = "default",
+        .namespace_id = 1,
         .table_index = (sm.getTable("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = r,
@@ -411,8 +410,8 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     });
     defer sm.deinit();
 
-    const first = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
-    const second = try engine.subscribe("ns", (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
+    const first = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter1, 1, 101);
+    const second = try engine.subscribe(2, (sm.getTable("coll") orelse return error.TestExpectedValue).index, filter2, 2, 102);
 
     try testing.expect(first);
     try testing.expect(!second);
@@ -446,13 +445,13 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     });
     defer sm.deinit();
 
-    _ = try engine.subscribe("default", (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     var r = try tth.rowFromTypedValues(allocator, &.{tth.valText("member")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RowChange{
-        .namespace = "default",
+        .namespace_id = 1,
         .table_index = (sm.getTable("users") orelse return error.TestExpectedValue).index,
         .operation = .insert,
         .new_row = r,
@@ -485,7 +484,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     });
     defer filter.deinit(allocator);
 
-    _ = try engine.subscribe("ns", (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
+    _ = try engine.subscribe(2, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Case 1: Row leaves filter (priority 8 -> 2)
     var old_row = try tth.rowFromTypedValues(allocator, &.{tth.valInt(8)});
@@ -494,7 +493,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     defer new_row.deinit(allocator);
 
     const change_leave = subscription_engine.RowChange{
-        .namespace = "ns",
+        .namespace_id = 2,
         .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_row = new_row,
@@ -513,7 +512,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     defer new_row2.deinit(allocator);
 
     const change_enter = subscription_engine.RowChange{
-        .namespace = "ns",
+        .namespace_id = 2,
         .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_row = new_row2,
@@ -532,7 +531,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     defer new_row3.deinit(allocator);
 
     const change_within = subscription_engine.RowChange{
-        .namespace = "ns",
+        .namespace_id = 2,
         .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_row = new_row3,
@@ -551,7 +550,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     defer new_row4.deinit(allocator);
 
     const change_outside = subscription_engine.RowChange{
-        .namespace = "ns",
+        .namespace_id = 2,
         .table_index = (sm.getTable("items") orelse return error.TestExpectedValue).index,
         .operation = .update,
         .new_row = new_row4,

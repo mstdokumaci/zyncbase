@@ -8,7 +8,13 @@ const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
 const sql = @import("sql.zig");
 
-pub const typed_cache_type = lockFreeCache(TypedRow);
+pub const MetadataCacheKey = struct {
+    namespace_id: i64,
+    table_index: usize,
+    id: DocId,
+};
+
+pub const typed_cache_type = lockFreeCache(TypedRow, MetadataCacheKey);
 pub const DocId = doc_id.DocId;
 
 /// Specific error types for different database failure scenarios
@@ -528,8 +534,8 @@ pub const WriteOp = union(enum) {
     upsert: struct {
         table_index: usize,
         id: DocId,
-        namespace: []const u8,
-        owner_id: []const u8,
+        namespace_id: i64,
+        owner_doc_id: DocId,
         sql: []const u8,
         values: []TypedValue,
         timestamp: i64,
@@ -538,9 +544,14 @@ pub const WriteOp = union(enum) {
     delete: struct {
         table_index: usize,
         id: DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         sql: []const u8,
         completion_signal: ?*CompletionSignal = null,
+    },
+    upsert_namespace: struct {
+        namespace: []const u8,
+        result: *i64,
+        completion_signal: *CompletionSignal,
     },
 
     pub const CompletionSignal = struct {
@@ -584,21 +595,22 @@ pub const WriteOp = union(enum) {
             .checkpoint => |op| op.completion_signal,
             .upsert => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
+            .upsert_namespace => |op| op.completion_signal,
         };
     }
 
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
         switch (self) {
             .upsert => |op| {
-                allocator.free(op.namespace);
-                allocator.free(op.owner_id);
                 allocator.free(op.sql);
                 for (op.values) |val| val.deinit(allocator);
                 allocator.free(op.values);
             },
             .delete => |op| {
-                allocator.free(op.namespace);
                 allocator.free(op.sql);
+            },
+            .upsert_namespace => |op| {
+                allocator.free(op.namespace);
             },
             else => {},
         }

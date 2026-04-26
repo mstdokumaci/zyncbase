@@ -40,7 +40,7 @@ test "StorageEngine: selectQuery basic equality" {
     };
     filter.conditions = conds;
 
-    var managed = try people.selectQuery(allocator, "ns", filter);
+    var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
     const res = managed.rows;
 
@@ -88,7 +88,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     };
     filter.or_conditions = or_conds;
 
-    var managed = try people.selectQuery(allocator, "ns", filter);
+    var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
     const res = managed.rows;
 
@@ -122,7 +122,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
-    var managed1 = try scores.selectQuery(allocator, "ns", filter1);
+    var managed1 = try scores.selectQuery(allocator, 1, filter1);
     defer managed1.deinit();
     const res1 = managed1.rows;
     try testing.expectEqual(@as(usize, 2), res1.len);
@@ -138,7 +138,7 @@ test "StorageEngine: selectQuery pagination (after)" {
         .id = 2,
     };
 
-    var managed2 = try scores.selectQuery(allocator, "ns", filter2);
+    var managed2 = try scores.selectQuery(allocator, 1, filter2);
     defer managed2.deinit();
     const res2 = managed2.rows;
     try testing.expectEqual(@as(usize, 2), res2.len);
@@ -148,14 +148,14 @@ test "StorageEngine: selectQuery pagination (after)" {
 
 fn seedPerson(allocator: std.mem.Allocator, people: sth.TableFixture, id: u128, name: []const u8, age: i64) !void {
     _ = allocator;
-    try people.insertNamed(id, "ns", .{
+    try people.insertNamed(id, 1, .{
         sth.named("name", tth.valText(name)),
         sth.named("age", tth.valInt(age)),
     });
 }
 
 fn seedScore(scores: sth.TableFixture, id: u128, score: i64) !void {
-    try scores.insertInt(id, "ns", "score", score);
+    try scores.insertInt(id, 1, "score", score);
 }
 
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
@@ -177,7 +177,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     const labels_tv = try tth.valArray(allocator, &.{ .{ .text = "work" }, .{ .text = "p1" } });
     defer labels_tv.deinit(allocator);
 
-    try items.insertNamed(1, "ns", .{
+    try items.insertNamed(1, 1, .{
         sth.named("name", tth.valText("Task 1")),
         sth.named("tags", tags_tv),
         sth.named("labels", labels_tv),
@@ -198,7 +198,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     };
     filter.conditions = conds;
 
-    var managed = try items.selectQuery(allocator, "ns", filter);
+    var managed = try items.selectQuery(allocator, 1, filter);
     defer managed.deinit();
 
     const res = managed.rows;
@@ -229,7 +229,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     const data_index = try wildcards.fieldIndex("data");
 
     // Seed data
-    const ns = "ns";
+    const ns = 1;
     try seedData(allocator, wildcards, 1, "apple");
     try seedData(allocator, wildcards, 2, "app%le");
     try seedData(allocator, wildcards, 3, "ap_le");
@@ -339,7 +339,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     // 6. SQL Injection Attempt - should be treated as a literal string by parameter binding
     {
         // Add a document in a different namespace that we'll try to reach
-        try seedDataInNs(allocator, wildcards, 5, "secret", "other_ns");
+        try seedDataInNs(allocator, wildcards, 5, "secret", 2);
         try wildcards.flush();
 
         var filter = try qth.makeDefaultFilter(allocator);
@@ -359,7 +359,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         filter.conditions = conds;
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
-        var managed = try wildcards.selectQuery(allocator, "ns", filter);
+        var managed = try wildcards.selectQuery(allocator, 1, filter);
         defer managed.deinit();
         const results = managed.rows;
         try testing.expectEqual(@as(usize, 0), results.len);
@@ -367,10 +367,10 @@ test "StorageEngine: LIKE wildcard escaping" {
 }
 
 fn seedData(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: u128, data: []const u8) !void {
-    try seedDataInNs(allocator, wildcards, id, data, "ns");
+    try seedDataInNs(allocator, wildcards, id, data, 1);
 }
 
-fn seedDataInNs(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: u128, data: []const u8, namespace: []const u8) !void {
+fn seedDataInNs(allocator: std.mem.Allocator, wildcards: sth.TableFixture, id: u128, data: []const u8, namespace_id: i64) !void {
     _ = allocator;
-    try wildcards.insertText(id, namespace, "data", data);
+    try wildcards.insertText(id, namespace_id, "data", data);
 }

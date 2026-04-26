@@ -196,45 +196,45 @@ pub const AppTestContext = struct {
         self: *AppTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         columns: anytype,
     ) !void {
         const tbl = try self.table(table_name);
-        try tbl.insertNamed(id, namespace, columns);
+        try tbl.insertNamed(id, namespace_id, columns);
     }
 
     pub fn insertField(
         self: *AppTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: @import("storage_engine.zig").TypedValue,
     ) !void {
         const tbl = try self.table(table_name);
-        try tbl.insertField(id, namespace, field, value);
+        try tbl.insertField(id, namespace_id, field, value);
     }
 
     pub fn insertText(
         self: *AppTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: []const u8,
     ) !void {
-        try self.insertField(table_name, id, namespace, field, tth.valText(value));
+        try self.insertField(table_name, id, namespace_id, field, tth.valText(value));
     }
 
     pub fn insertInt(
         self: *AppTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: i64,
     ) !void {
-        try self.insertField(table_name, id, namespace, field, tth.valInt(value));
+        try self.insertField(table_name, id, namespace_id, field, tth.valInt(value));
     }
 
     /// Helper to open a test connection and return a scoped wrapper.
@@ -284,6 +284,7 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
+        conn.setNamespaceId(1);
         return ScopedConnection{
             .app = self,
             .ws = ws,

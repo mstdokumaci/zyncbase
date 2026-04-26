@@ -6,13 +6,13 @@ const OwnedRowChange = change_buffer.OwnedRowChange;
 const Allocator = std.mem.Allocator;
 
 test "ChangeBuffer: basic push and drain" {
-    var alloc = testing.allocator;
+    const alloc = testing.allocator;
     var cb = try ChangeBuffer.init(alloc);
     defer cb.deinit();
 
     // Push one item
     try cb.push(.{
-        .namespace = try alloc.dupe(u8, "ns"),
+        .namespace_id = 1,
         .table_index = 1,
         .operation = .insert,
         .old_row = null,
@@ -27,7 +27,7 @@ test "ChangeBuffer: basic push and drain" {
 
     try cb.drainInto(&out, alloc);
     try testing.expectEqual(@as(usize, 1), out.items.len);
-    try testing.expectEqualStrings("ns", out.items[0].namespace);
+    try testing.expectEqual(@as(i64, 1), out.items[0].namespace_id);
     try testing.expectEqual(@as(usize, 1), out.items[0].table_index);
     try testing.expectEqual(OwnedRowChange.Operation.insert, out.items[0].operation);
 
@@ -39,7 +39,7 @@ test "ChangeBuffer: basic push and drain" {
 }
 
 test "ChangeBuffer: concurrent push and drain stress" {
-    var alloc = testing.allocator;
+    const alloc = testing.allocator;
     var cb = try ChangeBuffer.init(alloc);
     defer cb.deinit();
 
@@ -52,9 +52,8 @@ test "ChangeBuffer: concurrent push and drain stress" {
     const producer = struct {
         fn run(ctx: *Context) !void {
             for (0..ctx.items_to_push) |i| {
-                const ns = try std.fmt.allocPrint(ctx.alloc, "ns{}", .{i});
                 try ctx.cb.push(.{
-                    .namespace = ns,
+                    .namespace_id = @intCast(i),
                     .table_index = i,
                     .operation = .update,
                     .old_row = null,
@@ -89,8 +88,6 @@ test "ChangeBuffer: concurrent push and drain stress" {
 
     // Verify ordering
     for (0..ctx.items_to_push) |i| {
-        const expected_ns = try std.fmt.allocPrint(alloc, "ns{}", .{i});
-        defer alloc.free(expected_ns);
-        try testing.expectEqualStrings(expected_ns, out.items[i].namespace);
+        try testing.expectEqual(@as(i64, @intCast(i)), out.items[i].namespace_id);
     }
 }

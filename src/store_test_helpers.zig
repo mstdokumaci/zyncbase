@@ -8,7 +8,7 @@ const doc_id = @import("doc_id.zig");
 pub fn createStoreSetMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    namespace_id: i64,
     table_index: usize,
     doc_id_value: storage_engine.DocId,
     value: []const u8,
@@ -16,13 +16,13 @@ pub fn createStoreSetMessage(
     // Compatibility helper for single-field test tables:
     // field index 0 is `id`, field index 1 is `namespace_id`.
     // The first custom user field sits at index 2.
-    return createStoreSetFieldMessage(allocator, id, namespace, table_index, doc_id_value, 2, value);
+    return createStoreSetFieldMessage(allocator, id, namespace_id, table_index, doc_id_value, 2, value);
 }
 
 pub fn createStoreSetFieldMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    namespace_id: i64,
     table_index: usize,
     doc_id_value: storage_engine.DocId,
     field_index: usize,
@@ -30,32 +30,30 @@ pub fn createStoreSetFieldMessage(
 ) ![]u8 {
     const val_payload = try msgpack_utils.Payload.strToPayload(value, allocator);
     defer val_payload.free(allocator);
-    return createStoreSetMessageWithPayload(allocator, id, namespace, table_index, doc_id_value, field_index, val_payload);
+    return createStoreSetMessageWithPayload(allocator, id, namespace_id, table_index, doc_id_value, field_index, val_payload);
 }
 
 pub fn createStoreSetMessageWithPayload(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    _namespace_id: i64,
     table_index: usize,
     doc_id_value: storage_engine.DocId,
     field_index: ?usize,
     value: msgpack_utils.Payload,
 ) ![]u8 {
+    _ = _namespace_id;
     var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
 
-    try buf.append(allocator, 0x85); // fixmap(5)
+    try buf.append(allocator, 0x84); // fixmap(4) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
     try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
 
     try msgpack_utils.writeMsgPackStr(writer, "id");
     try buf.append(allocator, 0xcf); // uint64
     try writer.writeInt(u64, id, .big);
-
-    try msgpack_utils.writeMsgPackStr(writer, "namespace");
-    try msgpack_utils.writeMsgPackStr(writer, namespace);
 
     try msgpack_utils.writeMsgPackStr(writer, "path");
     const path_len: usize = if (field_index != null) 3 else 2;
@@ -83,10 +81,11 @@ pub fn createStoreSetMessageWithPayload(
 pub fn createStoreQueryMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    _namespace_id: i64,
     table_index: usize,
     filter: msgpack_utils.Payload,
 ) ![]u8 {
+    _ = _namespace_id;
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
@@ -96,11 +95,6 @@ pub fn createStoreQueryMessage(
         try p.mapPut("type", k_val);
     }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    {
-        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
-        errdefer k_val.free(allocator);
-        try p.mapPut("namespace", k_val);
-    }
     {
         try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
@@ -126,10 +120,11 @@ pub fn createStoreQueryMessage(
 pub fn createStoreQueryMessageWithFilterKey(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    _namespace_id: i64,
     table_index: usize,
     filter: msgpack_utils.Payload,
 ) ![]u8 {
+    _ = _namespace_id;
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
@@ -139,11 +134,6 @@ pub fn createStoreQueryMessageWithFilterKey(
         try p.mapPut("type", k_val);
     }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    {
-        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
-        errdefer k_val.free(allocator);
-        try p.mapPut("namespace", k_val);
-    }
     {
         try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
@@ -162,22 +152,23 @@ pub fn createStoreQueryMessageWithFilterKey(
 pub fn createStoreQueryMessageWithEmptyFilter(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    namespace_id: i64,
     table_index: usize,
 ) ![]u8 {
     var filter = msgpack_utils.Payload.mapPayload(allocator);
     defer filter.free(allocator);
-    return createStoreQueryMessageWithFilterKey(allocator, id, namespace, table_index, filter);
+    return createStoreQueryMessageWithFilterKey(allocator, id, namespace_id, table_index, filter);
 }
 
 pub fn createStoreSubscribeMessage(
     allocator: std.mem.Allocator,
     id: u64,
-    namespace: []const u8,
+    _namespace_id: i64,
     table_index: usize,
     filter: msgpack_utils.Payload,
     _subscription_id: u64,
 ) ![]u8 {
+    _ = _namespace_id;
     var p = msgpack_utils.Payload.mapPayload(allocator);
     defer p.free(allocator);
 
@@ -188,11 +179,6 @@ pub fn createStoreSubscribeMessage(
         try p.mapPut("type", k_val);
     }
     try p.mapPut("id", msgpack_utils.Payload.uintToPayload(id));
-    {
-        const k_val = try msgpack_utils.Payload.strToPayload(namespace, allocator);
-        errdefer k_val.free(allocator);
-        try p.mapPut("namespace", k_val);
-    }
     {
         try p.mapPut("table_index", msgpack_utils.Payload.uintToPayload(table_index));
     }
@@ -219,25 +205,25 @@ pub fn createCustomMessage(
     allocator: std.mem.Allocator,
     id: u64,
     msg_type: []const u8,
-    namespace: []const u8,
+    namespace_id: i64,
     table_index: ?usize,
     path_suffix: []const []const u8,
 ) ![]u8 {
-    return msgpack_test_helpers.createMessage(allocator, id, msg_type, namespace, table_index, path_suffix, null);
+    _ = namespace_id;
+    return msgpack_test_helpers.createMessage(allocator, id, msg_type, null, table_index, path_suffix, null);
 }
 
 pub fn createInvalidStoreSetMessageMissingId(
     allocator: std.mem.Allocator,
-    namespace: []const u8,
+    _namespace_id: i64,
 ) ![]u8 {
+    _ = _namespace_id;
     var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
-    try buf.append(allocator, 0x82); // fixmap(2)
+    try buf.append(allocator, 0x81); // fixmap(1) - removed namespace
     try msgpack_utils.writeMsgPackStr(writer, "type");
     try msgpack_utils.writeMsgPackStr(writer, "StoreSet");
-    try msgpack_utils.writeMsgPackStr(writer, "namespace");
-    try msgpack_utils.writeMsgPackStr(writer, namespace);
     return buf.toOwnedSlice(allocator);
 }
 

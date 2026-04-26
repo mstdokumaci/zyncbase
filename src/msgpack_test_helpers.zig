@@ -15,7 +15,7 @@ pub fn createMessage(
     allocator: std.mem.Allocator,
     id: u64,
     msg_type: []const u8,
-    namespace: []const u8,
+    namespace: ?[]const u8,
     table_index: ?usize,
     path_suffix: []const []const u8,
     value: ?[]const u8,
@@ -24,7 +24,8 @@ pub fn createMessage(
     errdefer buf.deinit(allocator);
 
     const writer = buf.writer(allocator);
-    const num_elements: u8 = if (value != null) 5 else 4;
+    var num_elements: u8 = if (value != null) 5 else 4;
+    if (namespace == null) num_elements -= 1;
     try buf.append(allocator, 0x80 | num_elements); // fixmap with N elements
 
     // "type" key
@@ -37,8 +38,10 @@ pub fn createMessage(
     try writer.writeInt(u64, id, .big);
 
     // "namespace" key
-    try writeMsgPackStr(writer, "namespace");
-    try writeMsgPackStr(writer, namespace);
+    if (namespace) |ns| {
+        try writeMsgPackStr(writer, "namespace");
+        try writeMsgPackStr(writer, ns);
+    }
 
     // "path" key
     try writeMsgPackStr(writer, "path");

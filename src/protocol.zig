@@ -12,14 +12,16 @@ pub const Envelope = struct {
 };
 
 pub const StorePathRequest = struct {
-    namespace: []const u8,
     path: Payload = .nil,
     value: ?Payload = null,
 };
 
 pub const StoreCollectionRequest = struct {
-    namespace: []const u8,
     table_index: Payload = .nil,
+};
+
+pub const StoreSetNamespaceRequest = struct {
+    namespace: []const u8,
 };
 
 pub const StoreUnsubscribeRequest = struct {
@@ -258,6 +260,29 @@ pub fn buildSuccessResponse(msgpack_allocator: Allocator, msg_id: u64) ![]const 
     return list.toOwnedSlice(msgpack_allocator);
 }
 
+pub fn buildConnectedMessage(
+    msgpack_allocator: Allocator,
+    user_id: ?[]const u8,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(msgpack_allocator);
+    const writer = list.writer(msgpack_allocator);
+
+    try msgpack.encodeMapHeader(writer, 2);
+
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "Connected");
+
+    try msgpack.writeMsgPackStr(writer, "userId");
+    if (user_id) |uid| {
+        try msgpack.writeMsgPackStr(writer, uid);
+    } else {
+        try msgpack.encode(.nil, writer);
+    }
+
+    return list.toOwnedSlice(msgpack_allocator);
+}
+
 pub fn buildErrorResponse(msgpack_allocator: Allocator, msg_id: u64, code: []const u8, message: []const u8) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
@@ -331,7 +356,6 @@ pub fn mapErrorToCode(err: anyerror) []const u8 {
         error.TypeMismatch, error.ConstraintViolation => err_code_schema_validation_failed,
         error.InvalidArrayElement => err_code_invalid_array_element,
         error.InvalidFieldName => err_code_invalid_field_name,
-        error.InvalidMessageFormat,
         error.InvalidPayload,
         error.InvalidConditionFormat,
         error.InvalidOperatorCode,
@@ -345,7 +369,7 @@ pub fn mapErrorToCode(err: anyerror) []const u8 {
         error.InvalidCursorSortValue,
         error.InvalidSubscriptionId,
         => err_code_invalid_message,
-        error.MissingRequiredFields, error.MissingSubscriptionId => err_code_invalid_message_format,
+        error.InvalidMessageFormat, error.MissingRequiredFields, error.MissingSubscriptionId => err_code_invalid_message_format,
         error.SubscriptionNotFound => err_code_subscription_not_found,
         error.AuthFailed => err_code_auth_failed,
         error.TokenExpired => err_code_token_expired,

@@ -258,28 +258,6 @@ pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     ) catch |err| return types.classifyError(err);
 }
 
-pub fn resolveEffectiveNamespaceId(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt_cache: *StatementCache,
-    table_metadata: *const schema_manager.TableMetadata,
-    namespace: []const u8,
-) !i64 {
-    if (!table_metadata.table.namespaced) return schema_manager.global_namespace_id;
-    return resolveNamespaceId(allocator, db, stmt_cache, namespace);
-}
-
-pub fn lookupEffectiveNamespaceId(
-    allocator: Allocator,
-    db: *sqlite.Db,
-    stmt_cache: *StatementCache,
-    table_metadata: *const schema_manager.TableMetadata,
-    namespace: []const u8,
-) !?i64 {
-    if (!table_metadata.table.namespaced) return schema_manager.global_namespace_id;
-    return lookupNamespaceId(allocator, db, stmt_cache, namespace);
-}
-
 pub fn resolveNamespaceId(
     allocator: Allocator,
     db: *sqlite.Db,

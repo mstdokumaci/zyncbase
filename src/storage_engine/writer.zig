@@ -37,41 +37,19 @@ fn getDocumentHelper(
 fn pushOwnedChange(
     allocator: Allocator,
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
-    namespace: []const u8,
+    namespace_id: i64,
     table_index: usize,
     op: OwnedRowChange.Operation,
     old_row: ?types.TypedRow,
     new_row: ?types.TypedRow,
 ) !void {
-    const ns = try allocator.dupe(u8, namespace);
-    errdefer allocator.free(ns);
     try pending_changes.append(allocator, .{
-        .namespace = ns,
+        .namespace_id = namespace_id,
         .table_index = table_index,
         .operation = op,
         .old_row = old_row,
         .new_row = new_row,
     });
-}
-
-fn resolveOwnerDocId(
-    allocator: Allocator,
-    conn: *sqlite.Db,
-    sm: *const schema_manager.SchemaManager,
-    stmt_cache: *sql.StatementCache,
-    table_metadata: *const schema_manager.TableMetadata,
-    namespace: []const u8,
-    external_owner_id: []const u8,
-    row_id: types.DocId,
-    timestamp: i64,
-) !types.DocId {
-    if (table_metadata.table.is_users_table) return row_id;
-
-    const users_table = sm.getTable("users") orelse {
-        return doc_id.fromStableString(external_owner_id);
-    };
-    const users_namespace_id = try sql.resolveEffectiveNamespaceId(allocator, conn, stmt_cache, users_table, namespace);
-    return try sql.resolveUserId(allocator, conn, stmt_cache, users_namespace_id, external_owner_id, timestamp);
 }
 
 pub fn executeBatch(
@@ -115,8 +93,8 @@ pub fn executeBatch(
         switch (op) {
             .upsert => |iop| {
                 const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = try sql.resolveEffectiveNamespaceId(allocator, conn, stmt_cache, table_metadata, iop.namespace);
-                const owner_doc_id = try resolveOwnerDocId(allocator, conn, sm, stmt_cache, table_metadata, iop.namespace, iop.owner_id, iop.id, iop.timestamp);
+                const namespace_id = if (table_metadata.table.namespaced) iop.namespace_id else schema_manager.global_namespace_id;
+                const owner_doc_id = if (table_metadata.table.is_users_table) iop.id else iop.owner_doc_id;
                 var old_row: ?types.TypedRow = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, namespace_id, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
@@ -133,8 +111,7 @@ pub fn executeBatch(
 
                 if (maybe_new_row) |new_row| {
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                    const change_namespace = schema_manager.effectiveNamespaceLabel(table_metadata, iop.namespace);
-                    pushOwnedChange(allocator, pending_changes, change_namespace, iop.table_index, op_type, old_row, new_row) catch |err| {
+                    pushOwnedChange(allocator, pending_changes, namespace_id, iop.table_index, op_type, old_row, new_row) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         if (old_row) |r| r.deinit(allocator);
                         var r = new_row;
@@ -152,7 +129,7 @@ pub fn executeBatch(
             },
             .delete => |dop| {
                 const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = try sql.lookupEffectiveNamespaceId(allocator, conn, stmt_cache, table_metadata, dop.namespace) orelse continue;
+                const namespace_id = if (table_metadata.table.namespaced) dop.namespace_id else schema_manager.global_namespace_id;
                 const maybe_old_row = executeDelete(allocator, conn, dop, namespace_id, table_metadata, stmt_cache) catch |err| {
                     const classified_err = types.classifyError(err);
                     types.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
@@ -161,8 +138,7 @@ pub fn executeBatch(
 
                 // For DELETE, the RETURNING * result IS the old row.
                 if (maybe_old_row) |old_row| {
-                    const change_namespace = schema_manager.effectiveNamespaceLabel(table_metadata, dop.namespace);
-                    pushOwnedChange(allocator, pending_changes, change_namespace, dop.table_index, .delete, old_row, null) catch |err| {
+                    pushOwnedChange(allocator, pending_changes, namespace_id, dop.table_index, .delete, old_row, null) catch |err| {
                         std.log.err("Failed to capture row change: {}", .{err});
                         var r = old_row;
                         r.deinit(allocator);
@@ -174,7 +150,7 @@ pub fn executeBatch(
                     std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, doc_id.hexSlice(dop.id, &id_hex_buf) });
                 }
             },
-            .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint => unreachable,
+            .begin_transaction, .commit_transaction, .rollback_transaction, .checkpoint, .upsert_namespace => unreachable,
         }
     }
 
@@ -208,42 +184,35 @@ pub fn flushBatch(
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-    var eviction_keys = std.ArrayListUnmanaged([]const u8).empty;
-    defer {
-        for (eviction_keys.items) |k| allocator.free(k);
-        eviction_keys.deinit(allocator);
-    }
+    var eviction_keys = std.ArrayListUnmanaged(types.MetadataCacheKey).empty;
+    defer eviction_keys.deinit(allocator);
     for (batch.items) |op| {
         // SAFETY: initialized below in the switch statement
         var table_index: usize = undefined;
         // SAFETY: initialized below in the switch statement
         var id: types.DocId = undefined;
         // SAFETY: initialized below in the switch statement
-        var ns: []const u8 = undefined;
+        var namespace_id: i64 = undefined;
         const has_affected = switch (op) {
             .upsert => |o| blk: {
                 table_index = o.table_index;
                 id = o.id;
-                ns = o.namespace;
+                namespace_id = o.namespace_id;
                 break :blk true;
             },
             .delete => |o| blk: {
                 table_index = o.table_index;
                 id = o.id;
-                ns = o.namespace;
+                namespace_id = o.namespace_id;
                 break :blk true;
             },
             else => false,
         };
         if (has_affected) {
             const table_metadata = sm.getTableByIndex(table_index) orelse continue;
-            const key = reader.getCacheKey(allocator, table_metadata, ns, id) catch |err| {
-                std.log.err("Failed to create cache key for eviction: {}", .{err});
-                continue;
-            };
+            const key = reader.getCacheKey(table_metadata, namespace_id, id);
             eviction_keys.append(allocator, key) catch |err| {
                 std.log.err("Failed to append eviction key: {}", .{err});
-                allocator.free(key);
                 continue;
             };
         }
@@ -342,6 +311,22 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                             ctx.write_mutex.unlock();
                             continue;
                         };
+                    },
+                    .upsert_namespace => |nop| {
+                        if (batch.items.len > 0) {
+                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                        }
+                        if (sql.resolveNamespaceId(ctx.allocator, &ctx._writer_conn, &ctx.writer_stmt_cache, nop.namespace)) |namespace_id| {
+                            nop.result.* = namespace_id;
+                            nop.completion_signal.signal(null);
+                        } else |err| {
+                            nop.completion_signal.signal(types.classifyError(err));
+                        }
+                        op.deinit(ctx.allocator);
+                        _ = ctx.pending_writes_count.fetchSub(1, .release);
+                        ctx.write_mutex.lock();
+                        ctx.flush_cond.broadcast();
+                        ctx.write_mutex.unlock();
                     },
                     .begin_transaction => |top| {
                         if (batch.items.len > 0) {
@@ -507,7 +492,9 @@ pub fn executeUpsert(
     if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
     bind_idx += 1;
     if (table_metadata.table.is_users_table) {
-        if (sql.bindTextTransient(stmt, bind_idx, op.owner_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+        var external_id_buf: [32]u8 = undefined;
+        const external_id = doc_id.hexSlice(op.id, &external_id_buf);
+        if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
         bind_idx += 1;
     }
 

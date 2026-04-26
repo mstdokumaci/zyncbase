@@ -11,6 +11,7 @@ const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
+const doc_id = @import("doc_id.zig");
 
 test "StoreService: set - full document replacement" {
     const allocator = testing.allocator;
@@ -35,11 +36,11 @@ test "StoreService: set - full document replacement" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("people"), 1, "public", "test-owner", 2, null, val);
+        try service.set(app.tableIndex("people"), 1, 1, doc_id.zero, 2, null, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
-        var doc = try people.getOne(allocator, 1, "public");
+        var doc = try people.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("name", "Alice");
         const age = try doc.getFieldInt("age");
@@ -51,7 +52,7 @@ test "StoreService: set - full document replacement" {
         const val = try store_helpers.createDocumentMapPayload(allocator, people.metadata, .{});
         defer val.free(allocator);
 
-        const result = service.set(@as(usize, 999), 1, "ns", "test-owner", 2, null, val);
+        const result = service.set(@as(usize, 999), 1, 4, doc_id.zero, 2, null, val);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -76,11 +77,11 @@ test "StoreService: set - field level update" {
         const val = try msgpack.Payload.strToPayload("active", allocator);
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("items"), 1, "public", "test-owner", 3, app.fieldIndex("items", "status"), val);
+        try service.set(app.tableIndex("items"), 1, 1, doc_id.zero, 3, app.fieldIndex("items", "status"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify
-        var doc = try items.getOne(allocator, 1, "public");
+        var doc = try items.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("status", "active");
     }
@@ -109,38 +110,38 @@ test "StoreService: remove" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("people"), 1, "public", "test-owner", 2, null, val);
+        try service.set(app.tableIndex("people"), 1, 1, doc_id.zero, 2, null, val);
         try app.storage_engine.flushPendingWrites();
     }
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, 1, "public", 3);
+        const result = service.remove(tbl_md.index, 1, 1, 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
     // 2. Success: Remove document (segments_len == 2)
     {
-        try service.remove(app.tableIndex("people"), 1, "public", 2);
+        try service.remove(app.tableIndex("people"), 1, 1, 2);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
-        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, "public");
+        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
 
     // 3. Negative: Unknown table
     {
-        const result = service.remove(@as(usize, 999), 1, "ns", 2);
+        const result = service.remove(@as(usize, 999), 1, 4, 2);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, 1, "public", 3);
+        const result = service.remove(tbl_md.index, 1, 1, 3);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }
@@ -176,7 +177,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
+        try service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
     }
 
     // 2. Negative: Element type mismatch (integer in string array)
@@ -186,7 +187,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -197,7 +198,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "tags"), val);
+        const result = app.store_service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -208,7 +209,7 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, "public", "test-owner", 3, app.fieldIndex("collections", "scores"), val);
+        try service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "scores"), val);
     }
 }
 
@@ -228,10 +229,10 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("value1", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", "test-owner", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, 2, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
-        var stored_doc = try test_table.getOne(allocator, 1, "ns-a");
+        var stored_doc = try test_table.getOne(allocator, 1, 2);
         defer stored_doc.deinit();
         _ = try stored_doc.expectFieldString("val", "value1");
     }
@@ -242,16 +243,16 @@ test "StoreService: persistence and namespace isolation" {
         defer val.free(allocator);
 
         // Same table/id, different namespace
-        try service.set(app.tableIndex("test"), 1, "ns-b", "test-owner", 3, app.fieldIndex("test", "val"), val);
+        try service.set(app.tableIndex("test"), 1, 3, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify ns-a still has value1
-        var doc_a = try test_table.getOne(allocator, 1, "ns-a");
+        var doc_a = try test_table.getOne(allocator, 1, 2);
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
         // Verify ns-b did not get a second row with the same id.
-        var managed_b = try test_table.selectDocument(allocator, 1, "ns-b");
+        var managed_b = try test_table.selectDocument(allocator, 1, 4);
         defer managed_b.deinit();
         try testing.expectEqual(@as(usize, 0), managed_b.rows.len);
     }
@@ -261,10 +262,10 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("updated", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, "ns-a", "test-owner", 3, app.fieldIndex("test", "val"), val);
+        try app.store_service.set(app.tableIndex("test"), 1, 2, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
         try app.storage_engine.flushPendingWrites();
 
-        var doc = try test_table.getOne(allocator, 1, "ns-a");
+        var doc = try test_table.getOne(allocator, 1, 2);
         defer doc.deinit();
         _ = try doc.expectFieldString("val", "updated");
     }
@@ -280,8 +281,8 @@ test "StoreService: query - basic search" {
     const people = try app.table("people");
 
     // Seed data
-    try people.insertText(1, "ns", "name", "Alice");
-    try people.insertText(2, "ns", "name", "Bob");
+    try people.insertText(1, 1, "name", "Alice");
+    try people.insertText(2, 1, "name", "Bob");
     try people.flush();
 
     // Build filter: { "conditions": [ ["id", 0, 1] ] }
@@ -291,7 +292,7 @@ test "StoreService: query - basic search" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try app.store_service.query(allocator, app.tableIndex("people"), "ns", filter_map);
+    var qr = try app.store_service.query(allocator, app.tableIndex("people"), 1, filter_map);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -311,7 +312,7 @@ test "StoreService: query - orderBy and limit" {
 
     const tasks = [_][]const u8{ "Task A", "Task B", "Task C" };
     for (tasks, 0..) |t, i| {
-        try app.insertText("tasks", i + 1, "ns", "title", t);
+        try app.insertText("tasks", i + 1, 1, "title", t);
     }
     try app.storage_engine.flushPendingWrites();
 
@@ -323,7 +324,7 @@ test "StoreService: query - orderBy and limit" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.query(allocator, app.tableIndex("tasks"), "ns", filter_map);
+    var qr = try service.query(allocator, app.tableIndex("tasks"), 1, filter_map);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -345,7 +346,7 @@ test "StoreService: query - negative cases" {
         const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
-        const err = service.query(allocator, @as(usize, 999), "ns", filter_map);
+        const err = service.query(allocator, @as(usize, 999), 1, filter_map);
         try testing.expectError(StorageError.UnknownTable, err);
     }
 
@@ -357,7 +358,7 @@ test "StoreService: query - negative cases" {
         });
         defer filter_map.free(allocator);
 
-        const err = service.query(allocator, app.tableIndex("data"), "ns", filter_map);
+        const err = service.query(allocator, app.tableIndex("data"), 1, filter_map);
         try testing.expectError(StorageError.UnknownField, err);
     }
 }
@@ -379,7 +380,7 @@ test "StoreService: queryWithCursor - pagination" {
         defer allocator.free(str);
         const id = try std.fmt.allocPrint(allocator, "id-{}", .{i});
         defer allocator.free(id);
-        try data_table.insertText(i + 1, "ns", "val", str);
+        try data_table.insertText(i + 1, 1, "val", str);
     }
     try data_table.flush();
 
@@ -390,7 +391,7 @@ test "StoreService: queryWithCursor - pagination" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.query(allocator, app.tableIndex("data"), "ns", filter_map);
+    var qr = try service.query(allocator, app.tableIndex("data"), 1, filter_map);
     defer qr.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
@@ -405,7 +406,7 @@ test "StoreService: queryWithCursor - pagination" {
     const cursor = try query_parser.parseCursorToken(allocator, encoded_cursor, .doc_id, null);
 
     // 2. Query with cursor: fetch next 2
-    var next_results = try service.queryWithCursor(allocator, app.tableIndex("data"), "ns", &qr.filter, cursor);
+    var next_results = try service.queryWithCursor(allocator, app.tableIndex("data"), 1, &qr.filter, cursor);
     defer next_results.deinit();
 
     if (next_results.rows.len == 0) return error.TestExpectedValue;

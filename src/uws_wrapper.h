@@ -131,6 +131,7 @@ void *uws_ws_get_user_data(int ssl, uws_websocket_t *ws);
 
 // Upgrade and Request helpers
 size_t uws_req_get_header(uws_req_t *req, const char *lower_case_header, size_t lower_case_header_length, const char **dest);
+size_t uws_req_get_query(uws_req_t *req, const char *key, size_t key_length, const char **dest);
 void *uws_res_upgrade(int ssl, uws_res_t *res, void *data, const char *sec_web_socket_key, size_t sec_web_socket_key_length, const char *sec_web_socket_protocol, size_t sec_web_socket_protocol_length, const char *sec_web_socket_extensions, size_t sec_web_socket_extensions_length, uws_socket_context_t *context);
 
 #ifdef __cplusplus
