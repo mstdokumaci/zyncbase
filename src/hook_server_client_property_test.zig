@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const hook_server = @import("hook_server_client.zig");
+const doc_id = @import("doc_id.zig");
 
 const HookServerClient = hook_server.HookServerClient;
 const AuthRequest = hook_server.AuthRequest;
@@ -30,10 +31,10 @@ test "circuit-breaker: opens after threshold failures" {
 
     // Create a test request
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -74,10 +75,10 @@ test "circuit-breaker: transitions to half-open after timeout" {
     defer client.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -114,10 +115,10 @@ test "circuit-breaker: resets on successful authorization" {
     defer client.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -161,10 +162,10 @@ test "circuit-breaker: fail-fast latency when circuit open" {
     defer client.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -199,10 +200,10 @@ test "cache: authorization response caching" {
     defer client.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -240,10 +241,10 @@ test "cache: eviction on TTL expiration" {
     // Create a cache entry with short TTL
     if (client.auth_cache) |cache| {
         const req = AuthRequest{
-            .user_id = "test-user",
-            .namespace = "test-namespace",
+            .user_doc_id = doc_id.zero,
+            .namespace_id = 1,
             .operation = .read,
-            .resource = "test-resource",
+            .table_index = 0,
             .timestamp = std.time.timestamp(),
         };
 

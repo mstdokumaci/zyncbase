@@ -92,12 +92,26 @@ pub const ConnectionManager = struct {
 
         // Acquire from pool and activate
         const conn = try self.memory_strategy.acquireConnection();
+        var inserted = false;
+        errdefer if (!inserted) {
+            if (conn.release()) {
+                self.memory_strategy.releaseConnection(conn);
+            }
+        };
+
         conn.activate(ws.getConnId(), ws.*);
+        if (ws.getClientId()) |client_id| {
+            try conn.setAnonymousUserId(client_id);
+        }
+
+        const connected_msg = try protocol.buildConnectedMessage(self.allocator, conn.user_id);
+        defer self.allocator.free(connected_msg);
 
         try self.map.put(conn_id, conn);
+        inserted = true;
         std.log.info("Client connected: id={}", .{conn_id});
 
-        // Send SchemaSync as the first message on this connection
+        ws.send(connected_msg, .binary);
         ws.send(self.schema_sync_msg, .binary);
     }
 

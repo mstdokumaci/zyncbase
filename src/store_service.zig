@@ -83,8 +83,8 @@ pub const StoreService = struct {
         self: *StoreService,
         table_index: usize,
         doc_id: DocId,
-        namespace: []const u8,
-        owner_id: []const u8,
+        namespace_id: i64,
+        owner_doc_id: DocId,
         segments_len: usize,
         field_index: ?usize,
         value: msgpack.Payload,
@@ -124,7 +124,7 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, owner_id, columns.items);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace_id, owner_doc_id, columns.items);
         } else if (segments_len == 3) {
             // Partial update / field-level update
             const f_index = field_index orelse return StorageError.InvalidPath;
@@ -136,7 +136,7 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed,
             }};
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace, owner_id, &col);
+            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace_id, owner_doc_id, &col);
         } else {
             return StorageError.InvalidPath;
         }
@@ -148,13 +148,13 @@ pub const StoreService = struct {
         self: *StoreService,
         table_index: usize,
         doc_id: DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         segments_len: usize,
     ) !void {
         _ = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (segments_len == 2) {
-            try self.storage_engine.deleteDocument(table_index, doc_id, namespace);
+            try self.storage_engine.deleteDocument(table_index, doc_id, namespace_id);
         } else {
             return StorageError.InvalidPath;
         }
@@ -167,7 +167,7 @@ pub const StoreService = struct {
         self: *StoreService,
         allocator: Allocator,
         table_index: usize,
-        namespace: []const u8,
+        namespace_id: i64,
         payload: msgpack.Payload,
     ) !QueryResult {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
@@ -175,14 +175,14 @@ pub const StoreService = struct {
 
         if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
             // Fast path: use selectDocument with cache
-            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace);
+            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
             return QueryResult{
                 .results = result,
                 .filter = filter,
             };
         }
 
-        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace, filter);
+        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
         return QueryResult{
             .results = results,
             .filter = filter,
@@ -195,14 +195,14 @@ pub const StoreService = struct {
         self: *StoreService,
         allocator: Allocator,
         table_index: usize,
-        namespace: []const u8,
+        namespace_id: i64,
         filter: *query_parser.QueryFilter,
         cursor: query_parser.Cursor,
     ) !storage_mod.ManagedResult {
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
-        return try self.storage_engine.selectQuery(allocator, table_index, namespace, filter.*);
+        return try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
     }
 };
 

@@ -417,6 +417,45 @@ pub const StorageEngine = struct {
         self.write_cond.signal();
     }
 
+    pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
+        try self.ensureRunning();
+
+        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
+        const node = &self.reader_pool[reader_idx];
+        node.mutex.lock();
+        defer node.mutex.unlock();
+
+        return try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace);
+    }
+
+    pub fn resolveNamespaceId(self: *StorageEngine, namespace: []const u8) !i64 {
+        try self.ensureRunning();
+
+        var signal = WriteOp.CompletionSignal{};
+        var namespace_id: i64 = 0;
+        const ns_owned = try self.allocator.dupe(u8, namespace);
+        var queued = false;
+        errdefer if (!queued) self.allocator.free(ns_owned);
+
+        const op = WriteOp{
+            .upsert_namespace = .{
+                .namespace = ns_owned,
+                .result = &namespace_id,
+                .completion_signal = &signal,
+            },
+        };
+
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        self.pushWrite(op) catch |err| {
+            _ = self.pending_writes_count.fetchSub(1, .release);
+            return err;
+        };
+        queued = true;
+
+        try signal.wait();
+        return namespace_id;
+    }
+
     pub fn flushPendingWrites(self: *StorageEngine) !void {
         std.log.debug("flushPendingWrites: count={}", .{self.pending_writes_count.load(.acquire)});
         self.write_mutex.lock();
@@ -426,8 +465,8 @@ pub const StorageEngine = struct {
         }
     }
 
-    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema_manager.TableMetadata, namespace: []const u8, id: DocId) ![]u8 {
-        return reader.getCacheKey(self.allocator, table_metadata, namespace, id);
+    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) ![]u8 {
+        return reader.getCacheKey(self.allocator, table_metadata, namespace_id, id);
     }
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
@@ -440,13 +479,14 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         table_index: usize,
         id: DocId,
-        namespace: []const u8,
-        owner_id: []const u8,
+        namespace_id: i64,
+        owner_doc_id: DocId,
         columns: []const ColumnValue,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
 
         const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
         errdefer self.allocator.free(sql_string);
@@ -462,21 +502,15 @@ pub const StorageEngine = struct {
             initialized_count += 1;
         }
 
-        const now = std.time.timestamp();
-        const ns_owned = try self.allocator.dupe(u8, namespace);
-        errdefer self.allocator.free(ns_owned);
-        const owner_owned = try self.allocator.dupe(u8, owner_id);
-        errdefer self.allocator.free(owner_owned);
-
         const op = WriteOp{
             .upsert = .{
                 .table_index = table_index,
                 .id = id,
-                .namespace = ns_owned,
-                .owner_id = owner_owned,
+                .namespace_id = effective_namespace_id,
+                .owner_doc_id = owner_doc_id,
                 .sql = sql_string,
                 .values = values,
-                .timestamp = now,
+                .timestamp = std.time.timestamp(),
                 .completion_signal = null,
             },
         };
@@ -491,13 +525,13 @@ pub const StorageEngine = struct {
         allocator: Allocator,
         table_index: usize,
         id: DocId,
-        namespace: []const u8,
+        namespace_id: i64,
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
 
-        const cache_key = try reader.getCacheKey(allocator, table_metadata, namespace, id);
-        defer allocator.free(cache_key);
+        const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
             const typed_row_ptr = handle.data();
@@ -516,10 +550,6 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const namespace_id = try sql.lookupEffectiveNamespaceId(self.allocator, &node.conn, &node.stmt_cache, table_metadata, namespace) orelse {
-            return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
-        };
-
         const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata);
         defer allocator.free(sql_query);
 
@@ -529,7 +559,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, namespace_id, table_metadata);
+        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata);
         if (result) |row| {
             if (self.write_seq.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -549,22 +579,19 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         allocator: Allocator,
         table_index: usize,
-        namespace: []const u8,
+        namespace_id: i64,
         filter: query_parser.QueryFilter,
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const namespace_id = try sql.lookupEffectiveNamespaceId(self.allocator, &node.conn, &node.stmt_cache, table_metadata, namespace) orelse {
-            return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
-        };
-
-        const query_res = try reader.buildSelectQuery(allocator, table_metadata, namespace_id, filter);
+        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter);
         defer query_res.deinit(allocator);
 
         const sort_field_index = filter.order_by.field_index;
@@ -594,23 +621,21 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         table_index: usize,
         id: DocId,
-        namespace: []const u8,
+        namespace_id: i64,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
 
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
         errdefer self.allocator.free(sql_string);
-
-        const ns_owned = try self.allocator.dupe(u8, namespace);
-        errdefer self.allocator.free(ns_owned);
 
         const op = WriteOp{
             .delete = .{
                 .table_index = table_index,
                 .id = id,
-                .namespace = ns_owned,
+                .namespace_id = effective_namespace_id,
                 .sql = sql_string,
                 .completion_signal = null,
             },

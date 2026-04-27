@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { ConnectionManager } from "./connection";
 import { encodeQueryOptions } from "./store";
+import { connectManager, installMockWs, MockWebSocket } from "./test-helpers";
 import type { ClientOptions, JsonValue } from "./types";
 
 // ─── Property 2: encodeQueryOptions Output Stability ─────────────────────────
@@ -173,7 +174,6 @@ describe("encodeQueryOptions — preservation property", () => {
 		const result = encodeQueryOptions({
 			where: { status: "active", age: { gte: 18 } },
 		});
-		// Both conditions should be present (order may vary by object key iteration)
 		expect(result.conditions).toHaveLength(2);
 		expect(result.conditions).toContainEqual(["status", 0, "active"]);
 		expect(result.conditions).toContainEqual(["age", 4, 18]);
@@ -240,7 +240,6 @@ describe("encodeQueryOptions — preservation property", () => {
 		});
 	});
 
-	// Property-based style: test many combinations systematically
 	test("property: limit values 0..100 all encode correctly", () => {
 		for (let limit = 0; limit <= 100; limit++) {
 			const result = encodeQueryOptions({ limit });
@@ -309,42 +308,6 @@ describe("encodeQueryOptions — preservation property", () => {
 //
 // Validates: Requirements 2.4, 2.5, 2.6, 3.1
 
-class MockWebSocket {
-	static OPEN = 1;
-	static CLOSING = 2;
-	static CLOSED = 3;
-
-	readyState = MockWebSocket.OPEN;
-	binaryType = "";
-	sentMessages: Uint8Array[] = [];
-
-	onopen: ((event: Record<string, unknown>) => void) | null = null;
-	onclose: ((event: Record<string, unknown>) => void) | null = null;
-	onerror: ((event: Record<string, unknown>) => void) | null = null;
-	onmessage: ((event: Record<string, unknown>) => void) | null = null;
-
-	send(data: Uint8Array) {
-		this.sentMessages.push(data);
-	}
-
-	close() {
-		this.readyState = MockWebSocket.CLOSED;
-	}
-
-	triggerOpen() {
-		this.onopen?.({});
-	}
-
-	triggerClose(code = 1000, reason = "") {
-		this.readyState = MockWebSocket.CLOSED;
-		this.onclose?.({ code, reason });
-	}
-
-	triggerError() {
-		this.onerror?.({});
-	}
-}
-
 const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
 	reconnect: false,
@@ -353,47 +316,23 @@ const defaultOptions: ClientOptions = {
 describe("WebSocket mock injection — preservation property", () => {
 	test("factory function pattern injects the correct mockWs instance", async () => {
 		const mockWs = new MockWebSocket();
-
-		// Use a regular function (not arrow) so `new WebSocket(url)` works in connection.ts
-		function wsFactory() {
-			return mockWs;
-		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
-			wsFactory,
-			{
-				OPEN: MockWebSocket.OPEN,
-			},
-		);
+		installMockWs(mockWs);
 
 		const manager = new ConnectionManager(defaultOptions);
-		const connectPromise = manager.connect();
-		mockWs.triggerOpen();
-		await connectPromise;
+		await connectManager(manager, mockWs);
 
-		// The manager should have set binaryType on the injected mockWs
 		expect(mockWs.binaryType).toBe("arraybuffer");
 	});
 
 	test("factory function pattern: send() reaches the injected mockWs", async () => {
 		const mockWs = new MockWebSocket();
-
-		function wsFactory() {
-			return mockWs;
-		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
-			wsFactory,
-			{
-				OPEN: MockWebSocket.OPEN,
-			},
-		);
+		installMockWs(mockWs);
 
 		const manager = new ConnectionManager(defaultOptions);
-		const connectPromise = manager.connect();
-		mockWs.triggerOpen();
-		await connectPromise;
+		await connectManager(manager, mockWs);
 
 		manager.send(new Uint8Array([1, 2, 3]));
-		expect(mockWs.sentMessages).toHaveLength(1);
+		expect(mockWs.sentMessages).toHaveLength(2);
 	});
 
 	test("factory function pattern: wsInstances counter increments correctly", async () => {
@@ -406,31 +345,18 @@ describe("WebSocket mock injection — preservation property", () => {
 		}
 		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 			wsFactory,
-			{
-				OPEN: MockWebSocket.OPEN,
-			},
+			{ OPEN: MockWebSocket.OPEN },
 		);
 
 		const manager = new ConnectionManager(defaultOptions);
-		const connectPromise = manager.connect();
-		mockWs.triggerOpen();
-		await connectPromise;
+		await connectManager(manager, mockWs);
 
 		expect(wsInstances).toBe(1);
 	});
 
 	test("factory function pattern: error event propagates correctly", async () => {
 		const mockWs = new MockWebSocket();
-
-		function wsFactory() {
-			return mockWs;
-		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
-			wsFactory,
-			{
-				OPEN: MockWebSocket.OPEN,
-			},
-		);
+		installMockWs(mockWs);
 
 		const manager = new ConnectionManager(defaultOptions);
 		const errors: unknown[] = [];
@@ -451,21 +377,10 @@ describe("WebSocket mock injection — preservation property", () => {
 
 	test("factory function pattern: close event propagates correctly", async () => {
 		const mockWs = new MockWebSocket();
-
-		function wsFactory() {
-			return mockWs;
-		}
-		(globalThis as Record<string, unknown>).WebSocket = Object.assign(
-			wsFactory,
-			{
-				OPEN: MockWebSocket.OPEN,
-			},
-		);
+		installMockWs(mockWs);
 
 		const manager = new ConnectionManager(defaultOptions);
-		const connectPromise = manager.connect();
-		mockWs.triggerOpen();
-		await connectPromise;
+		await connectManager(manager, mockWs);
 
 		const events: string[] = [];
 		manager.on("disconnected", () => events.push("disconnected"));
@@ -475,24 +390,12 @@ describe("WebSocket mock injection — preservation property", () => {
 	});
 
 	test("factory function pattern: multiple independent mock instances work correctly", async () => {
-		// Simulate what happens across multiple test sites
 		for (let i = 0; i < 3; i++) {
 			const mockWs = new MockWebSocket();
-
-			function wsFactory() {
-				return mockWs;
-			}
-			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
-				wsFactory,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
-			);
+			installMockWs(mockWs);
 
 			const manager = new ConnectionManager(defaultOptions);
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			expect(mockWs.binaryType).toBe("arraybuffer");
 		}

@@ -4,6 +4,7 @@ import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	ClientOptions,
+	ConnectedMessage,
 	ErrorResponse,
 	InboundMessage,
 	LifecycleEvent,
@@ -11,6 +12,21 @@ import type {
 	StatusDetail,
 	StoreDelta,
 } from "./types";
+import { generateUUIDv7 } from "./uuid.js";
+
+const CLIENT_ID_STORAGE_KEY = "zyncbase_client_id";
+
+function getOrCreateClientId(explicit?: string): string {
+	if (explicit) return explicit;
+	if (typeof localStorage !== "undefined") {
+		const stored = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+		if (stored) return stored;
+		const id = generateUUIDv7();
+		localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+		return id;
+	}
+	return generateUUIDv7();
+}
 
 type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
@@ -54,6 +70,7 @@ export class ConnectionManager {
 	// Active namespaces
 	private storeNamespace: string;
 	private presenceNamespace: string;
+	private readonly clientId: string;
 
 	// Schema dictionary (populated from SchemaSync)
 	readonly schemaDictionary = new SchemaDictionary();
@@ -70,12 +87,14 @@ export class ConnectionManager {
 		this.options = options;
 		this.storeNamespace = options.storeNamespace ?? "public";
 		this.presenceNamespace = options.presenceNamespace ?? this.storeNamespace;
+		this.clientId = getOrCreateClientId(options.clientId);
 	}
 
 	getStoreNamespace(): string {
 		return this.storeNamespace;
 	}
-	setStoreNamespace(ns: string) {
+	async setStoreNamespace(ns: string): Promise<void> {
+		await this.dispatch({ type: "StoreSetNamespace", namespace: ns });
 		this.storeNamespace = ns;
 	}
 	getPresenceNamespace(): string {
@@ -100,15 +119,21 @@ export class ConnectionManager {
 		this.schemaSyncPromise.catch(() => {});
 
 		return new Promise((resolve, reject) => {
-			const ws = new WebSocket(this.options.url);
+			const url = new URL(this.options.url);
+			url.searchParams.set("clientId", this.clientId);
+			const ws = new WebSocket(url.toString());
 			ws.binaryType = "arraybuffer";
 			this.ws = ws;
 
 			ws.onopen = () => {
-				this.reconnectAttempt = 0;
-				this.setStatus("connected");
-				this.emit("connected");
-				resolve();
+				this.setStoreNamespace(this.storeNamespace)
+					.then(() => {
+						this.reconnectAttempt = 0;
+						this.setStatus("connected");
+						this.emit("connected");
+						resolve();
+					})
+					.catch(reject);
 			};
 
 			ws.onerror = (_event) => this._handleSocketError(reject);
@@ -223,15 +248,6 @@ export class ConnectionManager {
 		const id = this.nextMsgId++;
 
 		const msgWithId: Record<string, unknown> = { ...msg, id };
-		if (!msgWithId.namespace) {
-			if ((msgWithId.type as string | undefined)?.startsWith("Store")) {
-				msgWithId.namespace = this.storeNamespace;
-			} else if (
-				(msgWithId.type as string | undefined)?.startsWith("Presence")
-			) {
-				msgWithId.namespace = this.presenceNamespace;
-			}
-		}
 
 		if (this.options.debug) {
 			console.log(
@@ -391,6 +407,9 @@ export class ConnectionManager {
 
 		let processedMsg: InboundMessage = msg;
 		switch (type) {
+			case "Connected":
+				this._handleConnected(msg as ConnectedMessage);
+				return;
 			case "SchemaSync":
 				await this._handleSchemaSync(msg);
 				return; // SchemaSync is internal — not dispatched to messageHandler
@@ -407,6 +426,14 @@ export class ConnectionManager {
 		}
 
 		if (this.messageHandler) this.messageHandler(processedMsg);
+	}
+
+	private _handleConnected(msg: ConnectedMessage): void {
+		if (msg.storeNamespace) this.storeNamespace = msg.storeNamespace;
+		if (msg.presenceNamespace) this.presenceNamespace = msg.presenceNamespace;
+		if (this.options.debug) {
+			console.log(`[SDK] Connected as userId=${msg.userId}`);
+		}
 	}
 
 	private _handleOkResponse(ok: OkResponse): void {

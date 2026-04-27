@@ -24,7 +24,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         defer filter.deinit(allocator);
 
         for (0..subs_per_group) |j| {
-            _ = try engine.subscribe("ns", 0, filter, @as(u64, @intCast(i * 1000 + j)), 1);
+            _ = try engine.subscribe(1, 0, filter, @as(u64, @intCast(i * 1000 + j)), 1);
         }
     }
 
@@ -36,7 +36,7 @@ test "SubscriptionEngine: handleRowChange performance" {
     defer new_row.deinit(allocator);
 
     const change = RowChange{
-        .namespace = "ns",
+        .namespace_id = 1,
         .table_index = 0,
         .operation = .insert,
         .new_row = new_row,

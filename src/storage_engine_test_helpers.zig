@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
+const doc_id = @import("doc_id.zig");
 const tth = @import("typed_test_helpers.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
@@ -35,40 +36,40 @@ pub const TableFixture = struct {
     pub fn insertNamed(
         self: TableFixture,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         columns: anytype,
     ) !void {
-        try insertNamedWithMetadata(self.engine, self.metadata, id, namespace, columns);
+        try insertNamedWithMetadata(self.engine, self.metadata, id, namespace_id, columns);
     }
 
     pub fn insertField(
         self: TableFixture,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: storage_engine.TypedValue,
     ) !void {
-        try insertNamedWithMetadata(self.engine, self.metadata, id, namespace, .{named(field, value)});
+        try insertNamedWithMetadata(self.engine, self.metadata, id, namespace_id, .{named(field, value)});
     }
 
     pub fn insertText(
         self: TableFixture,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: []const u8,
     ) !void {
-        try self.insertField(id, namespace, field, tth.valText(value));
+        try self.insertField(id, namespace_id, field, tth.valText(value));
     }
 
     pub fn insertInt(
         self: TableFixture,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: i64,
     ) !void {
-        try self.insertField(id, namespace, field, tth.valInt(value));
+        try self.insertField(id, namespace_id, field, tth.valInt(value));
     }
 
     pub fn flush(self: TableFixture) !void {
@@ -79,42 +80,35 @@ pub const TableFixture = struct {
         self: TableFixture,
         allocator: Allocator,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace);
+        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace_id);
     }
 
     pub fn selectQuery(
         self: TableFixture,
         allocator: Allocator,
-        namespace: []const u8,
+        namespace_id: i64,
         filter: query_parser.QueryFilter,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectQuery(allocator, self.metadata.index, namespace, filter);
-    }
-
-    pub fn countRows(
-        self: TableFixture,
-        namespace: []const u8,
-    ) !usize {
-        return self.engine.countRows(self.metadata.index, namespace);
+        return self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter);
     }
 
     pub fn deleteDocument(
         self: TableFixture,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
     ) !void {
-        return self.engine.deleteDocument(self.metadata.index, id, namespace);
+        return self.engine.deleteDocument(self.metadata.index, id, namespace_id);
     }
 
     pub fn getOne(
         self: TableFixture,
         allocator: Allocator,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
     ) !ManagedDocument {
-        var managed = try self.selectDocument(allocator, id, namespace);
+        var managed = try self.selectDocument(allocator, id, namespace_id);
         if (managed.rows.len == 0) {
             managed.deinit();
             return error.NotFound;
@@ -248,44 +242,44 @@ pub const EngineTestContext = struct {
         self: *EngineTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         columns: anytype,
     ) !void {
         const table_metadata = try self.tableMetadata(table_name);
-        try insertNamedWithMetadata(&self.engine, table_metadata, id, namespace, columns);
+        try insertNamedWithMetadata(&self.engine, table_metadata, id, namespace_id, columns);
     }
 
     pub fn insertField(
         self: *EngineTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: storage_engine.TypedValue,
     ) !void {
-        try self.insertNamed(table_name, id, namespace, .{named(field, value)});
+        try self.insertNamed(table_name, id, namespace_id, .{named(field, value)});
     }
 
     pub fn insertText(
         self: *EngineTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: []const u8,
     ) !void {
-        try self.insertField(table_name, id, namespace, field, tth.valText(value));
+        try self.insertField(table_name, id, namespace_id, field, tth.valText(value));
     }
 
     pub fn insertInt(
         self: *EngineTestContext,
         table_name: []const u8,
         id: storage_engine.DocId,
-        namespace: []const u8,
+        namespace_id: i64,
         field: []const u8,
         value: i64,
     ) !void {
-        try self.insertField(table_name, id, namespace, field, tth.valInt(value));
+        try self.insertField(table_name, id, namespace_id, field, tth.valInt(value));
     }
 
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
@@ -428,12 +422,12 @@ fn insertNamedWithMetadata(
     engine: *StorageEngine,
     table_metadata: *const TableMetadata,
     id: storage_engine.DocId,
-    namespace: []const u8,
+    namespace_id: i64,
     columns: anytype,
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace, "test-owner", &resolved);
+    try engine.insertOrReplace(table_metadata.index, id, namespace_id, doc_id.zero, &resolved);
 }
 
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───

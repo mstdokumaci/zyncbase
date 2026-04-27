@@ -17,7 +17,7 @@ const schema_manager = sth.schema_manager;
 // - Resource cleanup after errors
 
 fn insertTestValue(ctx: *sth.EngineTestContext, id: u128, value: []const u8) !void {
-    try ctx.insertText("test", id, "test", "val", value);
+    try ctx.insertText("test", id, 1, "val", value);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -49,13 +49,13 @@ test "storage: stability no crashes on concurrent errors" {
                 // Mix of operations that might fail
                 const key: u128 = t_ctx.thread_id * 1_000 + i + 1;
                 // Try to set a value
-                t_ctx.ctx.insertText("test", key, "test", "val", "value") catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.insertText("test", key, 1, "val", "value") catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
-                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
                 _ = managed.rows;
                 // Try to delete the value
-                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;
@@ -93,7 +93,7 @@ test "storage: stability continues after transaction errors" {
     // Server should still be operational - try normal operations
     try insertTestValue(&ctx, 1, "value1");
     try storage.flushPendingWrites();
-    var doc1 = try tbl.getOne(allocator, 1, "test");
+    var doc1 = try tbl.getOne(allocator, 1, 1);
     defer doc1.deinit();
     _ = try doc1.expectFieldString("val", "value1");
     // Cause another transaction error
@@ -103,7 +103,7 @@ test "storage: stability continues after transaction errors" {
     // Server should still be operational
     try insertTestValue(&ctx, 2, "value2");
     try storage.flushPendingWrites();
-    var doc2 = try tbl.getOne(allocator, 2, "test");
+    var doc2 = try tbl.getOne(allocator, 2, 1);
     defer doc2.deinit();
     _ = try doc2.expectFieldString("val", "value2");
 }
@@ -129,7 +129,7 @@ test "storage: stability handles rapid error conditions" {
     // Server should still be operational
     try insertTestValue(&ctx, 1, "value");
     try storage.flushPendingWrites();
-    var doc = try tbl.getOne(allocator, 1, "test");
+    var doc = try tbl.getOne(allocator, 1, 1);
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value");
 }
@@ -157,13 +157,13 @@ test "storage: stability error recovery with valid operations" {
             try testing.expectEqual(error.NoActiveTransaction, err);
         };
         // Another valid operation
-        var doc = try tbl.selectDocument(allocator, key, "test");
+        var doc = try tbl.selectDocument(allocator, key, 1);
         defer doc.deinit();
     }
     // Flush and verify server is still operational
     try storage.flushPendingWrites();
     // Verify some data was persisted
-    var doc0 = try tbl.getOne(allocator, 1, "test");
+    var doc0 = try tbl.getOne(allocator, 1, 1);
     defer doc0.deinit();
     _ = try doc0.expectFieldString("val", "value");
 }
@@ -194,7 +194,7 @@ test "storage: stability resource cleanup after errors" {
     try insertTestValue(&ctx, 3, "value3");
     try storage.commitTransaction();
     // Verify the committed data is there
-    var doc = try tbl.getOne(allocator, 3, "test");
+    var doc = try tbl.getOne(allocator, 3, 1);
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value3");
 }
@@ -227,15 +227,15 @@ test "storage: stability mixed error and success scenarios" {
     try insertTestValue(&ctx, 3, "value3");
     try storage.flushPendingWrites();
     // Verify first transaction succeeded
-    var doc1 = try tbl.getOne(allocator, 1, "test");
+    var doc1 = try tbl.getOne(allocator, 1, 1);
     defer doc1.deinit();
     _ = try doc1.expectFieldString("val", "value1");
     // Verify second transaction was rolled back
-    var managed2 = try tbl.selectDocument(allocator, 2, "test");
+    var managed2 = try tbl.selectDocument(allocator, 2, 1);
     defer managed2.deinit();
     try testing.expect(managed2.rows.len == 0);
     // Verify third operation succeeded
-    var doc3 = try tbl.getOne(allocator, 3, "test");
+    var doc3 = try tbl.getOne(allocator, 3, 1);
     defer doc3.deinit();
     _ = try doc3.expectFieldString("val", "value3");
 }
@@ -266,10 +266,10 @@ test "storage: stability concurrent reads during write errors" {
             var i: usize = 0;
             while (i < 50) : (i += 1) {
                 // Read operations should succeed
-                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 1, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed1 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 1, 1) catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed1.deinit();
                 _ = managed1.rows;
-                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 2, "test") catch continue; // zwanzig-disable-line: swallowed-error
+                var managed2 = r_ctx.storage.selectDocument(r_ctx.allocator, table_index, 2, 1) catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed2.deinit();
                 _ = managed2.rows;
                 // Small delay
@@ -298,7 +298,7 @@ test "storage: stability concurrent reads during write errors" {
         thread.join();
     }
     // Verify data is still intact
-    var doc = try tbl.getOne(allocator, 1, "test");
+    var doc = try tbl.getOne(allocator, 1, 1);
     defer doc.deinit();
     _ = try doc.expectFieldString("val", "value1");
 }

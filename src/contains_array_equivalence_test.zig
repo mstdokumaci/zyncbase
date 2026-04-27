@@ -32,7 +32,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     const engine = &ctx.engine;
     const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
 
-    const ns = "ns";
+    const ns = 1;
 
     {
         const tags_tv = try tth.valArray(allocator, &.{ .{ .text = "urgent" }, .{ .text = "home" } });
@@ -135,7 +135,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     const engine = &ctx.engine;
     const players_md = ctx.sm.getTable("players") orelse return error.UnknownTable;
 
-    const ns = "ns";
+    const ns = 1;
 
     {
         const arr_tv = try tth.valArray(allocator, &.{ .{ .integer = 10 }, .{ .integer = 20 }, .{ .integer = 30 } });

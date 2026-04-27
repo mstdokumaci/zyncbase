@@ -70,7 +70,7 @@ export class ZyncBaseClient {
 		const oldNs = this.conn.getStoreNamespace();
 		if (oldNs === namespace) return;
 
-		this.conn.setStoreNamespace(namespace);
+		await this.conn.setStoreNamespace(namespace);
 
 		// Spec: "Active store subscriptions are invalidated — the client must re-subscribe."
 		// We replay all active subscriptions with the new namespace context.

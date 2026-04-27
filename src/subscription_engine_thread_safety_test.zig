@@ -28,7 +28,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
             var i: u32 = 0;
             while (i < sub_count) : (i += 1) {
                 const conn_id = start_id + i;
-                _ = engine_ptr.subscribe("ns", 0, filter, conn_id, 1) catch @panic("subscribe failed");
+                _ = engine_ptr.subscribe(1, 0, filter, conn_id, 1) catch @panic("subscribe failed");
             }
         }
     }.run;
@@ -54,7 +54,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
             defer r.deinit(alloc);
 
             const change = RowChange{
-                .namespace = "ns",
+                .namespace_id = 1,
                 .table_index = 0,
                 .operation = .update,
                 .new_row = r,
@@ -87,7 +87,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
 
     const count = 400;
     for (0..count) |i| {
-        _ = try engine.subscribe("n", 0, filter, i, 1);
+        _ = try engine.subscribe(1, 0, filter, i, 1);
     }
 
     const thread_count = 4;
@@ -99,9 +99,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
             _ = sub_count;
             for (0..400) |i| {
                 const conn_id = start_id + @as(u32, @intCast(i));
-                engine_ptr.unsubscribe(conn_id, 1) catch |err| {
-                    if (err != error.SubscriptionNotFound) @panic("unexpected error");
-                };
+                engine_ptr.unsubscribe(conn_id, 1);
             }
         }
     }.run;

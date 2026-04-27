@@ -34,7 +34,7 @@ test "property: random query filters on StorageEngine" {
         defer filter.deinit(allocator);
 
         // Execute query
-        var managed = try (try ctx.table("entities")).selectQuery(allocator, "ns1", filter);
+        var managed = try (try ctx.table("entities")).selectQuery(allocator, 1, filter);
         defer managed.deinit();
         try testing.expect(managed.rows.len >= 0);
     }
@@ -54,7 +54,7 @@ fn seedEntities(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, count
         const age = random.intRangeAtMost(i64, 0, 100);
         const score = random.float(f64) * 1000.0;
 
-        try ctx.insertNamed("entities", id, "ns1", .{
+        try ctx.insertNamed("entities", id, 1, .{
             sth.named("name", tth.valText(name)),
             sth.named("age", tth.valInt(age)),
             sth.named("score", tth.valReal(score)),

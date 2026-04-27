@@ -528,7 +528,6 @@ export class StoreImpl {
 
 		const subscribeParams: Omit<StoreSubscribe, "id"> = {
 			type: "StoreSubscribe",
-			namespace: this.conn.getStoreNamespace(),
 			table_index: segments[0],
 			conditions: [["id", 0, segments[1]]],
 		};
@@ -577,7 +576,6 @@ export class StoreImpl {
 		const encoded = encodeQueryOptions(options);
 		const subscribeParams: Omit<StoreSubscribe, "id"> = {
 			type: "StoreSubscribe",
-			namespace: this.conn.getStoreNamespace(),
 			table_index: collection,
 			...encoded,
 		};

@@ -6,6 +6,11 @@ pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
 
+const SocketUserData = struct {
+    server: *WebSocketServer,
+    client_id: ?[]const u8,
+};
+
 /// WebSocket server wrapper using Bun's uWebSockets C API
 pub const WebSocketServer = struct {
     app: *c.uws_app_t,
@@ -146,6 +151,7 @@ pub const WebSocket = struct {
     ws: ?*c.uws_websocket_t,
     ssl: bool,
     user_data: ?*anyopaque = null, // Mock data for testing
+    client_id: ?[]const u8 = null,
 
     pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) void {
         if (self.ws == null) return;
@@ -164,6 +170,10 @@ pub const WebSocket = struct {
     pub fn getUserData(self: *WebSocket) ?*anyopaque {
         if (self.ws == null) return self.user_data;
         return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws.?);
+    }
+
+    pub fn getClientId(self: WebSocket) ?[]const u8 {
+        return self.client_id;
     }
 
     /// Returns a unique identifier for the connection.
@@ -236,30 +246,38 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
 
 // Specialized callbacks to avoid SSL probing hacks
 
+fn getSocketUserData(ws: ?*c.uws_websocket_t, is_ssl: bool) ?*SocketUserData {
+    if (ws == null) return null;
+    const ptr = c.uws_ws_get_user_data(if (is_ssl) 1 else 0, ws) orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
 fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     if (ws == null) return;
-    const server_ptr = c.uws_ws_get_user_data(if (is_ssl) 1 else 0, ws) orelse return;
-    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl };
+    const socket_data = getSocketUserData(ws, is_ssl) orelse return;
+    const server = socket_data.server;
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
 }
 
 fn onMessage(ws: ?*c.uws_websocket_t, message: [*c]const u8, length: usize, opcode: c.uws_opcode_t, is_ssl: bool) void {
     if (ws == null or message == null) return;
-    const server_ptr = c.uws_ws_get_user_data(if (is_ssl) 1 else 0, ws) orelse return;
-    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl };
+    const socket_data = getSocketUserData(ws, is_ssl) orelse return;
+    const server = socket_data.server;
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
     const msg_type: MessageType = if (opcode == c.UWS_OPCODE_TEXT) .text else .binary;
     if (server.handlers.on_message) |handler| handler(&zig_ws, message[0..length], msg_type, server.user_data);
 }
 
 fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: usize, is_ssl: bool) void {
     if (ws == null) return;
-    const server_ptr = c.uws_ws_get_user_data(if (is_ssl) 1 else 0, ws) orelse return;
-    const server: *WebSocketServer = @ptrCast(@alignCast(server_ptr));
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl };
+    const socket_data = getSocketUserData(ws, is_ssl) orelse return;
+    const server = socket_data.server;
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
     const msg_slice = if (message != null) message[0..length] else "";
     if (server.handlers.on_close) |handler| handler(&zig_ws, code, msg_slice, server.user_data);
+    if (socket_data.client_id) |client_id| server.allocator.free(client_id);
+    server.allocator.destroy(socket_data);
 }
 
 // C callback entry points
@@ -303,7 +321,27 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
     var ext: [*c]const u8 = undefined;
     const ext_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-extensions", "sec-websocket-extensions".len, &ext);
 
-    // Note: upgrade_context passed here will be returned by uws_ws_get_user_data().
-    // Currently this is the WebSocketServer pointer itself.
-    _ = c.uws_res_upgrade(ssl, res, upgrade_context, key, key_len, proto, proto_len, ext, ext_len, context);
+    const socket_data = server.allocator.create(SocketUserData) catch |err| {
+        std.log.err("Failed to allocate WebSocket user data: {}", .{err});
+        return;
+    };
+
+    var client_id: ?[]const u8 = null;
+    // SAFETY: Populated by uws_req_get_query C API which handles length mapping.
+    var client_id_ptr: [*c]const u8 = undefined;
+    const client_id_len = c.uws_req_get_query(@ptrCast(req), "clientId", "clientId".len, &client_id_ptr);
+    if (client_id_len > 0) {
+        client_id = server.allocator.dupe(u8, client_id_ptr[0..client_id_len]) catch |err| {
+            std.log.err("Failed to copy clientId query param: {}", .{err});
+            server.allocator.destroy(socket_data);
+            return;
+        };
+    }
+
+    socket_data.* = .{
+        .server = server,
+        .client_id = client_id,
+    };
+
+    _ = c.uws_res_upgrade(ssl, res, socket_data, key, key_len, proto, proto_len, ext, ext_len, context);
 }

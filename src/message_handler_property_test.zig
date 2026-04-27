@@ -100,7 +100,7 @@ test "connection: thread-safe manager access" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p9", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -165,7 +165,7 @@ test "connection: concurrent reads are non-blocking" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p10", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -229,7 +229,7 @@ test "connection: mixed concurrent ops safety" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p4", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -294,7 +294,7 @@ test "connection: closeAll is thread-safe" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p4", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -350,7 +350,7 @@ test "connection: unique IDs" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p5", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -524,7 +524,7 @@ test "message: all valid frames are parsed" {
         // Create a valid MessagePack message
         const tbl = app.schema_manager.getTable("data_table").?;
         const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, 1, field_idx, "value1");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 1, field_idx, "value1");
         defer allocator.free(message);
 
         // This should not throw a parsing error
@@ -542,7 +542,7 @@ test "message: all valid frames are parsed" {
         defer filter.free(allocator);
 
         const tbl = app.schema_manager.getTable("data_table").?;
-        const message = try store_helpers.createStoreQueryMessage(allocator, 2, "test", tbl.index, filter);
+        const message = try store_helpers.createStoreQueryMessage(allocator, 2, 1, tbl.index, filter);
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -557,7 +557,7 @@ test "message: all valid frames are parsed" {
 
         const tbl = app.schema_manager.getTable("data_table").?;
         const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 123, "ns", tbl.index, 1, field_idx, "v");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 123, 1, tbl.index, 1, field_idx, "v");
         defer allocator.free(message);
 
         manager.onMessage(&ws, message, .binary);
@@ -570,9 +570,9 @@ test "message: all valid frames are parsed" {
         try manager.onOpen(&ws);
         defer manager.onClose(&ws);
 
-        const messages = [_]struct { ns: []const u8, p: u128, v: []const u8 }{
-            .{ .ns = "a", .p = 1, .v = "c" },
-            .{ .ns = "x", .p = 2, .v = "z" },
+        const messages = [_]struct { ns: i64, p: u128, v: []const u8 }{
+            .{ .ns = 1, .p = 1, .v = "c" },
+            .{ .ns = 1, .p = 2, .v = "z" },
         };
 
         for (messages, 0..) |m, i| {
@@ -613,7 +613,7 @@ test "message: request routing to handlers" {
 
         const tbl = app.schema_manager.getTable("test_table").?;
         const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, 1, field_idx, "value1");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 1, field_idx, "value1");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -635,7 +635,7 @@ test "message: request routing to handlers" {
 
         const tbl = app.schema_manager.getTable("test_table").?;
         const field_idx = tbl.getFieldIndex("val").?;
-        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test", tbl.index, 2, field_idx, "value2");
+        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 2, field_idx, "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -649,7 +649,7 @@ test "message: request routing to handlers" {
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
         const tbl_q = app.schema_manager.getTable("test_table").?;
-        const query_message = try store_helpers.createStoreQueryMessage(allocator, 2, "test", tbl_q.index, filter);
+        const query_message = try store_helpers.createStoreQueryMessage(allocator, 2, 1, tbl_q.index, filter);
         defer allocator.free(query_message);
 
         var get_reader: std.Io.Reader = .fixed(query_message);
@@ -669,7 +669,7 @@ test "message: request routing to handlers" {
         defer sc.deinit();
         const conn = sc.conn;
 
-        const message = try store_helpers.createCustomMessage(allocator, 3, "UnknownType", "test", null, &.{"key"});
+        const message = try store_helpers.createCustomMessage(allocator, 3, "UnknownType", 1, null, &.{"key"});
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -699,10 +699,10 @@ test "message: request routing to handlers" {
         var q_f = msgpack.Payload.mapPayload(allocator);
         defer q_f.free(allocator);
         const msgs = [_][]const u8{
-            try store_helpers.createStoreSetFieldMessage(allocator, 10, "ns", tbl_m.index, 1, field_idx_m, "v1"),
-            try store_helpers.createStoreQueryMessage(allocator, 11, "ns", tbl_m.index, q_f),
-            try store_helpers.createStoreSetFieldMessage(allocator, 12, "ns", tbl_m.index, 2, field_idx_m, "v2"),
-            try store_helpers.createCustomMessage(allocator, 13, "InvalidType", "ns", tbl_m.index, &.{"p3"}),
+            try store_helpers.createStoreSetFieldMessage(allocator, 10, 1, tbl_m.index, 1, field_idx_m, "v1"),
+            try store_helpers.createStoreQueryMessage(allocator, 11, 1, tbl_m.index, q_f),
+            try store_helpers.createStoreSetFieldMessage(allocator, 12, 1, tbl_m.index, 2, field_idx_m, "v2"),
+            try store_helpers.createCustomMessage(allocator, 13, "InvalidType", 1, tbl_m.index, &.{"p3"}),
         };
         defer {
             for (msgs) |m| allocator.free(m);
@@ -758,7 +758,7 @@ test "message: response correlation by ID" {
         const correlation_id: u64 = 12345;
         const tbl = app.schema_manager.getTable("test_table").?;
         const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, correlation_id, "test", tbl.index, 1, field_idx, "val");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, correlation_id, 1, tbl.index, 1, field_idx, "val");
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -793,7 +793,7 @@ test "message: response correlation by ID" {
 
         const tbl_s = app.schema_manager.getTable("test_table").?;
         const field_idx_s = tbl_s.getFieldIndex("val").?;
-        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test", tbl_s.index, 2, field_idx_s, "value2");
+        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl_s.index, 2, field_idx_s, "value2");
         defer allocator.free(set_message);
 
         var set_reader: std.Io.Reader = .fixed(set_message);
@@ -808,7 +808,7 @@ test "message: response correlation by ID" {
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
         const tbl_qr = app.schema_manager.getTable("test_table").?;
-        const query_message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, "test", tbl_qr.index, filter);
+        const query_message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, 1, tbl_qr.index, filter);
         defer allocator.free(query_message);
 
         var get_reader: std.Io.Reader = .fixed(query_message);
@@ -846,7 +846,7 @@ test "message: response correlation by ID" {
         for (correlation_ids) |corr_id| {
             const tbl = app.schema_manager.getTable("test_table").?;
             const field_idx = tbl.getFieldIndex("val").?;
-            const message = try store_helpers.createStoreSetFieldMessage(allocator, corr_id, "test", tbl.index, 1, field_idx, "val");
+            const message = try store_helpers.createStoreSetFieldMessage(allocator, corr_id, 1, tbl.index, 1, field_idx, "val");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -884,7 +884,7 @@ test "message: response correlation by ID" {
         const correlation_id: u64 = 77777;
         var filter = msgpack.Payload.mapPayload(allocator);
         defer filter.free(allocator);
-        const message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, "test", @intCast(tbl.index), filter);
+        const message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, 1, @intCast(tbl.index), filter);
         defer allocator.free(message);
 
         var reader: std.Io.Reader = .fixed(message);
@@ -921,7 +921,7 @@ test "message: error responses for invalid types/fields" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     try app.init(allocator, "handler-p11", &.{
-        .{ .name = "test", .fields = &.{"val"} },
+        .{ .name = "test_table", .fields = &.{"val"} },
     });
     defer app.deinit();
 
@@ -995,7 +995,7 @@ test "message: error responses for invalid types/fields" {
         try msgpack.writeMsgPackStr(writer, "id");
         try buf.append(allocator, 0x01);
         try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "1");
         try msgpack.writeMsgPackStr(writer, "path");
         try msgpack.writeMsgPackStr(writer, "/key");
 
@@ -1032,7 +1032,7 @@ test "message: error responses for invalid types/fields" {
         try msgpack.writeMsgPackStr(writer, "id");
         try msgpack.writeMsgPackStr(writer, "not_a_number");
         try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "test");
+        try msgpack.writeMsgPackStr(writer, "1");
 
         const message = buf.items;
 

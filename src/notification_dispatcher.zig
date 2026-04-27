@@ -58,7 +58,7 @@ pub const NotificationDispatcher = struct {
 
         // === Phase 1: Extract row metadata ===
         const row_change = RowChange{
-            .namespace = change.namespace,
+            .namespace_id = change.namespace_id,
             .table_index = change.table_index,
             .operation = @enumFromInt(@intFromEnum(change.operation)),
             .new_row = change.new_row,
@@ -71,7 +71,7 @@ pub const NotificationDispatcher = struct {
             null;
 
         if (id_val == null) {
-            std.log.err("NotificationDispatcher skipping delta for {s}:{d} because row has no id", .{ change.namespace, change.table_index });
+            std.log.err("NotificationDispatcher skipping delta for namespace {d}, table {d} because row has no id", .{ change.namespace_id, change.table_index });
             return;
         }
 
@@ -103,7 +103,7 @@ pub const NotificationDispatcher = struct {
         for (matches) |match| {
             if (set_suffix == null and match.op == MatchOp.set_op) {
                 const new_row = change.new_row orelse {
-                    std.log.err("NotificationDispatcher skipping set delta for {s}:{d} because new_row is missing", .{ change.namespace, change.table_index });
+                    std.log.err("NotificationDispatcher skipping set delta for namespace {d}, table {d} because new_row is missing", .{ change.namespace_id, change.table_index });
                     return;
                 };
                 set_suffix = protocol.encodeSetDeltaSuffix(
@@ -113,7 +113,7 @@ pub const NotificationDispatcher = struct {
                     new_row,
                     table_metadata,
                 ) catch |err| {
-                    std.log.err("NotificationDispatcher failed to encode set suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
+                    std.log.err("NotificationDispatcher failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
                     return;
                 };
             }
@@ -123,7 +123,7 @@ pub const NotificationDispatcher = struct {
                     table_metadata.index,
                     id_val_actual,
                 ) catch |err| {
-                    std.log.err("NotificationDispatcher failed to encode remove suffix for {s}:{d}: {}", .{ change.namespace, change.table_index, err });
+                    std.log.err("NotificationDispatcher failed to encode remove suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });
                     return;
                 };
             }

@@ -18,7 +18,6 @@ describe("SubscriptionTracker", () => {
 
 				const params: Omit<StoreSubscribe, "id"> = {
 					type: "StoreSubscribe",
-					namespace: "public",
 					table_index: "users",
 				};
 
@@ -57,7 +56,6 @@ describe("SubscriptionTracker", () => {
 					tracker.register(registeredSubId, {
 						params: {
 							type: "StoreSubscribe",
-							namespace: "public",
 							table_index: "users",
 						},
 						callbacks: [callback],
@@ -96,7 +94,6 @@ describe("SubscriptionTracker - replayAll", () => {
 				for (let i = 0; i < n; i++) {
 					const params: Omit<StoreSubscribe, "id"> = {
 						type: "StoreSubscribe",
-						namespace: "public",
 						table_index: collections[i],
 					};
 					tracker.register(subIds[i], {

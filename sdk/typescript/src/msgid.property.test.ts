@@ -2,6 +2,7 @@ import { describe, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import * as fc from "fast-check";
 import { ConnectionManager } from "./connection";
+import { AutoMockWebSocket } from "./test-helpers";
 import type { ClientOptions } from "./types";
 
 /**
@@ -12,42 +13,11 @@ import type { ClientOptions } from "./types";
  * SHALL be strictly increasing integers with no duplicates.
  */
 
-/** A MockWebSocket that triggers open immediately and captures sent messages. */
-class MockWebSocket {
-	static readonly OPEN = 1;
-	static readonly CLOSED = 3;
-
-	binaryType: string = "arraybuffer";
-	readyState: number = 1; // OPEN
-	sentMessages: Uint8Array[] = [];
-
-	onopen: (() => void) | null = null;
-	onclose: ((event: unknown) => void) | null = null;
-	onerror: ((event: unknown) => void) | null = null;
-	onmessage: ((event: unknown) => void) | null = null;
-
-	constructor(_url: string) {
-		// Trigger open asynchronously (next microtask)
-		Promise.resolve().then(() => {
-			if (this.onopen) this.onopen();
-		});
-	}
-
-	send(data: ArrayBuffer | Uint8Array): void {
-		const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-		this.sentMessages.push(bytes);
-	}
-
-	close(): void {
-		this.readyState = 3; // CLOSED
-	}
-}
-
 async function runMsgIdPropertyTest(n: number): Promise<boolean> {
-	// Install mock WebSocket globally
 	const originalWebSocket = (globalThis as unknown as { WebSocket: unknown })
 		.WebSocket;
-	(globalThis as unknown as { WebSocket: unknown }).WebSocket = MockWebSocket;
+	(globalThis as unknown as { WebSocket: unknown }).WebSocket =
+		AutoMockWebSocket;
 
 	try {
 		const options: ClientOptions = {
@@ -58,7 +28,6 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 		const manager = new ConnectionManager(options);
 		await manager.connect();
 
-		// Pre-seed with a minimal schema so StoreQuery tests don't throw TABLE_NOT_FOUND
 		manager.schemaDictionary.processSchemaSync({
 			tables: ["test", "users"],
 			fields: [
@@ -71,44 +40,36 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 			],
 		});
 
-		// Dispatch N messages (they'll be pending since no responses come)
 		const dispatchPromises: Promise<unknown>[] = [];
 		for (let i = 0; i < n; i++) {
 			dispatchPromises.push(
 				manager
 					.dispatch({ type: "StoreQuery", table_index: "test" })
-					.catch(() => {
-						// Ignore rejections from disconnect cleanup
-					}),
+					.catch(() => {}),
 			);
 		}
 
-		// Wait briefly for all dispatches to hit the "socket"
 		await Promise.resolve();
 
-		// Collect the sent messages from the mock WebSocket
-		const mockWs = (manager as unknown as { ws: MockWebSocket })
-			.ws as MockWebSocket;
+		const mockWs = (manager as unknown as { ws: AutoMockWebSocket })
+			.ws as AutoMockWebSocket;
 		const sentMessages = mockWs.sentMessages;
 
-		// Decode each sent Uint8Array to extract the id field
 		const ids: number[] = sentMessages.map((bytes) => {
 			const decoded = decode(bytes) as Record<string, unknown>;
 			return decoded.id as number;
 		});
 
-		// Clean up
 		manager.disconnect();
 
-		// Assert we got exactly N ids
-		if (ids.length !== n) return false;
+		if (ids.length !== n + 1) return false;
 
-		// Assert ids are [1, 2, 3, ..., N] — strictly increasing, no duplicates
-		for (let i = 0; i < ids.length; i++) {
+		if (ids[0] !== 1) return false;
+
+		for (let i = 1; i < ids.length; i++) {
 			if (ids[i] !== i + 1) return false;
 		}
 
-		// Double-check uniqueness via Set
 		const unique = new Set(ids);
 		if (unique.size !== ids.length) return false;
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const hook_server = @import("hook_server_client.zig");
+const doc_id = @import("doc_id.zig");
 
 const HookServerClient = hook_server.HookServerClient;
 const AuthRequest = hook_server.AuthRequest;
@@ -136,26 +137,26 @@ test "HookServerClient: authorize validates request" {
     });
     defer client.deinit();
 
-    // Test empty user_id
+    // Test zero user_doc_id
     {
         const req = AuthRequest{
-            .user_id = "",
-            .namespace = "test-namespace",
+            .user_doc_id = doc_id.zero,
+            .namespace_id = 1,
             .operation = .read,
-            .resource = "test-resource",
+            .table_index = 0,
             .timestamp = std.time.timestamp(),
         };
         const result = client.authorize(req);
         try testing.expectError(error.InvalidUserId, result);
     }
 
-    // Test empty namespace
+    // Test negative namespace_id
     {
         const req = AuthRequest{
-            .user_id = "test-user",
-            .namespace = "",
+            .user_doc_id = 1, // Valid ID
+            .namespace_id = -1,
             .operation = .read,
-            .resource = "test-resource",
+            .table_index = 0,
             .timestamp = std.time.timestamp(),
         };
         const result = client.authorize(req);
@@ -199,10 +200,10 @@ test "HookServerClient: authorization cache operations" {
     defer cache.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1, // Non-zero test ID
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -247,10 +248,10 @@ test "HookServerClient: fallback behavior" {
     defer client.deinit();
 
     const req = AuthRequest{
-        .user_id = "test-user",
-        .namespace = "test-namespace",
+        .user_doc_id = 1, // Non-zero test ID
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "test-resource",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 
@@ -331,14 +332,11 @@ test "AuthCache: enforce max_size" {
     // Fill the cache
     var i: u32 = 0;
     while (i < 15) : (i += 1) {
-        const user_id = try std.fmt.allocPrint(allocator, "user-{}", .{i});
-        defer allocator.free(user_id);
-
         const req = AuthRequest{
-            .user_id = user_id,
-            .namespace = "test-namespace",
+            .user_doc_id = @as(u128, i + 1),
+            .namespace_id = 1,
             .operation = .read,
-            .resource = "test-resource",
+            .table_index = 0,
             .timestamp = std.time.timestamp(),
         };
 
@@ -376,14 +374,11 @@ test "AuthCache: concurrent put enforcement" {
         fn run(ctx: @This()) void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                const user_id = std.fmt.allocPrint(ctx.allocator, "user-{}-{}", .{ ctx.thread_id, i }) catch unreachable; // zwanzig-disable-line: swallowed-error
-                defer ctx.allocator.free(user_id);
-
                 const req = AuthRequest{
-                    .user_id = user_id,
-                    .namespace = "ns",
+                    .user_doc_id = @as(u128, ctx.thread_id + 1) * 1000 + i,
+                    .namespace_id = 1,
                     .operation = .read,
-                    .resource = "res",
+                    .table_index = 0,
                     .timestamp = std.time.timestamp(),
                 };
                 const resp = hook_server.AuthResponse{
@@ -419,10 +414,10 @@ test "AuthCache: evictExpired manually" {
     defer cache.deinit();
 
     const req = AuthRequest{
-        .user_id = "expired-user",
-        .namespace = "ns",
+        .user_doc_id = 999,
+        .namespace_id = 1,
         .operation = .read,
-        .resource = "res",
+        .table_index = 0,
         .timestamp = std.time.timestamp(),
     };
 

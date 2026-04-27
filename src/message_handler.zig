@@ -12,9 +12,9 @@ const subscription_mod = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const Connection = @import("connection.zig").Connection;
+const connection_mod = @import("connection.zig");
+const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
-const schema_mod = @import("schema_manager.zig");
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
 const protocol = @import("protocol.zig");
@@ -166,12 +166,10 @@ pub const MessageHandler = struct {
         defer conn.mutex.unlock();
 
         for (conn.subscription_ids.items) |sub_id| {
-            self.subscription_engine.unsubscribe(conn.id, sub_id) catch |err| {
-                std.log.debug("Failed to unsubscribe {} for connection {}: {}", .{ sub_id, conn.id, err });
-            };
+            self.subscription_engine.unsubscribe(conn.id, sub_id);
         }
 
-        conn.resetSession();
+        conn.resetSessionLocked();
     }
 
     pub fn routeMessage(
@@ -181,18 +179,20 @@ pub const MessageHandler = struct {
         msg_info: protocol.Envelope,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
+        if (std.mem.eql(u8, msg_info.type, "StoreSetNamespace")) {
+            return try self.handleStoreSetNamespace(arena_allocator, conn, msg_info.id, parsed);
+        } else if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
             return try self.handleStoreSet(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
             return try self.handleStoreSubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreUnsubscribe")) {
             return try self.handleStoreUnsubscribe(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreQuery")) {
-            return try self.handleStoreQuery(arena_allocator, msg_info.id, parsed);
+            return try self.handleStoreQuery(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreLoadMore")) {
             return try self.handleStoreLoadMore(arena_allocator, conn, msg_info.id, parsed);
         } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
-            return try self.handleStoreRemove(arena_allocator, msg_info.id, parsed);
+            return try self.handleStoreRemove(arena_allocator, conn, msg_info.id, parsed);
         } else {
             return error.UnknownMessageType;
         }
@@ -234,6 +234,44 @@ pub const MessageHandler = struct {
         };
     }
 
+    fn requireStoreSession(conn: *Connection) !Connection.StoreSession {
+        const session = conn.getStoreSession();
+        if (session.namespace_id == connection_mod.unset_namespace_id) return error.NamespaceUnauthorized;
+        return session;
+    }
+
+    fn requireStoreNamespace(conn: *Connection) !i64 {
+        return (try requireStoreSession(conn)).namespace_id;
+    }
+
+    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
+        conn.mutex.lock();
+        defer conn.mutex.unlock();
+
+        for (conn.subscription_ids.items) |sub_id| {
+            self.subscription_engine.unsubscribe(conn.id, sub_id);
+        }
+        conn.subscription_ids.clearRetainingCapacity();
+    }
+
+    fn handleStoreSetNamespace(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        parsed: msgpack.Payload,
+    ) ![]const u8 {
+        const req = try protocol.extractAs(protocol.StoreSetNamespaceRequest, arena_allocator, parsed);
+        if (req.namespace.len == 0) return error.InvalidMessageFormat;
+
+        const namespace_id = (try self.storage_engine.lookupNamespaceId(req.namespace)) orelse try self.storage_engine.resolveNamespaceId(req.namespace);
+
+        self.clearStoreSubscriptions(conn);
+        conn.setNamespaceId(namespace_id);
+
+        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
+    }
+
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
@@ -256,13 +294,13 @@ pub const MessageHandler = struct {
             break :blk fi;
         } else null;
         const value = req.value orelse return error.MissingRequiredFields;
-        const owner_id = conn.user_id orelse "anonymous";
+        const session = try requireStoreSession(conn);
 
         try self.store_service.set(
             table_index,
             doc_id_value,
-            req.namespace,
-            owner_id,
+            session.namespace_id,
+            session.user_doc_id,
             arr.len,
             field_index,
             value,
@@ -274,6 +312,7 @@ pub const MessageHandler = struct {
     fn handleStoreRemove(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
+        conn: *Connection,
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
@@ -286,11 +325,12 @@ pub const MessageHandler = struct {
         _ = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         if (arr[1] != .bin) return error.InvalidMessageFormat;
         const doc_id_value = try doc_id.fromBytes(arr[1].bin.value());
+        const namespace_id = try requireStoreNamespace(conn);
 
         try self.store_service.remove(
             table_index,
             doc_id_value,
-            req.namespace,
+            namespace_id,
             arr.len,
         );
 
@@ -308,12 +348,12 @@ pub const MessageHandler = struct {
         const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
+        const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);
+        var qr = try self.store_service.query(arena_allocator, table_index, namespace_id, payload);
         defer qr.deinit(arena_allocator);
 
-        const subscription_namespace = schema_mod.effectiveNamespaceLabel(tbl_md, req.namespace);
-        _ = try self.subscription_engine.subscribe(subscription_namespace, table_index, qr.filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(namespace_id, table_index, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
         return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
@@ -328,7 +368,7 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreUnsubscribeRequest, arena_allocator, payload);
 
-        try self.subscription_engine.unsubscribe(conn.id, req.subId);
+        self.subscription_engine.unsubscribe(conn.id, req.subId);
         conn.removeSubscription(req.subId);
 
         return try protocol.buildSuccessResponse(arena_allocator, msg_id);
@@ -337,14 +377,16 @@ pub const MessageHandler = struct {
     fn handleStoreQuery(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
+        conn: *Connection,
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
         const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.query(arena_allocator, table_index, req.namespace, payload);
+        var qr = try self.store_service.query(arena_allocator, table_index, namespace_id, payload);
         defer qr.deinit(arena_allocator);
 
         return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
@@ -369,7 +411,7 @@ pub const MessageHandler = struct {
 
         const cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor, sub_query.filter.order_by.field_type, sub_query.filter.order_by.items_type);
 
-        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.table_index, sub_query.namespace, &sub_query.filter, cursor);
+        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, cursor);
         defer results.deinit();
 
         const tbl_md = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;

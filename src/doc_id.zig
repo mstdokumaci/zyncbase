@@ -6,6 +6,7 @@ pub const DocIdError = error{
 };
 
 pub const DocId = u128;
+pub const zero: DocId = 0;
 const uuid_family_tag: u128 = @as(u128, 1) << 127;
 const uuid_payload_mask: u128 = (@as(u128, 1) << 122) - 1;
 

@@ -38,7 +38,7 @@ test "buffer: message deallocation after processing" {
         // Create a simple MessagePack message
         const tbl = try app.tableMetadata("test");
         const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, 1, field_idx, "value");
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 1, field_idx, "value");
         defer allocator.free(message);
 
         // Parse the message
@@ -60,7 +60,7 @@ test "buffer: message deallocation after processing" {
         const conn = sc.conn;
 
         // Create invalid message (missing required fields)
-        const invalid_message = try store_helpers.createInvalidStoreSetMessageMissingId(allocator, "test");
+        const invalid_message = try store_helpers.createInvalidStoreSetMessageMissingId(allocator, 1);
         defer allocator.free(invalid_message);
 
         var reader: std.Io.Reader = .fixed(invalid_message);
@@ -85,7 +85,7 @@ test "buffer: message deallocation after processing" {
             const message = try store_helpers.createStoreSetFieldMessage(
                 allocator,
                 @as(u64, iter),
-                "test_ns",
+                1,
                 tbl.index,
                 1,
                 field_idx,
@@ -112,7 +112,7 @@ test "buffer: message deallocation after processing" {
         {
             const tbl = try app.tableMetadata("test");
             const field_idx = tbl.getFieldIndex("val") orelse return error.UnknownField;
-            const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, "test_ns", tbl.index, 2, field_idx, "value1");
+            const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 2, field_idx, "value1");
             defer allocator.free(message);
 
             var reader: std.Io.Reader = .fixed(message);
@@ -126,10 +126,10 @@ test "buffer: message deallocation after processing" {
         // StoreQuery
         {
             const tbl = try app.tableMetadata("test");
-            const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, "test_ns", tbl.index);
-            defer allocator.free(message);
+            const msg = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 2, 1, tbl.index);
+            defer allocator.free(msg);
 
-            var reader: std.Io.Reader = .fixed(message);
+            var reader: std.Io.Reader = .fixed(msg);
             const parsed = try msgpack.decode(allocator, &reader);
             defer parsed.free(allocator);
 
@@ -184,7 +184,7 @@ test "buffer: concurrent message deallocation" {
                 const message = try store_helpers.createStoreSetFieldMessage(
                     ctx.app.allocator,
                     @as(u64, i),
-                    "test_ns",
+                    1,
                     tbl.index,
                     1,
                     field_idx,
