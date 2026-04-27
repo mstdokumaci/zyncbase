@@ -9,7 +9,7 @@ const OwnedRowChange = @import("change_buffer.zig").OwnedRowChange;
 const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const schema_manager = @import("schema_manager.zig");
 
 pub const NotificationDispatcher = struct {
@@ -106,7 +106,7 @@ pub const NotificationDispatcher = struct {
                     std.log.err("NotificationDispatcher skipping set delta for namespace {d}, table {d} because new_row is missing", .{ change.namespace_id, change.table_index });
                     return;
                 };
-                set_suffix = protocol.encodeSetDeltaSuffix(
+                set_suffix = wire.encodeSetDeltaSuffix(
                     alloc,
                     table_metadata.index,
                     id_val_actual,
@@ -118,7 +118,7 @@ pub const NotificationDispatcher = struct {
                 };
             }
             if (remove_suffix == null and match.op == MatchOp.remove) {
-                remove_suffix = protocol.encodeDeleteDeltaSuffix(
+                remove_suffix = wire.encodeDeleteDeltaSuffix(
                     alloc,
                     table_metadata.index,
                     id_val_actual,
@@ -139,7 +139,7 @@ pub const NotificationDispatcher = struct {
             const writer = out.writer(alloc);
 
             // Write constant header (23 bytes)
-            out.appendSlice(alloc, &protocol.store_delta_header) catch |err| {
+            out.appendSlice(alloc, &wire.store_delta_header) catch |err| {
                 std.log.err("NotificationDispatcher failed to write header: {}", .{err});
                 continue;
             };

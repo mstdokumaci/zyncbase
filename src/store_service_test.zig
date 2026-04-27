@@ -5,7 +5,7 @@ const storage_mod = @import("storage_engine.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const schema_manager = @import("schema_manager.zig");
 const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
@@ -399,7 +399,7 @@ test "StoreService: queryWithCursor - pagination" {
 
     // Save the cursor token (encoded)
     const cursor_val = qr.results.next_cursor orelse return error.TestExpectedValue;
-    const encoded_cursor = try protocol.encodeCursor(allocator, cursor_val);
+    const encoded_cursor = try wire.encodeCursor(allocator, cursor_val);
     defer allocator.free(encoded_cursor);
 
     // Decode it back to a domain object (simulating what MessageHandler does)

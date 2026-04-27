@@ -17,7 +17,7 @@ const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const query_parser = @import("query_parser.zig");
 
 /// Message handler for WebSocket events
@@ -104,7 +104,8 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(ws, protocol.err_code_rate_limited, protocol.err_msg_too_many_requests, null);
+                const err = wire.getWireError(error.RateLimited);
+                try self.sendError(ws, err.code, err.message, null);
                 return;
             }
         }
@@ -129,14 +130,16 @@ pub const MessageHandler = struct {
                 }
             }
 
-            try self.sendError(ws, protocol.err_code_invalid_message, protocol.err_msg_failed_to_parse, null);
+            const wire_err = wire.getWireError(error.InvalidMessageFormat);
+            try self.sendError(ws, wire_err.code, wire_err.message, null);
             return;
         };
 
         // Extract message type and correlation ID
-        const msg_info = protocol.extractAs(protocol.Envelope, arena_allocator, parsed) catch |err| {
+        const msg_info = wire.extractAs(wire.Envelope, arena_allocator, parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
-            try self.sendError(ws, protocol.err_code_invalid_message_format, protocol.err_msg_missing_type_or_id, null);
+            const wire_err2 = wire.getWireError(error.InvalidMessageFormat);
+            try self.sendError(ws, wire_err2.code, wire_err2.message, null);
             return;
         };
 
@@ -151,13 +154,11 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         allocator: std.mem.Allocator,
         conn: *Connection,
-        msg_info: protocol.Envelope,
+        msg_info: wire.Envelope,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
-            const code = protocol.mapErrorToCode(err);
-            const message = protocol.mapErrorToMessage(err);
-            return try protocol.buildErrorResponse(allocator, msg_info.id, code, message);
+            return try wire.buildErrorResponse(allocator, msg_info.id, wire.getWireError(err));
         };
     }
 
@@ -176,7 +177,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
-        msg_info: protocol.Envelope,
+        msg_info: wire.Envelope,
         parsed: msgpack.Payload,
     ) ![]const u8 {
         if (std.mem.eql(u8, msg_info.type, "StoreSetNamespace")) {
@@ -204,14 +205,14 @@ pub const MessageHandler = struct {
         const writer = list.writer(self.allocator);
 
         try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
-        try list.appendSlice(self.allocator, &protocol.error_type_header);
+        try list.appendSlice(self.allocator, &wire.error_type_header);
         try list.appendSlice(self.allocator, code);
 
-        try list.appendSlice(self.allocator, protocol.message_key);
+        try list.appendSlice(self.allocator, wire.Keys.message);
         try list.appendSlice(self.allocator, message);
 
         if (msg_id) |id| {
-            try list.appendSlice(self.allocator, protocol.id_key);
+            try list.appendSlice(self.allocator, wire.Keys.id);
             try writer.writeByte(0xcf);
             try writer.writeInt(u64, id, .big);
         }
@@ -261,7 +262,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StoreSetNamespaceRequest, arena_allocator, parsed);
+        const req = try wire.extractAs(wire.StoreSetNamespaceRequest, arena_allocator, parsed);
         if (req.namespace.len == 0) return error.InvalidMessageFormat;
 
         const namespace_id = (try self.storage_engine.lookupNamespaceId(req.namespace)) orelse try self.storage_engine.resolveNamespaceId(req.namespace);
@@ -269,7 +270,7 @@ pub const MessageHandler = struct {
         self.clearStoreSubscriptions(conn);
         conn.setNamespaceId(namespace_id);
 
-        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreSet(
@@ -279,7 +280,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
+        const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
         if (req.path != .arr) return error.InvalidMessageFormat;
         const arr = req.path.arr;
         if (arr.len < 2) return error.InvalidPath;
@@ -306,7 +307,7 @@ pub const MessageHandler = struct {
             value,
         );
 
-        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreRemove(
@@ -316,7 +317,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         parsed: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, parsed);
+        const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
         if (req.path != .arr) return error.InvalidMessageFormat;
         const arr = req.path.arr;
         if (arr.len < 2) return error.InvalidPath;
@@ -334,7 +335,7 @@ pub const MessageHandler = struct {
             arr.len,
         );
 
-        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreSubscribe(
@@ -344,7 +345,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
+        const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
         const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
@@ -356,7 +357,7 @@ pub const MessageHandler = struct {
         _ = try self.subscription_engine.subscribe(namespace_id, table_index, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
+        return try wire.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
     }
 
     fn handleStoreUnsubscribe(
@@ -366,12 +367,12 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StoreUnsubscribeRequest, arena_allocator, payload);
+        const req = try wire.extractAs(wire.StoreUnsubscribeRequest, arena_allocator, payload);
 
         self.subscription_engine.unsubscribe(conn.id, req.subId);
         conn.removeSubscription(req.subId);
 
-        return try protocol.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.buildSuccessResponse(arena_allocator, msg_id);
     }
 
     fn handleStoreQuery(
@@ -381,7 +382,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StoreCollectionRequest, arena_allocator, payload);
+        const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
         const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
         const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const namespace_id = try requireStoreNamespace(conn);
@@ -389,7 +390,7 @@ pub const MessageHandler = struct {
         var qr = try self.store_service.query(arena_allocator, table_index, namespace_id, payload);
         defer qr.deinit(arena_allocator);
 
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
+        return try wire.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
     }
 
     fn handleStoreLoadMore(
@@ -399,7 +400,7 @@ pub const MessageHandler = struct {
         msg_id: u64,
         payload: msgpack.Payload,
     ) ![]const u8 {
-        const req = try protocol.extractAs(protocol.StoreLoadMoreRequest, arena_allocator, payload);
+        const req = try wire.extractAs(wire.StoreLoadMoreRequest, arena_allocator, payload);
 
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
             .connection_id = conn.id,
@@ -415,7 +416,7 @@ pub const MessageHandler = struct {
         defer results.deinit();
 
         const tbl_md = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
-        return try protocol.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
+        return try wire.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

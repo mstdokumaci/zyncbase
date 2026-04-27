@@ -15,7 +15,7 @@ pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const storage_engine = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -39,7 +39,7 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const msg_info = try protocol.extractAs(protocol.Envelope, arena_allocator, parsed);
+    const msg_info = try wire.extractAs(wire.Envelope, arena_allocator, parsed);
 
     const result = try handler.routeRequest(arena_allocator, conn, msg_info, parsed);
 

@@ -25,7 +25,7 @@ test {
     _ = @import("query_parser_test.zig");
     _ = @import("storage_query_test.zig");
     _ = @import("change_buffer_test.zig");
-    _ = @import("protocol_test.zig");
+    _ = @import("wire_test.zig");
     _ = @import("notification_dispatcher_test.zig");
     _ = @import("sync_consistency_test.zig");
 
