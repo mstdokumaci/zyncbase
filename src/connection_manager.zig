@@ -4,7 +4,7 @@ const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const SchemaManager = @import("schema_manager.zig").SchemaManager;
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 
@@ -35,7 +35,7 @@ pub const ConnectionManager = struct {
         schema_manager: *const SchemaManager,
     ) !void {
         // Pre-build SchemaSync message once at startup
-        const schema_sync_msg = try protocol.buildSchemaSyncMessage(allocator, schema_manager);
+        const schema_sync_msg = try wire.buildSchemaSyncMessage(allocator, schema_manager);
 
         self.* = .{
             .allocator = allocator,
@@ -104,7 +104,7 @@ pub const ConnectionManager = struct {
             try conn.setAnonymousUserId(client_id);
         }
 
-        const connected_msg = try protocol.buildConnectedMessage(self.allocator, conn.user_id);
+        const connected_msg = try wire.buildConnectedMessage(self.allocator, conn.user_id);
         defer self.allocator.free(connected_msg);
 
         try self.map.put(conn_id, conn);

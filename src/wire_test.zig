@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const protocol = @import("protocol.zig");
+const wire = @import("wire.zig");
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
@@ -30,7 +30,7 @@ test "extractAs: Envelope from valid map" {
     defer map.free(allocator);
     try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
     try map.mapPut("id", Payload.uintToPayload(42));
-    const result = try protocol.extractAs(protocol.Envelope, undefined, map);
+    const result = try wire.extractAs(wire.Envelope, undefined, map);
     try testing.expectEqualStrings("StoreSet", result.type);
     try testing.expectEqual(@as(u64, 42), result.id);
 }
@@ -40,7 +40,7 @@ test "extractAs: Envelope missing required field" {
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
     try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
-    const result = protocol.extractAs(protocol.Envelope, undefined, map);
+    const result = wire.extractAs(wire.Envelope, undefined, map);
     try testing.expectError(error.MissingRequiredFields, result);
 }
 
@@ -60,7 +60,7 @@ test "extractAs: StorePathRequest from valid map" {
     try map.mapPut("path", Payload{ .arr = path_arr });
     try map.mapPut("value", Payload{ .bool = true });
 
-    const result = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, map);
+    const result = try wire.extractAs(wire.StorePathRequest, arena_allocator, map);
     try testing.expect(result.path == .arr);
     try testing.expectEqual(@as(usize, 3), result.path.arr.len);
     try testing.expectEqual(@as(u64, 0), result.path.arr[0].uint);
@@ -84,7 +84,7 @@ test "extractAs: StorePathRequest without value" {
     var map = Payload.mapPayload(allocator);
     try map.mapPut("path", Payload{ .arr = path_arr });
 
-    const result = try protocol.extractAs(protocol.StorePathRequest, arena_allocator, map);
+    const result = try wire.extractAs(wire.StorePathRequest, arena_allocator, map);
     try testing.expect(result.value == null);
 
     map.free(allocator);
@@ -97,7 +97,7 @@ test "extractAs: StoreCollectionRequest from valid map" {
     defer map.free(allocator);
     try map.mapPut("table_index", Payload.uintToPayload(0));
 
-    const result = try protocol.extractAs(protocol.StoreCollectionRequest, undefined, map);
+    const result = try wire.extractAs(wire.StoreCollectionRequest, undefined, map);
     try testing.expect(result.table_index == .uint);
     try testing.expectEqual(@as(u64, 0), result.table_index.uint);
 }
@@ -109,7 +109,7 @@ test "extractAs: StoreUnsubscribeRequest from valid map" {
     defer map.free(allocator);
     try map.mapPut("subId", Payload.uintToPayload(12345));
 
-    const result = try protocol.extractAs(protocol.StoreUnsubscribeRequest, undefined, map);
+    const result = try wire.extractAs(wire.StoreUnsubscribeRequest, undefined, map);
     try testing.expectEqual(@as(u64, 12345), result.subId);
 }
 
@@ -121,13 +121,13 @@ test "extractAs: StoreLoadMoreRequest from valid map" {
     try map.mapPut("subId", Payload.uintToPayload(99));
     try map.mapPut("nextCursor", try Payload.strToPayload("abc123", allocator));
 
-    const result = try protocol.extractAs(protocol.StoreLoadMoreRequest, undefined, map);
+    const result = try wire.extractAs(wire.StoreLoadMoreRequest, undefined, map);
     try testing.expectEqual(@as(u64, 99), result.subId);
     try testing.expectEqualStrings("abc123", result.nextCursor);
 }
 
 test "extractAs: non-map payload returns InvalidMessageFormat" {
-    const result = protocol.extractAs(protocol.Envelope, undefined, Payload{ .uint = 42 });
+    const result = wire.extractAs(wire.Envelope, undefined, Payload{ .uint = 42 });
     try testing.expectError(error.InvalidMessageFormat, result);
 }
 
@@ -138,13 +138,13 @@ test "extractAs: wrong type for field returns InvalidMessageFormat" {
     try map.mapPut("type", Payload.uintToPayload(42));
     try map.mapPut("id", Payload.uintToPayload(1));
 
-    const result = protocol.extractAs(protocol.Envelope, undefined, map);
+    const result = wire.extractAs(wire.Envelope, undefined, map);
     try testing.expectError(error.InvalidMessageFormat, result);
 }
 
 test "buildSuccessResponse: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const response = try protocol.buildSuccessResponse(allocator, 12345);
+    const response = try wire.buildSuccessResponse(allocator, 12345);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -160,7 +160,8 @@ test "buildSuccessResponse: produces valid MsgPack" {
 
 test "buildErrorResponse: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const response = try protocol.buildErrorResponse(allocator, 999, protocol.err_code_collection_not_found, protocol.err_msg_collection_not_found);
+    const wire_err = wire.getWireError(error.UnknownTable);
+    const response = try wire.buildErrorResponse(allocator, 999, wire_err);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -191,7 +192,7 @@ test "encodeSetDeltaSuffix: set operation" {
     const row = try makeDeltaTestRow(allocator, "user-123", "Ada");
     defer row.deinit(allocator);
 
-    const suffix = try protocol.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), row, table_metadata);
+    const suffix = try wire.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), row, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -234,7 +235,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     const allocator = testing.allocator;
 
     const id_val = tth.valInt(999);
-    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, 0, id_val);
+    const suffix = try wire.encodeDeleteDeltaSuffix(allocator, 0, id_val);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
@@ -257,28 +258,39 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     try testing.expect((try op_obj.mapGet("value")) == null);
 }
 
-test "mapErrorToCode: returns non-empty comptime-encoded keys" {
-    const code1 = protocol.mapErrorToCode(error.UnknownTable);
-    try testing.expect(code1.len > 0);
-    const code2 = protocol.mapErrorToCode(error.UnknownField);
-    try testing.expect(code2.len > 0);
-    try testing.expect(code1.len != code2.len or !std.mem.eql(u8, code1, code2));
+test "getWireError: returns non-empty comptime-encoded keys" {
+    const err1 = wire.getWireError(error.UnknownTable);
+    try testing.expect(err1.code.len > 0);
+    const err2 = wire.getWireError(error.UnknownField);
+    try testing.expect(err2.code.len > 0);
+    try testing.expect(err1.code.len != err2.code.len or !std.mem.eql(u8, err1.code, err2.code));
 }
 
-test "mapErrorToMessage: returns non-empty comptime-encoded messages" {
-    const msg1 = protocol.mapErrorToMessage(error.UnknownTable);
-    try testing.expect(msg1.len > 0);
-    const msg2 = protocol.mapErrorToMessage(error.UnknownField);
-    try testing.expect(msg2.len > 0);
+test "getWireError: returns non-empty comptime-encoded messages" {
+    const err1 = wire.getWireError(error.UnknownTable);
+    try testing.expect(err1.message.len > 0);
+    const err2 = wire.getWireError(error.UnknownField);
+    try testing.expect(err2.message.len > 0);
 }
 
-test "mapErrorToMessage: query parser errors keep distinct human messages" {
-    try testing.expectEqualSlices(u8, protocol.err_msg_missing_query_operand, protocol.mapErrorToMessage(error.MissingOperand));
-    try testing.expectEqualSlices(u8, protocol.err_msg_unexpected_query_operand, protocol.mapErrorToMessage(error.UnexpectedOperand));
-    try testing.expectEqualSlices(u8, protocol.err_msg_invalid_in_operand, protocol.mapErrorToMessage(error.InvalidInOperand));
-    try testing.expectEqualSlices(u8, protocol.err_msg_null_query_operand, protocol.mapErrorToMessage(error.NullOperandUnsupported));
-    try testing.expectEqualSlices(u8, protocol.err_msg_unsupported_query_operator, protocol.mapErrorToMessage(error.UnsupportedOperatorForFieldType));
-    try testing.expectEqualSlices(u8, protocol.err_msg_invalid_cursor_sort_value, protocol.mapErrorToMessage(error.InvalidCursorSortValue));
+test "getWireError: query parser errors keep distinct human messages" {
+    const allocator = testing.allocator;
+    const check = struct {
+        fn run(comptime err: anyerror, comptime expected: []const u8) !void {
+            const wire_err = wire.getWireError(err);
+            var reader: std.Io.Reader = .fixed(wire_err.message);
+            const decoded = try msgpack.decode(allocator, &reader);
+            defer decoded.free(allocator);
+            try testing.expectEqualStrings(expected, decoded.str.value());
+        }
+    }.run;
+
+    try check(error.MissingOperand, "Query operator is missing an operand");
+    try check(error.UnexpectedOperand, "Query operator does not accept an operand");
+    try check(error.InvalidInOperand, "IN and NOT IN require an array operand");
+    try check(error.NullOperandUnsupported, "Null is not allowed as a query operand");
+    try check(error.UnsupportedOperatorForFieldType, "Query operator is not supported for this field type");
+    try check(error.InvalidCursorSortValue, "Cursor sort value does not match the active sort field");
 }
 
 test "store_delta_header: decodes to StoreDelta type" {
@@ -286,7 +298,7 @@ test "store_delta_header: decodes to StoreDelta type" {
 
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(allocator);
-    try buf.appendSlice(allocator, &protocol.store_delta_header);
+    try buf.appendSlice(allocator, &wire.store_delta_header);
     try buf.append(allocator, 0xcf);
     try buf.writer(allocator).writeInt(u64, 42, .big);
     // Append a minimal ops array to complete the map
@@ -309,7 +321,7 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const allocator = testing.allocator;
 
     const id_val = tth.valText("doc-abc-123");
-    const suffix = try protocol.encodeDeleteDeltaSuffix(allocator, 1, id_val);
+    const suffix = try wire.encodeDeleteDeltaSuffix(allocator, 1, id_val);
     defer allocator.free(suffix);
 
     // Decode and verify
@@ -347,7 +359,7 @@ test "extractAs: respects default values" {
         defer map.free(allocator);
         try map.mapPut("required", Payload.uintToPayload(10));
 
-        const result = try protocol.extractAs(TestStruct, undefined, map);
+        const result = try wire.extractAs(TestStruct, undefined, map);
 
         try testing.expectEqual(@as(u64, 10), result.required);
         try testing.expectEqual(@as(u64, 42), result.with_default);
@@ -364,7 +376,7 @@ test "extractAs: respects default values" {
         try map.mapPut("optional_with_default", Payload.uintToPayload(200));
         try map.mapPut("optional_no_default", Payload.uintToPayload(300));
 
-        const result = try protocol.extractAs(TestStruct, undefined, map);
+        const result = try wire.extractAs(TestStruct, undefined, map);
 
         try testing.expectEqual(@as(u64, 10), result.required);
         try testing.expectEqual(@as(u64, 50), result.with_default);
