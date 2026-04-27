@@ -1,57 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { encode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
+import {
+	installMockWs,
+	MockWebSocket,
+	triggerNamespaceOk,
+	triggerSchemaSync,
+} from "./test-helpers";
 import type { ClientOptions } from "./types";
-
-// ─── Mock WebSocket ───────────────────────────────────────────────────────────
-
-class MockWebSocket {
-	static OPEN = 1;
-	static CLOSING = 2;
-	static CLOSED = 3;
-
-	readyState = MockWebSocket.OPEN;
-	binaryType: string = "";
-	sentMessages: Uint8Array[] = [];
-
-	onopen: ((event: unknown) => void) | null = null;
-	onclose: ((event: unknown) => void) | null = null;
-	onerror: ((event: unknown) => void) | null = null;
-	onmessage: ((event: unknown) => void) | null = null;
-
-	send(data: Uint8Array) {
-		this.sentMessages.push(data);
-	}
-	close() {
-		this.readyState = MockWebSocket.CLOSED;
-	}
-
-	triggerOpen() {
-		this.onopen?.({});
-	}
-	triggerMessage(data: ArrayBuffer) {
-		this.onmessage?.({ data });
-	}
-	triggerClose(code = 1000, reason = "") {
-		this.readyState = MockWebSocket.CLOSED;
-		this.onclose?.({ code, reason });
-	}
-}
 
 let mockWs: MockWebSocket;
 const OriginalWebSocket = globalThis.WebSocket;
 
 function installMockWebSocket() {
 	mockWs = new MockWebSocket();
-	(globalThis as unknown as { WebSocket: unknown }).WebSocket = class {
-		static OPEN = MockWebSocket.OPEN;
-		static CLOSING = MockWebSocket.CLOSING;
-		static CLOSED = MockWebSocket.CLOSED;
-		constructor(_url: string) {
-			// biome-ignore lint/correctness/noConstructorReturn: required for mocking pattern
-			return mockWs as unknown as WebSocket;
-		}
-	};
+	installMockWs(mockWs);
 }
 
 function restoreWebSocket() {
@@ -59,26 +22,10 @@ function restoreWebSocket() {
 		OriginalWebSocket;
 }
 
-function triggerSchemaSync() {
-	const payload = encode({
-		type: "SchemaSync",
-		tables: ["users"],
-		fields: [["id", "namespace_id", "name", "created_at", "updated_at"]],
-		fieldFlags: [[0b11, 0b01, 0b00, 0b01, 0b01]],
-	});
-	const arrayBuffer = payload.buffer.slice(
-		payload.byteOffset,
-		payload.byteOffset + payload.byteLength,
-	) as ArrayBuffer;
-	mockWs.triggerMessage(arrayBuffer);
-}
-
 const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
 	reconnect: false,
 };
-
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("createClient", () => {
 	test("returns a ZyncBaseClient instance without connecting", () => {
@@ -109,7 +56,8 @@ describe("ZyncBaseClient", () => {
 		const client = createClient(defaultOptions);
 		const p = client.connect();
 		mockWs.triggerOpen();
-		triggerSchemaSync();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
 		await expect(p).resolves.toBeUndefined();
 		client.disconnect();
 		restoreWebSocket();
@@ -120,7 +68,8 @@ describe("ZyncBaseClient", () => {
 		const client = createClient(defaultOptions);
 		const p = client.connect();
 		mockWs.triggerOpen();
-		triggerSchemaSync();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
 		await p;
 		client.disconnect();
 		expect(mockWs.readyState).toBe(MockWebSocket.CLOSED);
@@ -134,7 +83,8 @@ describe("ZyncBaseClient", () => {
 		client.on("connected", () => events.push("connected"));
 		const p = client.connect();
 		mockWs.triggerOpen();
-		triggerSchemaSync();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
 		await p;
 		expect(events).toContain("connected");
 		client.disconnect();
@@ -157,16 +107,15 @@ describe("ZyncBaseClient", () => {
 
 		const p = client.connect();
 		mockWs.triggerOpen();
-		triggerSchemaSync();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
 		await p;
 
-		// Trigger a set call but catch its rejection to allow the test to continue
 		const setPromise = client.store
 			.set("users.u1", { name: "Alice" })
 			.catch(() => {});
 
-		// Find the dispatched message and respond with an error
-		await new Promise((r) => setTimeout(r, 0)); // flush microtasks
+		await new Promise((r) => setTimeout(r, 0));
 		const lastMsg = mockWs.sentMessages[mockWs.sentMessages.length - 1];
 		const { decode } = await import("@msgpack/msgpack");
 		const decoded = decode(lastMsg) as Record<string, unknown>;
@@ -177,7 +126,6 @@ describe("ZyncBaseClient", () => {
 			code: "INTERNAL_ERROR",
 			message: "oops",
 		});
-		// Pass as Uint8Array directly (connection.ts handles both ArrayBuffer and Uint8Array)
 		mockWs.triggerMessage(errorResponse as unknown as ArrayBuffer);
 
 		await setPromise;

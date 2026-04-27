@@ -31,6 +31,7 @@ export type LifecycleEvent =
 export interface ClientOptions {
 	url: string;
 	auth?: { token: string }; // Optional until auth is implemented
+	clientId?: string;
 	storeNamespace?: string; // default: 'public'
 	presenceNamespace?: string; // default: same as storeNamespace
 	reconnect?: boolean; // default: true
@@ -105,7 +106,6 @@ export interface Store {
 export interface StoreSet {
 	type: "StoreSet";
 	id: number;
-	namespace: string;
 	path: string[];
 	value: JsonValue;
 }
@@ -113,7 +113,6 @@ export interface StoreSet {
 export interface StoreRemove {
 	type: "StoreRemove";
 	id: number;
-	namespace: string;
 	path: string[];
 }
 
@@ -121,8 +120,13 @@ export interface StoreRemove {
 export interface StoreBatch {
 	type: "StoreBatch";
 	id: number;
-	namespace: string;
 	ops: (["s", string[], JsonValue] | ["r", string[]])[];
+}
+
+export interface StoreSetNamespace {
+	type: "StoreSetNamespace";
+	id: number;
+	namespace: string;
 }
 
 // ─── Outbound wire messages: reads (one-shot) ─────────────────────────────────
@@ -130,7 +134,6 @@ export interface StoreBatch {
 export interface StoreQuery {
 	type: "StoreQuery";
 	id: number;
-	namespace: string;
 	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
@@ -144,7 +147,6 @@ export interface StoreQuery {
 export interface StoreSubscribe {
 	type: "StoreSubscribe";
 	id: number;
-	namespace: string;
 	table_index: string | number;
 	conditions?: [field: string, op: number, value?: JsonValue][];
 	orConditions?: [field: string, op: number, value?: JsonValue][];
@@ -171,6 +173,7 @@ export type OutboundMessage =
 	| StoreSet
 	| StoreRemove
 	| StoreBatch
+	| StoreSetNamespace
 	| StoreQuery
 	| StoreSubscribe
 	| StoreUnsubscribe
@@ -188,6 +191,7 @@ export interface OkResponse {
 	// StoreSubscribe response fields:
 	subId?: number;
 	hasMore?: boolean;
+	namespace_id?: number;
 }
 
 export interface ErrorResponse {
@@ -217,9 +221,17 @@ export interface SchemaSync {
 	fieldFlags: number[][];
 }
 
+export interface ConnectedMessage {
+	type: "Connected";
+	userId: string | null;
+	storeNamespace?: string;
+	presenceNamespace?: string;
+}
+
 /** Union of all inbound message types. */
 export type InboundMessage =
 	| OkResponse
 	| ErrorResponse
 	| StoreDelta
-	| SchemaSync;
+	| SchemaSync
+	| ConnectedMessage;

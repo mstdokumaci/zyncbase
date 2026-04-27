@@ -1,115 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { decode, encode } from "@msgpack/msgpack";
+import { decode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
-import type { ClientOptions } from "./types";
-
-// Minimal mock WebSocket for unit testing
-class MockWebSocket {
-	static OPEN = 1;
-	static CLOSING = 2;
-	static CLOSED = 3;
-
-	readyState = MockWebSocket.OPEN;
-	binaryType: string = "";
-	sentMessages: Uint8Array[] = [];
-
-	onopen: ((event: Record<string, unknown>) => void) | null = null;
-	onclose: ((event: Record<string, unknown>) => void) | null = null;
-	onerror: ((event: Record<string, unknown>) => void) | null = null;
-	onmessage: ((event: Record<string, unknown>) => void) | null = null;
-
-	send(data: Uint8Array) {
-		this.sentMessages.push(data);
-	}
-
-	close() {
-		this.readyState = MockWebSocket.CLOSED;
-	}
-
-	// Test helpers
-	triggerOpen() {
-		this.onopen?.({});
-	}
-
-	triggerMessage(data: ArrayBuffer) {
-		this.onmessage?.({ data });
-	}
-
-	triggerClose(code = 1000, reason = "") {
-		this.readyState = MockWebSocket.CLOSED;
-		this.onclose?.({ code, reason });
-	}
-
-	triggerError() {
-		this.onerror?.({});
-	}
-}
-
-const defaultOptions: ClientOptions = {
-	url: "ws://localhost:3000",
-	reconnect: false,
-};
-
-/** encode() may return a Uint8Array view into a larger buffer; this returns an exact-size ArrayBuffer */
-function encodeToBuffer(msg: unknown): ArrayBuffer {
-	const encoded = encode(msg);
-	return encoded.buffer.slice(
-		encoded.byteOffset,
-		encoded.byteOffset + encoded.byteLength,
-	) as ArrayBuffer;
-}
-
-function makeManager(): { manager: ConnectionManager; mockWs: MockWebSocket } {
-	const mockWs = new MockWebSocket();
-	// Patch global WebSocket — regular function required so `new WebSocket(url)` works in production code
-	function wsFactory() {
-		return mockWs;
-	}
-	(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
-		OPEN: MockWebSocket.OPEN,
-	});
-	const manager = new ConnectionManager(defaultOptions);
-	// Pre-seed with a minimal schema so StoreSet/StoreQuery tests don't throw TABLE_NOT_FOUND
-	manager.schemaDictionary.processSchemaSync({
-		tables: ["a", "users", "tasks"],
-		fields: [
-			["b", "c"],
-			["name", "age"],
-			["title", "meta"],
-		],
-		fieldFlags: [
-			[0b00, 0b00],
-			[0b00, 0b00],
-			[0b00, 0b00],
-		],
-	});
-	return { manager, mockWs };
-}
+import {
+	connectManager,
+	encodeToBuffer,
+	MockWebSocket,
+	makeManager,
+} from "./test-helpers";
 
 describe("ConnectionManager", () => {
 	describe("connect()", () => {
 		test("sets binaryType to arraybuffer on WebSocket creation", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 			expect(mockWs.binaryType).toBe("arraybuffer");
 		});
 
 		test("resolves when WebSocket opens", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await expect(connectPromise).resolves.toBeUndefined();
+			await expect(connectManager(manager, mockWs)).resolves.toBeUndefined();
 		});
 
 		test("emits 'connected' lifecycle event on open", async () => {
 			const { manager, mockWs } = makeManager();
 			const events: string[] = [];
 			manager.on("connected", () => events.push("connected"));
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 			expect(events).toContain("connected");
 		});
 
@@ -117,9 +33,7 @@ describe("ConnectionManager", () => {
 			const { manager, mockWs } = makeManager();
 			const statuses: string[] = [];
 			manager.on("statusChange", (s: unknown) => statuses.push(s as string));
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 			expect(statuses).toContain("connected");
 		});
 
@@ -136,9 +50,7 @@ describe("ConnectionManager", () => {
 	describe("dispatch() — msg_id and pendingQueue", () => {
 		test("assigns incrementing msg_ids starting at 1", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p1 = manager.dispatch({
 				type: "StoreSet",
@@ -151,25 +63,21 @@ describe("ConnectionManager", () => {
 				value: 2,
 			});
 
-			const msg1 = decode(mockWs.sentMessages[0]) as Record<string, unknown>;
-			const msg2 = decode(mockWs.sentMessages[1]) as Record<string, unknown>;
+			const msg1 = decode(mockWs.sentMessages[1]) as Record<string, unknown>;
+			const msg2 = decode(mockWs.sentMessages[2]) as Record<string, unknown>;
 
-			expect(msg1.id).toBe(1);
-			expect(msg2.id).toBe(2);
+			expect(msg1.id).toBe(2);
+			expect(msg2.id).toBe(3);
 
-			// Resolve to avoid unhandled rejections
-			// Use encodeToBuffer() to get an exact-size ArrayBuffer
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
 			await p1;
 			await p2;
 		});
 
 		test("resolves promise on type:ok response with matching id", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p = manager.dispatch({
 				type: "StoreSet",
@@ -177,18 +85,16 @@ describe("ConnectionManager", () => {
 				value: 1,
 			});
 			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 1, value: [{ x: 1 }] }),
+				encodeToBuffer({ type: "ok", id: 2, value: [{ x: 1 }] }),
 			);
 
 			const result = await p;
-			expect(result).toMatchObject({ type: "ok", id: 1 });
+			expect(result).toMatchObject({ type: "ok", id: 2 });
 		});
 
 		test("rejects promise on type:error response with matching id", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p = manager.dispatch({
 				type: "StoreSet",
@@ -198,7 +104,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 1,
+					id: 2,
 					code: "PERMISSION_DENIED",
 					message: "Not allowed",
 				}),
@@ -209,12 +115,8 @@ describe("ConnectionManager", () => {
 
 		test("discards response with unknown id silently", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
-			// No dispatch — just send a response with an unknown id
-			// Should not throw
 			expect(() =>
 				mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 999 })),
 			).not.toThrow();
@@ -224,9 +126,7 @@ describe("ConnectionManager", () => {
 	describe("StoreDelta routing", () => {
 		test("routes StoreDelta to registered delta handler by subId", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
@@ -246,9 +146,7 @@ describe("ConnectionManager", () => {
 
 		test("StoreDelta does not affect pendingQueue", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p = manager.dispatch({
 				type: "StoreSet",
@@ -256,27 +154,22 @@ describe("ConnectionManager", () => {
 				value: 1,
 			});
 
-			// Send a StoreDelta — should not resolve/reject the pending dispatch
 			const delta = { type: "StoreDelta", subId: 99, ops: [] };
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
-			// Now resolve the actual pending request
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
-			await expect(p).resolves.toMatchObject({ type: "ok", id: 1 });
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+			await expect(p).resolves.toMatchObject({ type: "ok", id: 2 });
 		});
 	});
 
 	describe("SchemaSync race condition (ADR-025)", () => {
 		test("processes StoreDelta only after SchemaSync is fully ready", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const received: unknown[] = [];
 			manager.onDelta((delta) => received.push(delta));
 
-			// 1. Send SchemaSync
 			const schema = {
 				type: "SchemaSync",
 				tables: ["users"],
@@ -285,20 +178,17 @@ describe("ConnectionManager", () => {
 			};
 			mockWs.triggerMessage(encodeToBuffer(schema));
 
-			// 2. Send StoreDelta immediately (should be queued and processed using NEW schema)
 			const delta = {
 				type: "StoreDelta",
 				subId: 1,
-				ops: [{ op: "set", path: [0, "u1", 0], value: "Alice" }], // [users, u1, name]
+				ops: [{ op: "set", path: [0, "u1", 0], value: "Alice" }],
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
-			// At this point, the queue is processing. We await the processingPromise.
 			await (manager as unknown as { processingPromise: Promise<void> })
 				.processingPromise;
 
 			expect(received).toHaveLength(1);
-			// Verify that the path was correctly decoded using the new schema
 			expect(
 				(received[0] as { ops: { path: string[] }[] }).ops[0].path,
 			).toEqual(["users", "u1", "name"]);
@@ -308,9 +198,7 @@ describe("ConnectionManager", () => {
 	describe("lifecycle events", () => {
 		test("emits 'disconnected' when WebSocket closes", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const events: string[] = [];
 			manager.on("disconnected", () => events.push("disconnected"));
@@ -339,9 +227,7 @@ describe("ConnectionManager", () => {
 
 		test("rejects all pending requests when connection closes", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p = manager.dispatch({
 				type: "StoreSet",
@@ -357,9 +243,7 @@ describe("ConnectionManager", () => {
 	describe("disconnect()", () => {
 		test("closes the WebSocket and rejects pending requests", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const p = manager.dispatch({
 				type: "StoreSet",
@@ -373,9 +257,7 @@ describe("ConnectionManager", () => {
 
 		test("emits 'disconnected' event", async () => {
 			const { manager, mockWs } = makeManager();
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const events: string[] = [];
 			manager.on("disconnected", () => events.push("disconnected"));
@@ -388,7 +270,6 @@ describe("ConnectionManager", () => {
 	describe("send()", () => {
 		test("throws if WebSocket is not open", () => {
 			const { manager } = makeManager();
-			// Don't connect — ws is null
 			expect(() => manager.send(new Uint8Array([1, 2, 3]))).toThrow();
 		});
 	});
@@ -401,9 +282,7 @@ describe("ConnectionManager", () => {
 			manager.on("connected", handler);
 			manager.off("connected", handler);
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			expect(events).toHaveLength(0);
 		});
@@ -417,9 +296,7 @@ describe("ConnectionManager", () => {
 			}
 			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 				wsFactory1,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
+				{ OPEN: MockWebSocket.OPEN },
 			);
 
 			const manager = new ConnectionManager({
@@ -432,17 +309,13 @@ describe("ConnectionManager", () => {
 			const events: string[] = [];
 			manager.on("reconnecting", () => events.push("reconnecting"));
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			mockWs.triggerClose(1006, "Abnormal closure");
 
-			// Give the timer a tick to register
 			await new Promise((r) => setTimeout(r, 10));
 			expect(events).toContain("reconnecting");
 
-			// Clean up timer
 			manager.disconnect();
 		});
 
@@ -453,9 +326,7 @@ describe("ConnectionManager", () => {
 			}
 			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 				wsFactory2,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
+				{ OPEN: MockWebSocket.OPEN },
 			);
 
 			const manager = new ConnectionManager({
@@ -467,9 +338,7 @@ describe("ConnectionManager", () => {
 			manager.on("reconnecting", () => events.push("reconnecting"));
 			manager.on("disconnected", () => events.push("disconnected"));
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			mockWs.triggerClose(1006, "Abnormal closure");
 
@@ -485,9 +354,7 @@ describe("ConnectionManager", () => {
 			}
 			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 				wsFactory3,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
+				{ OPEN: MockWebSocket.OPEN },
 			);
 
 			const manager = new ConnectionManager({
@@ -502,9 +369,7 @@ describe("ConnectionManager", () => {
 			manager.on("reconnecting", () => events.push("reconnecting"));
 			manager.on("disconnected", () => events.push("disconnected"));
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			mockWs.triggerClose(1006, "Abnormal closure");
 
@@ -522,9 +387,7 @@ describe("ConnectionManager", () => {
 			}
 			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 				wsFactory4,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
+				{ OPEN: MockWebSocket.OPEN },
 			);
 
 			const manager = new ConnectionManager({
@@ -534,17 +397,13 @@ describe("ConnectionManager", () => {
 				maxReconnectDelay: 5000,
 			});
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			const instancesBeforeClose = wsInstances;
 			mockWs.triggerClose(1006, "Abnormal closure");
 
-			// Immediately cancel before timer fires
 			manager.disconnect();
 
-			// Wait longer than the delay to confirm no new connection was attempted
 			await new Promise((r) => setTimeout(r, 300));
 			expect(wsInstances).toBe(instancesBeforeClose);
 		});
@@ -556,9 +415,7 @@ describe("ConnectionManager", () => {
 			}
 			(globalThis as Record<string, unknown>).WebSocket = Object.assign(
 				wsFactory5,
-				{
-					OPEN: MockWebSocket.OPEN,
-				},
+				{ OPEN: MockWebSocket.OPEN },
 			);
 
 			const manager = new ConnectionManager({
@@ -570,9 +427,7 @@ describe("ConnectionManager", () => {
 			const events: string[] = [];
 			manager.on("reconnecting", () => events.push("reconnecting"));
 
-			const connectPromise = manager.connect();
-			mockWs.triggerOpen();
-			await connectPromise;
+			await connectManager(manager, mockWs);
 
 			manager.disconnect();
 
@@ -606,14 +461,12 @@ describe("ConnectionManager", () => {
 				maxReconnectDelay: 5000,
 			});
 
-			// attempt=10 → preCap = 1000 * 1024 = 1,024,000 >> 5000
 			const delay = manager._computeBackoffDelay(10);
 			expect(delay).toBeLessThanOrEqual(5000);
 		});
 
 		test("uses default values when options not specified", () => {
 			const manager = new ConnectionManager({ url: "ws://localhost:3000" });
-			// attempt=0 → preCap = 1000 * 1 = 1000, jitter ±10%
 			const delay = manager._computeBackoffDelay(0);
 			expect(delay).toBeGreaterThanOrEqual(900);
 			expect(delay).toBeLessThanOrEqual(1100);
