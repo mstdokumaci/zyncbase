@@ -14,8 +14,6 @@ pub const extractAs = decode.extractAs;
 
 pub const WireError = errors.WireError;
 pub const getWireError = errors.getWireError;
-pub const getErrorCode = errors.getErrorCode;
-pub const getErrorMessage = errors.getErrorMessage;
 
 pub const Keys = encode.Keys;
 pub const ok_id_header = encode.ok_id_header;

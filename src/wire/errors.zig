@@ -48,12 +48,3 @@ pub fn getWireError(err: anyerror) WireError {
         else => wireError("INTERNAL_ERROR", "Zig core failure"),
     };
 }
-
-// Backward-compat convenience
-pub fn getErrorCode(err: anyerror) []const u8 {
-    return getWireError(err).code;
-}
-
-pub fn getErrorMessage(err: anyerror) []const u8 {
-    return getWireError(err).message;
-}

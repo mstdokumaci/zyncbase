@@ -206,8 +206,9 @@ pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.Sc
     try list.appendSlice(allocator, Keys.type);
     try list.appendSlice(allocator, Values.schema_sync);
 
-    try list.appendSlice(allocator, Keys.tables);
     const tables = sm.schema.tables;
+
+    try list.appendSlice(allocator, Keys.tables);
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
         try msgpack.writeMsgPackStr(writer, table.name);
@@ -317,7 +318,7 @@ pub fn encodeSetDeltaSuffix(
     });
 }
 
-pub fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
+pub inline fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
     if (row.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeMapHeader(writer, row.values.len);
     for (row.values, 0..) |value, idx| {
