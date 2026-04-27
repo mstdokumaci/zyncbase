@@ -164,6 +164,14 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
             self.reclaim_handle = try std.Thread.spawn(.{}, reclaimLoop, .{self});
         }
 
+        fn cloneEntries(self: *Self, old_entries: *MapType) !*MapType {
+            const new_entries = try self.allocator.create(MapType);
+            errdefer self.allocator.destroy(new_entries);
+
+            new_entries.* = try old_entries.clone();
+            return new_entries;
+        }
+
         pub fn deinit(self: *Self) void {
             self.reclaim_active.store(false, .release);
             if (self.reclaim_handle) |h| h.join();
@@ -254,8 +262,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
                 const old_entries = self.entries.load(.acquire);
 
-                const new_entries = try self.allocator.create(MapType);
-                new_entries.* = try old_entries.clone();
+                const new_entries = try self.cloneEntries(old_entries);
                 errdefer {
                     new_entries.deinit();
                     self.allocator.destroy(new_entries);
@@ -302,8 +309,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
                 const old_entries = self.entries.load(.acquire);
 
-                const new_entries = try self.allocator.create(MapType);
-                new_entries.* = try old_entries.clone();
+                const new_entries = try self.cloneEntries(old_entries);
                 errdefer {
                     new_entries.deinit();
                     self.allocator.destroy(new_entries);
@@ -378,11 +384,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 const old_entries = self.entries.load(.acquire);
                 if (!old_entries.contains(key)) return false;
 
-                const new_entries = self.allocator.create(MapType) catch return false;
-                new_entries.* = old_entries.clone() catch {
-                    self.allocator.destroy(new_entries);
-                    return false;
-                };
+                const new_entries = self.cloneEntries(old_entries) catch return false;
 
                 const old_val = new_entries.fetchRemove(key) orelse unreachable;
 
@@ -418,11 +420,7 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 }
                 if (!any_exists) return;
 
-                const new_entries = self.allocator.create(MapType) catch return;
-                new_entries.* = old_entries.clone() catch {
-                    self.allocator.destroy(new_entries);
-                    return;
-                };
+                const new_entries = self.cloneEntries(old_entries) catch return;
 
                 var evicted_entries = std.ArrayListUnmanaged(*CacheEntry).initCapacity(self.allocator, keys.len) catch {
                     new_entries.deinit();
