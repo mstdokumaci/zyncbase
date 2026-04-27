@@ -161,8 +161,8 @@ pub fn buildQueryResponse(
     errdefer list.deinit(arena_allocator);
     const writer = list.writer(arena_allocator);
 
-    const map_size: u8 = if (sub_id != null) 6 else 4;
-    try writer.writeByte(0x80 | map_size);
+    const map_size: usize = if (sub_id != null) 6 else 4;
+    try msgpack.encodeMapHeader(writer, map_size);
 
     try list.appendSlice(arena_allocator, &ok_id_header);
     try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
