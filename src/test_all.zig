@@ -31,10 +31,10 @@ test {
 
     // Property tests
     _ = @import("message_handler_property_test.zig");
+    _ = @import("connection_manager_property_test.zig");
     _ = @import("hook_server_client_property_test.zig");
     _ = @import("config_loader_property_test.zig");
     _ = @import("checkpoint_manager_property_test.zig");
-    _ = @import("message_buffer_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");
     _ = @import("connection_state_property_test.zig");
     _ = @import("storage_engine_property_test.zig");
