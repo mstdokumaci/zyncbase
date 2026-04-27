@@ -98,8 +98,8 @@ test "StoreService: set - field level update" {
     try app.init(allocator, "store-service-test-field", &.{
         .{
             .name = "items",
-            .fields = &.{ "status", "meta" },
-            .types = &.{ .text, .boolean },
+            .fields = &.{ "status", "metadata__tags", "a__b__c" },
+            .types = &.{ .text, .array, .text },
         },
     });
     defer app.deinit();
@@ -122,6 +122,75 @@ test "StoreService: set - field level update" {
         var doc = try items.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("status", "active");
+    }
+
+    {
+        var tags = try allocator.alloc(msgpack.Payload, 2);
+        tags[0] = try msgpack.Payload.strToPayload("a", allocator);
+        tags[1] = try msgpack.Payload.strToPayload("b", allocator);
+        const val = msgpack.Payload{ .arr = tags };
+        defer val.free(allocator);
+
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "metadata__tags"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+    }
+
+    {
+        const val = try msgpack.Payload.strToPayload("deep-value", allocator);
+        defer val.free(allocator);
+
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "a__b__c"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        var doc = try items.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("a__b__c", "deep-value");
+    }
+}
+
+test "StoreService: setPath path validation" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-service-path-validation", &.{
+        .{ .name = "items", .fields = &.{"status"} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const value = try msgpack.Payload.strToPayload("active", allocator);
+    defer value.free(allocator);
+
+    try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), .nil, value));
+
+    {
+        const arr = try allocator.alloc(msgpack.Payload, 1);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
+        const path = msgpack.Payload{ .arr = arr };
+        defer path.free(allocator);
+
+        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value));
+    }
+
+    {
+        const arr = try allocator.alloc(msgpack.Payload, 2);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
+        arr[1] = msgpack.Payload.uintToPayload(1);
+        const path = msgpack.Payload{ .arr = arr };
+        defer path.free(allocator);
+
+        try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), path, value));
+    }
+
+    {
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, 999);
+        defer path.free(allocator);
+
+        try testing.expectError(StorageError.UnknownField, service.setPath(writeCtx(1), path, value));
     }
 }
 
