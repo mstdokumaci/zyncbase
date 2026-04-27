@@ -207,7 +207,7 @@ pub const ZyncBaseServer = struct {
             &self.schema_manager,
         );
 
-        try self.message_handler.init(
+        self.message_handler.init(
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.violation_tracker,

@@ -34,7 +34,7 @@ pub const MessageHandler = struct {
         store_service: *StoreService,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
-    ) !void {
+    ) void {
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,

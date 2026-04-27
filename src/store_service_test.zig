@@ -19,27 +19,27 @@ fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     };
 }
 
-fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId) !msgpack.Payload {
-    const arr = try allocator.alloc(msgpack.Payload, 2);
+fn storePath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: ?usize) !msgpack.Payload {
+    const segments_len: usize = if (field_index != null) 3 else 2;
+    const arr = try allocator.alloc(msgpack.Payload, segments_len);
     errdefer allocator.free(arr);
 
     arr[0] = msgpack.Payload.uintToPayload(table_index);
     const id_bytes = doc_id.toBytes(id);
     arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
+    if (field_index) |index| {
+        arr[2] = msgpack.Payload.uintToPayload(index);
+    }
 
     return .{ .arr = arr };
 }
 
+fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId) !msgpack.Payload {
+    return storePath(allocator, table_index, id, null);
+}
+
 fn fieldPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: usize) !msgpack.Payload {
-    const arr = try allocator.alloc(msgpack.Payload, 3);
-    errdefer allocator.free(arr);
-
-    arr[0] = msgpack.Payload.uintToPayload(table_index);
-    const id_bytes = doc_id.toBytes(id);
-    arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
-    arr[2] = msgpack.Payload.uintToPayload(field_index);
-
-    return .{ .arr = arr };
+    return storePath(allocator, table_index, id, field_index);
 }
 
 test "StoreService: set - full document replacement" {
@@ -437,7 +437,7 @@ test "StoreService: query - negative cases" {
     }
 }
 
-test "StoreService: queryWithCursor - pagination" {
+test "StoreService: queryMore - pagination" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-cursor", &.{

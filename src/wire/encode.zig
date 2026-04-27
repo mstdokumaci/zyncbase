@@ -9,7 +9,7 @@ const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 
 // === Comptime-encoded wire keys and values ===
 
-pub const Keys = struct {
+const Keys = struct {
     pub const @"type" = comptimeEncodeKey("type");
     pub const id = comptimeEncodeKey("id");
     pub const code = comptimeEncodeKey("code");
@@ -27,7 +27,7 @@ pub const Keys = struct {
     pub const field_flags = comptimeEncodeKey("fieldFlags");
 };
 
-pub const Values = struct {
+const Values = struct {
     pub const ok = comptimeEncodeKey("ok");
     pub const @"error" = comptimeEncodeKey("error");
     pub const connected = comptimeEncodeKey("Connected");
@@ -152,7 +152,7 @@ pub fn encodeError(
 pub const QueryResponse = struct {
     msg_id: u64,
     sub_id: ?u64 = null,
-    results: *storage_mod.ManagedResult,
+    results: *const storage_mod.ManagedResult,
     table: *const storage_mod.TableMetadata,
 };
 

@@ -354,7 +354,7 @@ test "logging: level filtering" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
@@ -437,7 +437,7 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
@@ -504,7 +504,7 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
