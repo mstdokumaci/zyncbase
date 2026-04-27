@@ -4,6 +4,7 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
+const doc_id_utils = @import("doc_id.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const DocId = storage_mod.DocId;
@@ -77,25 +78,143 @@ pub const StoreService = struct {
 
     pub fn deinit(_: *StoreService) void {}
 
-    /// Set a value at a path.
-    /// Handles both full-document replacement (path len 2) and field-level updates (path len 3).
-    pub fn set(
-        self: *StoreService,
-        table_index: usize,
-        doc_id: DocId,
+    pub const WriteContext = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
+    };
+
+    const PathKind = enum {
+        document_or_field,
+        document_only,
+    };
+
+    const StorePath = struct {
+        table_index: usize,
+        table: *const schema_manager.TableMetadata,
+        doc_id: DocId,
         segments_len: usize,
         field_index: ?usize,
+    };
+
+    pub fn resolveNamespace(self: *StoreService, namespace: []const u8) !i64 {
+        if (namespace.len == 0) return error.InvalidMessageFormat;
+        return (try self.storage_engine.lookupNamespaceId(namespace)) orelse try self.storage_engine.resolveNamespaceId(namespace);
+    }
+
+    pub fn setPath(
+        self: *StoreService,
+        ctx: WriteContext,
+        path: msgpack.Payload,
         value: msgpack.Payload,
     ) !void {
-        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const parsed = try self.parseStorePath(path, .document_or_field);
+        try self.applySet(parsed, ctx, value);
+    }
 
-        if (segments_len == 2) {
-            // Full document replacement
+    pub fn removePath(
+        self: *StoreService,
+        namespace_id: i64,
+        path: msgpack.Payload,
+    ) !void {
+        const parsed = try self.parseStorePath(path, .document_only);
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, namespace_id);
+    }
+
+    pub fn queryCollection(
+        self: *StoreService,
+        allocator: Allocator,
+        namespace_id: i64,
+        table_index_payload: msgpack.Payload,
+        payload: msgpack.Payload,
+    ) !QueryResult {
+        const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+
+        const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
+        errdefer filter.deinit(allocator);
+
+        if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
+            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            return .{
+                .table_index = table_index,
+                .table = table,
+                .results = result,
+                .filter = filter,
+            };
+        }
+
+        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        return .{
+            .table_index = table_index,
+            .table = table,
+            .results = results,
+            .filter = filter,
+        };
+    }
+
+    pub fn queryMore(
+        self: *StoreService,
+        allocator: Allocator,
+        table_index: usize,
+        namespace_id: i64,
+        filter: *query_parser.QueryFilter,
+        next_cursor: []const u8,
+    ) !CursorResult {
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const cursor = try query_parser.parseCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
+
+        if (filter.after) |*old| old.deinit(allocator);
+        filter.after = cursor;
+
+        return .{
+            .table = table,
+            .results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*),
+        };
+    }
+
+    fn parseStorePath(
+        self: *StoreService,
+        payload: msgpack.Payload,
+        kind: PathKind,
+    ) !StorePath {
+        if (payload != .arr) return error.InvalidMessageFormat;
+
+        const path = payload.arr;
+        switch (kind) {
+            .document_or_field => if (path.len != 2 and path.len != 3) return StorageError.InvalidPath,
+            .document_only => if (path.len != 2) return StorageError.InvalidPath,
+        }
+
+        const table_index = msgpack.extractPayloadUint(path[0]) orelse return error.InvalidMessageFormat;
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+
+        if (path[1] != .bin) return error.InvalidMessageFormat;
+        const parsed_doc_id = try doc_id_utils.fromBytes(path[1].bin.value());
+
+        const field_index: ?usize = if (path.len == 3) blk: {
+            const index = msgpack.extractPayloadUint(path[2]) orelse return error.InvalidMessageFormat;
+            if (index >= table.fields.len) return StorageError.UnknownField;
+            break :blk index;
+        } else null;
+
+        return .{
+            .table_index = table_index,
+            .table = table,
+            .doc_id = parsed_doc_id,
+            .segments_len = path.len,
+            .field_index = field_index,
+        };
+    }
+
+    fn applySet(
+        self: *StoreService,
+        path: StorePath,
+        ctx: WriteContext,
+        value: msgpack.Payload,
+    ) !void {
+        if (path.segments_len == 2) {
             if (value != .map) return error.InvalidPayload;
 
-            // Validate schema and construct columns in a single pass
             var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
             defer {
                 for (columns.items) |col| col.value.deinit(self.allocator);
@@ -104,8 +223,6 @@ pub const StoreService = struct {
 
             var it = value.map.iterator();
             while (it.next()) |entry| {
-                // Value map keys are field indices. Accept both integer keys and numeric strings
-                // because JS objects in MessagePack decode with string keys.
                 const f_idx = blk: {
                     if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
                     if (entry.key_ptr.* == .str) {
@@ -115,7 +232,7 @@ pub const StoreService = struct {
                     return StorageError.UnknownField;
                 };
 
-                const field = try validateFieldWrite(tbl_md, f_idx, entry.value_ptr.*);
+                const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
                 const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
@@ -124,11 +241,10 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace_id, owner_doc_id, columns.items);
-        } else if (segments_len == 3) {
-            // Partial update / field-level update
-            const f_index = field_index orelse return StorageError.InvalidPath;
-            const field = try validateFieldWrite(tbl_md, f_index, value);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items);
+        } else if (path.segments_len == 3) {
+            const f_index = path.field_index orelse return StorageError.InvalidPath;
+            const field = try validateFieldWrite(path.table, f_index, value);
             const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
 
@@ -136,82 +252,30 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed,
             }};
-            try self.storage_engine.insertOrReplace(table_index, doc_id, namespace_id, owner_doc_id, &col);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col);
         } else {
             return StorageError.InvalidPath;
         }
-    }
-
-    /// Remove a value at a path.
-    /// Handles document deletion (path len 2). Field-level removal is not supported (use set to null).
-    pub fn remove(
-        self: *StoreService,
-        table_index: usize,
-        doc_id: DocId,
-        namespace_id: i64,
-        segments_len: usize,
-    ) !void {
-        _ = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
-
-        if (segments_len == 2) {
-            try self.storage_engine.deleteDocument(table_index, doc_id, namespace_id);
-        } else {
-            return StorageError.InvalidPath;
-        }
-    }
-
-    /// Execute a filtered query against a collection.
-    /// Returns both the results and the parsed QueryFilter.
-    /// The caller owns the returned QueryResult and must call deinit().
-    pub fn query(
-        self: *StoreService,
-        allocator: Allocator,
-        table_index: usize,
-        namespace_id: i64,
-        payload: msgpack.Payload,
-    ) !QueryResult {
-        const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
-        errdefer filter.deinit(allocator);
-
-        if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
-            // Fast path: use selectDocument with cache
-            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
-            return QueryResult{
-                .results = result,
-                .filter = filter,
-            };
-        }
-
-        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
-        return QueryResult{
-            .results = results,
-            .filter = filter,
-        };
-    }
-
-    /// Execute a query with an existing filter and apply a cursor.
-    /// The caller is responsible for parsing the cursor from the wire format.
-    pub fn queryWithCursor(
-        self: *StoreService,
-        allocator: Allocator,
-        table_index: usize,
-        namespace_id: i64,
-        filter: *query_parser.QueryFilter,
-        cursor: query_parser.Cursor,
-    ) !storage_mod.ManagedResult {
-        if (filter.after) |*old| old.deinit(allocator);
-        filter.after = cursor;
-
-        return try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
     }
 };
 
 pub const QueryResult = struct {
+    table_index: usize,
+    table: *const schema_manager.TableMetadata,
     results: storage_mod.ManagedResult,
     filter: query_parser.QueryFilter,
 
     pub fn deinit(self: *QueryResult, allocator: Allocator) void {
         self.results.deinit();
         self.filter.deinit(allocator);
+    }
+};
+
+pub const CursorResult = struct {
+    table: *const schema_manager.TableMetadata,
+    results: storage_mod.ManagedResult,
+
+    pub fn deinit(self: *CursorResult) void {
+        self.results.deinit();
     }
 };

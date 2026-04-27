@@ -4,10 +4,7 @@ pub const std_options = struct {
 };
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
-const doc_id = @import("doc_id.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const storage_mod = @import("storage_engine.zig");
-const StorageEngine = storage_mod.StorageEngine;
 const subscription_mod = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_mod.SubscriptionEngine;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
@@ -15,10 +12,8 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const connection_mod = @import("connection.zig");
 const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
-const SchemaManager = @import("schema_manager.zig").SchemaManager;
 const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
-const query_parser = @import("query_parser.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -26,10 +21,8 @@ pub const MessageHandler = struct {
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     violation_tracker: *ViolationTracker,
-    storage_engine: *StorageEngine,
     store_service: *StoreService,
     subscription_engine: *SubscriptionEngine,
-    schema_manager: *const SchemaManager,
     security_config: SecurityConfig,
 
     /// Initialize message handler with all required components
@@ -38,20 +31,16 @@ pub const MessageHandler = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         violation_tracker: *ViolationTracker,
-        storage_engine: *StorageEngine,
         store_service: *StoreService,
         subscription_engine: *SubscriptionEngine,
-        schema_manager: *const SchemaManager,
         security_config: SecurityConfig,
-    ) !void {
+    ) void {
         self.* = .{
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .violation_tracker = violation_tracker,
-            .storage_engine = storage_engine,
             .store_service = store_service,
             .subscription_engine = subscription_engine,
-            .schema_manager = schema_manager,
             .security_config = security_config,
         };
     }
@@ -104,8 +93,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                const err = wire.getWireError(error.RateLimited);
-                try self.sendError(ws, err.code, err.message, null);
+                try self.sendError(ws, null, wire.getWireError(error.RateLimited));
                 return;
             }
         }
@@ -131,7 +119,7 @@ pub const MessageHandler = struct {
             }
 
             const wire_err = wire.getWireError(err);
-            try self.sendError(ws, wire_err.code, wire_err.message, null);
+            try self.sendError(ws, null, wire_err);
             return;
         };
 
@@ -139,7 +127,7 @@ pub const MessageHandler = struct {
         const msg_info = wire.extractAs(wire.Envelope, arena_allocator, parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
             const wire_err2 = wire.getWireError(err);
-            try self.sendError(ws, wire_err2.code, wire_err2.message, null);
+            try self.sendError(ws, null, wire_err2);
             return;
         };
 
@@ -158,7 +146,7 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
-            return try wire.buildErrorResponse(allocator, msg_info.id, wire.getWireError(err));
+            return try wire.encodeError(allocator, msg_info.id, wire.getWireError(err));
         };
     }
 
@@ -199,25 +187,8 @@ pub const MessageHandler = struct {
         }
     }
 
-    pub fn sendError(self: *MessageHandler, ws: *WebSocket, code: []const u8, message: []const u8, msg_id: ?u64) !void {
-        var list = std.ArrayListUnmanaged(u8).empty;
-        defer list.deinit(self.allocator);
-        const writer = list.writer(self.allocator);
-
-        try writer.writeByte(if (msg_id != null) 0x84 else 0x83);
-        try list.appendSlice(self.allocator, &wire.error_type_header);
-        try list.appendSlice(self.allocator, code);
-
-        try list.appendSlice(self.allocator, wire.Keys.message);
-        try list.appendSlice(self.allocator, message);
-
-        if (msg_id) |id| {
-            try list.appendSlice(self.allocator, wire.Keys.id);
-            try writer.writeByte(0xcf);
-            try writer.writeInt(u64, id, .big);
-        }
-
-        const error_msg = try list.toOwnedSlice(self.allocator);
+    pub fn sendError(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
+        const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
         defer self.allocator.free(error_msg);
         ws.send(error_msg, .binary);
     }
@@ -263,14 +234,13 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         const req = try wire.extractAs(wire.StoreSetNamespaceRequest, arena_allocator, parsed);
-        if (req.namespace.len == 0) return error.InvalidMessageFormat;
 
-        const namespace_id = (try self.storage_engine.lookupNamespaceId(req.namespace)) orelse try self.storage_engine.resolveNamespaceId(req.namespace);
+        const namespace_id = try self.store_service.resolveNamespace(req.namespace);
 
         self.clearStoreSubscriptions(conn);
         conn.setNamespaceId(namespace_id);
 
-        return try wire.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreSet(
@@ -281,33 +251,19 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
-        if (req.path != .arr) return error.InvalidMessageFormat;
-        const arr = req.path.arr;
-        if (arr.len < 2) return error.InvalidPath;
-
-        const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
-        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        if (arr[1] != .bin) return error.InvalidMessageFormat;
-        const doc_id_value = try doc_id.fromBytes(arr[1].bin.value());
-        const field_index: ?usize = if (arr.len >= 3) blk: {
-            const fi = msgpack.extractPayloadUint(arr[2]) orelse return error.InvalidMessageFormat;
-            if (fi >= tbl_md.fields.len) return error.UnknownField;
-            break :blk fi;
-        } else null;
         const value = req.value orelse return error.MissingRequiredFields;
         const session = try requireStoreSession(conn);
 
-        try self.store_service.set(
-            table_index,
-            doc_id_value,
-            session.namespace_id,
-            session.user_doc_id,
-            arr.len,
-            field_index,
+        try self.store_service.setPath(
+            .{
+                .namespace_id = session.namespace_id,
+                .owner_doc_id = session.user_doc_id,
+            },
+            req.path,
             value,
         );
 
-        return try wire.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreRemove(
@@ -318,24 +274,11 @@ pub const MessageHandler = struct {
         parsed: msgpack.Payload,
     ) ![]const u8 {
         const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
-        if (req.path != .arr) return error.InvalidMessageFormat;
-        const arr = req.path.arr;
-        if (arr.len < 2) return error.InvalidPath;
-
-        const table_index = msgpack.extractPayloadUint(arr[0]) orelse return error.InvalidMessageFormat;
-        _ = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        if (arr[1] != .bin) return error.InvalidMessageFormat;
-        const doc_id_value = try doc_id.fromBytes(arr[1].bin.value());
         const namespace_id = try requireStoreNamespace(conn);
 
-        try self.store_service.remove(
-            table_index,
-            doc_id_value,
-            namespace_id,
-            arr.len,
-        );
+        try self.store_service.removePath(namespace_id, req.path);
 
-        return try wire.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreSubscribe(
@@ -346,18 +289,21 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
-        const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
-        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.query(arena_allocator, table_index, namespace_id, payload);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, req.table_index, payload);
         defer qr.deinit(arena_allocator);
 
-        _ = try self.subscription_engine.subscribe(namespace_id, table_index, qr.filter, conn.id, sub_id);
+        _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
         try conn.addSubscription(sub_id);
 
-        return try wire.buildQueryResponse(arena_allocator, msg_id, sub_id, &qr.results, tbl_md);
+        return try wire.encodeQuery(arena_allocator, .{
+            .msg_id = msg_id,
+            .sub_id = sub_id,
+            .results = &qr.results,
+            .table = qr.table,
+        });
     }
 
     fn handleStoreUnsubscribe(
@@ -372,7 +318,7 @@ pub const MessageHandler = struct {
         self.subscription_engine.unsubscribe(conn.id, req.subId);
         conn.removeSubscription(req.subId);
 
-        return try wire.buildSuccessResponse(arena_allocator, msg_id);
+        return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
     fn handleStoreQuery(
@@ -383,14 +329,16 @@ pub const MessageHandler = struct {
         payload: msgpack.Payload,
     ) ![]const u8 {
         const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
-        const table_index = msgpack.extractPayloadUint(req.table_index) orelse return error.InvalidMessageFormat;
-        const tbl_md = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.query(arena_allocator, table_index, namespace_id, payload);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, req.table_index, payload);
         defer qr.deinit(arena_allocator);
 
-        return try wire.buildQueryResponse(arena_allocator, msg_id, null, &qr.results, tbl_md);
+        return try wire.encodeQuery(arena_allocator, .{
+            .msg_id = msg_id,
+            .results = &qr.results,
+            .table = qr.table,
+        });
     }
 
     fn handleStoreLoadMore(
@@ -410,13 +358,15 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const cursor = try query_parser.parseCursorToken(arena_allocator, req.nextCursor, sub_query.filter.order_by.field_type, sub_query.filter.order_by.items_type);
+        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor);
+        defer page.deinit();
 
-        var results = try self.store_service.queryWithCursor(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, cursor);
-        defer results.deinit();
-
-        const tbl_md = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
-        return try wire.buildQueryResponse(arena_allocator, msg_id, req.subId, &results, tbl_md);
+        return try wire.encodeQuery(arena_allocator, .{
+            .msg_id = msg_id,
+            .sub_id = req.subId,
+            .results = &page.results,
+            .table = page.table,
+        });
     }
 
     fn generateSubscriptionId(conn: *Connection) !u64 {

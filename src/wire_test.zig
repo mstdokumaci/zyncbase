@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const wire = @import("wire.zig");
 const msgpack = @import("msgpack_utils.zig");
+const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
 const storage_types = @import("storage_engine/types.zig");
@@ -142,9 +143,9 @@ test "extractAs: wrong type for field returns InvalidMessageFormat" {
     try testing.expectError(error.InvalidMessageFormat, result);
 }
 
-test "buildSuccessResponse: produces valid MsgPack" {
+test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const response = try wire.buildSuccessResponse(allocator, 12345);
+    const response = try wire.encodeSuccess(allocator, 12345);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -158,10 +159,10 @@ test "buildSuccessResponse: produces valid MsgPack" {
     try testing.expectEqual(@as(u64, 12345), id_val.uint);
 }
 
-test "buildErrorResponse: produces valid MsgPack" {
+test "encodeError: produces valid MsgPack" {
     const allocator = testing.allocator;
     const wire_err = wire.getWireError(error.UnknownTable);
-    const response = try wire.buildErrorResponse(allocator, 999, wire_err);
+    const response = try wire.encodeError(allocator, 999, wire_err);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -177,6 +178,63 @@ test "buildErrorResponse: produces valid MsgPack" {
     try testing.expectEqualStrings("COLLECTION_NOT_FOUND", code_val.str.value());
     const msg_val = (try parsed.mapGet("message")) orelse return error.MissingMessage;
     try testing.expectEqualStrings("Collection missing in schema", msg_val.str.value());
+}
+
+test "encodeQuery: includes subscription pagination fields" {
+    const allocator = testing.allocator;
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &.{"name"},
+    }});
+    defer sm.deinit();
+
+    const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
+    const rows = try allocator.alloc(storage_types.TypedRow, 1);
+    rows[0] = try makeDeltaTestRow(allocator, "user-123", "Ada");
+    defer {
+        rows[0].deinit(allocator);
+        allocator.free(rows);
+    }
+
+    var result = storage_types.ManagedResult{
+        .rows = rows,
+        .next_cursor = .{
+            .sort_value = tth.valInt(10),
+            .id = 1,
+        },
+    };
+
+    const response = try wire.encodeQuery(allocator, .{
+        .msg_id = 44,
+        .sub_id = 7,
+        .results = &result,
+        .table = table_metadata,
+    });
+    defer allocator.free(response);
+
+    var reader: std.Io.Reader = .fixed(response);
+    const parsed = try msgpack.decodeTrusted(allocator, &reader);
+    defer parsed.free(allocator);
+
+    const type_val = (try parsed.mapGet("type")) orelse return error.MissingType;
+    try testing.expectEqualStrings("ok", type_val.str.value());
+    const id_val = (try parsed.mapGet("id")) orelse return error.MissingId;
+    try testing.expectEqual(@as(u64, 44), id_val.uint);
+    const sub_id_val = (try parsed.mapGet("subId")) orelse return error.MissingSubId;
+    try testing.expectEqual(@as(u64, 7), sub_id_val.uint);
+
+    const rows_payload = (try parsed.mapGet("value")) orelse return error.MissingValue;
+    try testing.expect(rows_payload == .arr);
+    try testing.expectEqual(@as(usize, 1), rows_payload.arr.len);
+    const name = (try msgpack_helpers.getMapValueByName(rows_payload.arr[0], table_metadata, "name")) orelse return error.MissingName;
+    try testing.expectEqualStrings("Ada", name.str.value());
+
+    const has_more = (try parsed.mapGet("hasMore")) orelse return error.MissingHasMore;
+    try testing.expectEqual(true, has_more.bool);
+    const next_cursor = (try parsed.mapGet("nextCursor")) orelse return error.MissingNextCursor;
+    try testing.expect(next_cursor == .str);
+    try testing.expect(next_cursor.str.value().len > 0);
 }
 
 test "encodeSetDeltaSuffix: set operation" {

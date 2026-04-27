@@ -22,6 +22,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.InvalidArrayElement => wireError("INVALID_ARRAY_ELEMENT", "Array field contains non-literal value"),
         error.InvalidFieldName => wireError("INVALID_FIELD_NAME", "Field name contains forbidden characters"),
         error.InvalidMessageFormat => wireError("INVALID_MESSAGE_FORMAT", "Malformed MessagePack frame"),
+        error.InvalidMessageType => wireError("INVALID_MESSAGE_TYPE", "Only binary MessagePack frames are supported"),
         error.MissingRequiredFields => wireError("INVALID_MESSAGE", "Request missing required fields"),
         error.MissingSubscriptionId => wireError("INVALID_MESSAGE_FORMAT", "Request missing subscription ID"),
         error.InvalidPayload => wireError("INVALID_MESSAGE", "Invalid payload structure"),

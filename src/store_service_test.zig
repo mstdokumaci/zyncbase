@@ -7,11 +7,40 @@ const helpers = @import("app_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const wire = @import("wire.zig");
 const schema_manager = @import("schema_manager.zig");
-const query_parser = @import("query_parser.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
 const doc_id = @import("doc_id.zig");
+
+fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
+    return .{
+        .namespace_id = namespace_id,
+        .owner_doc_id = doc_id.zero,
+    };
+}
+
+fn storePath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: ?usize) !msgpack.Payload {
+    const segments_len: usize = if (field_index != null) 3 else 2;
+    const arr = try allocator.alloc(msgpack.Payload, segments_len);
+    errdefer allocator.free(arr);
+
+    arr[0] = msgpack.Payload.uintToPayload(table_index);
+    const id_bytes = doc_id.toBytes(id);
+    arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
+    if (field_index) |index| {
+        arr[2] = msgpack.Payload.uintToPayload(index);
+    }
+
+    return .{ .arr = arr };
+}
+
+fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId) !msgpack.Payload {
+    return storePath(allocator, table_index, id, null);
+}
+
+fn fieldPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: usize) !msgpack.Payload {
+    return storePath(allocator, table_index, id, field_index);
+}
 
 test "StoreService: set - full document replacement" {
     const allocator = testing.allocator;
@@ -36,7 +65,10 @@ test "StoreService: set - full document replacement" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("people"), 1, 1, doc_id.zero, 2, null, val);
+        var path = try documentPath(allocator, app.tableIndex("people"), 1);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify with storage engine
@@ -52,7 +84,10 @@ test "StoreService: set - full document replacement" {
         const val = try store_helpers.createDocumentMapPayload(allocator, people.metadata, .{});
         defer val.free(allocator);
 
-        const result = service.set(@as(usize, 999), 1, 4, doc_id.zero, 2, null, val);
+        var path = try documentPath(allocator, 999, 1);
+        defer path.free(allocator);
+
+        const result = service.setPath(writeCtx(4), path, val);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 }
@@ -63,8 +98,8 @@ test "StoreService: set - field level update" {
     try app.init(allocator, "store-service-test-field", &.{
         .{
             .name = "items",
-            .fields = &.{ "status", "meta" },
-            .types = &.{ .text, .boolean },
+            .fields = &.{ "status", "metadata__tags", "a__b__c" },
+            .types = &.{ .text, .array, .text },
         },
     });
     defer app.deinit();
@@ -77,13 +112,85 @@ test "StoreService: set - field level update" {
         const val = try msgpack.Payload.strToPayload("active", allocator);
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("items"), 1, 1, doc_id.zero, 3, app.fieldIndex("items", "status"), val);
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "status"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify
         var doc = try items.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("status", "active");
+    }
+
+    {
+        var tags = try allocator.alloc(msgpack.Payload, 2);
+        tags[0] = try msgpack.Payload.strToPayload("a", allocator);
+        tags[1] = try msgpack.Payload.strToPayload("b", allocator);
+        const val = msgpack.Payload{ .arr = tags };
+        defer val.free(allocator);
+
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "metadata__tags"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+    }
+
+    {
+        const val = try msgpack.Payload.strToPayload("deep-value", allocator);
+        defer val.free(allocator);
+
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "a__b__c"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        var doc = try items.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("a__b__c", "deep-value");
+    }
+}
+
+test "StoreService: setPath path validation" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "store-service-path-validation", &.{
+        .{ .name = "items", .fields = &.{"status"} },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const value = try msgpack.Payload.strToPayload("active", allocator);
+    defer value.free(allocator);
+
+    try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), .nil, value));
+
+    {
+        const arr = try allocator.alloc(msgpack.Payload, 1);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
+        const path = msgpack.Payload{ .arr = arr };
+        defer path.free(allocator);
+
+        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value));
+    }
+
+    {
+        const arr = try allocator.alloc(msgpack.Payload, 2);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
+        arr[1] = msgpack.Payload.uintToPayload(1);
+        const path = msgpack.Payload{ .arr = arr };
+        defer path.free(allocator);
+
+        try testing.expectError(error.InvalidMessageFormat, service.setPath(writeCtx(1), path, value));
+    }
+
+    {
+        var path = try fieldPath(allocator, app.tableIndex("items"), 1, 999);
+        defer path.free(allocator);
+
+        try testing.expectError(StorageError.UnknownField, service.setPath(writeCtx(1), path, value));
     }
 }
 
@@ -110,20 +217,29 @@ test "StoreService: remove" {
         });
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("people"), 1, 1, doc_id.zero, 2, null, val);
+        var path = try documentPath(allocator, app.tableIndex("people"), 1);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
         try app.storage_engine.flushPendingWrites();
     }
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, 1, 1, 3);
+        var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
+        defer path.free(allocator);
+
+        const result = service.removePath(1, path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
     // 2. Success: Remove document (segments_len == 2)
     {
-        try service.remove(app.tableIndex("people"), 1, 1, 2);
+        var path = try documentPath(allocator, app.tableIndex("people"), 1);
+        defer path.free(allocator);
+
+        try service.removePath(1, path);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
@@ -134,14 +250,20 @@ test "StoreService: remove" {
 
     // 3. Negative: Unknown table
     {
-        const result = service.remove(@as(usize, 999), 1, 4, 2);
+        var path = try documentPath(allocator, 999, 1);
+        defer path.free(allocator);
+
+        const result = service.removePath(4, path);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
         const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
-        const result = service.remove(tbl_md.index, 1, 1, 3);
+        var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
+        defer path.free(allocator);
+
+        const result = service.removePath(1, path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }
@@ -177,7 +299,10 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
+        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
     }
 
     // 2. Negative: Element type mismatch (integer in string array)
@@ -187,7 +312,10 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
+        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        defer path.free(allocator);
+
+        const result = app.store_service.setPath(writeCtx(1), path, val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -198,7 +326,10 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        const result = app.store_service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "tags"), val);
+        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        defer path.free(allocator);
+
+        const result = app.store_service.setPath(writeCtx(1), path, val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
@@ -209,7 +340,10 @@ test "StoreService: array validation" {
         const val = msgpack.Payload{ .arr = arr };
         defer val.free(allocator);
 
-        try service.set(app.tableIndex("collections"), 1, 1, doc_id.zero, 3, app.fieldIndex("collections", "scores"), val);
+        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "scores"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
     }
 }
 
@@ -229,7 +363,10 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("value1", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, 2, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
+        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        defer path.free(allocator);
+
+        try app.store_service.setPath(writeCtx(2), path, val);
         try app.storage_engine.flushPendingWrites();
 
         var stored_doc = try test_table.getOne(allocator, 1, 2);
@@ -243,7 +380,10 @@ test "StoreService: persistence and namespace isolation" {
         defer val.free(allocator);
 
         // Same table/id, different namespace
-        try service.set(app.tableIndex("test"), 1, 3, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
+        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(3), path, val);
         try app.storage_engine.flushPendingWrites();
 
         // Verify ns-a still has value1
@@ -262,7 +402,10 @@ test "StoreService: persistence and namespace isolation" {
         const val = try msgpack.Payload.strToPayload("updated", allocator);
         defer val.free(allocator);
 
-        try app.store_service.set(app.tableIndex("test"), 1, 2, doc_id.zero, 3, app.fieldIndex("test", "val"), val);
+        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        defer path.free(allocator);
+
+        try app.store_service.setPath(writeCtx(2), path, val);
         try app.storage_engine.flushPendingWrites();
 
         var doc = try test_table.getOne(allocator, 1, 2);
@@ -292,7 +435,7 @@ test "StoreService: query - basic search" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try app.store_service.query(allocator, app.tableIndex("people"), 1, filter_map);
+    var qr = try app.store_service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("people")), filter_map);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -324,7 +467,7 @@ test "StoreService: query - orderBy and limit" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.query(allocator, app.tableIndex("tasks"), 1, filter_map);
+    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("tasks")), filter_map);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -346,7 +489,7 @@ test "StoreService: query - negative cases" {
         const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
-        const err = service.query(allocator, @as(usize, 999), 1, filter_map);
+        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(999), filter_map);
         try testing.expectError(StorageError.UnknownTable, err);
     }
 
@@ -358,12 +501,12 @@ test "StoreService: query - negative cases" {
         });
         defer filter_map.free(allocator);
 
-        const err = service.query(allocator, app.tableIndex("data"), 1, filter_map);
+        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map);
         try testing.expectError(StorageError.UnknownField, err);
     }
 }
 
-test "StoreService: queryWithCursor - pagination" {
+test "StoreService: queryMore - pagination" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "service-query-cursor", &.{
@@ -391,7 +534,7 @@ test "StoreService: queryWithCursor - pagination" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.query(allocator, app.tableIndex("data"), 1, filter_map);
+    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map);
     defer qr.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
@@ -402,22 +545,19 @@ test "StoreService: queryWithCursor - pagination" {
     const encoded_cursor = try wire.encodeCursor(allocator, cursor_val);
     defer allocator.free(encoded_cursor);
 
-    // Decode it back to a domain object (simulating what MessageHandler does)
-    const cursor = try query_parser.parseCursorToken(allocator, encoded_cursor, .doc_id, null);
-
     // 2. Query with cursor: fetch next 2
-    var next_results = try service.queryWithCursor(allocator, app.tableIndex("data"), 1, &qr.filter, cursor);
-    defer next_results.deinit();
+    var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor);
+    defer next_page.deinit();
 
-    if (next_results.rows.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), next_results.rows.len);
+    if (next_page.results.rows.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), next_page.results.rows.len);
 
     // Verify results are different (pagination worked)
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     const first_doc = qr.results.rows[0];
     const first_page_id = try sth.getFieldDocId(first_doc, data_table.metadata, "id");
 
-    const second_doc = next_results.rows[0];
+    const second_doc = next_page.results.rows[0];
     const second_page_id = try sth.getFieldDocId(second_doc, data_table.metadata, "id");
 
     try testing.expect(first_page_id != second_page_id);

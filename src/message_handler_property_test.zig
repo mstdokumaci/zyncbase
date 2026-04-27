@@ -1,1041 +1,260 @@
 const std = @import("std");
 const testing = std.testing;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const msgpack = @import("msgpack_test_helpers.zig");
-const store_helpers = @import("store_test_helpers.zig");
-const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
+
 const helpers = @import("app_test_helpers.zig");
-const createMockWebSocket = helpers.createMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
+const msgpack = @import("msgpack_test_helpers.zig");
+const store_helpers = @import("store_test_helpers.zig");
+const storage_engine = @import("storage_engine.zig");
 
-test "connection: open/close is inverse operation" {
+const table_defs = [_]helpers.TableDef{
+    .{ .name = "items", .fields = &.{ "value", "tags" } },
+};
+
+fn routeBytes(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) ![]u8 {
+    var reader: std.Io.Reader = .fixed(message);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+    return try routeWithArena(&app.handler, allocator, conn, parsed);
+}
+
+fn decodeResponse(allocator: std.mem.Allocator, response: []const u8) !msgpack.Payload {
+    var reader: std.Io.Reader = .fixed(response);
+    return try msgpack.decode(allocator, &reader);
+}
+
+fn expectResponseType(allocator: std.mem.Allocator, response: []const u8, expected: []const u8) !void {
+    const parsed = try decodeResponse(allocator, response);
+    defer parsed.free(allocator);
+
+    const value = (try msgpack.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
+    try testing.expectEqualStrings(expected, value.str.value());
+}
+
+fn expectResponseId(allocator: std.mem.Allocator, response: []const u8, expected: u64) !void {
+    const parsed = try decodeResponse(allocator, response);
+    defer parsed.free(allocator);
+
+    const value = (try msgpack.getMapValue(parsed, "id")) orelse return error.TestExpectedError;
+    try testing.expect(value == .uint);
+    try testing.expectEqual(expected, value.uint);
+}
+
+fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected: []const u8) !void {
+    const parsed = try decodeResponse(allocator, response);
+    defer parsed.free(allocator);
+
+    const resp_type = (try msgpack.getMapValue(parsed, "type")) orelse return error.TestExpectedError;
+    try testing.expectEqualStrings("error", resp_type.str.value());
+
+    const code = (try msgpack.getMapValue(parsed, "code")) orelse return error.TestExpectedError;
+    try testing.expectEqualStrings(expected, code.str.value());
+}
+
+test "message: representative frames route at protocol boundary" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-inverse", &.{
-        .{ .name = "_dummy", .fields = &.{"val"} },
-    });
+    try app.init(allocator, "handler-property-route", &table_defs);
     defer app.deinit();
 
-    const manager = &app.connection_manager;
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const table = try app.tableMetadata("items");
+    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
 
-    // Test single connection open/close
     {
-        // Create a mock WebSocket
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1))); // Use unique ID
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 11, 1, table.index, 1, field_index, "value-a");
+        defer allocator.free(message);
 
-        // Open connection
-        try manager.onOpen(&ws);
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
 
-        // Verify connection was added
-        const conn_id = ws.getConnId();
-        const state = try manager.acquireConnection(conn_id);
-        defer if (state.release()) app.releaseConnection(state);
-        try testing.expectEqual(conn_id, state.id);
-
-        // Close connection
-        manager.onClose(&ws);
-
-        // Verify connection was removed (inverse operation)
-        const result = manager.acquireConnection(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        try expectResponseType(allocator, response, "ok");
+        try expectResponseId(allocator, response, 11);
     }
 
-    // Test multiple connections open/close
     {
-        const num_connections = 100;
-        var websockets: [num_connections]WebSocket = undefined;
+        const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 12, 1, table.index);
+        defer allocator.free(message);
 
-        // Open all connections
-        for (&websockets, 0..) |*ws, i| {
-            ws.* = createMockWebSocket();
-            ws.setUserData(@ptrFromInt(i + 10)); // Ensure unique ID
-            try manager.onOpen(ws);
-        }
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
 
-        // Verify all connections exist
-        try testing.expectEqual(@as(usize, num_connections), manager.map.count());
-
-        // Close all connections
-        for (&websockets) |*ws| {
-            manager.onClose(ws);
-        }
-
-        // Verify all connections were removed (inverse operation)
-        try testing.expectEqual(@as(usize, 0), manager.map.count());
+        try expectResponseType(allocator, response, "ok");
+        try expectResponseId(allocator, response, 12);
     }
 
-    // Test connection with subscriptions
     {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1234)));
+        const message = try store_helpers.createCustomMessage(allocator, 13, "UnknownType", 1, table.index, &.{});
+        defer allocator.free(message);
 
-        // Open connection
-        try manager.onOpen(&ws);
-        const conn_id = ws.getConnId();
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
 
-        // Add some subscriptions to the connection state
-        const state = try manager.acquireConnection(conn_id);
-        defer if (state.release()) app.releaseConnection(state);
-        try state.subscription_ids.append(state.allocator, 1);
-        try state.subscription_ids.append(state.allocator, 2);
-        try state.subscription_ids.append(state.allocator, 3);
-
-        // Verify subscriptions exist
-        try testing.expectEqual(@as(usize, 3), state.subscription_ids.items.len);
-
-        // Close connection
-        manager.onClose(&ws);
-
-        // Verify connection and all associated state was removed (inverse operation)
-        const result = manager.acquireConnection(conn_id);
-        try testing.expectError(error.ConnectionNotFound, result);
+        try expectErrorCode(allocator, response, "INTERNAL_ERROR");
+        try expectResponseId(allocator, response, 13);
     }
 }
 
-// Helper function to create a mock WebSocket for testing
-
-test "connection: thread-safe manager access" {
+test "message: response id is preserved across routed requests" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p9", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
+    try app.init(allocator, "handler-property-correlation", &table_defs);
     defer app.deinit();
 
-    const manager = &app.connection_manager;
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const table = try app.tableMetadata("items");
+    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
 
-    // Spawn multiple threads performing concurrent operations
-    const num_threads = 10;
-    const ops_per_thread = 100;
+    {
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, 101, 1, table.index, 1, field_index, "value-b");
+        defer allocator.free(message);
 
-    var threads: [num_threads]std.Thread = undefined;
-
-    for (&threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, concurrentManagerOps, .{
-            &app,
-            i * ops_per_thread,
-            ops_per_thread,
-        });
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
+        try expectResponseId(allocator, response, 101);
     }
 
-    // Wait for all threads
+    {
+        const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 202, 1, table.index);
+        defer allocator.free(message);
+
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
+        try expectResponseId(allocator, response, 202);
+    }
+
+    {
+        const message = try store_helpers.createCustomMessage(allocator, 303, "InvalidType", 1, table.index, &.{});
+        defer allocator.free(message);
+
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
+        try expectResponseId(allocator, response, 303);
+    }
+}
+
+test "message: invalid envelopes fail before store dispatch" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-property-invalid-envelope", &table_defs);
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    const missing_id = try store_helpers.createInvalidStoreSetMessageMissingId(allocator, 1);
+    defer allocator.free(missing_id);
+
+    var reader: std.Io.Reader = .fixed(missing_id);
+    const parsed = try msgpack.decode(allocator, &reader);
+    defer parsed.free(allocator);
+
+    try testing.expectError(error.MissingRequiredFields, routeWithArena(&app.handler, allocator, sc.conn, parsed));
+}
+
+test "message: repeated routed requests release per-message allocations" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-property-lifetime", &table_defs);
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const table = try app.tableMetadata("items");
+    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const msg_id: u64 = @intCast(i + 1);
+        const doc_id: storage_engine.DocId = @intCast(i + 1);
+        const message = try store_helpers.createStoreSetFieldMessage(allocator, msg_id, 1, table.index, doc_id, field_index, "value-c");
+        defer allocator.free(message);
+
+        const response = try routeBytes(&app, sc.conn, allocator, message);
+        defer allocator.free(response);
+
+        try expectResponseType(allocator, response, "ok");
+        try expectResponseId(allocator, response, msg_id);
+    }
+}
+
+test "message: concurrent routed requests release response allocations" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "handler-property-concurrent-lifetime", &table_defs);
+    defer app.deinit();
+
+    const table = try app.tableMetadata("items");
+    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+
+    const ThreadContext = struct {
+        app: *AppTestContext,
+        table_index: usize,
+        field_index: usize,
+        thread_index: usize,
+        iterations: usize,
+        failure: ?anyerror = null,
+
+        fn run(ctx: *@This()) void {
+            runInternal(ctx) catch |err| {
+                std.log.err("message routing property failed: {}", .{err});
+                ctx.failure = err;
+            };
+        }
+
+        fn runInternal(ctx: *@This()) !void {
+            const thread_allocator = ctx.app.allocator;
+            const sc = try ctx.app.setupMockConnection();
+            defer sc.deinit();
+
+            var i: usize = 0;
+            while (i < ctx.iterations) : (i += 1) {
+                const raw_id = ctx.thread_index * 1000 + i + 1;
+                const msg_id: u64 = @intCast(raw_id);
+                const doc_id: storage_engine.DocId = @intCast(raw_id);
+
+                const message = try store_helpers.createStoreSetFieldMessage(
+                    thread_allocator,
+                    msg_id,
+                    1,
+                    ctx.table_index,
+                    doc_id,
+                    ctx.field_index,
+                    "value-d",
+                );
+                defer thread_allocator.free(message);
+
+                const response = try routeBytes(ctx.app, sc.conn, thread_allocator, message);
+                defer thread_allocator.free(response);
+
+                try expectResponseType(thread_allocator, response, "ok");
+                try expectResponseId(thread_allocator, response, msg_id);
+            }
+        }
+    };
+
+    var contexts: [4]ThreadContext = undefined;
+    var threads: [4]std.Thread = undefined;
+
+    for (&contexts, 0..) |*ctx, idx| {
+        ctx.* = .{
+            .app = &app,
+            .table_index = table.index,
+            .field_index = field_index,
+            .thread_index = idx,
+            .iterations = 8,
+        };
+        threads[idx] = try std.Thread.spawn(.{}, ThreadContext.run, .{ctx});
+    }
+
     for (threads) |thread| {
         thread.join();
     }
 
-    // Verify all connections should have been removed by their respective threads
-    try testing.expectEqual(@as(usize, 0), manager.map.count());
-}
-
-fn concurrentManagerOps(
-    app: *AppTestContext,
-    start_id: u64,
-    count: usize,
-) void {
-    const manager = &app.connection_manager;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const conn_id = start_id + i;
-
-        // Add connection
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
-        manager.onOpen(&ws) catch { // zwanzig-disable-line: swallowed-error
-            std.log.debug("Failed to open connection\n", .{});
-            return;
-        };
-
-        // Read connection
-        if (manager.acquireConnection(conn_id)) |s| {
-            if (s.release()) app.releaseConnection(s);
-        } else |_| {
-            std.log.debug("Failed to get connection\n", .{});
-            return;
-        }
-
-        // Remove connection
-        manager.onClose(&ws);
-    }
-}
-
-// Additional property test: Concurrent reads should not block each other
-test "connection: concurrent reads are non-blocking" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p10", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const manager = &app.connection_manager;
-
-    // Pre-populate manager with connections
-    const num_connections = 100;
-    var i: usize = 0;
-    while (i < num_connections) : (i += 1) {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(i + 1));
-        try manager.onOpen(&ws);
-    }
-
-    // Spawn multiple reader threads
-    const num_readers = 10;
-    const reads_per_thread = 1000;
-
-    var threads: [num_readers]std.Thread = undefined;
-
-    for (&threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, concurrentReads, .{
-            &app,
-            num_connections,
-            reads_per_thread,
-        });
-    }
-
-    // Wait for all threads
-    for (threads) |thread| {
-        thread.join();
-    }
-
-    // Verify all connections still exist
-    try testing.expectEqual(@as(usize, num_connections), manager.map.count());
-}
-
-fn concurrentReads(
-    app: *AppTestContext,
-    num_connections: usize,
-    num_reads: usize,
-) void {
-    const manager = &app.connection_manager;
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-    const random = prng.random();
-
-    var i: usize = 0;
-    while (i < num_reads) : (i += 1) {
-        const conn_id = random.intRangeAtMost(u64, 1, num_connections);
-        if (manager.acquireConnection(conn_id)) |s| {
-            if (s.release()) app.releaseConnection(s);
-        } else |_| {
-            std.log.debug("Failed to get connection {}\n", .{conn_id});
-            return;
-        }
-    }
-}
-
-// Additional property test: Mixed concurrent operations
-test "connection: mixed concurrent ops safety" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p4", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const num_threads = 8;
-    const ops_per_thread = 500;
-    var threads: [num_threads]std.Thread = undefined;
-
-    for (&threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, concurrentMixedOps, .{
-            &app,
-            @as(u64, i) * 1000 + 100, // Range offset to avoid overlap with other tests
-            ops_per_thread,
-        });
-    }
-
-    // Wait for all threads
-    for (threads) |thread| {
-        thread.join();
-    }
-
-    // Test passes if no crashes or data races occurred
-}
-
-fn concurrentMixedOps(
-    app: *AppTestContext,
-    start_id: u64,
-    count: usize,
-) void {
-    const manager = &app.connection_manager;
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-    const random = prng.random();
-
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const conn_id = start_id + i;
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
-
-        const op = random.intRangeAtMost(u8, 0, 2);
-        switch (op) {
-            0 => {
-                // Add operation
-                manager.onOpen(&ws) catch continue; // zwanzig-disable-line: swallowed-error
-            },
-            1 => {
-                // Get operation
-                if (manager.acquireConnection(conn_id)) |s| {
-                    if (s.release()) app.releaseConnection(s);
-                } else |_| {}
-            },
-            2 => {
-                // Remove operation
-                manager.onClose(&ws);
-            },
-            else => unreachable,
-        }
-    }
-}
-
-// Property test: Clear operation is thread-safe
-test "connection: closeAll is thread-safe" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p4", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const manager = &app.connection_manager;
-
-    // Add some initial connections
-    var i: usize = 0;
-    while (i < 50) : (i += 1) {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(i + 1));
-        try manager.onOpen(&ws);
-    }
-
-    // Spawn threads that add connections while main thread closes all
-    const num_threads = 5;
-    var threads: [num_threads]std.Thread = undefined;
-
-    for (&threads, 0..) |*thread, idx| {
-        thread.* = try std.Thread.spawn(.{}, addConnections, .{
-            manager,
-            100 + idx * 20,
-            20,
-        });
-    }
-
-    // Close all connections while threads are adding
-    std.Thread.sleep(1 * std.time.ns_per_ms);
-    manager.closeAllConnections();
-
-    // Wait for all threads
-    for (threads) |thread| {
-        thread.join();
-    }
-
-    // Test passes if no crashes occurred
-}
-
-fn addConnections(
-    manager: *ConnectionManager,
-    start_id: u64,
-    count: usize,
-) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const conn_id = start_id + i;
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, conn_id)));
-        manager.onOpen(&ws) catch continue; // zwanzig-disable-line: swallowed-error
-    }
-}
-
-test "connection: unique IDs" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p5", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const manager = &app.connection_manager;
-
-    // Test 1: Sequential connections should have unique IDs
-    {
-        const num_connections = 1000;
-        var websockets: [num_connections]WebSocket = undefined;
-        var connection_ids: [num_connections]u64 = undefined;
-
-        // Open all connections sequentially
-        for (&websockets, 0..) |*ws, idx| {
-            ws.* = createMockWebSocket();
-            const conn_id = idx + 1;
-            ws.setUserData(@ptrFromInt(conn_id));
-            try manager.onOpen(ws);
-            connection_ids[idx] = ws.getConnId();
-            try testing.expectEqual(conn_id, connection_ids[idx]);
-        }
-
-        // Verify all connection IDs are unique
-        for (connection_ids, 0..) |id1, idx| {
-            for (connection_ids[idx + 1 ..], idx + 1..) |id2, j| {
-                if (id1 == id2) {
-                    std.log.debug("Duplicate connection ID found: {} at positions {} and {}\n", .{ id1, idx, j });
-                    try testing.expect(false);
-                }
-            }
-        }
-
-        // Clean up
-        for (&websockets) |*ws| {
-            manager.onClose(ws);
-        }
-    }
-
-    // Test 2: Concurrent connections should have unique IDs
-    {
-        const num_threads = 10;
-        const connections_per_thread = 100;
-        var threads: [num_threads]std.Thread = undefined;
-
-        // Shared storage for connection IDs
-        var all_connection_ids = std.AutoHashMap(u64, void).init(allocator);
-        defer all_connection_ids.deinit();
-        var ids_mutex = std.Thread.Mutex{};
-
-        // Spawn threads that open connections concurrently
-        for (&threads, 0..) |*thread, idx| {
-            thread.* = try std.Thread.spawn(.{}, openConnectionsConcurrently, .{
-                manager,
-                connections_per_thread,
-                &all_connection_ids,
-                &ids_mutex,
-                idx, // Pass thread index
-            });
-        }
-
-        // Wait for all threads
-        for (threads) |thread| {
-            thread.join();
-        }
-
-        // Verify we have exactly the expected number of unique IDs
-        const expected_count = num_threads * connections_per_thread;
-        try testing.expectEqual(@as(usize, expected_count), all_connection_ids.count());
-    }
-
-    // Test 3: Connection IDs should be unique (replacing monotonicity test)
-    {
-        const num_connections = 1000;
-        var ids = std.AutoHashMap(u64, void).init(allocator);
-        defer ids.deinit();
-
-        var idx: usize = 0;
-        while (idx < num_connections) : (idx += 1) {
-            var ws = createMockWebSocket();
-            ws.setUserData(@ptrFromInt(idx + 1000000));
-            try manager.onOpen(&ws);
-            const conn_id = ws.getConnId();
-
-            try testing.expect(!ids.contains(conn_id));
-            try ids.put(conn_id, {});
-
-            // Clean up immediately to avoid memory issues
-            manager.onClose(&ws);
-        }
-
-        try testing.expectEqual(@as(usize, num_connections), ids.count());
-    }
-
-    // Test 4: IDs should be unique across manager restarts (new manager instance)
-    {
-        // Create a second manager instance using the same context components (safely)
-        var manager2: ConnectionManager = undefined;
-        try manager2.init(allocator, &app.memory_strategy, &app.handler, &app.schema_manager);
-        defer manager2.deinit();
-
-        // Open connections on both managers
-        var ws1 = createMockWebSocket();
-        var ws2 = createMockWebSocket();
-
-        ws1.setUserData(@ptrFromInt(@as(usize, 1)));
-        ws2.setUserData(@ptrFromInt(@as(usize, 1)));
-
-        try manager.onOpen(&ws1);
-        try manager2.onOpen(&ws2);
-
-        const id1 = ws1.getConnId();
-        const id2 = ws2.getConnId();
-
-        // IDs from different manager instances can overlap if they both start from the same base
-        _ = id1;
-        _ = id2;
-
-        // Clean up
-        manager.onClose(&ws1);
-        manager2.onClose(&ws2);
-    }
-}
-
-fn openConnectionsConcurrently(
-    manager: *ConnectionManager,
-    count: usize,
-    all_ids: *std.AutoHashMap(u64, void),
-    mutex: *std.Thread.Mutex,
-    thread_idx: usize,
-) void {
-    var idx: usize = 0;
-    while (idx < count) : (idx += 1) {
-        var ws = createMockWebSocket();
-        const unique_id = (thread_idx + 1) * 10000 + idx;
-        ws.setUserData(@ptrFromInt(unique_id));
-        manager.onOpen(&ws) catch { // zwanzig-disable-line: swallowed-error
-            std.log.debug("Failed to open connection\n", .{});
-            continue;
-        };
-
-        const conn_id = ws.getConnId();
-
-        // Store ID in shared map (thread-safe)
-        mutex.lock();
-        all_ids.put(conn_id, {}) catch {
-            std.log.debug("Failed to store connection ID\n", .{});
-        };
-        mutex.unlock();
-
-        // Clean up connection
-        manager.onClose(&ws);
-    }
-}
-
-test "message: all valid frames are parsed" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p7", &.{
-        .{ .name = "data_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const manager = &app.connection_manager;
-
-    // Test 1: Valid StoreSet message should be parsed successfully
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        // Create a valid MessagePack message
-        const tbl = app.schema_manager.getTable("data_table").?;
-        const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 1, field_idx, "value1");
-        defer allocator.free(message);
-
-        // This should not throw a parsing error
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 2: Valid StoreQuery message should be parsed successfully
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 2)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        var filter = msgpack.Payload.mapPayload(allocator);
-        defer filter.free(allocator);
-
-        const tbl = app.schema_manager.getTable("data_table").?;
-        const message = try store_helpers.createStoreQueryMessage(allocator, 2, 1, tbl.index, filter);
-        defer allocator.free(message);
-
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 3: Message with all required fields should parse
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 3)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        const tbl = app.schema_manager.getTable("data_table").?;
-        const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 123, 1, tbl.index, 1, field_idx, "v");
-        defer allocator.free(message);
-
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 4: Various valid message formats should parse
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 4)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        const messages = [_]struct { ns: i64, p: u128, v: []const u8 }{
-            .{ .ns = 1, .p = 1, .v = "c" },
-            .{ .ns = 1, .p = 2, .v = "z" },
-        };
-
-        for (messages, 0..) |m, i| {
-            const tbl = app.schema_manager.getTable("data_table").?;
-            const msg = try store_helpers.createStoreSetMessage(allocator, @intCast(i), m.ns, tbl.index, m.p, m.v);
-            defer allocator.free(msg);
-            manager.onMessage(&ws, msg, .binary);
-        }
-    }
-}
-
-// **Property: Message type extraction**
-// Message type extraction properties
-//
-// For any successfully parsed message, the message type field should be extractable
-// from the MessagePack map.
-
-// **Property: Request routing**
-// Message routing properties
-//
-// For any message with a recognized type (StoreSet, StoreGet), the message should be
-// routed to the appropriate handler function.
-test "message: request routing to handlers" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p9", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const handler = &app.handler;
-
-    // Test 1: StoreSet message should route to handleStoreSet
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const tbl = app.schema_manager.getTable("test_table").?;
-        const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 1, field_idx, "value1");
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-        defer allocator.free(response);
-
-        // Response should be a success response
-        try testing.expect(response.len > 0);
-    }
-
-    // Test 2: StoreQuery message should route to handleStoreQuery
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const tbl = app.schema_manager.getTable("test_table").?;
-        const field_idx = tbl.getFieldIndex("val").?;
-        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl.index, 2, field_idx, "value2");
-        defer allocator.free(set_message);
-
-        var set_reader: std.Io.Reader = .fixed(set_message);
-        const set_parsed = try msgpack.decode(allocator, &set_reader);
-        defer set_parsed.free(allocator);
-
-        const set_response = try routeWithArena(handler, allocator, conn, set_parsed);
-        defer allocator.free(set_response);
-
-        // Now query the value
-        var filter = msgpack.Payload.mapPayload(allocator);
-        defer filter.free(allocator);
-        const tbl_q = app.schema_manager.getTable("test_table").?;
-        const query_message = try store_helpers.createStoreQueryMessage(allocator, 2, 1, tbl_q.index, filter);
-        defer allocator.free(query_message);
-
-        var get_reader: std.Io.Reader = .fixed(query_message);
-        const get_parsed = try msgpack.decode(allocator, &get_reader);
-        defer get_parsed.free(allocator);
-
-        const response = try routeWithArena(handler, allocator, conn, get_parsed);
-        defer allocator.free(response);
-
-        // Response should contain the value
-        try testing.expect(response.len > 0);
-    }
-
-    // Test 3: Unknown message type should return error
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const message = try store_helpers.createCustomMessage(allocator, 3, "UnknownType", 1, null, &.{"key"});
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(handler, allocator, conn, parsed);
-        defer allocator.free(response);
-        const res_parsed = try helpers.parseResponse(allocator, response);
-        defer {
-            allocator.free(res_parsed.resp_type);
-            if (res_parsed.code) |c| allocator.free(c);
-        }
-        try testing.expectEqualStrings("error", res_parsed.resp_type);
-        // mapErrorToCode maps else => INTERNAL_ERROR for UnknownMessageType
-        try testing.expectEqualStrings("INTERNAL_ERROR", res_parsed.code.?);
-    }
-
-    // Test 4: Multiple different message types should route correctly
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const tbl_m = app.schema_manager.getTable("test_table").?;
-        const field_idx_m = tbl_m.getFieldIndex("val").?;
-        var q_f = msgpack.Payload.mapPayload(allocator);
-        defer q_f.free(allocator);
-        const msgs = [_][]const u8{
-            try store_helpers.createStoreSetFieldMessage(allocator, 10, 1, tbl_m.index, 1, field_idx_m, "v1"),
-            try store_helpers.createStoreQueryMessage(allocator, 11, 1, tbl_m.index, q_f),
-            try store_helpers.createStoreSetFieldMessage(allocator, 12, 1, tbl_m.index, 2, field_idx_m, "v2"),
-            try store_helpers.createCustomMessage(allocator, 13, "InvalidType", 1, tbl_m.index, &.{"p3"}),
-        };
-        defer {
-            for (msgs) |m| allocator.free(m);
-        }
-
-        const should_succeed = [_]bool{ true, true, true, false };
-
-        for (msgs, 0..) |m, i| {
-            var reader: std.Io.Reader = .fixed(m);
-            const parsed = try msgpack.decode(allocator, &reader);
-            defer parsed.free(allocator);
-
-            if (should_succeed[i]) {
-                const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-                defer allocator.free(response);
-                try testing.expect(response.len > 0);
-            } else {
-                const response = try routeWithArena(handler, allocator, conn, parsed);
-                defer allocator.free(response);
-                const res_parsed = try helpers.parseResponse(allocator, response);
-                defer {
-                    allocator.free(res_parsed.resp_type);
-                    if (res_parsed.code) |c| allocator.free(c);
-                }
-                try testing.expectEqualStrings("error", res_parsed.resp_type);
-                try testing.expectEqualStrings("INTERNAL_ERROR", res_parsed.code.?);
-            }
-        }
-    }
-}
-
-// **Property: Response correlation**
-// Message correlation properties
-//
-// For any request message with a correlation ID, the response message should include
-// the same correlation ID.
-test "message: response correlation by ID" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p10", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const handler = &app.handler;
-
-    // Test 1: StoreSet response should include correlation ID
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const correlation_id: u64 = 12345;
-        const tbl = app.schema_manager.getTable("test_table").?;
-        const field_idx = tbl.getFieldIndex("val").?;
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, correlation_id, 1, tbl.index, 1, field_idx, "val");
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-        defer allocator.free(response);
-
-        // Response should contain the correlation ID
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
-        defer resp_parsed.free(allocator);
-
-        try testing.expect(resp_parsed == .map);
-        var found_id = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
-                found_id = true;
-            }
-        }
-        try testing.expect(found_id);
-    }
-
-    // Test 2: StoreQuery response should include correlation ID
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const tbl_s = app.schema_manager.getTable("test_table").?;
-        const field_idx_s = tbl_s.getFieldIndex("val").?;
-        const set_message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, tbl_s.index, 2, field_idx_s, "value2");
-        defer allocator.free(set_message);
-
-        var set_reader: std.Io.Reader = .fixed(set_message);
-        const set_parsed = try msgpack.decode(allocator, &set_reader);
-        defer set_parsed.free(allocator);
-
-        const set_response = try routeWithArena(handler, allocator, conn, set_parsed);
-        defer allocator.free(set_response);
-
-        // Now query with specific correlation ID
-        const correlation_id: u64 = 99999;
-        var filter = msgpack.Payload.mapPayload(allocator);
-        defer filter.free(allocator);
-        const tbl_qr = app.schema_manager.getTable("test_table").?;
-        const query_message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, 1, tbl_qr.index, filter);
-        defer allocator.free(query_message);
-
-        var get_reader: std.Io.Reader = .fixed(query_message);
-        const get_parsed = try msgpack.decode(allocator, &get_reader);
-        defer get_parsed.free(allocator);
-
-        const response = try routeWithArena(handler, allocator, conn, get_parsed);
-        defer allocator.free(response);
-
-        // Response should contain the correlation ID
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
-        defer resp_parsed.free(allocator);
-
-        try testing.expect(resp_parsed == .map);
-        var found_id = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
-                found_id = true;
-            }
-        }
-        try testing.expect(found_id);
-    }
-
-    // Test 3: Multiple requests with different correlation IDs
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const correlation_ids = [_]u64{ 1, 100, 999, 12345, 0 };
-
-        for (correlation_ids) |corr_id| {
-            const tbl = app.schema_manager.getTable("test_table").?;
-            const field_idx = tbl.getFieldIndex("val").?;
-            const message = try store_helpers.createStoreSetFieldMessage(allocator, corr_id, 1, tbl.index, 1, field_idx, "val");
-            defer allocator.free(message);
-
-            var reader: std.Io.Reader = .fixed(message);
-            const parsed = try msgpack.decode(allocator, &reader);
-            defer parsed.free(allocator);
-
-            const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-            defer allocator.free(response);
-
-            // Each response should contain its specific correlation ID
-            var resp_reader: std.Io.Reader = .fixed(response);
-            const resp_parsed = try msgpack.decode(allocator, &resp_reader);
-            defer resp_parsed.free(allocator);
-
-            try testing.expect(resp_parsed == .map);
-            var found_id = false;
-            var it = resp_parsed.map.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                    try testing.expectEqual(corr_id, entry.value_ptr.*.uint);
-                    found_id = true;
-                }
-            }
-            try testing.expect(found_id);
-        }
-    }
-
-    // Test 4: Correlation ID should be preserved even for query responses
-    {
-        const sc = try app.setupMockConnection();
-        defer sc.deinit();
-        const conn = sc.conn;
-
-        const tbl = app.schema_manager.getTable("test_table").?;
-        const correlation_id: u64 = 77777;
-        var filter = msgpack.Payload.mapPayload(allocator);
-        defer filter.free(allocator);
-        const message = try store_helpers.createStoreQueryMessage(allocator, correlation_id, 1, @intCast(tbl.index), filter);
-        defer allocator.free(message);
-
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
-        defer allocator.free(response);
-
-        // Response should contain the correlation ID
-        var resp_reader: std.Io.Reader = .fixed(response);
-        const resp_parsed = try msgpack.decode(allocator, &resp_reader);
-        defer resp_parsed.free(allocator);
-
-        try testing.expect(resp_parsed == .map);
-        var found_id = false;
-        var it = resp_parsed.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), "id")) {
-                try testing.expectEqual(correlation_id, entry.value_ptr.*.uint);
-                found_id = true;
-            }
-        }
-        try testing.expect(found_id);
-    }
-}
-
-// **Property: Error responses for invalid messages**
-// Message validation properties
-//
-// For any message that fails parsing, an error response in Wire Protocol format
-// should be sent to the client.
-test "message: error responses for invalid types/fields" {
-    const allocator = testing.allocator;
-    var app: AppTestContext = undefined;
-    try app.init(allocator, "handler-p11", &.{
-        .{ .name = "test_table", .fields = &.{"val"} },
-    });
-    defer app.deinit();
-
-    const manager = &app.connection_manager;
-
-    // Test 1: Invalid MessagePack should trigger error response
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 1)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        // 0xc1 is never used in MessagePack
-        const invalid_message = "\xc1\xc1\xc1";
-
-        // onMessage should catch the parsing error and send error response
-        // It should not panic or crash
-        manager.onMessage(&ws, invalid_message, .binary);
-    }
-
-    // Test 2: Message missing required fields should trigger error
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 2)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        // Create map with 2 elements: type and id
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x82); // fixmap(2)
-        try msgpack.writeMsgPackStr(writer, "type");
-        try msgpack.writeMsgPackStr(writer, "StoreSet");
-        try msgpack.writeMsgPackStr(writer, "id");
-        try buf.append(allocator, 0x01);
-
-        const message = buf.items;
-
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 3: Text messages should trigger error (only binary supported)
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 3)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        const message = "some text message";
-
-        // Should trigger TEXT_NOT_SUPPORTED error (though onMessage doesn't take opCode,
-        // normally the server calls onMessage with the data)
-        // ConnectionManager expects []const u8, so it's always "binary" in its view
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 4: Message with invalid type should trigger error
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 4)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x84); // fixmap(4)
-        try msgpack.writeMsgPackStr(writer, "type");
-        try msgpack.writeMsgPackStr(writer, "InvalidType");
-        try msgpack.writeMsgPackStr(writer, "id");
-        try buf.append(allocator, 0x01);
-        try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "1");
-        try msgpack.writeMsgPackStr(writer, "path");
-        try msgpack.writeMsgPackStr(writer, "/key");
-
-        const message = buf.items;
-
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 5: Empty message should trigger error
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 5)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        const message = "";
-
-        manager.onMessage(&ws, message, .binary);
-    }
-
-    // Test 6: Message with wrong field types should trigger error
-    {
-        var ws = createMockWebSocket();
-        ws.setUserData(@ptrFromInt(@as(usize, 6)));
-        try manager.onOpen(&ws);
-        defer manager.onClose(&ws);
-
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(allocator);
-        const writer = buf.writer(allocator);
-        try buf.append(allocator, 0x83); // fixmap(3) - type, id, namespace
-        try msgpack.writeMsgPackStr(writer, "type");
-        try buf.append(allocator, 0x90); // empty list for type
-        try msgpack.writeMsgPackStr(writer, "id");
-        try msgpack.writeMsgPackStr(writer, "not_a_number");
-        try msgpack.writeMsgPackStr(writer, "namespace");
-        try msgpack.writeMsgPackStr(writer, "1");
-
-        const message = buf.items;
-
-        manager.onMessage(&ws, message, .binary);
+    for (contexts) |ctx| {
+        if (ctx.failure) |err| return err;
     }
 }

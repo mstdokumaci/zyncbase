@@ -144,7 +144,7 @@ pub const AppTestContext = struct {
         self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager);
 
         // 7. Initialize Handler and Manager
-        try self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.storage_engine, &self.store_service, &self.subscription_engine, &self.schema_manager, .{});
+        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{});
         errdefer self.handler.deinit();
 
         // 8. Initialize Connection Manager

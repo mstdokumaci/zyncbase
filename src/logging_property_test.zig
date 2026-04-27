@@ -354,14 +354,12 @@ test "logging: level filtering" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm2,
             .{},
         );
         defer handler.deinit();
@@ -439,14 +437,12 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm3,
             .{},
         );
         defer handler.deinit();
@@ -508,14 +504,12 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
-        try handler.init(
+        handler.init(
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm4,
             .{},
         );
         defer handler.deinit();
