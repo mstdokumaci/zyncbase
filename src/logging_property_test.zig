@@ -358,10 +358,8 @@ test "logging: level filtering" {
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm2,
             .{},
         );
         defer handler.deinit();
@@ -443,10 +441,8 @@ test "logging: message formatting" {
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm3,
             .{},
         );
         defer handler.deinit();
@@ -512,10 +508,8 @@ test "logging: message formatting" {
             allocator,
             &memory_strategy,
             &tracker,
-            &storage_engine,
             &store_service,
             &subscription_engine,
-            &sm4,
             .{},
         );
         defer handler.deinit();

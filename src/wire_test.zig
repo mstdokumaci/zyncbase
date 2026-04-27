@@ -142,9 +142,9 @@ test "extractAs: wrong type for field returns InvalidMessageFormat" {
     try testing.expectError(error.InvalidMessageFormat, result);
 }
 
-test "buildSuccessResponse: produces valid MsgPack" {
+test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
-    const response = try wire.buildSuccessResponse(allocator, 12345);
+    const response = try wire.encodeSuccess(allocator, 12345);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);
@@ -158,10 +158,10 @@ test "buildSuccessResponse: produces valid MsgPack" {
     try testing.expectEqual(@as(u64, 12345), id_val.uint);
 }
 
-test "buildErrorResponse: produces valid MsgPack" {
+test "encodeError: produces valid MsgPack" {
     const allocator = testing.allocator;
     const wire_err = wire.getWireError(error.UnknownTable);
-    const response = try wire.buildErrorResponse(allocator, 999, wire_err);
+    const response = try wire.encodeError(allocator, 999, wire_err);
     defer allocator.free(response);
 
     var reader: std.Io.Reader = .fixed(response);

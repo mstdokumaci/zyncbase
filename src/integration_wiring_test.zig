@@ -41,7 +41,7 @@ test "Integration: All components properly wired" {
     try testing.expect(@intFromPtr(&server.message_handler) != 0);
 
     // Verify message handler's component wiring
-    try testing.expect(server.message_handler.storage_engine == &server.storage_engine);
+    try testing.expect(server.message_handler.store_service == &server.store_service);
     try testing.expect(server.message_handler.subscription_engine == &server.subscription_engine);
     try testing.expect(server.message_handler.violation_tracker == &server.violation_tracker);
 

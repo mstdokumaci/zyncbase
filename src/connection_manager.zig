@@ -35,7 +35,7 @@ pub const ConnectionManager = struct {
         schema_manager: *const SchemaManager,
     ) !void {
         // Pre-build SchemaSync message once at startup
-        const schema_sync_msg = try wire.buildSchemaSyncMessage(allocator, schema_manager);
+        const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema_manager);
 
         self.* = .{
             .allocator = allocator,
@@ -104,7 +104,7 @@ pub const ConnectionManager = struct {
             try conn.setAnonymousUserId(client_id);
         }
 
-        const connected_msg = try wire.buildConnectedMessage(self.allocator, conn.user_id);
+        const connected_msg = try wire.encodeConnected(self.allocator, conn.user_id);
         defer self.allocator.free(connected_msg);
 
         try self.map.put(conn_id, conn);
@@ -123,7 +123,7 @@ pub const ConnectionManager = struct {
         // ZyncBase uses binary MessagePack for all communications.
         if (msg_type != .binary) {
             std.log.warn("Rejected non-binary (text) message from connection {}", .{conn_id});
-            self.message_handler.sendError(ws, "INVALID_MESSAGE_TYPE", "Only binary MessagePack frames are supported", null) catch |err| {
+            self.message_handler.sendError(ws, null, wire.getWireError(error.InvalidMessageType)) catch |err| {
                 std.log.err("Failed to send error response for invalid message type: {}", .{err});
             };
             return;

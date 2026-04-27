@@ -39,7 +39,7 @@ pub const Values = struct {
 
 // === Comptime-encoded hot-path headers ===
 
-pub const ok_id_header = blk: {
+const ok_id_header = blk: {
     var buf: [Keys.type.len + Values.ok.len + Keys.id.len]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
@@ -48,14 +48,14 @@ pub const ok_id_header = blk: {
     break :blk buf[0..w.end].*;
 };
 
-pub const success_header = blk: {
+const success_header = blk: {
     var buf: [1 + ok_id_header.len]u8 = undefined;
     buf[0] = 0x82; // fixmap(2)
     @memcpy(buf[1..], &ok_id_header);
     break :blk buf[0..].*;
 };
 
-pub const error_type_header = blk: {
+const error_type_header = blk: {
     var buf: [Keys.type.len + Values.@"error".len + Keys.code.len]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
@@ -64,9 +64,16 @@ pub const error_type_header = blk: {
     break :blk buf[0..w.end].*;
 };
 
-pub const error_envelope_header = blk: {
+const error_header_with_id = blk: {
     var buf: [1 + error_type_header.len]u8 = undefined;
     buf[0] = 0x84; // fixmap(4)
+    @memcpy(buf[1..], &error_type_header);
+    break :blk buf[0..].*;
+};
+
+const error_header_without_id = blk: {
+    var buf: [1 + error_type_header.len]u8 = undefined;
+    buf[0] = 0x83; // fixmap(3)
     @memcpy(buf[1..], &error_type_header);
     break :blk buf[0..].*;
 };
@@ -83,7 +90,7 @@ pub const store_delta_header = blk: {
 
 // === Response builders ===
 
-pub fn buildSuccessResponse(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
+pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
     const writer = list.writer(msgpack_allocator);
@@ -95,7 +102,7 @@ pub fn buildSuccessResponse(msgpack_allocator: Allocator, msg_id: u64) ![]const 
     return list.toOwnedSlice(msgpack_allocator);
 }
 
-pub fn buildConnectedMessage(
+pub fn encodeConnected(
     msgpack_allocator: Allocator,
     user_id: ?[]const u8,
 ) ![]const u8 {
@@ -118,21 +125,23 @@ pub fn buildConnectedMessage(
     return list.toOwnedSlice(msgpack_allocator);
 }
 
-pub fn buildErrorResponse(
+pub fn encodeError(
     msgpack_allocator: Allocator,
-    msg_id: u64,
+    msg_id: ?u64,
     wire_err: WireError,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(msgpack_allocator);
     const writer = list.writer(msgpack_allocator);
 
-    try list.appendSlice(msgpack_allocator, &error_envelope_header);
+    try list.appendSlice(msgpack_allocator, if (msg_id != null) &error_header_with_id else &error_header_without_id);
     try list.appendSlice(msgpack_allocator, wire_err.code);
 
-    try list.appendSlice(msgpack_allocator, Keys.id);
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, msg_id, .big);
+    if (msg_id) |id| {
+        try list.appendSlice(msgpack_allocator, Keys.id);
+        try writer.writeByte(0xcf);
+        try writer.writeInt(u64, id, .big);
+    }
 
     try list.appendSlice(msgpack_allocator, Keys.message);
     try list.appendSlice(msgpack_allocator, wire_err.message);
@@ -140,42 +149,46 @@ pub fn buildErrorResponse(
     return list.toOwnedSlice(msgpack_allocator);
 }
 
-pub fn buildQueryResponse(
-    arena_allocator: std.mem.Allocator,
+pub const QueryResponse = struct {
     msg_id: u64,
-    sub_id: ?u64,
+    sub_id: ?u64 = null,
     results: *storage_mod.ManagedResult,
-    table_metadata: *const storage_mod.TableMetadata,
+    table: *const storage_mod.TableMetadata,
+};
+
+pub fn encodeQuery(
+    arena_allocator: std.mem.Allocator,
+    response: QueryResponse,
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(arena_allocator);
     const writer = list.writer(arena_allocator);
 
-    const map_size: usize = if (sub_id != null) 6 else 4;
+    const map_size: usize = if (response.sub_id != null) 6 else 4;
     try msgpack.encodeMapHeader(writer, map_size);
 
     try list.appendSlice(arena_allocator, &ok_id_header);
-    try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+    try msgpack.encode(msgpack.Payload.uintToPayload(response.msg_id), writer);
 
-    if (sub_id) |sid| {
+    if (response.sub_id) |sid| {
         try list.appendSlice(arena_allocator, Keys.sub_id);
         try msgpack.encode(msgpack.Payload.uintToPayload(sid), writer);
     }
 
     try list.appendSlice(arena_allocator, Keys.value);
-    try msgpack.encodeArrayHeader(writer, results.rows.len);
-    for (results.rows) |row| {
-        try encodeTypedRow(writer, row, table_metadata);
+    try msgpack.encodeArrayHeader(writer, response.results.rows.len);
+    for (response.results.rows) |row| {
+        try encodeTypedRow(writer, row, response.table);
     }
 
-    if (sub_id != null) {
-        const has_more = results.next_cursor != null;
+    if (response.sub_id != null) {
+        const has_more = response.results.next_cursor != null;
         try list.appendSlice(arena_allocator, Keys.has_more);
         try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
     }
 
     try list.appendSlice(arena_allocator, Keys.next_cursor);
-    if (results.next_cursor) |cursor| {
+    if (response.results.next_cursor) |cursor| {
         const encoded_cursor = try encodeCursor(arena_allocator, cursor);
         defer arena_allocator.free(encoded_cursor);
         try msgpack.writeMsgPackStr(writer, encoded_cursor);
@@ -186,7 +199,7 @@ pub fn buildQueryResponse(
     return list.toOwnedSlice(arena_allocator);
 }
 
-pub fn buildSchemaSyncMessage(allocator: Allocator, sm: *const schema_manager.SchemaManager) ![]const u8 {
+pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema_manager.SchemaManager) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
