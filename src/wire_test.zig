@@ -274,12 +274,23 @@ test "getWireError: returns non-empty comptime-encoded messages" {
 }
 
 test "getWireError: query parser errors keep distinct human messages" {
-    try testing.expectEqualSlices(u8, wire.getWireError(error.MissingOperand).message, wire.getWireError(error.MissingOperand).message);
-    try testing.expectEqualSlices(u8, wire.getWireError(error.UnexpectedOperand).message, wire.getWireError(error.UnexpectedOperand).message);
-    try testing.expectEqualSlices(u8, wire.getWireError(error.InvalidInOperand).message, wire.getWireError(error.InvalidInOperand).message);
-    try testing.expectEqualSlices(u8, wire.getWireError(error.NullOperandUnsupported).message, wire.getWireError(error.NullOperandUnsupported).message);
-    try testing.expectEqualSlices(u8, wire.getWireError(error.UnsupportedOperatorForFieldType).message, wire.getWireError(error.UnsupportedOperatorForFieldType).message);
-    try testing.expectEqualSlices(u8, wire.getWireError(error.InvalidCursorSortValue).message, wire.getWireError(error.InvalidCursorSortValue).message);
+    const allocator = testing.allocator;
+    const check = struct {
+        fn run(comptime err: anyerror, comptime expected: []const u8) !void {
+            const wire_err = wire.getWireError(err);
+            var reader: std.Io.Reader = .fixed(wire_err.message);
+            const decoded = try msgpack.decode(allocator, &reader);
+            defer decoded.free(allocator);
+            try testing.expectEqualStrings(expected, decoded.str.value());
+        }
+    }.run;
+
+    try check(error.MissingOperand, "Query operator is missing an operand");
+    try check(error.UnexpectedOperand, "Query operator does not accept an operand");
+    try check(error.InvalidInOperand, "IN and NOT IN require an array operand");
+    try check(error.NullOperandUnsupported, "Null is not allowed as a query operand");
+    try check(error.UnsupportedOperatorForFieldType, "Query operator is not supported for this field type");
+    try check(error.InvalidCursorSortValue, "Cursor sort value does not match the active sort field");
 }
 
 test "store_delta_header: decodes to StoreDelta type" {

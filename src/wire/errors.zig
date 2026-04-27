@@ -42,7 +42,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.PermissionDenied => wireError("PERMISSION_DENIED", "Rule blocked operation"),
         error.NamespaceUnauthorized => wireError("NAMESPACE_UNAUTHORIZED", "No access to namespace"),
         error.MaxDepthExceeded => wireError("MESSAGE_TOO_LARGE", "Payload too big"),
-        error.RateLimited => wireError("RATE_LIMITED", "Threshold exceeded"),
+        error.RateLimited => wireError("RATE_LIMITED", "Too many requests"),
         error.HookServerUnavailable => wireError("HOOK_SERVER_UNAVAILABLE", "Logic runtime down"),
         error.HookDenied => wireError("HOOK_DENIED", "Logic rejected write"),
         else => wireError("INTERNAL_ERROR", "Zig core failure"),

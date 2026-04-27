@@ -41,14 +41,11 @@ pub const Values = struct {
 
 pub const ok_id_header = blk: {
     var buf: [Keys.type.len + Values.ok.len + Keys.id.len]u8 = undefined;
-    var pos: usize = 0;
-    @memcpy(buf[pos .. pos + Keys.type.len], Keys.type);
-    pos += Keys.type.len;
-    @memcpy(buf[pos .. pos + Values.ok.len], Values.ok);
-    pos += Values.ok.len;
-    @memcpy(buf[pos .. pos + Keys.id.len], Keys.id);
-    pos += Keys.id.len;
-    break :blk buf[0..pos].*;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.ok) catch @panic("comptime: failed to write ok value");
+    w.writeAll(Keys.id) catch @panic("comptime: failed to write id key");
+    break :blk buf[0..w.end].*;
 };
 
 pub const success_header = blk: {
@@ -60,14 +57,11 @@ pub const success_header = blk: {
 
 pub const error_type_header = blk: {
     var buf: [Keys.type.len + Values.@"error".len + Keys.code.len]u8 = undefined;
-    var pos: usize = 0;
-    @memcpy(buf[pos .. pos + Keys.type.len], Keys.type);
-    pos += Keys.type.len;
-    @memcpy(buf[pos .. pos + Values.@"error".len], Values.@"error");
-    pos += Values.@"error".len;
-    @memcpy(buf[pos .. pos + Keys.code.len], Keys.code);
-    pos += Keys.code.len;
-    break :blk buf[0..pos].*;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.@"error") catch @panic("comptime: failed to write error value");
+    w.writeAll(Keys.code) catch @panic("comptime: failed to write code key");
+    break :blk buf[0..w.end].*;
 };
 
 pub const error_envelope_header = blk: {
@@ -79,16 +73,12 @@ pub const error_envelope_header = blk: {
 
 pub const store_delta_header = blk: {
     var buf: [1 + Keys.type.len + Values.store_delta.len + Keys.sub_id.len]u8 = undefined;
-    var pos: usize = 0;
-    buf[pos] = 0x83; // fixmap(3)
-    pos += 1;
-    @memcpy(buf[pos .. pos + Keys.type.len], Keys.type);
-    pos += Keys.type.len;
-    @memcpy(buf[pos .. pos + Values.store_delta.len], Values.store_delta);
-    pos += Values.store_delta.len;
-    @memcpy(buf[pos .. pos + Keys.sub_id.len], Keys.sub_id);
-    pos += Keys.sub_id.len;
-    break :blk buf[0..pos].*;
+    var w = std.Io.Writer.fixed(&buf);
+    w.writeByte(0x83) catch @panic("comptime: failed to write map header");
+    w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
+    w.writeAll(Values.store_delta) catch @panic("comptime: failed to write StoreDelta value");
+    w.writeAll(Keys.sub_id) catch @panic("comptime: failed to write subId key");
+    break :blk buf[0..w.end].*;
 };
 
 // === Response builders ===

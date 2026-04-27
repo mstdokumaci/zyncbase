@@ -130,7 +130,7 @@ pub const MessageHandler = struct {
                 }
             }
 
-            const wire_err = wire.getWireError(error.InvalidMessageFormat);
+            const wire_err = wire.getWireError(err);
             try self.sendError(ws, wire_err.code, wire_err.message, null);
             return;
         };
@@ -138,7 +138,7 @@ pub const MessageHandler = struct {
         // Extract message type and correlation ID
         const msg_info = wire.extractAs(wire.Envelope, arena_allocator, parsed) catch |err| {
             std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
-            const wire_err2 = wire.getWireError(error.InvalidMessageFormat);
+            const wire_err2 = wire.getWireError(err);
             try self.sendError(ws, wire_err2.code, wire_err2.message, null);
             return;
         };
