@@ -69,7 +69,7 @@ test "MessageHandler: StoreSet routes to StoreService and maps errors correctly"
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
-    conn.namespace_id = 1; // Set default namespace
+    conn.setNamespaceId(1);
 
     // 1. Success path: Valid literal array
     {

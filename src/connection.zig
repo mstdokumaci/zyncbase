@@ -10,6 +10,11 @@ pub const unset_namespace_id: i64 = -1;
 /// Connection represents a single client session.
 /// It is ref-counted and decoupled from the network/storage infrastructure.
 pub const Connection = struct {
+    pub const StoreSession = struct {
+        namespace_id: i64,
+        user_doc_id: doc_id.DocId,
+    };
+
     /// Allocator used for internal metadata (user_id, subscription_ids)
     allocator: Allocator,
 
@@ -77,6 +82,14 @@ pub const Connection = struct {
     /// Reset session-specific state and free dynamic memory.
     /// Retains capacity in subscription_ids for future reuse.
     pub fn resetSession(self: *Connection) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.resetSessionLocked();
+    }
+
+    /// Reset session-specific state while the caller already holds mutex.
+    pub fn resetSessionLocked(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.user_id = null;
         self.namespace_id = unset_namespace_id;
@@ -104,6 +117,16 @@ pub const Connection = struct {
         defer self.mutex.unlock();
 
         self.namespace_id = namespace_id;
+    }
+
+    pub fn getStoreSession(self: *Connection) StoreSession {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        return .{
+            .namespace_id = self.namespace_id,
+            .user_doc_id = self.user_doc_id,
+        };
     }
 
     /// Allocate the next subscription ID in O(1) time.

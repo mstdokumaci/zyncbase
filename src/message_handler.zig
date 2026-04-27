@@ -169,7 +169,7 @@ pub const MessageHandler = struct {
             self.subscription_engine.unsubscribe(conn.id, sub_id);
         }
 
-        conn.resetSession();
+        conn.resetSessionLocked();
     }
 
     pub fn routeMessage(
@@ -234,10 +234,14 @@ pub const MessageHandler = struct {
         };
     }
 
+    fn requireStoreSession(conn: *Connection) !Connection.StoreSession {
+        const session = conn.getStoreSession();
+        if (session.namespace_id == connection_mod.unset_namespace_id) return error.NamespaceUnauthorized;
+        return session;
+    }
+
     fn requireStoreNamespace(conn: *Connection) !i64 {
-        const namespace_id = conn.namespace_id;
-        if (namespace_id == connection_mod.unset_namespace_id) return error.NamespaceUnauthorized;
-        return namespace_id;
+        return (try requireStoreSession(conn)).namespace_id;
     }
 
     fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
@@ -290,13 +294,13 @@ pub const MessageHandler = struct {
             break :blk fi;
         } else null;
         const value = req.value orelse return error.MissingRequiredFields;
-        const namespace_id = try requireStoreNamespace(conn);
+        const session = try requireStoreSession(conn);
 
         try self.store_service.set(
             table_index,
             doc_id_value,
-            namespace_id,
-            conn.user_doc_id,
+            session.namespace_id,
+            session.user_doc_id,
             arr.len,
             field_index,
             value,
