@@ -355,26 +355,6 @@ pub const SubscriptionEngine = struct {
         }
     }
 
-    pub fn match(self: *SubscriptionEngine, change: RowChange) ![]const u64 {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
-
-        const coll_key = CollectionKey{ .namespace_id = change.namespace_id, .table_index = change.table_index };
-        const group_ids = self.groups_by_collection.get(coll_key) orelse return &[_]u64{};
-
-        var matched = std.ArrayList(u64).init(self.allocator);
-        errdefer matched.deinit();
-
-        for (group_ids.items) |gid| {
-            const group = self.groups.get(gid) orelse unreachable;
-            if (try evaluateFilterForChangeInternal(group.filter, change)) {
-                try matched.append(gid);
-            }
-        }
-
-        return matched.toOwnedSlice();
-    }
-
     pub fn getSubscribers(self: *SubscriptionEngine, group_id: u64) ![]SubscriptionGroup.SubscriberKey {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
@@ -587,37 +567,5 @@ fn compareTypedValuesInternal(a: TypedValue, b: TypedValue) std.math.Order {
     return switch (a) {
         .scalar => |sa| sa.order(b.scalar),
         else => .eq, // Unsortable
-    };
-}
-
-fn evaluateFilterForChangeInternal(filter: QueryFilter, change: RowChange) !bool {
-    if (filter.conditions == null and filter.or_conditions == null) return true;
-
-    if (filter.conditions) |conds| {
-        for (conds) |c| {
-            if (!try evaluateConditionForChangeInternal(c, change)) return false;
-        }
-        if (filter.or_conditions == null) return true;
-    }
-
-    if (filter.or_conditions) |or_conds| {
-        for (or_conds) |c| {
-            if (try evaluateConditionForChangeInternal(c, change)) return true;
-        }
-        return false;
-    }
-
-    return true;
-}
-
-fn evaluateConditionForChangeInternal(c: Condition, change: RowChange) !bool {
-    const row = change.new_row orelse return false;
-    if (c.field_index >= row.values.len) return false;
-
-    const val = row.values[c.field_index];
-    return switch (c.op) {
-        .eq => typedValuesEqualInternal(val, c.value orelse return false),
-        .ne => !typedValuesEqualInternal(val, c.value orelse return true),
-        else => false,
     };
 }
