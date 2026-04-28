@@ -164,6 +164,9 @@ pub const TypedValue = union(enum) {
         }
 
         if (write < arr.len) {
+            for (arr[write..]) |*item| {
+                item.* = .{ .integer = 0 };
+            }
             self.* = .{ .array = try allocator.realloc(arr, write) };
         }
     }
