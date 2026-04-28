@@ -6,7 +6,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const schema_manager = @import("schema_manager.zig");
-const storage_types = @import("storage_engine/types.zig");
+const storage_types = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
 test "NotificationDispatcher: empty poll" {

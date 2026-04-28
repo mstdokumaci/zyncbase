@@ -3,7 +3,9 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 const sql_identifier = @import("../sql_identifier.zig");
-const types = @import("types.zig");
+const errors = @import("errors.zig");
+const value_codec = @import("value_codec.zig");
+const values = @import("values.zig");
 const doc_id = @import("../doc_id.zig");
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
@@ -245,17 +247,76 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
 }
 
+pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
+    const rc = switch (value) {
+        .scalar => |s| switch (s) {
+            .doc_id => |id| blk: {
+                const bytes = doc_id.toBytes(id);
+                break :blk bindBlobTransient(stmt, index, &bytes);
+            },
+            .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
+            .real => |v| sqlite.c.sqlite3_bind_double(stmt, index, v),
+            .text => |s_val| bindTextTransient(stmt, index, s_val),
+            .boolean => |b| sqlite.c.sqlite3_bind_int(stmt, index, if (b) 1 else 0),
+        },
+        .nil => sqlite.c.sqlite3_bind_null(stmt, index),
+        .array => |items| blk: {
+            const json = try value_codec.jsonAlloc(allocator, .{ .array = items });
+            defer allocator.free(json);
+            break :blk bindTextTransient(stmt, index, json);
+        },
+    };
+    if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+}
+
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema_manager.Field) !values.TypedValue {
+    const col_type = sqlite.c.sqlite3_column_type(stmt, i);
+    if (field.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
+        const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+        const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+        const s = if (ptr != null) ptr[0..len] else "[]";
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
+        defer parsed.deinit();
+        return value_codec.fromJson(allocator, field.sql_type, field.items_type, parsed.value);
+    }
+
+    return switch (col_type) {
+        sqlite.c.SQLITE_BLOB => blk: {
+            if (field.sql_type != .doc_id) break :blk .nil;
+            const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+            const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+            break :blk values.TypedValue{ .scalar = .{ .doc_id = try doc_id.fromBytes(bytes) } };
+        },
+        sqlite.c.SQLITE_INTEGER => {
+            const val = sqlite.c.sqlite3_column_int64(stmt, i);
+            if (field.sql_type == .boolean) {
+                return values.TypedValue{ .scalar = .{ .boolean = val != 0 } };
+            }
+            return values.TypedValue{ .scalar = .{ .integer = val } };
+        },
+        sqlite.c.SQLITE_FLOAT => values.TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+        sqlite.c.SQLITE_TEXT => blk: {
+            const ptr = sqlite.c.sqlite3_column_text(stmt, i);
+            const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
+            const s = if (ptr != null) ptr[0..len] else "";
+            break :blk values.TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+        },
+        else => .nil,
+    };
+}
+
 pub fn ensureNamespaceTable(db: *sqlite.Db) !void {
     db.exec(
         "CREATE TABLE IF NOT EXISTS _zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
         .{},
         .{},
-    ) catch |err| return types.classifyError(err);
+    ) catch |err| return errors.classifyError(err);
     db.exec(
         "INSERT OR IGNORE INTO _zync_namespaces (id, name) VALUES (0, '$global')",
         .{},
         .{},
-    ) catch |err| return types.classifyError(err);
+    ) catch |err| return errors.classifyError(err);
 }
 
 pub fn resolveNamespaceId(
@@ -273,11 +334,11 @@ pub fn resolveNamespaceId(
     var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
     defer mstmt.release();
 
-    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     const rc = sqlite.c.sqlite3_step(mstmt.stmt);
     if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
-    if (rc != sqlite.c.SQLITE_DONE) return types.classifyStepError(db);
-    return types.StorageError.InvalidOperation;
+    if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
+    return errors.StorageError.InvalidOperation;
 }
 
 pub fn lookupNamespaceId(
@@ -290,11 +351,11 @@ pub fn lookupNamespaceId(
     var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
     defer mstmt.release();
 
-    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (bindTextTransient(mstmt.stmt, 1, namespace) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     const rc = sqlite.c.sqlite3_step(mstmt.stmt);
     if (rc == sqlite.c.SQLITE_ROW) return sqlite.c.sqlite3_column_int64(mstmt.stmt, 0);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    return types.classifyStepError(db);
+    return errors.classifyStepError(db);
 }
 
 pub fn resolveUserId(
@@ -316,28 +377,28 @@ pub fn resolveUserId(
     var mstmt = try stmt_cache.acquire(allocator, db, sql_text);
     defer mstmt.release();
 
-    if (bindBlobTransient(mstmt.stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (bindBlobTransient(mstmt.stmt, 3, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (bindTextTransient(mstmt.stmt, 4, external_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 5, timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 6, timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (bindBlobTransient(mstmt.stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (bindBlobTransient(mstmt.stmt, 3, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (bindTextTransient(mstmt.stmt, 4, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 5, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(mstmt.stmt, 6, timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(mstmt.stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
         const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
         const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-        return doc_id.fromBytes(bytes) catch return types.StorageError.TypeMismatch;
+        return doc_id.fromBytes(bytes) catch return errors.StorageError.TypeMismatch;
     }
-    if (rc != sqlite.c.SQLITE_DONE) return types.classifyStepError(db);
-    return types.StorageError.InvalidOperation;
+    if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
+    return errors.StorageError.InvalidOperation;
 }
 
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
     table_metadata: *const schema_manager.TableMetadata,
-    columns: []const types.ColumnValue,
+    columns: []const values.ColumnValue,
 ) ![]const u8 {
     const table = table_metadata.table.name;
 
@@ -412,9 +473,9 @@ pub fn buildInsertOrReplaceSql(
 
 fn getColumnField(
     table_metadata: *const schema_manager.TableMetadata,
-    col: types.ColumnValue,
+    col: values.ColumnValue,
 ) !schema_manager.Field {
-    if (col.index >= table_metadata.fields.len) return types.StorageError.UnknownField;
+    if (col.index >= table_metadata.fields.len) return errors.StorageError.UnknownField;
     return table_metadata.fields[col.index];
 }
 

@@ -11,25 +11,32 @@ const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const types = @import("storage_engine/types.zig");
+const storage_values = @import("storage_engine/values.zig");
+const value_codec = @import("storage_engine/value_codec.zig");
+const storage_errors = @import("storage_engine/errors.zig");
+const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 
-pub const StorageError = types.StorageError;
-pub const ColumnValue = types.ColumnValue;
-pub const DocId = types.DocId;
-pub const ManagedResult = types.ManagedResult;
-pub const TypedValue = types.TypedValue;
-pub const TypedRow = types.TypedRow;
+pub const StorageError = storage_errors.StorageError;
+pub const ColumnValue = storage_values.ColumnValue;
+pub const DocId = storage_values.DocId;
+pub const ManagedResult = storage_values.ManagedResult;
+pub const ScalarValue = storage_values.ScalarValue;
+pub const TypedValue = storage_values.TypedValue;
+pub const TypedRow = storage_values.TypedRow;
 pub const TableMetadata = schema_manager.TableMetadata;
-pub const TypedCursor = types.TypedCursor;
-pub const CheckpointMode = types.CheckpointMode;
-pub const ReaderNode = types.ReaderNode;
-pub const CheckpointStats = types.CheckpointStats;
-pub const ReconnectionConfig = types.ReconnectionConfig;
-pub const WriteOp = types.WriteOp;
-pub const WriteQueue = types.WriteQueue;
-pub const typed_cache_type = types.typed_cache_type;
+pub const TypedCursor = storage_values.TypedCursor;
+pub const CheckpointMode = write_queue.CheckpointMode;
+pub const ReaderNode = connection.ReaderNode;
+pub const CheckpointStats = write_queue.CheckpointStats;
+pub const ReconnectionConfig = write_queue.ReconnectionConfig;
+pub const WriteOp = write_queue.WriteOp;
+pub const WriteQueue = write_queue.WriteQueue;
+const typed_cache_type = storage_values.typed_cache_type;
+pub const typedValueFromPayload = value_codec.fromPayload;
+pub const validateTypedValuePayload = value_codec.validateValue;
+pub const writeTypedValueMsgPack = value_codec.writeMsgPack;
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
 
@@ -535,7 +542,7 @@ pub const StorageEngine = struct {
 
         if (self.metadata_cache.get(cache_key)) |handle| {
             const typed_row_ptr = handle.data();
-            const slice = @as([*]types.TypedRow, @ptrCast(typed_row_ptr))[0..1];
+            const slice = @as([*]TypedRow, @ptrCast(typed_row_ptr))[0..1];
             return ManagedResult{
                 .rows = slice,
                 .handle = handle,
@@ -567,11 +574,11 @@ pub const StorageEngine = struct {
                 errdefer cache_row.deinit(self.allocator);
                 try self.metadata_cache.update(cache_key, cache_row);
             }
-            const items = try allocator.alloc(types.TypedRow, 1);
+            const items = try allocator.alloc(TypedRow, 1);
             items[0] = row;
             return ManagedResult{ .rows = items, .allocator = allocator };
         }
-        return ManagedResult{ .rows = &[_]types.TypedRow{}, .allocator = allocator };
+        return ManagedResult{ .rows = &[_]TypedRow{}, .allocator = allocator };
     }
 
     /// SELECT for a query filter.

@@ -45,12 +45,12 @@ pub fn validateFieldWrite(
     if (field.required and value == .nil) return StorageError.NullNotAllowed;
 
     if (value != .nil) {
-        try storage_mod.TypedValue.validateValue(field.sql_type, value);
+        try storage_mod.validateTypedValuePayload(field.sql_type, value);
 
         if (field.sql_type == .array) {
             if (field.items_type) |items_type| {
                 for (value.arr) |item| {
-                    storage_mod.TypedValue.validateValue(items_type, item) catch {
+                    storage_mod.validateTypedValuePayload(items_type, item) catch {
                         return StorageError.InvalidArrayElement;
                     };
                 }
@@ -233,7 +233,7 @@ pub const StoreService = struct {
                 };
 
                 const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
+                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .index = f_idx,
@@ -245,7 +245,7 @@ pub const StoreService = struct {
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
-            const typed = try storage_mod.TypedValue.fromPayload(self.allocator, field.sql_type, field.items_type, value);
+            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.sql_type, field.items_type, value);
             defer typed.deinit(self.allocator);
 
             const col = [_]storage_mod.ColumnValue{.{

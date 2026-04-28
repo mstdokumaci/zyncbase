@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const query_parser = @import("query_parser.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
-const types = @import("storage_engine/types.zig");
+const types = @import("storage_engine.zig");
 const TypedRow = types.TypedRow;
 const TypedValue = types.TypedValue;
 

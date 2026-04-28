@@ -2,10 +2,12 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema_manager = @import("schema_manager.zig");
 const SchemaManager = schema_manager.SchemaManager;
-const types = @import("storage_engine/types.zig");
 const doc_id = @import("doc_id.zig");
-const TypedValue = types.TypedValue;
-const DocId = types.DocId;
+const storage_values = @import("storage_engine/values.zig");
+const value_codec = @import("storage_engine/value_codec.zig");
+const DocId = storage_values.DocId;
+const ScalarValue = storage_values.ScalarValue;
+const TypedValue = storage_values.TypedValue;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -167,7 +169,7 @@ fn parseCursorSortValue(
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.InvalidCursorSortValue;
-    return TypedValue.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+    return value_codec.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidCursorSortValue,
     };
@@ -314,7 +316,7 @@ fn parseScalarValue(
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
     if (field_type == .array) return error.UnsupportedOperatorForFieldType;
-    return TypedValue.fromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
+    return value_codec.fromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TypeMismatch,
     };
@@ -327,7 +329,7 @@ fn parseFieldValue(
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
-    return TypedValue.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+    return value_codec.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TypeMismatch,
     };
@@ -351,7 +353,7 @@ fn parseInOperand(
     if (payload != .arr) return error.InvalidInOperand;
     if (field_type == .array) return error.UnsupportedOperatorForFieldType;
 
-    const items = try allocator.alloc(types.ScalarValue, payload.arr.len);
+    const items = try allocator.alloc(ScalarValue, payload.arr.len);
     var count: usize = 0;
     errdefer {
         for (items[0..count]) |item| item.deinit(allocator);

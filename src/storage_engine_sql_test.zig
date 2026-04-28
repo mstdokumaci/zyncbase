@@ -1,7 +1,7 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
 const sql = @import("storage_engine/sql.zig");
-const types = @import("storage_engine/types.zig");
+const types = @import("storage_engine.zig");
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
