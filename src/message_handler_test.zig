@@ -74,11 +74,7 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, field_index, value);
         defer allocator.free(message);
 
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, message);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);
@@ -98,11 +94,7 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, 1, table.index, 1, field_index, value);
         defer allocator.free(message);
 
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-
-        const response = try routeWithArena(&app.handler, allocator, conn, parsed);
+        const response = try routeWithArena(&app.handler, allocator, conn, message);
         defer allocator.free(response);
         const result = try parseResponse(allocator, response);
         defer allocator.free(result.resp_type);

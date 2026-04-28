@@ -98,18 +98,9 @@ pub const MessageHandler = struct {
             }
         }
 
-        // 2. Message processing (Independent of connection state currently)
-        // Acquire dynamic parsing arena from the pool
-        const arena = try self.memory_strategy.acquireArena();
-        defer self.memory_strategy.releaseArena(arena);
-        const arena_allocator = arena.allocator();
-
-        // Parse MessagePack message
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
-            std.log.warn("Failed to parse message from connection {}: {}", .{ conn_id, err });
-
-            // Record violation if it was a security/limit error
+        // 2. Extract envelope from raw bytes (zero-alloc)
+        const envelope = wire.extractEnvelopeFast(message) catch |err| {
+            std.log.warn("Failed to extract envelope from connection {}: {}", .{ conn_id, err });
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
                     std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
@@ -117,36 +108,49 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-
-            const wire_err = wire.getWireError(err);
-            try self.sendError(ws, null, wire_err);
+            try self.sendError(ws, null, wire.getWireError(err));
             return;
         };
 
-        // Extract message type and correlation ID
-        const msg_info = wire.extractAs(wire.Envelope, arena_allocator, parsed) catch |err| {
-            std.log.warn("Failed to extract message info from connection {}: {}", .{ conn_id, err });
-            const wire_err2 = wire.getWireError(err);
-            try self.sendError(ws, null, wire_err2);
+        // 3. Acquire arena for response encoding
+        const arena = try self.memory_strategy.acquireArena();
+        defer self.memory_strategy.releaseArena(arena);
+        const arena_allocator = arena.allocator();
+
+        // 4. Route and handle errors
+        const response = self.routeMessageFast(arena_allocator, conn, envelope, message) catch |err| {
+            if (isSecurityError(err)) {
+                if (try self.violation_tracker.recordViolation(conn_id)) {
+                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
+                    ws.close();
+                    return;
+                }
+            }
+            const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
+            ws.send(response_err, .binary);
             return;
         };
 
-        // Route request and handle errors to produce a wire response
-        const response = try self.routeRequest(arena_allocator, conn, msg_info, parsed);
-
-        // Send response (Outside lock to avoid blocking on backpressure)
+        // 5. Send response
         ws.send(response, .binary);
     }
 
-    pub fn routeRequest(
+    pub fn routeMessageFast(
         self: *MessageHandler,
-        allocator: std.mem.Allocator,
+        arena_allocator: std.mem.Allocator,
         conn: *Connection,
-        msg_info: wire.Envelope,
-        parsed: msgpack.Payload,
+        envelope: wire.Envelope,
+        message: []const u8,
     ) ![]const u8 {
-        return self.routeMessage(allocator, conn, msg_info, parsed) catch |err| {
-            return try wire.encodeError(allocator, msg_info.id, wire.getWireError(err));
+        const msg_type = classifyMsgType(envelope.type) orelse return error.UnknownMessageType;
+        return switch (msg_type) {
+            .store_set_namespace => try self.handleStoreSetNamespace(arena_allocator, conn, envelope.id, message),
+            .store_set => try self.handleStoreSet(arena_allocator, conn, envelope.id, message),
+            .store_subscribe => try self.handleStoreSubscribe(arena_allocator, conn, envelope.id, message),
+            .store_unsubscribe => try self.handleStoreUnsubscribe(arena_allocator, conn, envelope.id, message),
+            .store_query => try self.handleStoreQuery(arena_allocator, conn, envelope.id, message),
+            .store_load_more => try self.handleStoreLoadMore(arena_allocator, conn, envelope.id, message),
+            .store_remove => try self.handleStoreRemove(arena_allocator, conn, envelope.id, message),
         };
     }
 
@@ -161,49 +165,10 @@ pub const MessageHandler = struct {
         conn.resetSessionLocked();
     }
 
-    pub fn routeMessage(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn: *Connection,
-        msg_info: wire.Envelope,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        if (std.mem.eql(u8, msg_info.type, "StoreSetNamespace")) {
-            return try self.handleStoreSetNamespace(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreSet")) {
-            return try self.handleStoreSet(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreSubscribe")) {
-            return try self.handleStoreSubscribe(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreUnsubscribe")) {
-            return try self.handleStoreUnsubscribe(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreQuery")) {
-            return try self.handleStoreQuery(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreLoadMore")) {
-            return try self.handleStoreLoadMore(arena_allocator, conn, msg_info.id, parsed);
-        } else if (std.mem.eql(u8, msg_info.type, "StoreRemove")) {
-            return try self.handleStoreRemove(arena_allocator, conn, msg_info.id, parsed);
-        } else {
-            return error.UnknownMessageType;
-        }
-    }
-
     pub fn sendError(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
         const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
         defer self.allocator.free(error_msg);
         ws.send(error_msg, .binary);
-    }
-
-    fn isSecurityError(err: anyerror) bool {
-        return switch (err) {
-            error.MaxDepthExceeded,
-            error.ArrayTooLarge,
-            error.MapTooLarge,
-            error.StringTooLong,
-            error.BinDataLengthTooLong,
-            error.ExtDataTooLarge,
-            => true,
-            else => false,
-        };
     }
 
     fn requireStoreSession(conn: *Connection) !Connection.StoreSession {
@@ -226,14 +191,16 @@ pub const MessageHandler = struct {
         conn.subscription_ids.clearRetainingCapacity();
     }
 
+    // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
+
     fn handleStoreSetNamespace(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
         msg_id: u64,
-        parsed: msgpack.Payload,
+        message: []const u8,
     ) ![]const u8 {
-        const req = try wire.extractAs(wire.StoreSetNamespaceRequest, arena_allocator, parsed);
+        const req = try wire.extractStoreSetNamespaceFast(message);
 
         const namespace_id = try self.store_service.resolveNamespace(req.namespace);
 
@@ -243,77 +210,14 @@ pub const MessageHandler = struct {
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
-    fn handleStoreSet(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn: *Connection,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
-        const value = req.value orelse return error.MissingRequiredFields;
-        const session = try requireStoreSession(conn);
-
-        try self.store_service.setPath(
-            .{
-                .namespace_id = session.namespace_id,
-                .owner_doc_id = session.user_doc_id,
-            },
-            req.path,
-            value,
-        );
-
-        return try wire.encodeSuccess(arena_allocator, msg_id);
-    }
-
-    fn handleStoreRemove(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn: *Connection,
-        msg_id: u64,
-        parsed: msgpack.Payload,
-    ) ![]const u8 {
-        const req = try wire.extractAs(wire.StorePathRequest, arena_allocator, parsed);
-        const namespace_id = try requireStoreNamespace(conn);
-
-        try self.store_service.removePath(namespace_id, req.path);
-
-        return try wire.encodeSuccess(arena_allocator, msg_id);
-    }
-
-    fn handleStoreSubscribe(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn: *Connection,
-        msg_id: u64,
-        payload: msgpack.Payload,
-    ) ![]const u8 {
-        const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
-        const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
-        const namespace_id = try requireStoreNamespace(conn);
-
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, req.table_index, payload);
-        defer qr.deinit(arena_allocator);
-
-        _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
-        try conn.addSubscription(sub_id);
-
-        return try wire.encodeQuery(arena_allocator, .{
-            .msg_id = msg_id,
-            .sub_id = sub_id,
-            .results = &qr.results,
-            .table = qr.table,
-        });
-    }
-
     fn handleStoreUnsubscribe(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
         msg_id: u64,
-        payload: msgpack.Payload,
+        message: []const u8,
     ) ![]const u8 {
-        const req = try wire.extractAs(wire.StoreUnsubscribeRequest, arena_allocator, payload);
+        const req = try wire.extractStoreUnsubscribeFast(message);
 
         self.subscription_engine.unsubscribe(conn.id, req.subId);
         conn.removeSubscription(req.subId);
@@ -321,34 +225,14 @@ pub const MessageHandler = struct {
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
 
-    fn handleStoreQuery(
-        self: *MessageHandler,
-        arena_allocator: std.mem.Allocator,
-        conn: *Connection,
-        msg_id: u64,
-        payload: msgpack.Payload,
-    ) ![]const u8 {
-        const req = try wire.extractAs(wire.StoreCollectionRequest, arena_allocator, payload);
-        const namespace_id = try requireStoreNamespace(conn);
-
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, req.table_index, payload);
-        defer qr.deinit(arena_allocator);
-
-        return try wire.encodeQuery(arena_allocator, .{
-            .msg_id = msg_id,
-            .results = &qr.results,
-            .table = qr.table,
-        });
-    }
-
     fn handleStoreLoadMore(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
         conn: *Connection,
         msg_id: u64,
-        payload: msgpack.Payload,
+        message: []const u8,
     ) ![]const u8 {
-        const req = try wire.extractAs(wire.StoreLoadMoreRequest, arena_allocator, payload);
+        const req = try wire.extractStoreLoadMoreFast(message);
 
         const sub_key = subscription_mod.SubscriptionGroup.SubscriberKey{
             .connection_id = conn.id,
@@ -369,7 +253,146 @@ pub const MessageHandler = struct {
         });
     }
 
+    // ---- Group B: Payload-dependent handlers (keep Payload tree) ----
+
+    fn handleStoreSet(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
+        const value = payloads.value orelse return error.MissingRequiredFields;
+        const session = try requireStoreSession(conn);
+
+        try self.store_service.setPath(
+            .{
+                .namespace_id = session.namespace_id,
+                .owner_doc_id = session.user_doc_id,
+            },
+            payloads.path,
+            value,
+        );
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handleStoreRemove(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
+        const namespace_id = try requireStoreNamespace(conn);
+
+        try self.store_service.removePath(namespace_id, payloads.path);
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handleStoreSubscribe(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const table_index = try wire.extractStoreTableIndexFast(message);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
+            std.log.warn("Failed to parse StoreSubscribe message: {}", .{err});
+            return err;
+        };
+
+        const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
+        const namespace_id = try requireStoreNamespace(conn);
+
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
+        defer qr.deinit(arena_allocator);
+
+        _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
+        try conn.addSubscription(sub_id);
+
+        return try wire.encodeQuery(arena_allocator, .{
+            .msg_id = msg_id,
+            .sub_id = sub_id,
+            .results = &qr.results,
+            .table = qr.table,
+        });
+    }
+
+    fn handleStoreQuery(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const table_index = try wire.extractStoreTableIndexFast(message);
+
+        var reader: std.Io.Reader = .fixed(message);
+        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
+            std.log.warn("Failed to parse StoreQuery message: {}", .{err});
+            return err;
+        };
+
+        const namespace_id = try requireStoreNamespace(conn);
+
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
+        defer qr.deinit(arena_allocator);
+
+        return try wire.encodeQuery(arena_allocator, .{
+            .msg_id = msg_id,
+            .results = &qr.results,
+            .table = qr.table,
+        });
+    }
+
     fn generateSubscriptionId(conn: *Connection) !u64 {
         return conn.allocateSubscriptionId();
     }
 };
+
+const MsgType = enum {
+    store_set_namespace,
+    store_set,
+    store_subscribe,
+    store_unsubscribe,
+    store_query,
+    store_load_more,
+    store_remove,
+};
+
+fn classifyMsgType(t: []const u8) ?MsgType {
+    if (t.len < 8) return null;
+    return switch (t[5]) {
+        'S' => {
+            if (std.mem.eql(u8, t, "StoreSetNamespace")) return .store_set_namespace;
+            if (std.mem.eql(u8, t, "StoreSubscribe")) return .store_subscribe;
+            if (std.mem.eql(u8, t, "StoreSet")) return .store_set;
+            return null;
+        },
+        'R' => if (std.mem.eql(u8, t, "StoreRemove")) return .store_remove else null,
+        'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
+        'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
+        'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
+        else => null,
+    };
+}
+
+fn isSecurityError(err: anyerror) bool {
+    return switch (err) {
+        error.MaxDepthExceeded,
+        error.ArrayTooLarge,
+        error.MapTooLarge,
+        error.StringTooLong,
+        error.BinDataLengthTooLong,
+        error.ExtDataTooLarge,
+        => true,
+        else => false,
+    };
+}

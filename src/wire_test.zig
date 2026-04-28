@@ -25,123 +25,203 @@ fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, name: []const 
     return .{ .values = values };
 }
 
-test "extractAs: Envelope from valid map" {
+fn encodePayload(allocator: std.mem.Allocator, payload: Payload) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    defer list.deinit(allocator);
+    try msgpack.encode(payload, list.writer(allocator));
+    return list.toOwnedSlice(allocator);
+}
+
+fn writeFixStr(writer: anytype, s: []const u8) !void {
+    // Write a fixstr header + payload bytes
+    try writer.writeByte(@as(u8, @intCast(0xa0 | s.len)));
+    try writer.writeAll(s);
+}
+
+fn writeFixMapHeader(writer: anytype, n: usize) !void {
+    try writer.writeByte(@as(u8, @intCast(0x80 | n)));
+}
+
+// === Fast Decoder Tests ===
+
+test "extractEnvelopeFast: valid envelope" {
     const allocator = testing.allocator;
+
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
     try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
     try map.mapPut("id", Payload.uintToPayload(42));
-    const result = try wire.extractAs(wire.Envelope, undefined, map);
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const result = try wire.extractEnvelopeFast(bytes);
     try testing.expectEqualStrings("StoreSet", result.type);
     try testing.expectEqual(@as(u64, 42), result.id);
 }
 
-test "extractAs: Envelope missing required field" {
+test "extractEnvelopeFast: missing type" {
     const allocator = testing.allocator;
+
+    var map = Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("id", Payload.uintToPayload(1));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, wire.extractEnvelopeFast(bytes));
+}
+
+test "extractEnvelopeFast: missing id" {
+    const allocator = testing.allocator;
+
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
     try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
-    const result = wire.extractAs(wire.Envelope, undefined, map);
-    try testing.expectError(error.MissingRequiredFields, result);
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, wire.extractEnvelopeFast(bytes));
 }
 
-test "extractAs: StorePathRequest from valid map" {
+test "extractEnvelopeFast: non-map payload" {
+    const bytes = &[_]u8{0x01}; // positive fixint, not a map
+    try testing.expectError(error.InvalidMessageFormat, wire.extractEnvelopeFast(bytes));
+}
+
+test "extractEnvelopeFast: wrong type for field" {
     const allocator = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var path_arr = try allocator.alloc(Payload, 3);
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+    try writeFixMapHeader(writer, 2);
+    try writeFixStr(writer, "type");
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, 999, .big); // type as uint64 instead of string
+    try writeFixStr(writer, "id");
+    try writer.writeByte(0x01); // positive fixint 1
 
-    path_arr[0] = Payload.uintToPayload(0); // table index
-    path_arr[1] = try Payload.strToPayload("doc1", allocator);
-    path_arr[2] = Payload.uintToPayload(2); // field index
-
-    var map = Payload.mapPayload(allocator);
-    try map.mapPut("path", Payload{ .arr = path_arr });
-    try map.mapPut("value", Payload{ .bool = true });
-
-    const result = try wire.extractAs(wire.StorePathRequest, arena_allocator, map);
-    try testing.expect(result.path == .arr);
-    try testing.expectEqual(@as(usize, 3), result.path.arr.len);
-    try testing.expectEqual(@as(u64, 0), result.path.arr[0].uint);
-    try testing.expectEqualStrings("doc1", result.path.arr[1].str.value());
-    try testing.expectEqual(@as(u64, 2), result.path.arr[2].uint);
-    try testing.expect(result.value != null);
-
-    map.free(allocator);
+    try testing.expectError(error.InvalidMessageFormat, wire.extractEnvelopeFast(buf.items));
 }
 
-test "extractAs: StorePathRequest without value" {
-    const allocator = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var path_arr = try allocator.alloc(Payload, 2);
-    path_arr[0] = Payload.uintToPayload(0); // table index
-    path_arr[1] = try Payload.strToPayload("doc1", allocator);
-
-    var map = Payload.mapPayload(allocator);
-    try map.mapPut("path", Payload{ .arr = path_arr });
-
-    const result = try wire.extractAs(wire.StorePathRequest, arena_allocator, map);
-    try testing.expect(result.value == null);
-
-    map.free(allocator);
-}
-
-test "extractAs: StoreCollectionRequest from valid map" {
+test "extractEnvelopeFast: extra fields (lenient)" {
     const allocator = testing.allocator;
 
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("table_index", Payload.uintToPayload(0));
+    try map.mapPut("type", try Payload.strToPayload("StoreSet", allocator));
+    try map.mapPut("id", Payload.uintToPayload(99));
+    try map.mapPut("extra", Payload.uintToPayload(123)); // unknown field
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
 
-    const result = try wire.extractAs(wire.StoreCollectionRequest, undefined, map);
-    try testing.expect(result.table_index == .uint);
-    try testing.expectEqual(@as(u64, 0), result.table_index.uint);
+    const result = try wire.extractEnvelopeFast(bytes);
+    try testing.expectEqualStrings("StoreSet", result.type);
+    try testing.expectEqual(@as(u64, 99), result.id);
 }
 
-test "extractAs: StoreUnsubscribeRequest from valid map" {
+test "extractStoreSetNamespaceFast: valid" {
     const allocator = testing.allocator;
 
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreSetNamespace", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
+    try map.mapPut("namespace", try Payload.strToPayload("my-ns", allocator));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    const result = try wire.extractStoreSetNamespaceFast(bytes);
+    try testing.expectEqualStrings("my-ns", result.namespace);
+}
+
+test "extractStoreSetNamespaceFast: missing namespace" {
+    const allocator = testing.allocator;
+
+    var map = Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreSetNamespace", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, wire.extractStoreSetNamespaceFast(bytes));
+}
+
+test "extractStoreUnsubscribeFast: valid" {
+    const allocator = testing.allocator;
+
+    var map = Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreUnsubscribe", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
     try map.mapPut("subId", Payload.uintToPayload(12345));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
 
-    const result = try wire.extractAs(wire.StoreUnsubscribeRequest, undefined, map);
+    const result = try wire.extractStoreUnsubscribeFast(bytes);
     try testing.expectEqual(@as(u64, 12345), result.subId);
 }
 
-test "extractAs: StoreLoadMoreRequest from valid map" {
+test "extractStoreUnsubscribeFast: missing subId" {
     const allocator = testing.allocator;
 
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreUnsubscribe", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, wire.extractStoreUnsubscribeFast(bytes));
+}
+
+test "extractStoreLoadMoreFast: valid" {
+    const allocator = testing.allocator;
+
+    var map = Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
     try map.mapPut("subId", Payload.uintToPayload(99));
     try map.mapPut("nextCursor", try Payload.strToPayload("abc123", allocator));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
 
-    const result = try wire.extractAs(wire.StoreLoadMoreRequest, undefined, map);
+    const result = try wire.extractStoreLoadMoreFast(bytes);
     try testing.expectEqual(@as(u64, 99), result.subId);
     try testing.expectEqualStrings("abc123", result.nextCursor);
 }
 
-test "extractAs: non-map payload returns InvalidMessageFormat" {
-    const result = wire.extractAs(wire.Envelope, undefined, Payload{ .uint = 42 });
-    try testing.expectError(error.InvalidMessageFormat, result);
-}
-
-test "extractAs: wrong type for field returns InvalidMessageFormat" {
+test "extractStoreLoadMoreFast: missing subId" {
     const allocator = testing.allocator;
+
     var map = Payload.mapPayload(allocator);
     defer map.free(allocator);
-    try map.mapPut("type", Payload.uintToPayload(42));
+    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
     try map.mapPut("id", Payload.uintToPayload(1));
+    try map.mapPut("nextCursor", try Payload.strToPayload("abc123", allocator));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
 
-    const result = wire.extractAs(wire.Envelope, undefined, map);
-    try testing.expectError(error.InvalidMessageFormat, result);
+    try testing.expectError(error.MissingRequiredFields, wire.extractStoreLoadMoreFast(bytes));
 }
+
+test "extractStoreLoadMoreFast: missing nextCursor" {
+    const allocator = testing.allocator;
+
+    var map = Payload.mapPayload(allocator);
+    defer map.free(allocator);
+    try map.mapPut("type", try Payload.strToPayload("StoreLoadMore", allocator));
+    try map.mapPut("id", Payload.uintToPayload(1));
+    try map.mapPut("subId", Payload.uintToPayload(99));
+    const bytes = try encodePayload(allocator, map);
+    defer allocator.free(bytes);
+
+    try testing.expectError(error.MissingRequiredFields, wire.extractStoreLoadMoreFast(bytes));
+}
+
+// === Encode Tests (unchanged) ===
 
 test "encodeSuccess: produces valid MsgPack" {
     const allocator = testing.allocator;
@@ -277,12 +357,9 @@ test "encodeSetDeltaSuffix: set operation" {
     try testing.expectEqual(@as(u64, 0), path.arr[0].uint);
     try testing.expectEqualStrings("user-123", path.arr[1].str.value());
 
-    // Value map now uses integer keys
     const value = try op_obj.mapGet("value");
     try testing.expect(value != null);
     try testing.expect(value.? == .map);
-    // Integer key 0 = id field, key 1 = namespace_id, key 2 = owner_id, key 3 = name
-    // Verify the map has entries with integer keys
     var val_it = value.?.map.iterator();
     var found_entries: usize = 0;
     while (val_it.next()) |_| found_entries += 1;
@@ -310,7 +387,7 @@ test "encodeDeleteDeltaSuffix: delete operation" {
     try testing.expectEqualStrings("remove", op.str.value());
 
     const path = (try op_obj.mapGet("path")) orelse return error.MissingPath;
-    try testing.expectEqual(@as(u64, 0), path.arr[0].uint); // table index
+    try testing.expectEqual(@as(u64, 0), path.arr[0].uint);
     try testing.expectEqual(@as(u64, 999), path.arr[1].uint);
 
     try testing.expect((try op_obj.mapGet("value")) == null);
@@ -359,10 +436,8 @@ test "store_delta_header: decodes to StoreDelta type" {
     try buf.appendSlice(allocator, &wire.store_delta_header);
     try buf.append(allocator, 0xcf);
     try buf.writer(allocator).writeInt(u64, 42, .big);
-    // Append a minimal ops array to complete the map
-    // ops key + fixarray(0)
     try msgpack.writeMsgPackStr(buf.writer(allocator), "ops");
-    try buf.append(allocator, 0x90); // fixarray(0)
+    try buf.append(allocator, 0x90);
 
     var reader: std.Io.Reader = .fixed(buf.items);
     const p = try msgpack.decodeTrusted(allocator, &reader);
@@ -382,7 +457,6 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const suffix = try wire.encodeDeleteDeltaSuffix(allocator, 1, id_val);
     defer allocator.free(suffix);
 
-    // Decode and verify
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });
     defer allocator.free(full_msg);
     var reader: std.Io.Reader = .fixed(full_msg);
@@ -397,48 +471,6 @@ test "encodeDeleteDeltaSuffix: with string id" {
     const path_opt = try op_obj.mapGet("path");
     try testing.expect(path_opt != null);
     const path = path_opt.?;
-    try testing.expectEqual(@as(u64, 1), path.arr[0].uint); // table index
+    try testing.expectEqual(@as(u64, 1), path.arr[0].uint);
     try testing.expectEqualStrings("doc-abc-123", path.arr[1].str.value());
-}
-
-test "extractAs: respects default values" {
-    const allocator = testing.allocator;
-
-    const TestStruct = struct {
-        required: u64,
-        with_default: u64 = 42,
-        optional_with_default: ?u64 = 100,
-        optional_no_default: ?u64,
-    };
-
-    // Case 1: Only required field provided
-    {
-        var map = Payload.mapPayload(allocator);
-        defer map.free(allocator);
-        try map.mapPut("required", Payload.uintToPayload(10));
-
-        const result = try wire.extractAs(TestStruct, undefined, map);
-
-        try testing.expectEqual(@as(u64, 10), result.required);
-        try testing.expectEqual(@as(u64, 42), result.with_default);
-        try testing.expectEqual(@as(?u64, 100), result.optional_with_default);
-        try testing.expectEqual(@as(?u64, null), result.optional_no_default);
-    }
-
-    // Case 2: Overriding defaults
-    {
-        var map = Payload.mapPayload(allocator);
-        defer map.free(allocator);
-        try map.mapPut("required", Payload.uintToPayload(10));
-        try map.mapPut("with_default", Payload.uintToPayload(50));
-        try map.mapPut("optional_with_default", Payload.uintToPayload(200));
-        try map.mapPut("optional_no_default", Payload.uintToPayload(300));
-
-        const result = try wire.extractAs(TestStruct, undefined, map);
-
-        try testing.expectEqual(@as(u64, 10), result.required);
-        try testing.expectEqual(@as(u64, 50), result.with_default);
-        try testing.expectEqual(@as(?u64, 200), result.optional_with_default);
-        try testing.expectEqual(@as(?u64, 300), result.optional_no_default);
-    }
 }

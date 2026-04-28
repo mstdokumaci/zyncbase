@@ -34,16 +34,25 @@ pub fn createMockWebSocket() WebSocket {
 
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// The caller is responsible for freeing the returned []u8.
-pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, parsed: msgpack.Payload) ![]u8 {
+pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) ![]u8 {
+    const envelope = try wire.extractEnvelopeFast(bytes);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const msg_info = try wire.extractAs(wire.Envelope, arena_allocator, parsed);
-
-    const result = try handler.routeRequest(arena_allocator, conn, msg_info, parsed);
+    const result = handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
+        const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
+        return try allocator.dupe(u8, error_msg);
+    };
 
     return try allocator.dupe(u8, result);
+}
+
+pub fn encodePayloadToBytes(allocator: Allocator, payload: msgpack.Payload) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    defer list.deinit(allocator);
+    try msgpack.encode(payload, list.writer(allocator));
+    return list.toOwnedSlice(allocator);
 }
 
 /// Parse a response and extract the "type" and "code" fields.
@@ -159,12 +168,12 @@ pub const AppTestContext = struct {
         // 2. Shut down subsystems
         self.connection_manager.deinit();
 
-        // 4. Now safe to tear down subsystems that were needed for session teardown
+        // 3. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
         self.store_service.deinit();
 
-        // 5. Cleanup remaining infrastructure
+        // 4. Cleanup remaining infrastructure
         self.schema_manager.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
