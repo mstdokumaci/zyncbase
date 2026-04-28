@@ -261,7 +261,7 @@ pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.
         },
         .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         .array => |items| blk: {
-            const json = try value_codec.arrayJsonAlloc(allocator, items);
+            const json = try value_codec.jsonAlloc(allocator, .{ .array = items });
             defer allocator.free(json);
             break :blk bindTextTransient(stmt, index, json);
         },
@@ -269,20 +269,20 @@ pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
-pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: ?schema_manager.Field) !values.TypedValue {
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema_manager.Field) !values.TypedValue {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
-    if (field != null and field.?.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
+    if (field.sql_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
         const ptr = sqlite.c.sqlite3_column_text(stmt, i);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
         const s = if (ptr != null) ptr[0..len] else "[]";
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
         defer parsed.deinit();
-        return value_codec.fromJson(allocator, field.?.sql_type, field.?.items_type, parsed.value);
+        return value_codec.fromJson(allocator, field.sql_type, field.items_type, parsed.value);
     }
 
     return switch (col_type) {
         sqlite.c.SQLITE_BLOB => blk: {
-            if (field == null or field.?.sql_type != .doc_id) break :blk .nil;
+            if (field.sql_type != .doc_id) break :blk .nil;
             const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
@@ -290,7 +290,7 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
         },
         sqlite.c.SQLITE_INTEGER => {
             const val = sqlite.c.sqlite3_column_int64(stmt, i);
-            if (field != null and field.?.sql_type == .boolean) {
+            if (field.sql_type == .boolean) {
                 return values.TypedValue{ .scalar = .{ .boolean = val != 0 } };
             }
             return values.TypedValue{ .scalar = .{ .integer = val } };

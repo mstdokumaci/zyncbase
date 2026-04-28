@@ -33,9 +33,8 @@ pub const CheckpointStats = write_queue.CheckpointStats;
 pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const WriteQueue = write_queue.WriteQueue;
-pub const typed_cache_type = storage_values.typed_cache_type;
+const typed_cache_type = storage_values.typed_cache_type;
 pub const typedValueFromPayload = value_codec.fromPayload;
-pub const typedValueFromJson = value_codec.fromJson;
 pub const validateTypedValuePayload = value_codec.validateValue;
 pub const writeTypedValueMsgPack = value_codec.writeMsgPack;
 

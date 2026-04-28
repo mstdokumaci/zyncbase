@@ -23,7 +23,7 @@ pub fn writeMsgPack(value: TypedValue, writer: anytype) !void {
     }
 }
 
-pub fn writeScalarMsgPack(value: ScalarValue, writer: anytype) !void {
+fn writeScalarMsgPack(value: ScalarValue, writer: anytype) !void {
     switch (value) {
         .doc_id => |id| {
             const bytes = doc_id.toBytes(id);
@@ -46,23 +46,7 @@ pub fn jsonAlloc(allocator: Allocator, value: TypedValue) ![]u8 {
     return std.json.Stringify.valueAlloc(allocator, JsonValue{ .value = value }, .{});
 }
 
-pub fn scalarJsonAlloc(allocator: Allocator, value: ScalarValue) ![]u8 {
-    return std.json.Stringify.valueAlloc(allocator, JsonScalar{ .value = value }, .{});
-}
-
-pub fn arrayJsonAlloc(allocator: Allocator, items: []const ScalarValue) ![]u8 {
-    return std.json.Stringify.valueAlloc(allocator, JsonScalarArray{ .items = items }, .{});
-}
-
-pub fn writeJson(value: TypedValue, stream: anytype) !void {
-    switch (value) {
-        .nil => try stream.write(null),
-        .scalar => |s| try writeScalarJson(s, stream),
-        .array => |items| try writeScalarArrayJson(items, stream),
-    }
-}
-
-pub fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
+fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
     switch (value) {
         .doc_id => |id| {
             var buf: [32]u8 = undefined;
@@ -74,14 +58,6 @@ pub fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
         .text => |s| try stream.write(s),
         .boolean => |b| try stream.write(b),
     }
-}
-
-pub fn writeScalarArrayJson(items: []const ScalarValue, stream: anytype) !void {
-    try stream.beginArray();
-    for (items) |item| {
-        try writeScalarJson(item, stream);
-    }
-    try stream.endArray();
 }
 
 pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
@@ -143,7 +119,7 @@ pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, items_type: 
     };
 }
 
-pub fn scalarFromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !ScalarValue {
+fn scalarFromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {
             .bin => |b| ScalarValue{ .doc_id = try doc_id.fromBytes(b.value()) },
@@ -160,7 +136,7 @@ pub fn scalarFromPayload(allocator: Allocator, ft: schema_manager.FieldType, val
     };
 }
 
-pub fn scalarFromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
+fn scalarFromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {
             .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return StorageError.TypeMismatch },
@@ -181,23 +157,15 @@ const JsonValue = struct {
     value: TypedValue,
 
     pub fn jsonStringify(self: @This(), stream: anytype) !void {
-        try writeJson(self.value, stream);
-    }
-};
-
-const JsonScalar = struct {
-    value: ScalarValue,
-
-    pub fn jsonStringify(self: @This(), stream: anytype) !void {
-        try writeScalarJson(self.value, stream);
-    }
-};
-
-const JsonScalarArray = struct {
-    items: []const ScalarValue,
-
-    pub fn jsonStringify(self: @This(), stream: anytype) !void {
-        try writeScalarArrayJson(self.items, stream);
+        switch (self.value) {
+            .nil => try stream.write(null),
+            .scalar => |s| try writeScalarJson(s, stream),
+            .array => |items| {
+                try stream.beginArray();
+                for (items) |item| try writeScalarJson(item, stream);
+                try stream.endArray();
+            },
+        }
     }
 };
 
