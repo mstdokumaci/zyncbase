@@ -14,6 +14,9 @@ This directory contains the technical details, internal implementations, and low
 - [Query Engine](./query-engine.md) — AST parsing and query execution logic.
 - [Presence Internals](./presence-internals.md) — History buffers and broadcast batching.
 
+## SDK Internals
+- [TypeScript SDK](./typescript-sdk.md) — Internal module ownership, wire flow, subscription materialization, and verification rules for the TypeScript SDK.
+
 ## Security & Reliability
 - [Security Model](./security.md) — Comprehensive security audit and threat model.
 - [Auth System](./auth-system.md) — JSON-declarative rules (`authorization.json`).

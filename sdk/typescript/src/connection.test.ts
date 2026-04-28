@@ -47,7 +47,7 @@ describe("ConnectionManager", () => {
 		});
 	});
 
-	describe("dispatch() — msg_id and pendingQueue", () => {
+	describe("dispatch() — msg_id and PendingRequests", () => {
 		test("assigns incrementing msg_ids starting at 1", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);

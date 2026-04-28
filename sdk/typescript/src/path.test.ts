@@ -1,7 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import { ErrorCodes, ZyncBaseError } from "./errors";
-import { decodeWirePath, encodeWirePath, normalizePath } from "./path";
+import {
+	decodeWirePath,
+	encodeWirePath,
+	flatten,
+	normalizePath,
+	unflatten,
+} from "./path";
+
+function hasNoEmptyObjects(val: unknown): boolean {
+	if (val === null || typeof val !== "object" || Array.isArray(val))
+		return true;
+	const obj = val as Record<string, unknown>;
+	if (Object.keys(obj).length === 0) return false;
+	return Object.values(obj).every(hasNoEmptyObjects);
+}
 
 /**
  * Property 1: Path round-trip identity
@@ -142,6 +156,33 @@ describe("encodeWirePath / decodeWirePath", () => {
 				),
 				(path) => {
 					expect(encodeWirePath(path)).toEqual(path);
+				},
+			),
+			{ numRuns: 100 },
+		);
+	});
+});
+
+describe("flatten / unflatten", () => {
+	test("Property 14: unflatten(flatten(obj)) deep-equals the original for objects with primitive leaf values", () => {
+		fc.assert(
+			fc.property(
+				fc
+					.object({
+						key: fc
+							.string({ minLength: 1 })
+							.filter((key) => !key.includes("_")),
+						values: [
+							fc.string(),
+							fc.integer(),
+							fc.boolean(),
+							fc.constant(null),
+						],
+					})
+					.filter(hasNoEmptyObjects),
+				(obj) => {
+					const typedObj = obj as Record<string, import("./types").JsonValue>;
+					expect(unflatten(flatten(typedObj))).toEqual(typedObj);
 				},
 			),
 			{ numRuns: 100 },
