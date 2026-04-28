@@ -325,7 +325,25 @@ pub fn extractStoreLoadMoreFast(bytes: []const u8) !types.StoreLoadMoreRequest {
     };
 }
 
-// === Map Payload Accessor (for Group B handlers) ===
+pub fn extractStoreTableIndexFast(bytes: []const u8) !u64 {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var table_index: ?u64 = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.table_index)) {
+            table_index = try readU64(bytes, &pos);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return table_index orelse return error.MissingRequiredFields;
+}
+
+// === Subtree Payload Extractors (for Group B handlers that need Payload) ===
 
 pub const StorePathPayloads = struct {
     path: Payload,

@@ -300,17 +300,18 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
+        const table_index = try wire.extractStoreTableIndexFast(message);
+
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreSubscribe message: {}", .{err});
             return err;
         };
 
-        const table_index_payload = wire.getMapPayload(parsed, "table_index") orelse return error.MissingRequiredFields;
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, table_index_payload, parsed);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
         defer qr.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
@@ -331,16 +332,17 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
+        const table_index = try wire.extractStoreTableIndexFast(message);
+
         var reader: std.Io.Reader = .fixed(message);
         const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
             std.log.warn("Failed to parse StoreQuery message: {}", .{err});
             return err;
         };
 
-        const table_index_payload = wire.getMapPayload(parsed, "table_index") orelse return error.MissingRequiredFields;
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, table_index_payload, parsed);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
         defer qr.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{
