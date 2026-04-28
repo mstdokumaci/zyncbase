@@ -112,6 +112,13 @@ pub const MessageHandler = struct {
 
         // 4. Route and handle errors
         const response = self.routeMessageFast(arena_allocator, conn, envelope, message) catch |err| {
+            if (isSecurityError(err)) {
+                if (try self.violation_tracker.recordViolation(conn_id)) {
+                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
+                    ws.close();
+                    return;
+                }
+            }
             const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
             ws.send(response_err, .binary);
             return;
@@ -377,5 +384,18 @@ fn classifyMsgType(t: []const u8) ?MsgType {
         'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
         'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
         else => null,
+    };
+}
+
+fn isSecurityError(err: anyerror) bool {
+    return switch (err) {
+        error.MaxDepthExceeded,
+        error.ArrayTooLarge,
+        error.MapTooLarge,
+        error.StringTooLong,
+        error.BinDataLengthTooLong,
+        error.ExtDataTooLarge,
+        => true,
+        else => false,
     };
 }

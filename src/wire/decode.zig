@@ -24,13 +24,13 @@ fn readMapHeader(bytes: []const u8, pos: *usize) !usize {
 
     if (m >= 0x80 and m <= 0x8f) return @intCast(m & 0x0f);
     if (m == 0xde) {
-        if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+        if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
         const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
         pos.* += 2;
         return len;
     }
     if (m == 0xdf) {
-        if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+        if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
         const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
         pos.* += 4;
         return len;
@@ -45,34 +45,34 @@ fn readStr(bytes: []const u8, pos: *usize) ![]const u8 {
 
     if (m >= 0xa0 and m <= 0xbf) {
         const len: usize = @intCast(m & 0x1f);
-        if (pos.* > bytes.len - len) return error.InvalidMessageFormat;
+        if (pos.* + len > bytes.len) return error.InvalidMessageFormat;
         const s = bytes[pos.* .. pos.* + len];
         pos.* += len;
         return s;
     }
     if (m == 0xd9) {
-        if (pos.* > bytes.len - 1) return error.InvalidMessageFormat;
+        if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
         const len: usize = bytes[pos.*];
         pos.* += 1;
-        if (pos.* > bytes.len - len) return error.InvalidMessageFormat;
+        if (pos.* + len > bytes.len) return error.InvalidMessageFormat;
         const s = bytes[pos.* .. pos.* + len];
         pos.* += len;
         return s;
     }
     if (m == 0xda) {
-        if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+        if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
         const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
         pos.* += 2;
-        if (pos.* > bytes.len - len) return error.InvalidMessageFormat;
+        if (pos.* + len > bytes.len) return error.InvalidMessageFormat;
         const s = bytes[pos.* .. pos.* + len];
         pos.* += len;
         return s;
     }
     if (m == 0xdb) {
-        if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+        if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
         const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
         pos.* += 4;
-        if (pos.* > bytes.len - len) return error.InvalidMessageFormat;
+        if (pos.* + len > bytes.len) return error.InvalidMessageFormat;
         const s = bytes[pos.* .. pos.* + len];
         pos.* += len;
         return s;
@@ -87,25 +87,25 @@ fn readU64(bytes: []const u8, pos: *usize) !u64 {
 
     if (m <= 0x7f) return m;
     if (m == 0xcc) {
-        if (pos.* > bytes.len - 1) return error.InvalidMessageFormat;
+        if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
         const v = bytes[pos.*];
         pos.* += 1;
         return v;
     }
     if (m == 0xcd) {
-        if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+        if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
         const v = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
         pos.* += 2;
         return v;
     }
     if (m == 0xce) {
-        if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+        if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
         const v = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
         pos.* += 4;
         return v;
     }
     if (m == 0xcf) {
-        if (pos.* > bytes.len - 8) return error.InvalidMessageFormat;
+        if (pos.* + 8 > bytes.len) return error.InvalidMessageFormat;
         const v = std.mem.readInt(u64, bytes[pos.*..][0..8], .big);
         pos.* += 8;
         return v;
@@ -139,37 +139,37 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
         0xcb => pos.* += 8,
         0xa0...0xbf => pos.* += @intCast(m & 0x1f),
         0xd9 => {
-            if (pos.* > bytes.len - 1) return error.InvalidMessageFormat;
+            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
             const len: usize = bytes[pos.*];
             pos.* += 1;
             pos.* += len;
         },
         0xda => {
-            if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
             pos.* += 2;
             pos.* += @intCast(len);
         },
         0xdb => {
-            if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
             pos.* += 4;
             pos.* += len;
         },
         0xc4 => {
-            if (pos.* > bytes.len - 1) return error.InvalidMessageFormat;
+            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
             const len: usize = bytes[pos.*];
             pos.* += 1;
             pos.* += len;
         },
         0xc5 => {
-            if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
             pos.* += 2;
             pos.* += @intCast(len);
         },
         0xc6 => {
-            if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
             pos.* += 4;
             pos.* += len;
@@ -179,13 +179,13 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
             for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
         },
         0xdc => {
-            if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
             pos.* += 2;
             for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
         },
         0xdd => {
-            if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
             pos.* += 4;
             for (0..len) |_| try skipValueDepth(bytes, pos, depth + 1);
@@ -195,13 +195,13 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
             for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
         },
         0xde => {
-            if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
             pos.* += 2;
             for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
         },
         0xdf => {
-            if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
             pos.* += 4;
             for (0..len * 2) |_| try skipValueDepth(bytes, pos, depth + 1);
@@ -212,19 +212,19 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
         0xd7 => pos.* += 9,
         0xd8 => pos.* += 17,
         0xc7 => {
-            if (pos.* > bytes.len - 1) return error.InvalidMessageFormat;
+            if (pos.* + 1 > bytes.len) return error.InvalidMessageFormat;
             const len: usize = bytes[pos.*];
             pos.* += 1;
             pos.* += len + 1;
         },
         0xc8 => {
-            if (pos.* > bytes.len - 2) return error.InvalidMessageFormat;
+            if (pos.* + 2 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u16, bytes[pos.*..][0..2], .big);
             pos.* += 2;
             pos.* += len + 1;
         },
         0xc9 => {
-            if (pos.* > bytes.len - 4) return error.InvalidMessageFormat;
+            if (pos.* + 4 > bytes.len) return error.InvalidMessageFormat;
             const len = std.mem.readInt(u32, bytes[pos.*..][0..4], .big);
             pos.* += 4;
             pos.* += len + 1;
