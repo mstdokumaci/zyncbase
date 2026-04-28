@@ -1,0 +1,42 @@
+TypeScript SDK Implementation records current choices not migration plan greenfield internal compatibility goal module boundaries clean update call sites contracts change Design Goals public API small stable internals concern one owner wire encoding network boundary store/query encoding outside store facade subscription materialization tracker Prefer pure functions stateless builders small classes Avoid framework abstractions Avoid compatibility layers implementations transition shims Module Ownership `client.ts` Owns `ConnectionManager `SubscriptionTracker client lifecycle methods-level error fanout Subscription replay reconnect Store request construction Wire encoding WebSocket event internals Materialized view mutation `connection.ts` Owns WebSocket creation teardown Reconnect policy timers Lifecycle event listeners Active store presence namespaces `connect Inbound message routing after wire decoding Delegates Request id promise tracking `pending_requests.ts` MessagePack schema-aware conversion `connection_wire.ts MessagePack imports Schema table lookup logic Store query batch encoding pending request map management `pending_requests.ts` request table in-flight RPCsMonotonic request id allocation Promise registration Resolve/reject id Reject-all disconnect Optional context request Unknown ids return `false `rejectAll clears map before rejections construct SDK errors pass final reason no WebSocket MessagePack schema knowledge `connection_wire.ts Transport wire codec MessagePack encode/decode `SchemaDictionary schema sync outbound store conversion row delta conversion schema failures `ZyncBaseError pending-request context responses `ConnectionManager sends SDK messages codec schema conversion before MessagePack Inbound deltas query rows decoded before store subscription code subscription modules import@msgpack `store.ts Public store facade Store API methods `ConnectionManager.dispatch User-facing error normalization emission High-level subscription open/close flow Store message construction result shaping `store_wire.ts Subscription entry snapshot handling.ts own Query operator opcode maps Wire condition tuple construction Path implementation details Materialized view construction mutation `store_wire.ts store request response helpersPath normalization depth validation Store command builders Query condition order encoding Batch operation normalization `get `query response shaping SDK errors invalid API input return normalized segments No network calls subscription tracker imports MessagePack imports `subscriptions Subscription registry local materialization Active subscription entries Delta queueing disconnected Replay/remap reconnect Listen projection Materialized collection views Initial snapshot-to-delta construction Incremental delta application tracker dispatch network messages code opens/closes subscriptions asks tracker register state views owned tracker `types public protocol-adjacent TypeScript types API types expose schema-encoded numeric wire internals Wire types logical SDK-side messages before codec conversion split wire-only types Dependency Graph dependencies```text
+client.ts
+  -> connection.ts
+  -> store.ts
+  -> subscriptions.ts
+
+connection.ts
+  -> connection_wire.ts
+  -> pending_requests.ts
+  -> errors.ts
+  -> types.ts
+
+connection_wire.ts
+  -> schema_dictionary.ts
+  -> errors.ts
+  -> types.ts
+  -> @msgpack/msgpack
+
+store.ts
+  -> connection.ts
+  -> store_wire.ts
+  -> subscriptions.ts
+  -> errors.ts
+  -> types.ts
+
+store_wire.ts
+  -> path.ts
+  -> errors.ts
+  -> types.ts
+
+subscriptions.ts
+  -> path.ts
+  -> types.ts
+```Forbidden dependencies_wire.ts -> connection.ts subscriptions.ts connection store.ts path.ts store-specific path handling except_wire.ts importing@msgpack Request Store/read flow Public API method `store.ts receives user input_wire.ts validates builds outbound store message dispatches `ConnectionManager allocates request id schema-encodes message-encodes bytes sends bytes WebSocket Inbound `ok`/`error` resolves rejects request shapes store results return values Subscription flow.ts builds subscribe params dispatches request success asks `SubscriptionTracker register collection state Initial snapshots converted into local deltas.ts `StoreDelta pushes decoded by `connection_wire.ts routes decoded deltas to `SubscriptionTracker` update calls user callbacks Reconnect flow `ConnectionManager owns reconnect timers attempts `SubscriptionTracker queues deltas disconnected.ts replays subscriptions after reconnect `SubscriptionTracker remaps old subscription ids to new idssnapshots views before deltas drain Error Handling Server responses converted with `ZyncBaseError Store API validation throws `ZyncBaseError non-SDK errors in.ts Pending requests rejected disconnect before map cleared Schema lookup failures encoding mapped in_wire.ts Performance Rules Normalize path operation batch messages pass MessagePack conversion connection boundary Decode schema-encoded rows before code Use maps for pending requests subscription entries views incremental Avoid cloning rows unless safety Testing boundary tests_requests id allocation resolve/reject unknown ids_wire schema encode/decode row decoding_wire path validation query encoding batch normalization result shaping lifecycle reconnect dispatch routing resolution one-dispatch error emission.ts projection views queue/replay SDK changes```bash
+bun run --filter @zyncbase/client build
+bun test sdk
+bunx biome check --write
+```protocol changes```bash
+bun run test:e2e
+```repo completion```bash
+bun run lint
+```Maintenance Notes Internal API breaks acceptable Update call sites reintroduce wrappers old methods move codec behavior.ts query/path helpers.ts Add new modules ownership distinct Prefer small helpers over new classes no state involved
