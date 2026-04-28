@@ -1,7 +1,12 @@
 // Subscription Tracker
 
 import { unflatten } from "./path.js";
-import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
+import type {
+	JsonValue,
+	QueryOptions,
+	StoreDelta,
+	StoreSubscribe,
+} from "./types.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,6 +61,39 @@ export class SubscriptionTracker {
 		this.subscriptions.set(subId, entry);
 	}
 
+	registerListen(
+		subId: number,
+		params: Omit<StoreSubscribe, "id">,
+		callback: (value: JsonValue) => void,
+		segments: string[],
+	): void {
+		this.register(subId, {
+			params,
+			callbacks: [callback],
+			projection: createListenProjection(segments),
+		});
+	}
+
+	registerCollection(
+		subId: number,
+		params: Omit<StoreSubscribe, "id">,
+		callback: (results: JsonValue[]) => void,
+		collection: string,
+		orderBy?: QueryOptions["orderBy"],
+	): void {
+		this.register(subId, {
+			params,
+			callbacks: [callback as (value: JsonValue) => void],
+			projection: null,
+			materializedView: {
+				records: new Map(),
+				sortedList: [],
+				collection,
+				comparator: buildComparator(orderBy),
+			},
+		});
+	}
+
 	/**
 	 * Remove a subscription entry by subId.
 	 */
@@ -94,6 +132,17 @@ export class SubscriptionTracker {
 			return;
 		}
 		this._dispatchDelta(delta);
+	}
+
+	dispatchInitialSnapshot(
+		subId: number,
+		segments: string[],
+		value: JsonValue,
+	): void {
+		const delta = createInitialSnapshotDelta(subId, segments, value);
+		if (delta.ops.length > 0) {
+			this.dispatch(delta);
+		}
 	}
 
 	/**
@@ -452,4 +501,53 @@ function getNestedValue(
 		current = (current as Record<string, JsonValue>)[part];
 	}
 	return current;
+}
+
+export function createListenProjection(segments: string[]): ListenProjection {
+	return {
+		field: segments.length === 2 ? null : segments.slice(2).join("."),
+		depth: segments.length,
+	};
+}
+
+export function createInitialSnapshotDelta(
+	subId: number,
+	segments: string[],
+	value: JsonValue,
+): StoreDelta {
+	const delta: StoreDelta = { type: "StoreDelta", subId, ops: [] };
+	const collection = segments[0];
+
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const op = createInitialSnapshotOp(collection, segments, item);
+			if (op) delta.ops.push(op);
+		}
+	} else if (value !== null) {
+		const op = createInitialSnapshotOp(collection, segments, value);
+		if (op) delta.ops.push(op);
+	}
+
+	return delta;
+}
+
+function createInitialSnapshotOp(
+	collection: string,
+	segments: string[],
+	item: JsonValue,
+): { op: "set"; path: string[]; value: JsonValue } | null {
+	if (item === null || typeof item !== "object" || Array.isArray(item)) {
+		return null;
+	}
+
+	const value = item as Record<string, JsonValue>;
+	const id =
+		(value.id as string) || (segments.length > 1 ? segments[1] : undefined);
+	if (!id) return null;
+
+	return {
+		op: "set",
+		path: [collection, id],
+		value: item,
+	};
 }

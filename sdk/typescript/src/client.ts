@@ -9,7 +9,6 @@ import type {
 	JsonValue,
 	LifecycleEvent,
 	Store,
-	StoreDelta,
 	StoreSubscribe,
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
@@ -171,23 +170,11 @@ export class ZyncBaseClient {
 		const entry = this.tracker.get(newSubId);
 		if (!entry?.materializedView) return;
 
-		const delta: StoreDelta = { type: "StoreDelta", subId: newSubId, ops: [] };
-		for (const row of snapshot.value) {
-			if (row && typeof row === "object" && !Array.isArray(row)) {
-				const r = row as Record<string, JsonValue>;
-				const id = r.id as string;
-				if (id) {
-					delta.ops.push({
-						op: "set",
-						path: [snapshot.collection, id],
-						value: row,
-					});
-				}
-			}
-		}
-		if (delta.ops.length > 0) {
-			this.tracker.dispatch(delta);
-		}
+		this.tracker.dispatchInitialSnapshot(
+			newSubId,
+			[snapshot.collection],
+			snapshot.value,
+		);
 	}
 }
 
