@@ -46,6 +46,7 @@ Important: Project is still in early development stage. Give no consideration to
 ## Building
 - **Debug Build:** `zig build`
 - **Release Build:** `zig build -Doptimize=ReleaseFast`
+- **Build Typescript SDK:** `bun run --filter @zyncbase/client build`
 
 ## Testing
 - **Run All Tests:** `zig build test`
@@ -53,6 +54,7 @@ Important: Project is still in early development stage. Give no consideration to
 - **E2E Tests:** `bun run test:e2e` (Run after every set of zig code changes to ensure that the server-client communication is not broken)
 - **Thread Safety:** `bun run test:tsan` (Run after every set of zig code changes to ensure thread safety is still ensured)
 - **Safe Mode:** `bun run test:safe` (Run after every set of zig code changes to ensure memory safety is still ensured)
+- **SDK Tests:** `bun test sdk`
 
 ## Maintenance & Setup
 - **Build BoringSSL:** `./scripts/build-boringssl.sh` (Required before first build or after submodule update)
@@ -61,6 +63,7 @@ Important: Project is still in early development stage. Give no consideration to
 
 ## Linting
 - **Run Linter:** `bun run lint` (Run after every small zig code change, so the errors won't accumulate)
+- **Biome Check:** `bunx biome check --write`
 
 # Actions Upon Task Completion
 
@@ -68,14 +71,16 @@ Before submitting a task or notifying the user, ensure the following steps are p
 
 1. **Run Linter:**
    - Run `bun run lint` to ensure no new linting issues were introduced. Fix or suppress as necessary.
+   - **Biome Check:** Run `bunx biome check --write` to format and lint TypeScript/JavaScript code.
 
 2. **Run relevant tests:**
    - If core logic was changed, run `zig build test`.
    - If specific modules were touched, run the corresponding unit test (e.g., `zig build -Doptimize=Debug test-unit -Dtest-filter="module_name"`).
    - If protocol-level changes were made, run `npm run test:e2e`.
+   - **SDK Tests:** If SDK code was changed, run `bun test sdk`.
 
-4. **Check for Sanitizer Regressions:**
+3. **Check for Sanitizer Regressions:**
    - Occasionally run `bun run test:safe` to ensure no new race conditions were introduced.
 
-5. **Check for Client-Server Communication:**
+4. **Check for Client-Server Communication:**
    - Occasionally run `bun run test:e2e` to ensure the server-client communication is not broken.
