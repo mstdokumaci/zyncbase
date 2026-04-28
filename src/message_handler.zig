@@ -101,6 +101,13 @@ pub const MessageHandler = struct {
         // 2. Extract envelope from raw bytes (zero-alloc)
         const envelope = wire.extractEnvelopeFast(message) catch |err| {
             std.log.warn("Failed to extract envelope from connection {}: {}", .{ conn_id, err });
+            if (isSecurityError(err)) {
+                if (try self.violation_tracker.recordViolation(conn_id)) {
+                    std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
+                    ws.close();
+                    return;
+                }
+            }
             try self.sendError(ws, null, wire.getWireError(err));
             return;
         };
@@ -255,14 +262,8 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
-            std.log.warn("Failed to parse StoreSet message: {}", .{err});
-            return err;
-        };
-
-        const path = wire.getMapPayload(parsed, "path") orelse return error.MissingRequiredFields;
-        const value = wire.getMapPayload(parsed, "value") orelse return error.MissingRequiredFields;
+        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
+        const value = payloads.value orelse return error.MissingRequiredFields;
         const session = try requireStoreSession(conn);
 
         try self.store_service.setPath(
@@ -270,7 +271,7 @@ pub const MessageHandler = struct {
                 .namespace_id = session.namespace_id,
                 .owner_doc_id = session.user_doc_id,
             },
-            path,
+            payloads.path,
             value,
         );
 
@@ -284,16 +285,10 @@ pub const MessageHandler = struct {
         msg_id: u64,
         message: []const u8,
     ) ![]const u8 {
-        var reader: std.Io.Reader = .fixed(message);
-        const parsed = msgpack.decode(arena_allocator, &reader) catch |err| {
-            std.log.warn("Failed to parse StoreRemove message: {}", .{err});
-            return err;
-        };
-
-        const path = wire.getMapPayload(parsed, "path") orelse return error.MissingRequiredFields;
+        const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
         const namespace_id = try requireStoreNamespace(conn);
 
-        try self.store_service.removePath(namespace_id, path);
+        try self.store_service.removePath(namespace_id, payloads.path);
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }

@@ -327,6 +327,40 @@ pub fn extractStoreLoadMoreFast(bytes: []const u8) !types.StoreLoadMoreRequest {
 
 // === Map Payload Accessor (for Group B handlers) ===
 
+pub const StorePathPayloads = struct {
+    path: Payload,
+    value: ?Payload,
+};
+
+pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator) !StorePathPayloads {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var path: ?Payload = null;
+    var value: ?Payload = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.path)) {
+            path = try readSubtree(bytes, &pos, allocator);
+        } else if (std.mem.eql(u8, key, Key.value)) {
+            value = try readSubtree(bytes, &pos, allocator);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{ .path = path orelse return error.MissingRequiredFields, .value = value };
+}
+
+fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
+    const start = pos.*;
+    try skipValue(bytes, pos);
+    const slice = bytes[start..pos.*];
+    var reader: std.Io.Reader = .fixed(slice);
+    return msgpack.decode(allocator, &reader);
+}
+
 pub fn getMapPayload(map: Payload, key: []const u8) ?Payload {
     if (map != .map) return null;
     var it = map.map.iterator();
