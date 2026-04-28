@@ -1,8 +1,25 @@
 const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const Payload = msgpack.Payload;
-const types = @import("types.zig");
 const comptimeKeyPayload = @import("comptime.zig").comptimeKeyPayload;
+
+pub const Envelope = struct {
+    type: []const u8,
+    id: u64,
+};
+
+pub const StoreSetNamespaceRequest = struct {
+    namespace: []const u8,
+};
+
+pub const StoreUnsubscribeRequest = struct {
+    subId: u64,
+};
+
+pub const StoreLoadMoreRequest = struct {
+    subId: u64,
+    nextCursor: []const u8,
+};
 
 const Key = struct {
     pub const @"type" = comptimeKeyPayload("type");
@@ -237,12 +254,14 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
 
 // === Fast Envelope Extractor ===
 
-pub fn extractEnvelopeFast(bytes: []const u8) !types.Envelope {
+pub fn extractEnvelopeFast(bytes: []const u8) !
+Envelope {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
     // SAFETY: all fields of result are set before use via the found_type/found_id guards below
-    var result: types.Envelope = undefined;
+    var result: 
+Envelope = undefined;
     var found_type: bool = false;
     var found_id: bool = false;
 
@@ -265,7 +284,8 @@ pub fn extractEnvelopeFast(bytes: []const u8) !types.Envelope {
 
 // === Type-Specific Fast Decoders ===
 
-pub fn extractStoreSetNamespaceFast(bytes: []const u8) !types.StoreSetNamespaceRequest {
+pub fn extractStoreSetNamespaceFast(bytes: []const u8) !
+StoreSetNamespaceRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
@@ -283,7 +303,8 @@ pub fn extractStoreSetNamespaceFast(bytes: []const u8) !types.StoreSetNamespaceR
     return .{ .namespace = namespace orelse return error.MissingRequiredFields };
 }
 
-pub fn extractStoreUnsubscribeFast(bytes: []const u8) !types.StoreUnsubscribeRequest {
+pub fn extractStoreUnsubscribeFast(bytes: []const u8) !
+StoreUnsubscribeRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
@@ -301,7 +322,8 @@ pub fn extractStoreUnsubscribeFast(bytes: []const u8) !types.StoreUnsubscribeReq
     return .{ .subId = sub_id orelse return error.MissingRequiredFields };
 }
 
-pub fn extractStoreLoadMoreFast(bytes: []const u8) !types.StoreLoadMoreRequest {
+pub fn extractStoreLoadMoreFast(bytes: []const u8) !
+StoreLoadMoreRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 

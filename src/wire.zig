@@ -1,14 +1,8 @@
-const types = @import("wire/types.zig");
 const decode = @import("wire/decode.zig");
 const errors = @import("wire/errors.zig");
 const encode = @import("wire/encode.zig");
 
-pub const Envelope = types.Envelope;
-pub const StorePathRequest = types.StorePathRequest;
-pub const StoreCollectionRequest = types.StoreCollectionRequest;
-pub const StoreSetNamespaceRequest = types.StoreSetNamespaceRequest;
-pub const StoreUnsubscribeRequest = types.StoreUnsubscribeRequest;
-pub const StoreLoadMoreRequest = types.StoreLoadMoreRequest;
+pub const Envelope = decode.Envelope;
 
 pub const extractEnvelopeFast = decode.extractEnvelopeFast;
 pub const extractStoreSetNamespaceFast = decode.extractStoreSetNamespaceFast;
