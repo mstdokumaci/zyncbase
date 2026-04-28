@@ -10,6 +10,15 @@ const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
 const doc_id = @import("doc_id.zig");
 
+test "TypedValue: real JSON preserves decimal marker for whole numbers" {
+    const allocator = testing.allocator;
+
+    const json = try value_codec.jsonAlloc(allocator, .{ .scalar = .{ .real = 1.0 } });
+    defer allocator.free(json);
+
+    try testing.expectEqualStrings("1.0", json);
+}
+
 test "TypedValue: payload -> json array -> payload roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -54,7 +54,18 @@ fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
             try stream.write(hex);
         },
         .integer => |v| try stream.write(v),
-        .real => |v| try stream.print("{d}", .{v}),
+        .real => |v| {
+            var buf: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return error.WriteFailed;
+            if (std.mem.indexOfScalar(u8, s, '.') == null and
+                std.mem.indexOfScalar(u8, s, 'e') == null and
+                std.mem.indexOfScalar(u8, s, 'E') == null)
+            {
+                try stream.print("{s}.0", .{s});
+            } else {
+                try stream.print("{s}", .{s});
+            }
+        },
         .text => |s| try stream.write(s),
         .boolean => |b| try stream.write(b),
     }
