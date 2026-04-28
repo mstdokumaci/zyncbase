@@ -10,7 +10,11 @@ pub const StoreSetNamespaceRequest = types.StoreSetNamespaceRequest;
 pub const StoreUnsubscribeRequest = types.StoreUnsubscribeRequest;
 pub const StoreLoadMoreRequest = types.StoreLoadMoreRequest;
 
-pub const extractAs = decode.extractAs;
+pub const extractEnvelopeFast = decode.extractEnvelopeFast;
+pub const extractStoreSetNamespaceFast = decode.extractStoreSetNamespaceFast;
+pub const extractStoreUnsubscribeFast = decode.extractStoreUnsubscribeFast;
+pub const extractStoreLoadMoreFast = decode.extractStoreLoadMoreFast;
+pub const getMapPayload = decode.getMapPayload;
 
 pub const WireError = errors.WireError;
 pub const getWireError = errors.getWireError;

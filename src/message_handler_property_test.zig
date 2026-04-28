@@ -13,10 +13,7 @@ const table_defs = [_]helpers.TableDef{
 };
 
 fn routeBytes(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) ![]u8 {
-    var reader: std.Io.Reader = .fixed(message);
-    const parsed = try msgpack.decode(allocator, &reader);
-    defer parsed.free(allocator);
-    return try routeWithArena(&app.handler, allocator, conn, parsed);
+    return try routeWithArena(&app.handler, allocator, conn, message);
 }
 
 fn decodeResponse(allocator: std.mem.Allocator, response: []const u8) !msgpack.Payload {
@@ -148,11 +145,7 @@ test "message: invalid envelopes fail before store dispatch" {
     const missing_id = try store_helpers.createInvalidStoreSetMessageMissingId(allocator, 1);
     defer allocator.free(missing_id);
 
-    var reader: std.Io.Reader = .fixed(missing_id);
-    const parsed = try msgpack.decode(allocator, &reader);
-    defer parsed.free(allocator);
-
-    try testing.expectError(error.MissingRequiredFields, routeWithArena(&app.handler, allocator, sc.conn, parsed));
+    try testing.expectError(error.MissingRequiredFields, routeWithArena(&app.handler, allocator, sc.conn, missing_id));
 }
 
 test "message: repeated routed requests release per-message allocations" {

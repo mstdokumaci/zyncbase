@@ -56,15 +56,19 @@ export class ConnectionWireCodec {
 			throw this.mapSchemaEncodingError(err);
 		}
 
+		const responseTableIndex: number | undefined =
+			typeof wireMessage.table_index === "number"
+				? wireMessage.table_index
+				: undefined;
+
+		if (debugMessage.type === "StoreLoadMore" && "table_index" in wireMessage) {
+			const { table_index: _, ...rest } = wireMessage;
+			wireMessage = rest;
+		}
+
 		return {
 			bytes: encode(wireMessage) as Uint8Array,
-			context: {
-				type: debugMessage.type,
-				responseTableIndex:
-					typeof wireMessage.table_index === "number"
-						? wireMessage.table_index
-						: undefined,
-			},
+			context: { type: debugMessage.type, responseTableIndex },
 			debugMessage,
 		};
 	}

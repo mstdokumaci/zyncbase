@@ -5,6 +5,7 @@ const helpers = @import("app_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
 const routeWithArena = helpers.routeWithArena;
+const encodePayloadToBytes = helpers.encodePayloadToBytes;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 
@@ -57,14 +58,10 @@ test "Verification: StoreQuery routes to query response" {
     const message = try store_helpers.createStoreQueryMessageWithEmptyFilter(allocator, 11, 1, table.index);
     defer allocator.free(message);
 
-    var reader: std.Io.Reader = .fixed(message);
-    const parsed = try msgpack.decode(allocator, &reader);
-    defer parsed.free(allocator);
-
     const sc = try app.setupMockConnection();
     defer sc.deinit();
 
-    const response = try routeWithArena(&app.handler, allocator, sc.conn, parsed);
+    const response = try routeWithArena(&app.handler, allocator, sc.conn, message);
     defer allocator.free(response);
 
     var response_reader: std.Io.Reader = .fixed(response);
@@ -99,8 +96,9 @@ test "Verification: Error handling for invalid messages" {
 
         const sc = try app.setupMockConnection();
         defer sc.deinit();
-        const result = routeWithArena(&app.handler, allocator, sc.conn, parsed);
-        try testing.expectError(error.MissingRequiredFields, result);
+        const bytes = try encodePayloadToBytes(allocator, parsed);
+        defer allocator.free(bytes);
+        try testing.expectError(error.MissingRequiredFields, routeWithArena(&app.handler, allocator, sc.conn, bytes));
     }
 
     {
@@ -120,7 +118,9 @@ test "Verification: Error handling for invalid messages" {
         const sc = try app.setupMockConnection();
         defer sc.deinit();
 
-        const response = try routeWithArena(&app.handler, allocator, sc.conn, parsed);
+        const bytes = try encodePayloadToBytes(allocator, parsed);
+        defer allocator.free(bytes);
+        const response = try routeWithArena(&app.handler, allocator, sc.conn, bytes);
         defer allocator.free(response);
         const decoded = try helpers.parseResponse(allocator, response);
         defer allocator.free(decoded.resp_type);
@@ -155,15 +155,11 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     const subscribe_message = try store_helpers.createStoreSubscribeMessage(allocator, 77, 1, table.index, filter, 0);
     defer allocator.free(subscribe_message);
 
-    var subscribe_reader: std.Io.Reader = .fixed(subscribe_message);
-    const subscribe_parsed = try msgpack.decode(allocator, &subscribe_reader);
-    defer subscribe_parsed.free(allocator);
-
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const conn = sc.conn;
 
-    const subscribe_response = try routeWithArena(&app.handler, allocator, conn, subscribe_parsed);
+    const subscribe_response = try routeWithArena(&app.handler, allocator, conn, subscribe_message);
     defer allocator.free(subscribe_response);
 
     var subscribe_response_reader: std.Io.Reader = .fixed(subscribe_response);
@@ -194,7 +190,9 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     try load_more.mapPut("subId", msgpack.Payload.uintToPayload(sub_id));
     try load_more.mapPut("nextCursor", try msgpack.Payload.strToPayload(next_cursor, allocator));
 
-    const load_response = try routeWithArena(&app.handler, allocator, conn, load_more);
+    const load_more_bytes = try encodePayloadToBytes(allocator, load_more);
+    defer allocator.free(load_more_bytes);
+    const load_response = try routeWithArena(&app.handler, allocator, conn, load_more_bytes);
     defer allocator.free(load_response);
 
     var load_response_reader: std.Io.Reader = .fixed(load_response);
