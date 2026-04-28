@@ -1,5 +1,5 @@
 const std = @import("std");
-const types = @import("storage_engine/types.zig");
+const types = @import("storage_engine.zig");
 const TypedValue = types.TypedValue;
 const TypedRow = types.TypedRow;
 const ScalarValue = types.ScalarValue;

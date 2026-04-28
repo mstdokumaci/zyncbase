@@ -5,7 +5,7 @@ const msgpack = @import("msgpack_utils.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
-const storage_types = @import("storage_engine/types.zig");
+const storage_types = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
 
 fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !storage_types.TypedRow {

@@ -3,15 +3,20 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
-const types = @import("types.zig");
+const errors = @import("errors.zig");
 const doc_id = @import("../doc_id.zig");
 const schema_manager = @import("../schema_manager.zig");
 const sql = @import("sql.zig");
+const storage_values = @import("values.zig");
+const write_queue = @import("write_queue.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
 
-const WriteOp = types.WriteOp;
-const StorageError = types.StorageError;
+const DocId = storage_values.DocId;
+const MetadataCacheKey = storage_values.MetadataCacheKey;
+const TypedRow = storage_values.TypedRow;
+const WriteOp = write_queue.WriteOp;
+const StorageError = errors.StorageError;
 
 fn getDocumentHelper(
     allocator: Allocator,
@@ -19,10 +24,10 @@ fn getDocumentHelper(
     sm: *const schema_manager.SchemaManager,
     table_index: usize,
     namespace_id: i64,
-    id: types.DocId,
+    id: DocId,
     sql_cache: *std.AutoHashMap(usize, []const u8),
     stmt_cache: *sql.StatementCache,
-) !?types.TypedRow {
+) !?TypedRow {
     const table_metadata = sm.getTableByIndex(table_index) orelse return null;
     const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
         const s = try sql.buildSelectDocumentSql(allocator, table_metadata);
@@ -40,8 +45,8 @@ fn pushOwnedChange(
     namespace_id: i64,
     table_index: usize,
     op: OwnedRowChange.Operation,
-    old_row: ?types.TypedRow,
-    new_row: ?types.TypedRow,
+    old_row: ?TypedRow,
+    new_row: ?TypedRow,
 ) !void {
     try pending_changes.append(allocator, .{
         .namespace_id = namespace_id,
@@ -72,8 +77,8 @@ pub fn executeBatch(
 
     if (!manual_transaction_active) {
         conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
-            const classified_err = types.classifyError(err);
-            types.logDatabaseError("executeBatch BEGIN", classified_err, "");
+            const classified_err = errors.classifyError(err);
+            errors.logDatabaseError("executeBatch BEGIN", classified_err, "");
             return classified_err;
         };
         transaction_active.store(true, .release);
@@ -82,8 +87,8 @@ pub fn executeBatch(
     errdefer {
         if (!manual_transaction_active) {
             conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
-                const classified_err = types.classifyError(rollback_err);
-                types.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
+                const classified_err = errors.classifyError(rollback_err);
+                errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
             };
             transaction_active.store(false, .release);
         }
@@ -95,7 +100,7 @@ pub fn executeBatch(
                 const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                 const namespace_id = if (table_metadata.table.namespaced) iop.namespace_id else schema_manager.global_namespace_id;
                 const owner_doc_id = if (table_metadata.table.is_users_table) iop.id else iop.owner_doc_id;
-                var old_row: ?types.TypedRow = null;
+                var old_row: ?TypedRow = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, namespace_id, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
                     old_row = orow;
@@ -104,8 +109,8 @@ pub fn executeBatch(
                 }
                 const maybe_new_row = executeUpsert(allocator, conn, iop, namespace_id, owner_doc_id, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |r| r.deinit(allocator);
-                    const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
+                    const classified_err = errors.classifyError(err);
+                    errors.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
                     return classified_err;
                 };
 
@@ -131,8 +136,8 @@ pub fn executeBatch(
                 const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                 const namespace_id = if (table_metadata.table.namespaced) dop.namespace_id else schema_manager.global_namespace_id;
                 const maybe_old_row = executeDelete(allocator, conn, dop, namespace_id, table_metadata, stmt_cache) catch |err| {
-                    const classified_err = types.classifyError(err);
-                    types.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
+                    const classified_err = errors.classifyError(err);
+                    errors.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
                     return classified_err;
                 };
 
@@ -156,8 +161,8 @@ pub fn executeBatch(
 
     if (!manual_transaction_active) {
         conn.exec("COMMIT", .{}, .{}) catch |err| {
-            const classified_err = types.classifyError(err);
-            types.logDatabaseError("executeBatch COMMIT", classified_err, "");
+            const classified_err = errors.classifyError(err);
+            errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
             return classified_err;
         };
         transaction_active.store(false, .release);
@@ -184,13 +189,13 @@ pub fn flushBatch(
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
-    var eviction_keys = std.ArrayListUnmanaged(types.MetadataCacheKey).empty;
+    var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
     defer eviction_keys.deinit(allocator);
     for (batch.items) |op| {
         // SAFETY: initialized below in the switch statement
         var table_index: usize = undefined;
         // SAFETY: initialized below in the switch statement
-        var id: types.DocId = undefined;
+        var id: DocId = undefined;
         // SAFETY: initialized below in the switch statement
         var namespace_id: i64 = undefined;
         const has_affected = switch (op) {
@@ -254,7 +259,7 @@ pub fn flushBatch(
             }
         }
     } else |err| {
-        const classified_err = types.classifyError(err);
+        const classified_err = errors.classifyError(err);
         std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
@@ -320,7 +325,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                             nop.result.* = namespace_id;
                             nop.completion_signal.signal(null);
                         } else |err| {
-                            nop.completion_signal.signal(types.classifyError(err));
+                            nop.completion_signal.signal(errors.classifyError(err));
                         }
                         op.deinit(ctx.allocator);
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
@@ -337,7 +342,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                             ctx.manual_transaction_active.store(true, .release);
                             if (top.completion_signal) |sig| sig.signal(null);
                         } else |err| {
-                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(errors.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -364,7 +369,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                         } else |err| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
-                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(errors.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -390,7 +395,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                         } else |err| {
                             ctx.transaction_active.store(false, .release);
                             ctx.manual_transaction_active.store(false, .release);
-                            if (top.completion_signal) |sig| sig.signal(types.classifyError(err));
+                            if (top.completion_signal) |sig| sig.signal(errors.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -404,7 +409,7 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
                         if (connection.internalExecuteCheckpoint(&ctx._writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
                             cop.completion_signal.signalWithResult(stats);
                         } else |err| {
-                            cop.completion_signal.signal(types.classifyError(err));
+                            cop.completion_signal.signal(errors.classifyError(err));
                         }
                         _ = ctx.pending_writes_count.fetchSub(1, .release);
                         ctx.write_mutex.lock();
@@ -473,10 +478,10 @@ pub fn executeUpsert(
     conn: *sqlite.Db,
     op: anytype,
     namespace_id: i64,
-    owner_id: types.DocId,
+    owner_id: DocId,
     table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
-) !?types.TypedRow {
+) !?TypedRow {
     const sql_str = op.sql;
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
@@ -484,35 +489,35 @@ pub fn executeUpsert(
 
     var bind_idx: c_int = 1;
     const id_bytes = doc_id.toBytes(op.id);
-    if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
-    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
     const owner_id_bytes = doc_id.toBytes(owner_id);
-    if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
     if (table_metadata.table.is_users_table) {
         var external_id_buf: [32]u8 = undefined;
         const external_id = doc_id.hexSlice(op.id, &external_id_buf);
-        if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+        if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
         bind_idx += 1;
     }
 
     for (op.values) |val| {
-        try val.bindSQLite(conn, stmt, bind_idx, allocator);
+        try sql.bindTypedValue(val, conn, stmt, bind_idx, allocator);
         bind_idx += 1;
     }
 
-    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
-    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
         return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(conn);
     return null;
 }
 
@@ -523,20 +528,20 @@ pub fn executeDelete(
     namespace_id: i64,
     table_metadata: *const schema_manager.TableMetadata,
     stmt_cache: *sql.StatementCache,
-) !?types.TypedRow {
+) !?TypedRow {
     const sql_str = op.sql;
     var mstmt = try stmt_cache.acquire(allocator, conn, sql_str);
     defer mstmt.release();
     const stmt = mstmt.stmt;
 
     const id_bytes = doc_id.toBytes(op.id);
-    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(conn);
+    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_ROW) {
         return try reader.decodeTypedRow(allocator, stmt, table_metadata);
     }
-    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(conn);
+    if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(conn);
     return null;
 }

@@ -4,11 +4,16 @@ const sqlite = @import("sqlite");
 const schema_manager = @import("../schema_manager.zig");
 const query_parser = @import("../query_parser.zig");
 const doc_id = @import("../doc_id.zig");
-const types = @import("types.zig");
+const errors = @import("errors.zig");
 const sql = @import("sql.zig");
+const storage_values = @import("values.zig");
 
-const TypedValue = types.TypedValue;
-const DocId = types.DocId;
+const StorageError = errors.StorageError;
+const DocId = storage_values.DocId;
+const MetadataCacheKey = storage_values.MetadataCacheKey;
+const TypedCursor = storage_values.TypedCursor;
+const TypedRow = storage_values.TypedRow;
+const TypedValue = storage_values.TypedValue;
 
 pub const QueryResult = struct {
     sql: []const u8,
@@ -121,9 +126,9 @@ pub fn buildSelectQuery(
     };
 }
 
-pub fn getCacheKey(table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) types.MetadataCacheKey {
+pub fn getCacheKey(table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) MetadataCacheKey {
     const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
-    return types.MetadataCacheKey{
+    return MetadataCacheKey{
         .namespace_id = effective_namespace_id,
         .table_index = table_metadata.index,
         .id = id,
@@ -248,11 +253,11 @@ pub fn decodeTypedRow(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema_manager.TableMetadata,
-) !types.TypedRow {
+) !TypedRow {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
-    if (col_count != table_metadata.fields.len) return types.StorageError.ColumnCountMismatch;
+    if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
 
-    var values = try allocator.alloc(types.TypedValue, col_count);
+    var values = try allocator.alloc(TypedValue, col_count);
     var i: usize = 0;
     errdefer {
         for (values[0..i]) |value| value.deinit(allocator);
@@ -261,11 +266,11 @@ pub fn decodeTypedRow(
 
     while (i < col_count) : (i += 1) {
         const field = table_metadata.fields[i];
-        const val = try types.TypedValue.fromSQLiteColumn(allocator, stmt, @intCast(i), field);
+        const val = try sql.typedValueFromColumn(allocator, stmt, @intCast(i), field);
         errdefer val.deinit(allocator);
         values[i] = val;
     }
-    return types.TypedRow{
+    return TypedRow{
         .values = values,
     };
 }
@@ -277,14 +282,14 @@ pub fn execSelectDocumentTyped(
     id: DocId,
     namespace_id: i64,
     table_metadata: *const schema_manager.TableMetadata,
-) !?types.TypedRow {
+) !?TypedRow {
     const id_bytes = doc_id.toBytes(id);
-    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
-    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return types.classifyStepError(db);
+    if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+    if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;
-    if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
+    if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
     return try decodeTypedRow(allocator, stmt, table_metadata);
 }
@@ -297,14 +302,14 @@ pub fn execQueryTyped(
     table_metadata: *const schema_manager.TableMetadata,
     requested_limit: ?u32,
     sort_field_index: usize,
-) !struct { rows: []types.TypedRow, next_cursor: ?types.TypedCursor } {
+) !struct { rows: []TypedRow, next_cursor: ?TypedCursor } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
-        try v.bindSQLite(db, stmt, @intCast(i + 1), allocator);
+        try sql.bindTypedValue(v, db, stmt, @intCast(i + 1), allocator);
     }
 
-    var rows: std.ArrayListUnmanaged(types.TypedRow) = .empty;
+    var rows: std.ArrayListUnmanaged(TypedRow) = .empty;
     errdefer {
         for (rows.items) |r| r.deinit(allocator);
         rows.deinit(allocator);
@@ -313,12 +318,12 @@ pub fn execQueryTyped(
     while (true) {
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_DONE) break;
-        if (rc != sqlite.c.SQLITE_ROW) return types.classifyStepError(db);
+        if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
         try rows.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
     }
 
-    var next_cursor: ?types.TypedCursor = null;
+    var next_cursor: ?TypedCursor = null;
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
         if (rows.items.len > limit) {
@@ -327,7 +332,7 @@ pub fn execQueryTyped(
                 const sort_val = last_row.values[sort_field_index];
                 const id_val = last_row.values[schema_manager.id_field_index];
                 if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
-                next_cursor = types.TypedCursor{
+                next_cursor = TypedCursor{
                     .sort_value = try sort_val.clone(allocator),
                     .id = id_val.scalar.doc_id,
                 };

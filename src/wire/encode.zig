@@ -250,7 +250,7 @@ pub fn encodeCursor(allocator: Allocator, cursor: storage_mod.TypedCursor) ![]co
     defer list.deinit(allocator);
     const writer = list.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
-    try cursor.sort_value.writeMsgPack(writer);
+    try storage_mod.writeTypedValueMsgPack(cursor.sort_value, writer);
     const id_bytes = doc_id.toBytes(cursor.id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
     const encoded_len = std.base64.standard.Encoder.calcSize(list.items.len);
@@ -288,7 +288,7 @@ fn encodeDeltaOp(
     try list.appendSlice(allocator, Keys.path);
     try writer.writeByte(0x92); // fixarray(2)
     try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
-    try id_val.writeMsgPack(writer);
+    try storage_mod.writeTypedValueMsgPack(id_val, writer);
 
     if (maybe_value) |v| {
         try list.appendSlice(allocator, Keys.value);
@@ -326,6 +326,6 @@ pub inline fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_m
     try msgpack.encodeMapHeader(writer, row.values.len);
     for (row.values, 0..) |value, idx| {
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
-        try value.writeMsgPack(writer);
+        try storage_mod.writeTypedValueMsgPack(value, writer);
     }
 }
