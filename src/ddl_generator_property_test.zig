@@ -1,11 +1,11 @@
 const std = @import("std");
 const schema_parser = @import("schema_parser.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
 const Field = schema_parser.Field;
 const FieldType = schema_parser.FieldType;
 const OnDelete = schema_parser.OnDelete;
-const Table = schema_parser.Table;
 const sqlite = @import("sqlite");
 
 // Feature: schema-aware-storage, Property 7: DDL contains all required columns and constraints
@@ -34,28 +34,26 @@ test "ddl_generator: DDL contains required columns and constraints" {
         // Build fields array
         var fields = try allocator.alloc(Field, n_fields);
         defer allocator.free(fields);
+        defer for (fields) |f| {
+            allocator.free(f.name);
+            allocator.free(f.name_quoted);
+        };
 
         for (0..n_fields) |fi| {
             const has_ref = rand.boolean();
             const ref_idx = rand.intRangeAtMost(usize, 0, ref_tables.len - 1);
             const base_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
             const st = if (has_ref) FieldType.doc_id else base_type;
-            fields[fi] = .{
-                .name = field_names[fi % field_names.len],
-                .sql_type = st,
-                .items_type = if (st == .array) .text else null,
-                .required = rand.boolean(),
-                .indexed = rand.boolean(),
-                .references = if (has_ref) ref_tables[ref_idx] else null,
-                .on_delete = if (has_ref) on_deletes[rand.intRangeAtMost(usize, 0, on_deletes.len - 1)] else null,
-            };
+            const fname = field_names[fi % field_names.len];
+            var f = try schema_helpers.makeFieldAlloc(allocator, fname, st);
+            f.required = rand.boolean();
+            f.indexed = rand.boolean();
+            f.references = if (has_ref) ref_tables[ref_idx] else null;
+            f.on_delete = if (has_ref) on_deletes[rand.intRangeAtMost(usize, 0, on_deletes.len - 1)] else null;
+            fields[fi] = f;
         }
 
-        const table_name = "test_table";
-        const table = Table{
-            .name = table_name,
-            .fields = fields,
-        };
+        const table = schema_helpers.makeTable("test_table", fields);
 
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
@@ -69,7 +67,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
         try std.testing.expect(std.mem.indexOf(u8, ddl, "PRIMARY KEY (\"id\")") != null);
 
         // Assert CREATE INDEX on namespace_id
-        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS \"idx_{s}_namespace_id\" ON \"{s}\"(\"namespace_id\")", .{ table_name, table_name });
+        const ns_idx = try std.fmt.allocPrint(allocator, "CREATE INDEX IF NOT EXISTS \"idx_{s}_namespace_id\" ON \"{s}\"(\"namespace_id\")", .{ "test_table", "test_table" });
         defer allocator.free(ns_idx);
         try std.testing.expect(std.mem.indexOf(u8, ddl, ns_idx) != null);
 
@@ -154,26 +152,27 @@ test "ddl_generator: generated DDL is executable" {
             _ = on_deletes;
 
             const st = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
-            fields[actual_n] = .{
-                .name = field_names[name_idx],
-                .sql_type = st,
-                .items_type = if (st == .array) .text else null,
-                .required = rand.boolean(),
-                .indexed = rand.boolean(),
-                .references = null,
-                .on_delete = null,
-            };
+            const fname2 = field_names[name_idx];
+            var f = try schema_helpers.makeFieldAlloc(allocator, fname2, st);
+            f.required = rand.boolean();
+            f.indexed = rand.boolean();
+            fields[actual_n] = f;
             actual_n += 1;
         }
+        defer for (fields[0..actual_n]) |f| {
+            allocator.free(f.name);
+            allocator.free(f.name_quoted);
+        };
 
         // Build table name unique per iteration to avoid conflicts
         var table_name_buf: [32]u8 = undefined;
         const table_name = try std.fmt.bufPrint(&table_name_buf, "tbl_{d}", .{iter});
 
-        const table = Table{
-            .name = table_name,
-            .fields = fields[0..actual_n],
-        };
+        const table = try schema_helpers.makeTableAlloc(allocator, table_name, fields[0..actual_n]);
+        defer {
+            allocator.free(table.name);
+            allocator.free(table.name_quoted);
+        }
 
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
@@ -220,21 +219,20 @@ test "ddl_generator: DDL emits BLOB for array fields" {
 
         var fields = try allocator.alloc(Field, n_fields);
         defer allocator.free(fields);
+        defer for (fields) |f| {
+            allocator.free(f.name);
+            allocator.free(f.name_quoted);
+        };
 
         for (0..n_fields) |fi| {
             const st = if (fi == array_idx) .array else non_array_types[rand.intRangeAtMost(usize, 0, non_array_types.len - 1)];
-            fields[fi] = .{
-                .name = field_names[fi % field_names.len],
-                .sql_type = st,
-                .items_type = if (st == .array) .text else null,
-                .required = rand.boolean(),
-                .indexed = false,
-                .references = null,
-                .on_delete = null,
-            };
+            const fname3 = field_names[fi % field_names.len];
+            var f = try schema_helpers.makeFieldAlloc(allocator, fname3, st);
+            f.required = rand.boolean();
+            fields[fi] = f;
         }
 
-        const table = Table{ .name = "prop1_tbl", .fields = fields };
+        const table = schema_helpers.makeTable("prop1_tbl", fields);
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
 

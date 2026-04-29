@@ -6,7 +6,7 @@ pub const ChangeKind = enum { create_table, add_column, change_type, remove_colu
 
 pub const Change = struct {
     kind: ChangeKind,
-    table_name: []const u8,
+    table: *const schema_manager.Table,
     field: ?schema_manager.Field,
 };
 
@@ -15,13 +15,6 @@ pub const MigrationPlan = struct {
     is_destructive: bool,
 };
 
-fn dbTypeToFieldType(db_type: []const u8) schema_manager.FieldType {
-    if (std.mem.eql(u8, db_type, "TEXT")) return .text;
-    if (std.mem.eql(u8, db_type, "INTEGER")) return .integer;
-    if (std.mem.eql(u8, db_type, "REAL")) return .real;
-    if (std.mem.eql(u8, db_type, "BLOB")) return .array;
-    return .text;
-}
 fn typesMatch(target: schema_manager.FieldType, db_type: []const u8) bool {
     const sql_type = target.toSqlType();
     if (std.mem.eql(u8, sql_type, db_type)) return true;
@@ -36,19 +29,20 @@ fn isManagedColumn(table: schema_manager.Table, name: []const u8) bool {
 pub const MigrationDetector = struct {
     allocator: std.mem.Allocator,
     db: *sqlite.Db,
+    current_schema: *const schema_manager.Schema,
 
-    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db) MigrationDetector {
-        return .{ .allocator = allocator, .db = db };
+    pub fn init(allocator: std.mem.Allocator, db: *sqlite.Db, current_schema: *const schema_manager.Schema) MigrationDetector {
+        return .{ .allocator = allocator, .db = db, .current_schema = current_schema };
     }
 
-    pub fn detectChanges(self: *MigrationDetector, target: schema_manager.Schema) !MigrationPlan {
+    pub fn detectChanges(self: *MigrationDetector, target: *const schema_manager.Schema) !MigrationPlan {
         var changes: std.ArrayListUnmanaged(Change) = .empty;
         errdefer {
             for (changes.items) |c| self.freeChange(c);
             changes.deinit(self.allocator);
         }
 
-        for (target.tables) |table| {
+        for (target.tables) |*table| {
             const pragma_sql = try std.fmt.allocPrint(
                 self.allocator,
                 "PRAGMA table_info({s})",
@@ -88,7 +82,7 @@ pub const MigrationDetector = struct {
                     if (row.dflt_value) |dv| self.allocator.free(dv);
                 }
                 table_exists = true;
-                if (!isManagedColumn(table, row.name)) {
+                if (!isManagedColumn(table.*, row.name)) {
                     const owned_name = try self.allocator.dupe(u8, row.name);
                     errdefer self.allocator.free(owned_name);
                     const owned_type = try self.allocator.dupe(u8, row.type);
@@ -98,38 +92,32 @@ pub const MigrationDetector = struct {
             }
 
             if (!table_exists) {
-                const owned_name = try self.allocator.dupe(u8, table.name);
-                errdefer self.allocator.free(owned_name);
                 try changes.append(self.allocator, .{
                     .kind = .create_table,
-                    .table_name = owned_name,
+                    .table = table,
                     .field = null,
                 });
                 continue;
             }
 
             for (table.fields) |field| {
-                if (isManagedColumn(table, field.name)) continue;
+                if (isManagedColumn(table.*, field.name)) continue;
                 if (existing.get(field.name)) |db_type| {
                     if (!typesMatch(field.sql_type, db_type)) {
-                        const owned_table = try self.allocator.dupe(u8, table.name);
-                        errdefer self.allocator.free(owned_table);
                         const owned_field = try field.clone(self.allocator);
                         errdefer schema_manager.freeField(self.allocator, owned_field);
                         try changes.append(self.allocator, .{
                             .kind = .change_type,
-                            .table_name = owned_table,
+                            .table = table,
                             .field = owned_field,
                         });
                     }
                 } else {
-                    const owned_table = try self.allocator.dupe(u8, table.name);
-                    errdefer self.allocator.free(owned_table);
                     const owned_field = try field.clone(self.allocator);
                     errdefer schema_manager.freeField(self.allocator, owned_field);
                     try changes.append(self.allocator, .{
                         .kind = .add_column,
-                        .table_name = owned_table,
+                        .table = table,
                         .field = owned_field,
                     });
                 }
@@ -146,23 +134,30 @@ pub const MigrationDetector = struct {
                     }
                 }
                 if (!found_in_target) {
-                    const owned_table = try self.allocator.dupe(u8, table.name);
-                    errdefer self.allocator.free(owned_table);
-                    const owned_field_name = try self.allocator.dupe(u8, col_name);
-                    errdefer self.allocator.free(owned_field_name);
-                    const ft = dbTypeToFieldType(entry.value_ptr.*);
+                    // Look up the field from the current schema (it was built with name_quoted etc.)
+                    // SAFETY: assigned via clone() before use; guard-checked by found_in_current
+                    var current_field: schema_manager.Field = undefined;
+                    var found_in_current = false;
+                    outer: for (self.current_schema.tables) |ct| {
+                        if (std.mem.eql(u8, ct.name, table.name)) {
+                            for (ct.fields) |f| {
+                                if (std.mem.eql(u8, f.name, col_name)) {
+                                    current_field = try f.clone(self.allocator);
+                                    found_in_current = true;
+                                    break :outer;
+                                }
+                            }
+                            break;
+                        }
+                    }
+
+                    if (!found_in_current) return error.ColumnNotFoundInCurrentSchema;
+
+                    errdefer schema_manager.freeField(self.allocator, current_field);
                     try changes.append(self.allocator, .{
                         .kind = .remove_column,
-                        .table_name = owned_table,
-                        .field = schema_manager.Field{
-                            .name = owned_field_name,
-                            .sql_type = ft,
-                            .items_type = null,
-                            .required = false,
-                            .indexed = false,
-                            .references = null,
-                            .on_delete = null,
-                        },
+                        .table = table,
+                        .field = current_field,
                     });
                 }
             }
@@ -188,7 +183,6 @@ pub const MigrationDetector = struct {
     }
 
     fn freeChange(self: *MigrationDetector, c: Change) void {
-        self.allocator.free(c.table_name);
         if (c.field) |f| schema_manager.freeField(self.allocator, f);
     }
 };

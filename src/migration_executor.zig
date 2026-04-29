@@ -3,7 +3,6 @@ const schema_manager = @import("schema_manager.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
-const sql_identifier = @import("sql_identifier.zig");
 
 pub const AutoMigrateMode = enum { full, additive_only, disabled };
 
@@ -53,11 +52,11 @@ pub const MigrationExecutor = struct {
     pub fn execute(
         self: *MigrationExecutor,
         plan: migration_detector.MigrationPlan,
-        target_schema: schema_manager.Schema,
+        target_version: []const u8,
     ) !void {
         // Nothing to do
         if (plan.changes.len == 0) {
-            try self.persistVersion(target_schema.version);
+            try self.persistVersion(target_version);
             return;
         }
 
@@ -67,7 +66,7 @@ pub const MigrationExecutor = struct {
         }
 
         // Check major version bump - parse target version first (may return InvalidVersion)
-        const target_ver = try parseVersion(target_schema.version);
+        const target_ver = try parseVersion(target_version);
         if (try self.getPersistedVersion()) |persisted_ver| {
             if (target_ver.major > persisted_ver.major) {
                 return error.MajorVersionBumpNotAllowed;
@@ -79,7 +78,7 @@ pub const MigrationExecutor = struct {
 
         // Apply each change
         for (plan.changes) |change| {
-            self.applyChange(change, target_schema) catch |err| {
+            self.applyChange(change) catch |err| {
                 self.db.exec("ROLLBACK", .{}, .{}) catch |e| std.log.err("ROLLBACK failed: {}", .{e});
                 return err;
             };
@@ -92,19 +91,13 @@ pub const MigrationExecutor = struct {
         };
 
         // Persist version after successful commit
-        try self.persistVersion(target_schema.version);
+        try self.persistVersion(target_version);
     }
 
-    fn applyChange(
-        self: *MigrationExecutor,
-        change: migration_detector.Change,
-        target_schema: schema_manager.Schema,
-    ) !void {
+    fn applyChange(self: *MigrationExecutor, change: migration_detector.Change) !void {
         switch (change.kind) {
             .create_table => {
-                const table = findTable(target_schema, change.table_name) orelse
-                    return error.TableNotFoundInSchema;
-                const ddl = try self.ddl_gen.generateDDL(table);
+                const ddl = try self.ddl_gen.generateDDL(change.table.*);
                 defer self.allocator.free(ddl);
                 const ddl_z = try self.allocator.dupeZ(u8, ddl);
                 defer self.allocator.free(ddl_z);
@@ -117,36 +110,38 @@ pub const MigrationExecutor = struct {
                 const sql = try std.fmt.allocPrint(
                     self.allocator,
                     "ALTER TABLE {s} ADD COLUMN {s} {s}",
-                    .{ change.table_name, field.name, sql_type_str },
+                    .{ change.table.name_quoted, field.name_quoted, sql_type_str },
                 );
                 defer self.allocator.free(sql);
                 try self.db.execDynamic(sql, .{}, .{});
             },
             .change_type, .remove_column => {
                 // Only reached when allow_destructive = true
-                const table = findTable(target_schema, change.table_name) orelse
-                    return error.TableNotFoundInSchema;
-                try self.recreateTable(table);
+                try self.recreateTable(change.table.*);
             },
         }
     }
 
     fn recreateTable(self: *MigrationExecutor, table: schema_manager.Table) !void {
         const name = table.name;
+        const name_quoted = table.name_quoted;
         const backup_name = try std.fmt.allocPrint(self.allocator, "{s}_backup", .{name});
         defer self.allocator.free(backup_name);
+
+        const backup_name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}_backup\"", .{name});
+        defer self.allocator.free(backup_name_quoted);
 
         // 1. Backup
         const backup_sql = try std.fmt.allocPrint(
             self.allocator,
-            "CREATE TABLE \"{s}_backup\" AS SELECT * FROM \"{s}\"",
-            .{ name, name },
+            "CREATE TABLE {s} AS SELECT * FROM {s}",
+            .{ backup_name_quoted, name_quoted },
         );
         defer self.allocator.free(backup_sql);
         try self.db.execDynamic(backup_sql, .{}, .{});
 
         // 2. Drop original
-        const drop_sql = try std.fmt.allocPrint(self.allocator, "DROP TABLE \"{s}\"", .{name});
+        const drop_sql = try std.fmt.allocPrint(self.allocator, "DROP TABLE {s}", .{name_quoted});
         defer self.allocator.free(drop_sql);
         try self.db.execDynamic(drop_sql, .{}, .{});
 
@@ -188,20 +183,20 @@ pub const MigrationExecutor = struct {
             defer col_list.deinit(self.allocator);
             for (common.items, 0..) |col, i| {
                 if (i > 0) try col_list.appendSlice(self.allocator, ", ");
-                try sql_identifier.appendQuoted(self.allocator, &col_list, col);
+                try appendQuotedIdentifier(self.allocator, &col_list, col);
             }
             const cols_str = col_list.items;
 
             var insert_sql_buf: std.ArrayListUnmanaged(u8) = .empty;
             defer insert_sql_buf.deinit(self.allocator);
             try insert_sql_buf.appendSlice(self.allocator, "INSERT INTO ");
-            try sql_identifier.appendQuoted(self.allocator, &insert_sql_buf, name);
+            try insert_sql_buf.appendSlice(self.allocator, name_quoted);
             try insert_sql_buf.appendSlice(self.allocator, " (");
             try insert_sql_buf.appendSlice(self.allocator, cols_str);
             try insert_sql_buf.appendSlice(self.allocator, ") SELECT ");
             try insert_sql_buf.appendSlice(self.allocator, cols_str);
             try insert_sql_buf.appendSlice(self.allocator, " FROM ");
-            try sql_identifier.appendQuoted(self.allocator, &insert_sql_buf, backup_name);
+            try insert_sql_buf.appendSlice(self.allocator, backup_name_quoted);
             const insert_sql = try insert_sql_buf.toOwnedSlice(self.allocator);
             defer self.allocator.free(insert_sql);
             try self.db.execDynamic(insert_sql, .{}, .{});
@@ -210,8 +205,8 @@ pub const MigrationExecutor = struct {
         // 6. Drop backup
         const drop_backup_sql = try std.fmt.allocPrint(
             self.allocator,
-            "DROP TABLE \"{s}_backup\"",
-            .{name},
+            "DROP TABLE {s}",
+            .{backup_name_quoted},
         );
         defer self.allocator.free(drop_backup_sql);
         try self.db.execDynamic(drop_backup_sql, .{}, .{});
@@ -220,7 +215,7 @@ pub const MigrationExecutor = struct {
     fn getTableColumns(self: *MigrationExecutor, table_name: []const u8) ![][]const u8 {
         const pragma_sql = try std.fmt.allocPrint(
             self.allocator,
-            "PRAGMA table_info(\"{s}\")",
+            "PRAGMA table_info('{s}')",
             .{table_name},
         );
         defer self.allocator.free(pragma_sql);
@@ -300,9 +295,12 @@ pub const MigrationExecutor = struct {
     }
 };
 
-fn findTable(schema: schema_manager.Schema, name: []const u8) ?schema_manager.Table {
-    for (schema.tables) |t| {
-        if (std.mem.eql(u8, t.name, name)) return t;
-    }
-    return null;
+fn appendQuotedIdentifier(
+    allocator: std.mem.Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    identifier: []const u8,
+) !void {
+    try buf.append(allocator, '"');
+    try buf.appendSlice(allocator, identifier);
+    try buf.append(allocator, '"');
 }

@@ -1,9 +1,9 @@
 const std = @import("std");
 const schema_parser = @import("schema_parser.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
 const Field = schema_parser.Field;
-const Table = schema_parser.Table;
 const sqlite = @import("sqlite");
 
 test "ddl_generator: generate DDL for a known table" {
@@ -11,39 +11,12 @@ test "ddl_generator: generate DDL for a known table" {
     var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
-        .{
-            .name = "title",
-            .sql_type = .text,
-            .items_type = null,
-            .required = true,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-        .{
-            .name = "status",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = true,
-            .references = null,
-            .on_delete = null,
-        },
-        .{
-            .name = "priority",
-            .sql_type = .integer,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
+        schema_helpers.makeRequiredField("title", .text),
+        schema_helpers.makeIndexedField("status", .text),
+        schema_helpers.makeField("priority", .integer),
     };
 
-    const table = Table{
-        .name = "tasks",
-        .fields = @constCast(&fields),
-    };
+    const table = schema_helpers.makeTable("tasks", &fields);
 
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
@@ -72,22 +45,13 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
-    const fields = [_]Field{
-        .{
-            .name = "user_id",
-            .sql_type = .doc_id,
-            .items_type = null,
-            .required = true,
-            .indexed = false,
-            .references = "users",
-            .on_delete = .cascade,
-        },
-    };
+    var user_id_field = schema_helpers.makeRequiredField("user_id", .doc_id);
+    user_id_field.references = "users";
+    user_id_field.on_delete = .cascade;
 
-    const table = Table{
-        .name = "posts",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]Field{user_id_field};
+
+    const table = schema_helpers.makeTable("posts", &fields);
 
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
@@ -107,30 +71,11 @@ test "ddl_generator: array field uses BLOB column type" {
     var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
-        .{
-            .name = "tags",
-            .sql_type = .array,
-            .items_type = .text,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-        .{
-            .name = "name",
-            .sql_type = .text,
-            .items_type = null,
-            .required = true,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
+        schema_helpers.makeField("tags", .array),
+        schema_helpers.makeRequiredField("name", .text),
     };
 
-    const table = Table{
-        .name = "items",
-        .fields = @constCast(&fields),
-    };
+    const table = schema_helpers.makeTable("items", &fields);
 
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
@@ -145,22 +90,12 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
     const allocator = std.testing.allocator;
     var gen = DDLGenerator.init(allocator);
 
-    const fields = [_]Field{
-        .{
-            .name = "from",
-            .sql_type = .text,
-            .items_type = null,
-            .required = true,
-            .indexed = true,
-            .references = null,
-            .on_delete = null,
-        },
-    };
+    var from_field = schema_helpers.makeRequiredField("from", .text);
+    from_field.indexed = true;
 
-    const table = Table{
-        .name = "select",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]Field{from_field};
+
+    const table = schema_helpers.makeTable("select", &fields);
 
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);

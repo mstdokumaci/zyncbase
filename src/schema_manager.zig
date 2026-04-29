@@ -24,6 +24,12 @@ pub const global_namespace_id = schema_parser.global_namespace_id;
 pub const global_namespace_name = schema_parser.global_namespace_name;
 pub const implicit_users_schema_json = schema_parser.implicit_users_schema_json;
 pub const effectiveNamespaceLabel = schema_parser.effectiveNamespaceLabel;
+pub const quoted_id = schema_parser.quoted_id;
+pub const quoted_namespace_id = schema_parser.quoted_namespace_id;
+pub const quoted_owner_id = schema_parser.quoted_owner_id;
+pub const quoted_external_id = schema_parser.quoted_external_id;
+pub const quoted_created_at = schema_parser.quoted_created_at;
+pub const quoted_updated_at = schema_parser.quoted_updated_at;
 
 /// SchemaManager centralizes schema metadata and provides efficient lookup and validation.
 /// It is initialized once at startup and remains immutable for the lifetime of the server.

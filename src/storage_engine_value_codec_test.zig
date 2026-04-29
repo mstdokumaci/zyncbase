@@ -6,6 +6,7 @@ const values = @import("storage_engine/values.zig");
 const value_codec = @import("storage_engine/value_codec.zig");
 const TypedValue = values.TypedValue;
 const schema_manager = @import("schema_manager.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
 const doc_id = @import("doc_id.zig");
@@ -171,17 +172,18 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
     try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_ROW), sqlite.c.sqlite3_step(select_stmt));
 
     // Reconstruct TypedValues from columns
-    const doc_id_f = schema_manager.Field{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const doc_id_f = schema_helpers.makeField("id", .doc_id);
     const read_tv_doc_id = try sql.typedValueFromColumn(allocator, select_stmt, 0, doc_id_f);
-    const int_f = schema_manager.Field{ .name = "int_val", .sql_type = .integer, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const int_f = schema_helpers.makeField("int_val", .integer);
     const read_tv_int = try sql.typedValueFromColumn(allocator, select_stmt, 1, int_f);
-    const real_f = schema_manager.Field{ .name = "real_val", .sql_type = .real, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const real_f = schema_helpers.makeField("real_val", .real);
     const read_tv_real = try sql.typedValueFromColumn(allocator, select_stmt, 2, real_f);
-    const text_f = schema_manager.Field{ .name = "text_val", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const text_f = schema_helpers.makeField("text_val", .text);
     const read_tv_text = try sql.typedValueFromColumn(allocator, select_stmt, 3, text_f);
-    const bool_f = schema_manager.Field{ .name = "bool_val", .sql_type = .boolean, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const bool_f = schema_helpers.makeField("bool_val", .boolean);
     const read_tv_bool = try sql.typedValueFromColumn(allocator, select_stmt, 4, bool_f);
-    const arr_f = schema_manager.Field{ .name = "arr_val", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null };
+    var arr_f = schema_helpers.makeField("arr_val", .array);
+    arr_f.items_type = .integer;
     const read_tv_arr = try sql.typedValueFromColumn(allocator, select_stmt, 5, arr_f);
 
     // Convert roundtripped back to payloads

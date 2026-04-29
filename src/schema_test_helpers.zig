@@ -8,6 +8,72 @@ const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 
+// ─── Low-level Field and Table builders ──────────────────────────────────────
+// These hide name_quoted — tests should never need to know about SQL quoting.
+
+/// Comptime field builder — auto-computes name_quoted at compile time.
+/// For runtime names, use makeFieldAlloc.
+pub fn makeField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    return .{
+        .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
+        .sql_type = sql_type,
+        .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+/// Comptime indexed field builder.
+pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    var f = makeField(name, sql_type);
+    f.indexed = true;
+    return f;
+}
+
+/// Comptime required field builder.
+pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    var f = makeField(name, sql_type);
+    f.required = true;
+    return f;
+}
+
+/// Comptime table builder — auto-computes name_quoted at compile time.
+pub fn makeTable(comptime name: []const u8, fields: []const schema_parser.Field) schema_parser.Table {
+    return .{
+        .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
+        .fields = fields,
+    };
+}
+
+/// Runtime field builder (for property tests with randomized names).
+/// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
+pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_parser.FieldType) !schema_parser.Field {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        .sql_type = sql_type,
+        .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+/// Runtime table builder with auto-computed name_quoted.
+/// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
+pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema_parser.Field) !schema_parser.Table {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        .fields = fields,
+    };
+}
+
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
@@ -25,8 +91,13 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         var fields = try allocator.alloc(schema_manager.Field, td.fields.len);
         errdefer allocator.free(fields);
         for (td.fields, 0..) |fn_name, j| {
+            const fname = try allocator.dupe(u8, fn_name);
+            errdefer allocator.free(fname);
+            const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
+            errdefer allocator.free(fname_quoted);
             fields[j] = .{
-                .name = try allocator.dupe(u8, fn_name),
+                .name = fname,
+                .name_quoted = fname_quoted,
                 .sql_type = if (td.types) |ts| ts[j] else .text,
                 .items_type = if (td.types) |ts| if (ts[j] == .array) schema_manager.FieldType.text else null else null,
                 .required = false,
@@ -35,7 +106,15 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
                 .on_delete = null,
             };
         }
-        tables[i] = .{ .name = try allocator.dupe(u8, td.name), .fields = fields };
+        const tname = try allocator.dupe(u8, td.name);
+        errdefer allocator.free(tname);
+        const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
+        errdefer allocator.free(tname_quoted);
+        tables[i] = .{
+            .name = tname,
+            .name_quoted = tname_quoted,
+            .fields = fields,
+        };
     }
 
     return schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };
@@ -149,8 +228,8 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
 
     // Detect and execute migrations
     const setup_conn = try engine.getSetupConn();
-    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn);
-    const plan = try detector.detectChanges(sm.schema);
+    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn, &sm.schema);
+    const plan = try detector.detectChanges(&sm.schema);
     defer detector.deinit(plan);
 
     if (plan.changes.len > 0) {
@@ -160,7 +239,7 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
             &gen,
             .{},
         );
-        try executor.execute(plan, sm.schema);
+        try executor.execute(plan, sm.schema.version);
     }
 
     try engine.start();

@@ -22,10 +22,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     const allocator = testing.allocator;
 
     var fields_arr = [_]schema_manager.Field{
-        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "tags", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        sth.makeField("name", .text, false),
+        sth.makeField("tags", .array, false),
     };
-    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
@@ -124,11 +124,13 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
 test "contains on array field: SQL and in-memory evaluator return same rows (integer)" {
     const allocator = testing.allocator;
 
+    var scores_field = sth.makeField("scores", .array, false);
+    scores_field.items_type = .integer;
     var fields_arr = [_]schema_manager.Field{
-        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "scores", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
+        sth.makeField("name", .text, false),
+        scores_field,
     };
-    const table = schema_manager.Table{ .name = "players", .fields = &fields_arr };
+    const table = sth.makeTable("players", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();

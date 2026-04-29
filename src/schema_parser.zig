@@ -25,12 +25,19 @@ pub const FieldType = enum {
 
 pub const OnDelete = enum { cascade, restrict, set_null };
 
+pub const quoted_id = "\"id\"";
+pub const quoted_namespace_id = "\"namespace_id\"";
+pub const quoted_owner_id = "\"owner_id\"";
+pub const quoted_external_id = "\"external_id\"";
+pub const quoted_created_at = "\"created_at\"";
+pub const quoted_updated_at = "\"updated_at\"";
+
 pub const built_in_columns = [_]Field{
-    .{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
-    .{ .name = "namespace_id", .sql_type = .integer, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
-    .{ .name = "owner_id", .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
-    .{ .name = "created_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
-    .{ .name = "updated_at", .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
+    .{ .name = "id", .name_quoted = quoted_id, .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "namespace_id", .name_quoted = quoted_namespace_id, .sql_type = .integer, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "owner_id", .name_quoted = quoted_owner_id, .sql_type = .doc_id, .items_type = null, .required = true, .indexed = true, .references = null, .on_delete = null },
+    .{ .name = "created_at", .name_quoted = quoted_created_at, .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
+    .{ .name = "updated_at", .name_quoted = quoted_updated_at, .sql_type = .integer, .items_type = null, .required = true, .indexed = false, .references = null, .on_delete = null },
 };
 
 /// Fixed positions of leading system columns in TableMetadata.fields.
@@ -64,6 +71,7 @@ fn isValidSchemaIdentifier(name: []const u8) bool {
 
 pub const Field = struct {
     name: []const u8, // flattened name, e.g. "address__city"
+    name_quoted: []const u8 = "", // pre-computed quoted form, e.g. "\"address__city\""
     sql_type: FieldType,
     items_type: ?FieldType, // used for array fields
     required: bool,
@@ -75,11 +83,15 @@ pub const Field = struct {
         const cloned_name = try allocator.dupe(u8, self.name);
         errdefer allocator.free(cloned_name);
 
+        const cloned_name_quoted = try allocator.dupe(u8, self.name_quoted);
+        errdefer allocator.free(cloned_name_quoted);
+
         const cloned_ref = if (self.references) |ref| try allocator.dupe(u8, ref) else null;
         errdefer if (cloned_ref) |r| allocator.free(r);
 
         return .{
             .name = cloned_name,
+            .name_quoted = cloned_name_quoted,
             .sql_type = self.sql_type,
             .items_type = self.items_type,
             .required = self.required,
@@ -92,6 +104,7 @@ pub const Field = struct {
 
 pub const Table = struct {
     name: []const u8,
+    name_quoted: []const u8 = "",
     fields: []const Field,
     namespaced: bool = true,
     is_users_table: bool = false,
@@ -99,6 +112,9 @@ pub const Table = struct {
     pub fn clone(self: Table, allocator: Allocator) !Table {
         const cloned_name = try allocator.dupe(u8, self.name);
         errdefer allocator.free(cloned_name);
+
+        const cloned_name_quoted = try allocator.dupe(u8, self.name_quoted);
+        errdefer allocator.free(cloned_name_quoted);
 
         const cloned_fields = try allocator.alloc(Field, self.fields.len);
         var i: usize = 0;
@@ -113,6 +129,7 @@ pub const Table = struct {
 
         return .{
             .name = cloned_name,
+            .name_quoted = cloned_name_quoted,
             .fields = cloned_fields,
             .namespaced = self.namespaced,
             .is_users_table = self.is_users_table,
@@ -296,6 +313,9 @@ pub const SchemaParser = struct {
             const table_name = try self.allocator.dupe(u8, table_name_raw);
             errdefer self.allocator.free(table_name);
 
+            const table_name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{table_name_raw});
+            errdefer self.allocator.free(table_name_quoted);
+
             const table_def = table_entry.value_ptr.*;
             if (table_def != .object) return error.InvalidTableDefinition;
 
@@ -346,6 +366,7 @@ pub const SchemaParser = struct {
 
             try tables.append(self.allocator, .{
                 .name = table_name,
+                .name_quoted = table_name_quoted,
                 .fields = try fields.toOwnedSlice(self.allocator),
                 .namespaced = namespaced,
                 .is_users_table = is_users_table,
@@ -361,8 +382,11 @@ pub const SchemaParser = struct {
         if (!has_users_table) {
             const users_name = try self.allocator.dupe(u8, "users");
             errdefer self.allocator.free(users_name);
+            const users_name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{"users"});
+            errdefer self.allocator.free(users_name_quoted);
             try tables.append(self.allocator, .{
                 .name = users_name,
+                .name_quoted = users_name_quoted,
                 .fields = try self.allocator.alloc(Field, 0),
                 .namespaced = false,
                 .is_users_table = true,
@@ -459,8 +483,12 @@ pub const SchemaParser = struct {
                     if (od == .set_null and is_required) return error.InvalidOnDelete;
                 }
 
+                const name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{full_name});
+                errdefer self.allocator.free(name_quoted);
+
                 try fields.append(self.allocator, .{
                     .name = full_name,
+                    .name_quoted = name_quoted,
                     .sql_type = sql_type,
                     .items_type = items_type,
                     .required = is_required,
@@ -648,13 +676,25 @@ fn writeJsonString(buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocato
     try buf.append(allocator, '"');
 }
 
+pub fn getFieldNameQuoted(self: *const Field) []const u8 {
+    if (self.name_quoted.len > 0) return self.name_quoted;
+    return self.name; // fallback: test code without pre-computed quoted name
+}
+
+pub fn getTableNameQuoted(self: *const Table) []const u8 {
+    if (self.name_quoted.len > 0) return self.name_quoted;
+    return self.name; // fallback: test code without pre-computed quoted name
+}
+
 pub fn freeField(allocator: Allocator, f: Field) void {
     allocator.free(f.name);
+    allocator.free(f.name_quoted);
     if (f.references) |r| allocator.free(r);
 }
 
 pub fn freeTable(allocator: Allocator, t: Table) void {
     allocator.free(t.name);
+    allocator.free(t.name_quoted);
     for (t.fields) |f| freeField(allocator, f);
     allocator.free(t.fields);
 }

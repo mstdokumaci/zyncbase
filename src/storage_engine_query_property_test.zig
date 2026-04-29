@@ -17,7 +17,7 @@ test "property: random query filters on StorageEngine" {
         sth.makeField("score", .real, false),
         sth.makeField("tags", .array, false),
     };
-    const table = schema_manager.Table{ .name = "entities", .fields = &fields_arr };
+    const table = sth.makeTable("entities", &fields_arr);
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "storage-query-p1", table);

@@ -1,25 +1,13 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
 const types = @import("storage_engine.zig");
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_manager.Field{
-        .{
-            .name = "from",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-    };
-    const table = schema_manager.Table{
-        .name = "select",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]schema_manager.Field{schema_helpers.makeField("from", .text)};
+    const table = schema_helpers.makeTable("select", &fields);
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
     defer table_metadata.deinit(allocator);
 
@@ -41,21 +29,8 @@ test "storage SQL builders quote identifiers" {
 
 test "storage SELECT SQL helpers quote and compose identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_manager.Field{
-        .{
-            .name = "from",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-    };
-    const table = schema_manager.Table{
-        .name = "select",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]schema_manager.Field{schema_helpers.makeField("from", .text)};
+    const table = schema_helpers.makeTable("select", &fields);
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
     defer table_metadata.deinit(allocator);
 
@@ -72,8 +47,8 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
     try sql_buf.appendSlice(allocator, " AND ");
-    try sql.appendCursorPredicateSql(allocator, &sql_buf, "from", false, false);
-    try sql.appendOrderBySql(allocator, &sql_buf, "from", false);
+    try sql.appendCursorPredicateSql(allocator, &sql_buf, "\"from\"", false, false);
+    try sql.appendOrderBySql(allocator, &sql_buf, "\"from\"", false);
 
     try std.testing.expectEqualStrings(
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",

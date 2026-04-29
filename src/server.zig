@@ -159,8 +159,8 @@ pub const ZyncBaseServer = struct {
 
             // Detect and execute migrations
             const setup_conn = try self.storage_engine.getSetupConn();
-            var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn);
-            const plan = try detector.detectChanges(schema_ptr.*);
+            var detector = MigrationDetector.init(self.memory_strategy.generalAllocator(), setup_conn, schema_ptr);
+            const plan = try detector.detectChanges(schema_ptr);
             defer detector.deinit(plan);
 
             if (plan.changes.len > 0) {
@@ -171,7 +171,7 @@ pub const ZyncBaseServer = struct {
                     &gen,
                     .{},
                 );
-                executor.execute(plan, schema_ptr.*) catch |err| {
+                executor.execute(plan, schema_ptr.version) catch |err| {
                     std.log.err("Schema migration failed: {}", .{err});
                     return err;
                 };

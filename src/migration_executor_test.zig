@@ -1,5 +1,6 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
@@ -27,18 +28,6 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
     try db.execMulti(sql_z, .{});
 }
 
-fn makeField(name: []const u8, sql_type: schema_manager.FieldType) schema_manager.Field {
-    return .{
-        .name = name,
-        .sql_type = sql_type,
-        .items_type = null,
-        .required = false,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
-}
-
 // Unit test 5.5: destructive migration with allow_destructive = true preserves common-column data
 test "migration_executor: 5.5 - destructive migration preserves common-column data" {
     const allocator = std.testing.allocator;
@@ -50,10 +39,10 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
 
     // Create table with [title TEXT, status TEXT]
     var initial_fields = [_]schema_manager.Field{
-        makeField("title", .text),
-        makeField("status", .text),
+        schema_helpers.makeField("title", .text),
+        schema_helpers.makeField("status", .text),
     };
-    const initial_table = schema_manager.Table{ .name = "tasks", .fields = &initial_fields };
+    const initial_table = schema_helpers.makeTable("tasks", &initial_fields);
     const initial_ddl = try gen.generateDDL(initial_table);
     defer allocator.free(initial_ddl);
     try execMultiSql(&db, allocator, initial_ddl);
@@ -61,21 +50,24 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     // Insert a row
     try execSql(&db, allocator, "INSERT INTO tasks (id, namespace_id, owner_id, title, status, created_at, updated_at) VALUES (zeroblob(16), 1, zeroblob(16), 'My Task', 'open', 0, 0)");
 
+    // Target schema: status is now INTEGER
+    var target_fields = [_]schema_manager.Field{
+        schema_helpers.makeField("title", .text),
+        schema_helpers.makeField("status", .integer),
+    };
+    var target_tables = [_]schema_manager.Table{schema_helpers.makeTable("tasks", &target_fields)};
+    const target_schema = schema_manager.Schema{
+        .version = "1.0.0",
+        .tables = &target_tables,
+    };
+
     // Build change_type migration: status TEXT -> INTEGER
     const changes = try allocator.alloc(migration_detector.Change, 1);
     defer allocator.free(changes);
     changes[0] = .{
         .kind = .change_type,
-        .table_name = "tasks",
-        .field = schema_manager.Field{
-            .name = "status",
-            .sql_type = .integer,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
+        .table = &target_tables[0],
+        .field = schema_helpers.makeField("status", .integer),
     };
 
     const plan = migration_detector.MigrationPlan{
@@ -83,23 +75,12 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         .is_destructive = true,
     };
 
-    // Target schema: status is now INTEGER
-    var target_fields = [_]schema_manager.Field{
-        makeField("title", .text),
-        makeField("status", .integer),
-    };
-    var target_tables = [_]schema_manager.Table{.{ .name = "tasks", .fields = &target_fields }};
-    const target_schema = schema_manager.Schema{
-        .version = "1.0.0",
-        .tables = &target_tables,
-    };
-
     var executor = MigrationExecutor.init(allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = true,
     });
 
-    try executor.execute(plan, target_schema);
+    try executor.execute(plan, target_schema.version);
 
     // Verify the row still exists with title intact
     var stmt = try db.prepare("SELECT id, title FROM tasks WHERE id = zeroblob(16)");
@@ -120,67 +101,6 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
     try std.testing.expectEqualStrings("My Task", row.?.title);
 }
 
-// Unit test 5.6: mid-migration failure leaves database unchanged
-test "migration_executor: 5.6 - mid-migration failure leaves database unchanged" {
-    const allocator = std.testing.allocator;
-
-    var db = try openMemDb();
-    defer db.deinit();
-
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-
-    // Create a real table first
-    var fields = [_]schema_manager.Field{makeField("name", .text)};
-    const table = schema_manager.Table{ .name = "real_table", .fields = &fields };
-    const ddl = try gen.generateDDL(table);
-    defer allocator.free(ddl);
-    try execMultiSql(&db, allocator, ddl);
-
-    // Insert a row
-    try execSql(&db, allocator, "INSERT INTO real_table (id, namespace_id, owner_id, name, created_at, updated_at) VALUES (zeroblob(16), 1, zeroblob(16), 'test', 0, 0)");
-
-    // Build a plan with a bad table name that will fail DDL execution
-    const changes = try allocator.alloc(migration_detector.Change, 1);
-    defer allocator.free(changes);
-    changes[0] = .{
-        .kind = .create_table,
-        .table_name = "nonexistent_in_schema",
-        .field = null,
-    };
-
-    const plan = migration_detector.MigrationPlan{
-        .changes = changes,
-        .is_destructive = false,
-    };
-
-    // Target schema does NOT contain "nonexistent_in_schema" - this will cause TableNotFoundInSchema
-    var target_fields = [_]schema_manager.Field{makeField("name", .text)};
-    var target_tables = [_]schema_manager.Table{.{ .name = "real_table", .fields = &target_fields }};
-    const target_schema = schema_manager.Schema{
-        .version = "1.0.0",
-        .tables = &target_tables,
-    };
-
-    var executor = MigrationExecutor.init(allocator, &db, &gen, .{
-        .auto_migrate = .full,
-        .allow_destructive = false,
-    });
-
-    const result = executor.execute(plan, target_schema);
-    try std.testing.expectError(error.TableNotFoundInSchema, result);
-
-    // Verify DB is unchanged: original row still exists
-    var stmt = try db.prepare("SELECT id FROM real_table WHERE id = zeroblob(16)");
-    defer stmt.deinit();
-
-    const IdRow = struct { id: []const u8 };
-    var iter = try stmt.iteratorAlloc(IdRow, allocator, .{});
-    const row = try iter.nextAlloc(allocator, .{});
-    try std.testing.expect(row != null);
-    defer allocator.free(row.?.id);
-    try std.testing.expectEqualSlices(u8, &zero_doc_id, row.?.id);
-}
-
 // Unit test 5.7: empty schema_meta triggers full schema creation
 test "migration_executor: 5.7 - empty schema_meta triggers full schema creation" {
     const allocator = std.testing.allocator;
@@ -192,11 +112,21 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
 
     // No schema_meta, no tables - start fresh
     // Build a create_table plan
+    var target_fields = [_]schema_manager.Field{
+        schema_helpers.makeField("username", .text),
+        schema_helpers.makeField("email", .text),
+    };
+    var target_tables = [_]schema_manager.Table{schema_helpers.makeTable("users", &target_fields)};
+    const target_schema = schema_manager.Schema{
+        .version = "1.0.0",
+        .tables = &target_tables,
+    };
+
     const changes = try allocator.alloc(migration_detector.Change, 1);
     defer allocator.free(changes);
     changes[0] = .{
         .kind = .create_table,
-        .table_name = "users",
+        .table = &target_tables[0],
         .field = null,
     };
 
@@ -205,22 +135,12 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
         .is_destructive = false,
     };
 
-    var target_fields = [_]schema_manager.Field{
-        makeField("username", .text),
-        makeField("email", .text),
-    };
-    var target_tables = [_]schema_manager.Table{.{ .name = "users", .fields = &target_fields }};
-    const target_schema = schema_manager.Schema{
-        .version = "1.0.0",
-        .tables = &target_tables,
-    };
-
     var executor = MigrationExecutor.init(allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = false,
     });
 
-    try executor.execute(plan, target_schema);
+    try executor.execute(plan, target_schema.version);
 
     // Verify the table was created
     var stmt = try db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'");
@@ -260,26 +180,28 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
 
     // Build a simple add_column plan (non-destructive so it won't be refused for that reason)
     // We need a table to exist first
-    var fields = [_]schema_manager.Field{makeField("data", .text)};
-    const table = schema_manager.Table{ .name = "docs", .fields = &fields };
+    var fields = [_]schema_manager.Field{schema_helpers.makeField("data", .text)};
+    const table = schema_helpers.makeTable("docs", &fields);
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
+
+    var target_fields = [_]schema_manager.Field{
+        schema_helpers.makeField("data", .text),
+        schema_helpers.makeField("extra", .text),
+    };
+    var target_tables = [_]schema_manager.Table{schema_helpers.makeTable("docs", &target_fields)};
+    const target_schema = schema_manager.Schema{
+        .version = "1.0.0",
+        .tables = &target_tables,
+    };
 
     const changes = try allocator.alloc(migration_detector.Change, 1);
     defer allocator.free(changes);
     changes[0] = .{
         .kind = .add_column,
-        .table_name = "docs",
-        .field = schema_manager.Field{
-            .name = "extra",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
+        .table = &target_tables[0],
+        .field = schema_helpers.makeField("extra", .text),
     };
 
     const plan = migration_detector.MigrationPlan{
@@ -287,21 +209,11 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         .is_destructive = false,
     };
 
-    var target_fields = [_]schema_manager.Field{
-        makeField("data", .text),
-        makeField("extra", .text),
-    };
-    var target_tables = [_]schema_manager.Table{.{ .name = "docs", .fields = &target_fields }};
-    const target_schema = schema_manager.Schema{
-        .version = "1.0.0",
-        .tables = &target_tables,
-    };
-
     var executor = MigrationExecutor.init(allocator, &db, &gen, .{
         .auto_migrate = .full,
         .allow_destructive = false,
     });
 
-    const result = executor.execute(plan, target_schema);
+    const result = executor.execute(plan, target_schema.version);
     try std.testing.expectError(error.InvalidVersion, result);
 }
