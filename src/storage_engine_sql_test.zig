@@ -1,27 +1,13 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
 const types = @import("storage_engine.zig");
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_manager.Field{
-        .{
-            .name = "from",
-            .name_quoted = "\"from\"",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-    };
-    const table = schema_manager.Table{
-        .name = "select",
-        .name_quoted = "\"select\"",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]schema_manager.Field{schema_helpers.makeField("from", .text)};
+    const table = schema_helpers.makeTable("select", &fields);
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
     defer table_metadata.deinit(allocator);
 
@@ -43,23 +29,8 @@ test "storage SQL builders quote identifiers" {
 
 test "storage SELECT SQL helpers quote and compose identifiers" {
     const allocator = std.testing.allocator;
-    const fields = [_]schema_manager.Field{
-        .{
-            .name = "from",
-            .name_quoted = "\"from\"",
-            .sql_type = .text,
-            .items_type = null,
-            .required = false,
-            .indexed = false,
-            .references = null,
-            .on_delete = null,
-        },
-    };
-    const table = schema_manager.Table{
-        .name = "select",
-        .name_quoted = "\"select\"",
-        .fields = @constCast(&fields),
-    };
+    const fields = [_]schema_manager.Field{schema_helpers.makeField("from", .text)};
+    const table = schema_helpers.makeTable("select", &fields);
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
     defer table_metadata.deinit(allocator);
 

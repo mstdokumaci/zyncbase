@@ -339,7 +339,7 @@ test "logging: level filtering" {
         var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
-        tables[0] = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
+        tables[0] = sth.makeTable("test", &fields);
         var sm2 = try sth.createSchemaManager(allocator, tables);
         defer sm2.deinit();
 
@@ -422,7 +422,7 @@ test "logging: message formatting" {
         var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
-        tables[0] = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
+        tables[0] = sth.makeTable("test", &fields);
         var sm3 = try sth.createSchemaManager(allocator, tables);
         defer sm3.deinit();
 
@@ -489,7 +489,7 @@ test "logging: message formatting" {
         var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
         var tables = try allocator.alloc(schema_manager.Table, 1);
         defer allocator.free(tables);
-        tables[0] = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
+        tables[0] = sth.makeTable("test", &fields);
         var sm4 = try sth.createSchemaManager(allocator, tables);
         defer sm4.deinit();
 

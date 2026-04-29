@@ -295,17 +295,11 @@ pub const EngineTestContext = struct {
 };
 
 /// Helper to create a Field with standard defaults.
+/// Delegates to schema_helpers.makeField, adding the required parameter.
 pub fn makeField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
-    return .{
-        .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .sql_type = sql_type,
-        .items_type = if (sql_type == .array) .text else null,
-        .required = required,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
+    var f = schema_helpers.makeField(name, sql_type);
+    f.required = required;
+    return f;
 }
 
 /// Helper to create an indexed Field.
@@ -313,6 +307,17 @@ pub fn makeIndexedField(comptime name: []const u8, sql_type: FieldType, required
     var f = makeField(name, sql_type, required);
     f.indexed = true;
     return f;
+}
+
+/// Helper to create a Table with auto-computed name_quoted.
+pub fn makeTable(comptime name: []const u8, fields: []const Field) Table {
+    return schema_helpers.makeTable(name, fields);
+}
+
+/// Runtime table builder (for property tests with randomized names).
+/// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
+pub fn makeTableAlloc(allocator: Allocator, name: []const u8, fields: []const Field) !Table {
+    return schema_helpers.makeTableAlloc(allocator, name, fields);
 }
 
 /// Internal helper that replaces the old SchemaManager.initWithSchema logic.
@@ -354,7 +359,7 @@ pub fn createDummySchemaManager(allocator: Allocator) !SchemaManager {
     fields[0] = makeField("val", .text, false);
 
     var tables = try allocator.alloc(Table, 1);
-    tables[0] = .{ .name = "_dummy", .name_quoted = "\"_dummy\"", .fields = fields };
+    tables[0] = makeTable("_dummy", fields);
     const sm = try createSchemaManager(allocator, tables);
 
     allocator.free(fields);

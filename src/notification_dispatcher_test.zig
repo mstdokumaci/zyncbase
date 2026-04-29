@@ -23,7 +23,7 @@ test "NotificationDispatcher: empty poll" {
     defer memory.deinit();
 
     const empty_fields = [_]schema_manager.Field{};
-    const table = schema_manager.Table{ .name = "_test", .name_quoted = "\"_test\"", .fields = &empty_fields };
+    const table = sth.makeTable("_test", &empty_fields);
     var sm = try sth.createSchemaManager(alloc, &[_]schema_manager.Table{table});
     defer sm.deinit();
 
@@ -49,7 +49,7 @@ test "NotificationDispatcher: poll processes items" {
     defer memory.deinit();
 
     const empty_fields = [_]schema_manager.Field{};
-    const table = schema_manager.Table{ .name = "coll", .name_quoted = "\"coll\"", .fields = &empty_fields };
+    const table = sth.makeTable("coll", &empty_fields);
     var sm = try sth.createSchemaManager(alloc, &[_]schema_manager.Table{table});
     defer sm.deinit();
 

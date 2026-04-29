@@ -1,5 +1,6 @@
 const std = @import("std");
 const schema_parser = @import("schema_parser.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
@@ -25,19 +26,6 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
     const sql_z = try allocator.dupeZ(u8, sql);
     defer allocator.free(sql_z);
     try db.execMulti(sql_z, .{});
-}
-
-fn makeField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
-    return .{
-        .name = name,
-        .name_quoted = "\"" ++ name ++ "\"",
-        .sql_type = sql_type,
-        .items_type = null,
-        .required = false,
-        .indexed = false,
-        .references = null,
-        .on_delete = null,
-    };
 }
 
 fn insertSchemaMetaVersion(db: *sqlite.Db, allocator: std.mem.Allocator, version: []const u8) !void {
@@ -69,10 +57,12 @@ test "migration_executor: additive migration preserves existing data" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table with initial columns
-        var initial_fields = [_]schema_parser.Field{makeField("title", .text)};
-        const name_quoted_initial = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted_initial);
-        const initial_table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted_initial, .fields = &initial_fields };
+        var initial_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
+        const initial_table = try schema_helpers.makeTableAlloc(allocator, tname, &initial_fields);
+        defer {
+            allocator.free(initial_table.name);
+            allocator.free(initial_table.name_quoted);
+        }
         const initial_ddl = try gen.generateDDL(initial_table);
         defer allocator.free(initial_ddl);
         try execMultiSql(&db, allocator, initial_ddl);
@@ -88,7 +78,7 @@ test "migration_executor: additive migration preserves existing data" {
         try execSql(&db, allocator, insert_sql);
 
         // Build additive migration plan: add a new column
-        const new_field = makeField("score", .integer);
+        const new_field = schema_helpers.makeField("score", .integer);
         const owned_table_name = try allocator.dupe(u8, tname);
         defer allocator.free(owned_table_name);
         const owned_field_name = try allocator.dupe(u8, new_field.name);
@@ -117,12 +107,14 @@ test "migration_executor: additive migration preserves existing data" {
 
         // Target schema has both columns
         var target_fields = [_]schema_parser.Field{
-            makeField("title", .text),
-            makeField("score", .integer),
+            schema_helpers.makeField("title", .text),
+            schema_helpers.makeField("score", .integer),
         };
-        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted_target);
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
+        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        defer {
+            allocator.free(target_tables[0].name);
+            allocator.free(target_tables[0].name_quoted);
+        }
         const target_schema = schema_parser.Schema{
             .version = "1.0.0",
             .tables = &target_tables,
@@ -186,10 +178,12 @@ test "migration_executor: destructive migration refused when not allowed" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table
-        var fields = [_]schema_parser.Field{makeField("col_a", .text)};
-        const name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted);
-        const table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted, .fields = &fields };
+        var fields = [_]schema_parser.Field{schema_helpers.makeField("col_a", .text)};
+        const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
+        defer {
+            allocator.free(table.name);
+            allocator.free(table.name_quoted);
+        }
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -231,10 +225,12 @@ test "migration_executor: destructive migration refused when not allowed" {
             .is_destructive = true,
         };
 
-        var target_fields = [_]schema_parser.Field{makeField("col_a", .integer)};
-        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted_target);
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
+        var target_fields = [_]schema_parser.Field{schema_helpers.makeField("col_a", .integer)};
+        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        defer {
+            allocator.free(target_tables[0].name);
+            allocator.free(target_tables[0].name_quoted);
+        }
         const target_schema = schema_parser.Schema{
             .version = "1.0.0",
             .tables = &target_tables,
@@ -309,10 +305,12 @@ test "migration_executor: schema version persisted after migration" {
             .is_destructive = false,
         };
 
-        var target_fields = [_]schema_parser.Field{makeField("name", .text)};
-        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted_target);
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
+        var target_fields = [_]schema_parser.Field{schema_helpers.makeField("name", .text)};
+        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        defer {
+            allocator.free(target_tables[0].name);
+            allocator.free(target_tables[0].name_quoted);
+        }
         const target_schema = schema_parser.Schema{
             .version = version,
             .tables = &target_tables,
@@ -359,10 +357,12 @@ test "migration_executor: major version bump is refused" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table and insert persisted version with lower major
-        var fields = [_]schema_parser.Field{makeField("data", .text)};
-        const name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted);
-        const table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted, .fields = &fields };
+        var fields = [_]schema_parser.Field{schema_helpers.makeField("data", .text)};
+        const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
+        defer {
+            allocator.free(table.name);
+            allocator.free(table.name_quoted);
+        }
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -406,12 +406,14 @@ test "migration_executor: major version bump is refused" {
         };
 
         var target_fields = [_]schema_parser.Field{
-            makeField("data", .text),
-            makeField("extra", .text),
+            schema_helpers.makeField("data", .text),
+            schema_helpers.makeField("extra", .text),
         };
-        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
-        defer allocator.free(name_quoted_target);
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
+        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        defer {
+            allocator.free(target_tables[0].name);
+            allocator.free(target_tables[0].name_quoted);
+        }
         const target_schema = schema_parser.Schema{
             .version = target_ver,
             .tables = &target_tables,

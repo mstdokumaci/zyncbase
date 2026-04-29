@@ -13,8 +13,8 @@ test "storage: error handling invalid database path" {
 
     // Try to create storage engine with invalid path
     var sm = try sth.createSchemaManager(allocator, &.{
-        .{ .name = "_dummy", .name_quoted = "\"_dummy\"", .fields = &.{sth.makeField("val", .text, false)} },
-        .{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} },
+        sth.makeTable("_dummy", &.{sth.makeField("val", .text, false)}),
+        sth.makeTable("data_table", &.{sth.makeField("val", .text, false)}),
     });
     defer sm.deinit();
 
@@ -37,7 +37,7 @@ test "storage: error handling invalid database path" {
 }
 test "storage: error handling read-only filesystem" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-readonly", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -58,7 +58,7 @@ test "storage: error handling read-only filesystem" {
 }
 test "storage: error handling constraint violations" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-constraints", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -84,7 +84,7 @@ test "storage: error handling constraint violations" {
 }
 test "storage: error handling transaction rollback on error" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-rollback", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -104,7 +104,7 @@ test "storage: error handling transaction rollback on error" {
 }
 test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-concurrent", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -134,7 +134,7 @@ test "storage: error handling concurrent access safety" {
 }
 test "storage: error handling empty paths" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-empty", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -151,7 +151,7 @@ test "storage: error handling empty paths" {
 }
 test "storage: error handling large values" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-large", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -173,7 +173,7 @@ test "storage: error handling large values" {
 }
 test "storage: error handling delete non-existent key" {
     const allocator = testing.allocator;
-    const table = sth.Table{ .name = "data_table", .name_quoted = "\"data_table\"", .fields = &.{sth.makeField("val", .text, false)} };
+    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-delete", table, .{ .in_memory = false });
     defer ctx.deinit();

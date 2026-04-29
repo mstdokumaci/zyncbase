@@ -13,7 +13,7 @@ test "StorageEngine: selectQuery basic equality" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = schema_manager.Table{ .name = "people", .name_quoted = "\"people\"", .fields = &fields_arr };
+    const table = sth.makeTable("people", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-basic", table);
     defer ctx.deinit();
@@ -55,7 +55,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = schema_manager.Table{ .name = "people", .name_quoted = "\"people\"", .fields = &fields_arr };
+    const table = sth.makeTable("people", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-complex", table);
     defer ctx.deinit();
@@ -103,7 +103,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("score", .integer, false),
     };
-    const table = schema_manager.Table{ .name = "scores", .name_quoted = "\"scores\"", .fields = &fields_arr };
+    const table = sth.makeTable("scores", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-index", table);
     defer ctx.deinit();
@@ -163,10 +163,10 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
 
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("name", .text, false),
-        schema_manager.Field{ .name = "tags", .name_quoted = "\"tags\"", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
-        schema_manager.Field{ .name = "labels", .name_quoted = "\"labels\"", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        sth.makeField("tags", .array, false),
+        sth.makeField("labels", .array, false),
     };
-    const table = schema_manager.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
+    const table = sth.makeTable("items", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "query-array-projection-aliased-multi-field", table);
     defer ctx.deinit();
@@ -221,7 +221,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     var fields_arr = [_]schema_manager.Field{
         sth.makeField("data", .text, false),
     };
-    const table = schema_manager.Table{ .name = "wildcards", .name_quoted = "\"wildcards\"", .fields = &fields_arr };
+    const table = sth.makeTable("wildcards", &fields_arr);
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-wildcard-escape", table);
     defer ctx.deinit();

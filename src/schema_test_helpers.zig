@@ -8,6 +8,72 @@ const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 
+// ─── Low-level Field and Table builders ──────────────────────────────────────
+// These hide name_quoted — tests should never need to know about SQL quoting.
+
+/// Comptime field builder — auto-computes name_quoted at compile time.
+/// For runtime names, use makeFieldAlloc.
+pub fn makeField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    return .{
+        .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
+        .sql_type = sql_type,
+        .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+/// Comptime indexed field builder.
+pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    var f = makeField(name, sql_type);
+    f.indexed = true;
+    return f;
+}
+
+/// Comptime required field builder.
+pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+    var f = makeField(name, sql_type);
+    f.required = true;
+    return f;
+}
+
+/// Comptime table builder — auto-computes name_quoted at compile time.
+pub fn makeTable(comptime name: []const u8, fields: []const schema_parser.Field) schema_parser.Table {
+    return .{
+        .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
+        .fields = fields,
+    };
+}
+
+/// Runtime field builder (for property tests with randomized names).
+/// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
+pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_parser.FieldType) !schema_parser.Field {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        .sql_type = sql_type,
+        .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
+        .required = false,
+        .indexed = false,
+        .references = null,
+        .on_delete = null,
+    };
+}
+
+/// Runtime table builder with auto-computed name_quoted.
+/// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
+pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema_parser.Field) !schema_parser.Table {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
+        .fields = fields,
+    };
+}
+
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
