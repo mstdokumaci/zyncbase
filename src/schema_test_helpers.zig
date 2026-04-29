@@ -228,8 +228,8 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
 
     // Detect and execute migrations
     const setup_conn = try engine.getSetupConn();
-    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn);
-    const plan = try detector.detectChanges(sm.schema);
+    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn, &sm.schema);
+    const plan = try detector.detectChanges(&sm.schema);
     defer detector.deinit(plan);
 
     if (plan.changes.len > 0) {
@@ -239,7 +239,7 @@ pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, mem
             &gen,
             .{},
         );
-        try executor.execute(plan, sm.schema);
+        try executor.execute(plan, sm.schema.version);
     }
 
     try engine.start();

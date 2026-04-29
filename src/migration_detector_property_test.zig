@@ -57,13 +57,13 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     .tables = &target_tables,
                 };
 
-                var detector = MigrationDetector.init(allocator, &db);
-                const plan = try detector.detectChanges(target_schema);
+                var detector = MigrationDetector.init(allocator, &db, &target_schema);
+                const plan = try detector.detectChanges(&target_schema);
                 defer detector.deinit(plan);
 
                 try std.testing.expectEqual(@as(usize, 1), plan.changes.len);
                 try std.testing.expectEqual(ChangeKind.create_table, plan.changes[0].kind);
-                try std.testing.expectEqualStrings(tname, plan.changes[0].table_name);
+                try std.testing.expectEqualStrings(tname, plan.changes[0].table.name);
                 try std.testing.expect(plan.changes[0].field == null);
                 try std.testing.expect(!plan.is_destructive);
             },
@@ -78,6 +78,11 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 const existing_ddl = try gen.generateDDL(existing_tables[0]);
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
+
+                const existing_schema = schema_parser.Schema{
+                    .version = "1.0.0",
+                    .tables = &existing_tables,
+                };
 
                 const new_fname = field_names[rand.intRangeAtMost(usize, 1, field_names.len - 1)];
                 const new_field = try schema_helpers.makeFieldAlloc(allocator, new_fname, .integer);
@@ -97,13 +102,13 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     .tables = &target_tables,
                 };
 
-                var detector = MigrationDetector.init(allocator, &db);
-                const plan = try detector.detectChanges(target_schema);
+                var detector = MigrationDetector.init(allocator, &db, &existing_schema);
+                const plan = try detector.detectChanges(&target_schema);
                 defer detector.deinit(plan);
 
                 try std.testing.expectEqual(@as(usize, 1), plan.changes.len);
                 try std.testing.expectEqual(ChangeKind.add_column, plan.changes[0].kind);
-                try std.testing.expectEqualStrings(tname, plan.changes[0].table_name);
+                try std.testing.expectEqualStrings(tname, plan.changes[0].table.name);
                 try std.testing.expect(plan.changes[0].field != null);
                 try std.testing.expectEqualStrings(new_fname, plan.changes[0].field.?.name);
                 try std.testing.expect(!plan.is_destructive);
@@ -120,6 +125,11 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
+                const existing_schema = schema_parser.Schema{
+                    .version = "1.0.0",
+                    .tables = &existing_tables,
+                };
+
                 var target_fields = [_]schema_parser.Field{schema_helpers.makeField("status", .integer)};
                 var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
@@ -131,13 +141,13 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     .tables = &target_tables,
                 };
 
-                var detector = MigrationDetector.init(allocator, &db);
-                const plan = try detector.detectChanges(target_schema);
+                var detector = MigrationDetector.init(allocator, &db, &existing_schema);
+                const plan = try detector.detectChanges(&target_schema);
                 defer detector.deinit(plan);
 
                 try std.testing.expectEqual(@as(usize, 1), plan.changes.len);
                 try std.testing.expectEqual(ChangeKind.change_type, plan.changes[0].kind);
-                try std.testing.expectEqualStrings(tname, plan.changes[0].table_name);
+                try std.testing.expectEqualStrings(tname, plan.changes[0].table.name);
                 try std.testing.expect(plan.is_destructive);
             },
             else => {
@@ -155,6 +165,11 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
+                const existing_schema = schema_parser.Schema{
+                    .version = "1.0.0",
+                    .tables = &existing_tables,
+                };
+
                 var target_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
                 var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
@@ -166,13 +181,13 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     .tables = &target_tables,
                 };
 
-                var detector = MigrationDetector.init(allocator, &db);
-                const plan = try detector.detectChanges(target_schema);
+                var detector = MigrationDetector.init(allocator, &db, &existing_schema);
+                const plan = try detector.detectChanges(&target_schema);
                 defer detector.deinit(plan);
 
                 try std.testing.expectEqual(@as(usize, 1), plan.changes.len);
                 try std.testing.expectEqual(ChangeKind.remove_column, plan.changes[0].kind);
-                try std.testing.expectEqualStrings(tname, plan.changes[0].table_name);
+                try std.testing.expectEqualStrings(tname, plan.changes[0].table.name);
                 try std.testing.expect(plan.is_destructive);
             },
         }
@@ -237,14 +252,14 @@ test "migration_detector: matching schema produces empty migration plan" {
             .tables = tables,
         };
 
-        var detector = MigrationDetector.init(allocator, &db);
-        const plan = try detector.detectChanges(target_schema);
+        var detector = MigrationDetector.init(allocator, &db, &target_schema);
+        const plan = try detector.detectChanges(&target_schema);
         defer detector.deinit(plan);
 
         if (plan.changes.len != 0) {
             std.debug.print("iter {d}: expected 0 changes, got {d}\n", .{ iter, plan.changes.len });
             for (plan.changes) |c| {
-                std.debug.print("  change: kind={s} table={s}\n", .{ @tagName(c.kind), c.table_name });
+                std.debug.print("  change: kind={s} table={s}\n", .{ @tagName(c.kind), c.table.name });
             }
         }
         try std.testing.expectEqual(@as(usize, 0), plan.changes.len);
