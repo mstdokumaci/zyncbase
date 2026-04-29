@@ -16,6 +16,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "items",
+            .name_quoted = "\"items\"",
             .fields = &.{
                 sth.makeField("id", .text, true),
                 sth.makeField("name", .text, false),
@@ -66,6 +67,7 @@ test "SubscriptionEngine: group sharing" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "coll",
+            .name_quoted = "\"coll\"",
             .fields = &.{
                 sth.makeField("id", .text, true),
                 sth.makeField("age", .integer, false),
@@ -95,7 +97,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
     defer filter.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = "c", .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = "c", .name_quoted = "\"c\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -141,7 +143,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = "items", .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = "items", .name_quoted = "\"items\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -179,7 +181,7 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = "users", .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = "users", .name_quoted = "\"users\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -205,7 +207,7 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     defer filter_real.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = "scores", .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = "scores", .name_quoted = "\"scores\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -225,7 +227,7 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
     const filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = long_coll, .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = long_coll, .name_quoted = "\"" ++ long_coll ++ "\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -314,6 +316,7 @@ test "SubscriptionEngine: group sharing with different condition order" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "coll",
+            .name_quoted = "\"coll\"",
             .fields = &.{
                 sth.makeField("id", .text, true),
                 sth.makeField("status", .text, false),
@@ -351,6 +354,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "users",
+            .name_quoted = "\"users\"",
             .fields = &.{
                 sth.makeField("id", .text, true),
                 sth.makeField("role", .text, false),
@@ -406,7 +410,7 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
-        .{ .name = "coll", .fields = &.{sth.makeField("id", .text, true)} },
+        .{ .name = "coll", .name_quoted = "\"coll\"", .fields = &.{sth.makeField("id", .text, true)} },
     });
     defer sm.deinit();
 
@@ -437,6 +441,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "users",
+            .name_quoted = "\"users\"",
             .fields = &.{
                 sth.makeField("id", .text, true),
                 sth.makeField("role", .text, false),
@@ -471,6 +476,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     var sm = try sth.createSchemaManager(allocator, &[_]sth.Table{
         .{
             .name = "items",
+            .name_quoted = "\"items\"",
             .fields = &.{
                 sth.makeField("priority", .integer, false),
             },

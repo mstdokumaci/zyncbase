@@ -40,7 +40,7 @@ pub fn buildSelectQuery(
         values.deinit(allocator);
     }
     if (filter.order_by.field_index >= table_metadata.fields.len) return error.InvalidSortFormat;
-    const sort_field_name = table_metadata.fields[filter.order_by.field_index].name;
+    const sort_field_name_quoted = table_metadata.fields[filter.order_by.field_index].name_quoted;
 
     // 1.. SELECT clause
     try sql.appendSelectFromTableSql(allocator, &sql_buf, table_metadata);
@@ -91,7 +91,7 @@ pub fn buildSelectQuery(
             try sql.appendCursorPredicateSql(
                 allocator,
                 &sql_buf,
-                sort_field_name,
+                sort_field_name_quoted,
                 filter.order_by.field_index == schema_manager.id_field_index,
                 filter.order_by.desc,
             );
@@ -111,7 +111,7 @@ pub fn buildSelectQuery(
 
     // 3.. ORDER BY
     const o = filter.order_by;
-    try sql.appendOrderBySql(allocator, &sql_buf, sort_field_name, o.desc);
+    try sql.appendOrderBySql(allocator, &sql_buf, sort_field_name_quoted, o.desc);
 
     // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
     if (filter.limit) |l| {
@@ -155,8 +155,8 @@ pub fn appendConditionSql(
     cond: query_parser.Condition,
 ) !void {
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
-    const sql_field = table_metadata.fields[cond.field_index].name;
-    try sql.appendColumnIdentifierSql(allocator, sql_buf, sql_field);
+    const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
+    try sql_buf.appendSlice(allocator, sql_field_quoted);
 
     switch (cond.op) {
         .eq => {
@@ -193,7 +193,7 @@ pub fn appendConditionSql(
             const val = cond.value orelse return error.MissingConditionValue;
             if (cond.field_type == .array) {
                 try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
-                try sql.appendColumnIdentifierSql(allocator, sql_buf, sql_field);
+                try sql_buf.appendSlice(allocator, sql_field_quoted);
                 try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
                 try values.append(allocator, try val.clone(allocator));
                 return;

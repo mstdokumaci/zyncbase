@@ -8,7 +8,7 @@ test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "_dummy", .fields = &fields_arr };
+    const table = sth.Table{ .name = "_dummy", .name_quoted = "\"_dummy\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngineWithOptions(&ctx, allocator, "engine-init", table, .{ .in_memory = false });
     defer ctx.deinit();
@@ -26,7 +26,7 @@ test "StorageEngine: insert and select basic" {
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
-    const table = sth.Table{ .name = "people", .fields = &fields_arr };
+    const table = sth.Table{ .name = "people", .name_quoted = "\"people\"", .fields = &fields_arr };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-basic", table);
@@ -52,7 +52,7 @@ test "StorageEngine: update document" {
     var fields_arr = [_]sth.Field{
         sth.makeField("val", .text, false),
     };
-    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    const table = sth.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields_arr };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-update", table);
@@ -75,7 +75,7 @@ test "StorageEngine: delete document" {
     var fields_arr = [_]sth.Field{
         sth.makeField("val", .text, false),
     };
-    const table = sth.Table{ .name = "test", .fields = &fields_arr };
+    const table = sth.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields_arr };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "crud-delete", table);
@@ -95,7 +95,7 @@ test "StorageEngine: delete document" {
 test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-crud", table);
     defer ctx.deinit();
@@ -113,7 +113,7 @@ test "StorageEngine: insertOrReplace and selectDocument" {
 test "StorageEngine: selectDocument non-existent key" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-nonexistent", table);
     defer ctx.deinit();
@@ -126,7 +126,7 @@ test "StorageEngine: selectDocument non-existent key" {
 test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-update", table);
     defer ctx.deinit();
@@ -146,7 +146,7 @@ test "StorageEngine: update existing document" {
 test "StorageEngine: query collection" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("name", .text, false)};
-    const table = sth.Table{ .name = "people", .fields = &fields_arr };
+    const table = sth.Table{ .name = "people", .name_quoted = "\"people\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-query", table);
     defer ctx.deinit();
@@ -166,7 +166,7 @@ test "StorageEngine: query collection" {
 test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-namespaces", table);
     defer ctx.deinit();
@@ -192,7 +192,7 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
 test "StorageEngine: transaction support" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "_dummy", .fields = &fields_arr };
+    const table = sth.Table{ .name = "_dummy", .name_quoted = "\"_dummy\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-tx", table);
     defer ctx.deinit();
@@ -221,7 +221,7 @@ test "StorageEngine: transaction support" {
 test "StorageEngine: automatic rollback in batch operations" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-auto-rollback", table);
     defer ctx.deinit();
@@ -246,7 +246,7 @@ test "StorageEngine: automatic rollback in batch operations" {
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-concurrent", table);
     defer ctx.deinit();
@@ -282,7 +282,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     const allocator = testing.allocator;
 
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     const num_keys = 50;
     var test_dir: []const u8 = undefined;
 
@@ -322,7 +322,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
 test "StorageEngine: client writes blocked during migration" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-migration-block", table);
     defer ctx.deinit();
@@ -341,7 +341,7 @@ test "StorageEngine: client writes blocked during migration" {
 test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "engine-tx-race", table);
     defer ctx.deinit();

@@ -22,10 +22,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     const allocator = testing.allocator;
 
     var fields_arr = [_]schema_manager.Field{
-        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "tags", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "name", .name_quoted = "\"name\"", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "tags", .name_quoted = "\"tags\"", .sql_type = .array, .items_type = .text, .required = false, .indexed = false, .references = null, .on_delete = null },
     };
-    const table = schema_manager.Table{ .name = "items", .fields = &fields_arr };
+    const table = schema_manager.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
@@ -125,10 +125,10 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     const allocator = testing.allocator;
 
     var fields_arr = [_]schema_manager.Field{
-        .{ .name = "name", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
-        .{ .name = "scores", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "name", .name_quoted = "\"name\"", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
+        .{ .name = "scores", .name_quoted = "\"scores\"", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null },
     };
-    const table = schema_manager.Table{ .name = "players", .fields = &fields_arr };
+    const table = schema_manager.Table{ .name = "players", .name_quoted = "\"players\"", .fields = &fields_arr };
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();

@@ -295,9 +295,10 @@ pub const EngineTestContext = struct {
 };
 
 /// Helper to create a Field with standard defaults.
-pub fn makeField(name: []const u8, sql_type: FieldType, required: bool) Field {
+pub fn makeField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
     return .{
         .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
         .sql_type = sql_type,
         .items_type = if (sql_type == .array) .text else null,
         .required = required,
@@ -308,7 +309,7 @@ pub fn makeField(name: []const u8, sql_type: FieldType, required: bool) Field {
 }
 
 /// Helper to create an indexed Field.
-pub fn makeIndexedField(name: []const u8, sql_type: FieldType, required: bool) Field {
+pub fn makeIndexedField(comptime name: []const u8, sql_type: FieldType, required: bool) Field {
     var f = makeField(name, sql_type, required);
     f.indexed = true;
     return f;
@@ -353,7 +354,7 @@ pub fn createDummySchemaManager(allocator: Allocator) !SchemaManager {
     fields[0] = makeField("val", .text, false);
 
     var tables = try allocator.alloc(Table, 1);
-    tables[0] = .{ .name = "_dummy", .fields = fields };
+    tables[0] = .{ .name = "_dummy", .name_quoted = "\"_dummy\"", .fields = fields };
     const sm = try createSchemaManager(allocator, tables);
 
     allocator.free(fields);

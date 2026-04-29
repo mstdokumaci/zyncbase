@@ -150,12 +150,15 @@ pub const MigrationDetector = struct {
                     errdefer self.allocator.free(owned_table);
                     const owned_field_name = try self.allocator.dupe(u8, col_name);
                     errdefer self.allocator.free(owned_field_name);
+                    const owned_field_name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{col_name});
+                    errdefer self.allocator.free(owned_field_name_quoted);
                     const ft = dbTypeToFieldType(entry.value_ptr.*);
                     try changes.append(self.allocator, .{
                         .kind = .remove_column,
                         .table_name = owned_table,
                         .field = schema_manager.Field{
                             .name = owned_field_name,
+                            .name_quoted = owned_field_name_quoted,
                             .sql_type = ft,
                             .items_type = null,
                             .required = false,

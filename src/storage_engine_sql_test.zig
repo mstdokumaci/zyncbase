@@ -8,6 +8,7 @@ test "storage SQL builders quote identifiers" {
     const fields = [_]schema_manager.Field{
         .{
             .name = "from",
+            .name_quoted = "\"from\"",
             .sql_type = .text,
             .items_type = null,
             .required = false,
@@ -18,6 +19,7 @@ test "storage SQL builders quote identifiers" {
     };
     const table = schema_manager.Table{
         .name = "select",
+        .name_quoted = "\"select\"",
         .fields = @constCast(&fields),
     };
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
@@ -44,6 +46,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     const fields = [_]schema_manager.Field{
         .{
             .name = "from",
+            .name_quoted = "\"from\"",
             .sql_type = .text,
             .items_type = null,
             .required = false,
@@ -54,6 +57,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     };
     const table = schema_manager.Table{
         .name = "select",
+        .name_quoted = "\"select\"",
         .fields = @constCast(&fields),
     };
     var table_metadata = try schema_manager.TableMetadata.init(allocator, &table, 0);
@@ -72,8 +76,8 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
     try sql_buf.appendSlice(allocator, " AND ");
-    try sql.appendCursorPredicateSql(allocator, &sql_buf, "from", false, false);
-    try sql.appendOrderBySql(allocator, &sql_buf, "from", false);
+    try sql.appendCursorPredicateSql(allocator, &sql_buf, "\"from\"", false, false);
+    try sql.appendOrderBySql(allocator, &sql_buf, "\"from\"", false);
 
     try std.testing.expectEqualStrings(
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",

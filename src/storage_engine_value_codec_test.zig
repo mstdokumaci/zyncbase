@@ -171,17 +171,17 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
     try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_ROW), sqlite.c.sqlite3_step(select_stmt));
 
     // Reconstruct TypedValues from columns
-    const doc_id_f = schema_manager.Field{ .name = "id", .sql_type = .doc_id, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const doc_id_f = schema_manager.Field{ .name = "id", .name_quoted = "\"id\"", .sql_type = .doc_id, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_doc_id = try sql.typedValueFromColumn(allocator, select_stmt, 0, doc_id_f);
-    const int_f = schema_manager.Field{ .name = "int_val", .sql_type = .integer, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const int_f = schema_manager.Field{ .name = "int_val", .name_quoted = "\"int_val\"", .sql_type = .integer, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_int = try sql.typedValueFromColumn(allocator, select_stmt, 1, int_f);
-    const real_f = schema_manager.Field{ .name = "real_val", .sql_type = .real, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const real_f = schema_manager.Field{ .name = "real_val", .name_quoted = "\"real_val\"", .sql_type = .real, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_real = try sql.typedValueFromColumn(allocator, select_stmt, 2, real_f);
-    const text_f = schema_manager.Field{ .name = "text_val", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const text_f = schema_manager.Field{ .name = "text_val", .name_quoted = "\"text_val\"", .sql_type = .text, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_text = try sql.typedValueFromColumn(allocator, select_stmt, 3, text_f);
-    const bool_f = schema_manager.Field{ .name = "bool_val", .sql_type = .boolean, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const bool_f = schema_manager.Field{ .name = "bool_val", .name_quoted = "\"bool_val\"", .sql_type = .boolean, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_bool = try sql.typedValueFromColumn(allocator, select_stmt, 4, bool_f);
-    const arr_f = schema_manager.Field{ .name = "arr_val", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null };
+    const arr_f = schema_manager.Field{ .name = "arr_val", .name_quoted = "\"arr_val\"", .sql_type = .array, .items_type = .integer, .required = false, .indexed = false, .references = null, .on_delete = null };
     const read_tv_arr = try sql.typedValueFromColumn(allocator, select_stmt, 5, arr_f);
 
     // Convert roundtripped back to payloads

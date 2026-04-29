@@ -34,14 +34,20 @@ test "ddl_generator: DDL contains required columns and constraints" {
         // Build fields array
         var fields = try allocator.alloc(Field, n_fields);
         defer allocator.free(fields);
+        defer for (fields) |f| {
+            if (f.name_quoted.len > 0) allocator.free(f.name_quoted);
+        };
 
         for (0..n_fields) |fi| {
             const has_ref = rand.boolean();
             const ref_idx = rand.intRangeAtMost(usize, 0, ref_tables.len - 1);
             const base_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
             const st = if (has_ref) FieldType.doc_id else base_type;
+            const fname = field_names[fi % field_names.len];
+            const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fname});
             fields[fi] = .{
-                .name = field_names[fi % field_names.len],
+                .name = fname,
+                .name_quoted = fname_quoted,
                 .sql_type = st,
                 .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
@@ -54,6 +60,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
         const table_name = "test_table";
         const table = Table{
             .name = table_name,
+            .name_quoted = "\"test_table\"",
             .fields = fields,
         };
 
@@ -154,8 +161,11 @@ test "ddl_generator: generated DDL is executable" {
             _ = on_deletes;
 
             const st = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
+            const fname2 = field_names[name_idx];
+            const fname2_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fname2});
             fields[actual_n] = .{
-                .name = field_names[name_idx],
+                .name = fname2,
+                .name_quoted = fname2_quoted,
                 .sql_type = st,
                 .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
@@ -165,6 +175,9 @@ test "ddl_generator: generated DDL is executable" {
             };
             actual_n += 1;
         }
+        defer for (fields[0..actual_n]) |f| {
+            if (f.name_quoted.len > 0) allocator.free(f.name_quoted);
+        };
 
         // Build table name unique per iteration to avoid conflicts
         var table_name_buf: [32]u8 = undefined;
@@ -172,6 +185,7 @@ test "ddl_generator: generated DDL is executable" {
 
         const table = Table{
             .name = table_name,
+            .name_quoted = "\"test_table\"",
             .fields = fields[0..actual_n],
         };
 
@@ -220,11 +234,17 @@ test "ddl_generator: DDL emits BLOB for array fields" {
 
         var fields = try allocator.alloc(Field, n_fields);
         defer allocator.free(fields);
+        defer for (fields) |f| {
+            if (f.name_quoted.len > 0) allocator.free(f.name_quoted);
+        };
 
         for (0..n_fields) |fi| {
             const st = if (fi == array_idx) .array else non_array_types[rand.intRangeAtMost(usize, 0, non_array_types.len - 1)];
+            const fname3 = field_names[fi % field_names.len];
+            const fname3_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fname3});
             fields[fi] = .{
-                .name = field_names[fi % field_names.len],
+                .name = fname3,
+                .name_quoted = fname3_quoted,
                 .sql_type = st,
                 .items_type = if (st == .array) .text else null,
                 .required = rand.boolean(),
@@ -234,7 +254,7 @@ test "ddl_generator: DDL emits BLOB for array fields" {
             };
         }
 
-        const table = Table{ .name = "prop1_tbl", .fields = fields };
+        const table = Table{ .name = "prop1_tbl", .name_quoted = "\"prop1_tbl\"", .fields = fields };
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
 

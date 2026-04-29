@@ -1,6 +1,5 @@
 const std = @import("std");
 const schema_manager = @import("schema_manager.zig");
-const sql_identifier = @import("sql_identifier.zig");
 
 pub const DDLGenerator = struct {
     allocator: std.mem.Allocator,
@@ -18,31 +17,31 @@ pub const DDLGenerator = struct {
 
         // ── CREATE TABLE ──────────────────────────────────────────────────────
         try buf.appendSlice(self.allocator, "CREATE TABLE IF NOT EXISTS ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+        try buf.appendSlice(self.allocator, table.name_quoted);
         try buf.appendSlice(self.allocator, " (\n");
 
         // Fixed leading columns
         try buf.appendSlice(self.allocator, "  ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_id);
         try buf.appendSlice(self.allocator, " BLOB NOT NULL CHECK(length(");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_id);
         try buf.appendSlice(self.allocator, ") = 16),\n");
         try buf.appendSlice(self.allocator, "  ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_namespace_id);
         try buf.appendSlice(self.allocator, " INTEGER NOT NULL,\n  ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_owner_id);
         try buf.appendSlice(self.allocator, " BLOB NOT NULL CHECK(length(");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_owner_id);
         try buf.appendSlice(self.allocator, ") = 16)");
         if (table.is_users_table) {
             try buf.appendSlice(self.allocator, ",\n  ");
-            try sql_identifier.appendQuoted(self.allocator, &buf, "external_id");
+            try buf.appendSlice(self.allocator, schema_manager.quoted_external_id);
             try buf.appendSlice(self.allocator, " TEXT NOT NULL");
         }
         // One column per field
         for (table.fields) |field| {
             try buf.appendSlice(self.allocator, ",\n  ");
-            try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
+            try buf.appendSlice(self.allocator, field.name_quoted);
             try buf.append(self.allocator, ' ');
             try buf.appendSlice(self.allocator, field.sql_type.toSqlType());
             if (field.required) {
@@ -50,33 +49,33 @@ pub const DDLGenerator = struct {
             }
             if (field.sql_type == .doc_id) {
                 try buf.appendSlice(self.allocator, " CHECK(length(");
-                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
+                try buf.appendSlice(self.allocator, field.name_quoted);
                 try buf.appendSlice(self.allocator, ") = 16)");
             }
         }
 
         // Fixed trailing columns
         try buf.appendSlice(self.allocator, ",\n  ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "created_at");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_created_at);
         try buf.appendSlice(self.allocator, " INTEGER NOT NULL");
         try buf.appendSlice(self.allocator, ",\n  ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "updated_at");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_updated_at);
         try buf.appendSlice(self.allocator, " INTEGER NOT NULL");
 
         // Global document identity is keyed by id; namespace remains a scoped column.
         try buf.appendSlice(self.allocator, ",\n  PRIMARY KEY (");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_id);
         try buf.append(self.allocator, ')');
 
         // FOREIGN KEY constraints
         for (table.fields) |field| {
             if (field.references) |ref| {
                 try buf.appendSlice(self.allocator, ",\n  FOREIGN KEY (");
-                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
+                try buf.appendSlice(self.allocator, field.name_quoted);
                 try buf.appendSlice(self.allocator, ") REFERENCES ");
-                try sql_identifier.appendQuoted(self.allocator, &buf, ref);
+                try appendQuotedIdentifier(self.allocator, &buf, ref);
                 try buf.appendSlice(self.allocator, "(");
-                try sql_identifier.appendQuoted(self.allocator, &buf, "id");
+                try buf.appendSlice(self.allocator, schema_manager.quoted_id);
                 try buf.append(self.allocator, ')');
                 if (field.on_delete) |od| {
                     switch (od) {
@@ -94,29 +93,29 @@ pub const DDLGenerator = struct {
         try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
         try appendQuotedIndexName(self.allocator, &buf, table.name, "namespace_id");
         try buf.appendSlice(self.allocator, " ON ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+        try buf.appendSlice(self.allocator, table.name_quoted);
         try buf.appendSlice(self.allocator, "(");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_namespace_id);
         try buf.append(self.allocator, ')');
 
         // ── CREATE INDEX on owner_id ──────────────────────────────────────────
         try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
         try appendQuotedIndexName(self.allocator, &buf, table.name, "owner_id");
         try buf.appendSlice(self.allocator, " ON ");
-        try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+        try buf.appendSlice(self.allocator, table.name_quoted);
         try buf.appendSlice(self.allocator, "(");
-        try sql_identifier.appendQuoted(self.allocator, &buf, "owner_id");
+        try buf.appendSlice(self.allocator, schema_manager.quoted_owner_id);
         try buf.append(self.allocator, ')');
 
         if (table.is_users_table) {
             try buf.appendSlice(self.allocator, ";\nCREATE UNIQUE INDEX IF NOT EXISTS ");
             try appendQuotedIndexName(self.allocator, &buf, table.name, "namespace_external_id");
             try buf.appendSlice(self.allocator, " ON ");
-            try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+            try buf.appendSlice(self.allocator, table.name_quoted);
             try buf.appendSlice(self.allocator, "(");
-            try sql_identifier.appendQuoted(self.allocator, &buf, "namespace_id");
+            try buf.appendSlice(self.allocator, schema_manager.quoted_namespace_id);
             try buf.appendSlice(self.allocator, ", ");
-            try sql_identifier.appendQuoted(self.allocator, &buf, "external_id");
+            try buf.appendSlice(self.allocator, schema_manager.quoted_external_id);
             try buf.append(self.allocator, ')');
         }
 
@@ -126,9 +125,9 @@ pub const DDLGenerator = struct {
                 try buf.appendSlice(self.allocator, ";\nCREATE INDEX IF NOT EXISTS ");
                 try appendQuotedIndexName(self.allocator, &buf, table.name, field.name);
                 try buf.appendSlice(self.allocator, " ON ");
-                try sql_identifier.appendQuoted(self.allocator, &buf, table.name);
+                try buf.appendSlice(self.allocator, table.name_quoted);
                 try buf.append(self.allocator, '(');
-                try sql_identifier.appendQuoted(self.allocator, &buf, field.name);
+                try buf.appendSlice(self.allocator, field.name_quoted);
                 try buf.append(self.allocator, ')');
             }
         }
@@ -150,5 +149,15 @@ fn appendQuotedIndexName(
     try buf.appendSlice(allocator, table_name);
     try buf.append(allocator, '_');
     try buf.appendSlice(allocator, field_name);
+    try buf.append(allocator, '"');
+}
+
+fn appendQuotedIdentifier(
+    allocator: std.mem.Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    identifier: []const u8,
+) !void {
+    try buf.append(allocator, '"');
+    try buf.appendSlice(allocator, identifier);
     try buf.append(allocator, '"');
 }

@@ -13,6 +13,7 @@ test "ddl_generator: generate DDL for a known table" {
     const fields = [_]Field{
         .{
             .name = "title",
+            .name_quoted = "\"title\"",
             .sql_type = .text,
             .items_type = null,
             .required = true,
@@ -22,6 +23,7 @@ test "ddl_generator: generate DDL for a known table" {
         },
         .{
             .name = "status",
+            .name_quoted = "\"status\"",
             .sql_type = .text,
             .items_type = null,
             .required = false,
@@ -31,6 +33,7 @@ test "ddl_generator: generate DDL for a known table" {
         },
         .{
             .name = "priority",
+            .name_quoted = "\"priority\"",
             .sql_type = .integer,
             .items_type = null,
             .required = false,
@@ -42,6 +45,7 @@ test "ddl_generator: generate DDL for a known table" {
 
     const table = Table{
         .name = "tasks",
+        .name_quoted = "\"tasks\"",
         .fields = @constCast(&fields),
     };
 
@@ -75,6 +79,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     const fields = [_]Field{
         .{
             .name = "user_id",
+            .name_quoted = "\"user_id\"",
             .sql_type = .doc_id,
             .items_type = null,
             .required = true,
@@ -86,6 +91,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
 
     const table = Table{
         .name = "posts",
+        .name_quoted = "\"posts\"",
         .fields = @constCast(&fields),
     };
 
@@ -109,6 +115,7 @@ test "ddl_generator: array field uses BLOB column type" {
     const fields = [_]Field{
         .{
             .name = "tags",
+            .name_quoted = "\"tags\"",
             .sql_type = .array,
             .items_type = .text,
             .required = false,
@@ -118,6 +125,7 @@ test "ddl_generator: array field uses BLOB column type" {
         },
         .{
             .name = "name",
+            .name_quoted = "\"name\"",
             .sql_type = .text,
             .items_type = null,
             .required = true,
@@ -129,6 +137,7 @@ test "ddl_generator: array field uses BLOB column type" {
 
     const table = Table{
         .name = "items",
+        .name_quoted = "\"items\"",
         .fields = @constCast(&fields),
     };
 
@@ -148,6 +157,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
     const fields = [_]Field{
         .{
             .name = "from",
+            .name_quoted = "\"from\"",
             .sql_type = .text,
             .items_type = null,
             .required = true,
@@ -159,6 +169,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
 
     const table = Table{
         .name = "select",
+        .name_quoted = "\"select\"",
         .fields = @constCast(&fields),
     };
 

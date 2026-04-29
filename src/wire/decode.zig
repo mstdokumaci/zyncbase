@@ -254,14 +254,12 @@ fn skipValueDepth(bytes: []const u8, pos: *usize, depth: u32) !void {
 
 // === Fast Envelope Extractor ===
 
-pub fn extractEnvelopeFast(bytes: []const u8) !
-Envelope {
+pub fn extractEnvelopeFast(bytes: []const u8) !Envelope {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
     // SAFETY: all fields of result are set before use via the found_type/found_id guards below
-    var result: 
-Envelope = undefined;
+    var result: Envelope = undefined;
     var found_type: bool = false;
     var found_id: bool = false;
 
@@ -284,8 +282,7 @@ Envelope = undefined;
 
 // === Type-Specific Fast Decoders ===
 
-pub fn extractStoreSetNamespaceFast(bytes: []const u8) !
-StoreSetNamespaceRequest {
+pub fn extractStoreSetNamespaceFast(bytes: []const u8) !StoreSetNamespaceRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
@@ -303,8 +300,7 @@ StoreSetNamespaceRequest {
     return .{ .namespace = namespace orelse return error.MissingRequiredFields };
 }
 
-pub fn extractStoreUnsubscribeFast(bytes: []const u8) !
-StoreUnsubscribeRequest {
+pub fn extractStoreUnsubscribeFast(bytes: []const u8) !StoreUnsubscribeRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 
@@ -322,8 +318,7 @@ StoreUnsubscribeRequest {
     return .{ .subId = sub_id orelse return error.MissingRequiredFields };
 }
 
-pub fn extractStoreLoadMoreFast(bytes: []const u8) !
-StoreLoadMoreRequest {
+pub fn extractStoreLoadMoreFast(bytes: []const u8) !StoreLoadMoreRequest {
     var pos: usize = 0;
     const map_len = try readMapHeader(bytes, &pos);
 

@@ -27,9 +27,10 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
     try db.execMulti(sql_z, .{});
 }
 
-fn makeField(name: []const u8, sql_type: schema_manager.FieldType) schema_manager.Field {
+fn makeField(comptime name: []const u8, sql_type: schema_manager.FieldType) schema_manager.Field {
     return .{
         .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
         .sql_type = sql_type,
         .items_type = null,
         .required = false,
@@ -53,7 +54,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         makeField("title", .text),
         makeField("status", .text),
     };
-    const initial_table = schema_manager.Table{ .name = "tasks", .fields = &initial_fields };
+    const initial_table = schema_manager.Table{ .name = "tasks", .name_quoted = "\"tasks\"", .fields = &initial_fields };
     const initial_ddl = try gen.generateDDL(initial_table);
     defer allocator.free(initial_ddl);
     try execMultiSql(&db, allocator, initial_ddl);
@@ -69,6 +70,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         .table_name = "tasks",
         .field = schema_manager.Field{
             .name = "status",
+            .name_quoted = "\"status\"",
             .sql_type = .integer,
             .items_type = null,
             .required = false,
@@ -88,7 +90,7 @@ test "migration_executor: 5.5 - destructive migration preserves common-column da
         makeField("title", .text),
         makeField("status", .integer),
     };
-    var target_tables = [_]schema_manager.Table{.{ .name = "tasks", .fields = &target_fields }};
+    var target_tables = [_]schema_manager.Table{.{ .name = "tasks", .name_quoted = "\"tasks\"", .fields = &target_fields }};
     const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
@@ -131,7 +133,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
 
     // Create a real table first
     var fields = [_]schema_manager.Field{makeField("name", .text)};
-    const table = schema_manager.Table{ .name = "real_table", .fields = &fields };
+    const table = schema_manager.Table{ .name = "real_table", .name_quoted = "\"real_table\"", .fields = &fields };
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
@@ -155,7 +157,7 @@ test "migration_executor: 5.6 - mid-migration failure leaves database unchanged"
 
     // Target schema does NOT contain "nonexistent_in_schema" - this will cause TableNotFoundInSchema
     var target_fields = [_]schema_manager.Field{makeField("name", .text)};
-    var target_tables = [_]schema_manager.Table{.{ .name = "real_table", .fields = &target_fields }};
+    var target_tables = [_]schema_manager.Table{.{ .name = "real_table", .name_quoted = "\"real_table\"", .fields = &target_fields }};
     const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
@@ -209,7 +211,7 @@ test "migration_executor: 5.7 - empty schema_meta triggers full schema creation"
         makeField("username", .text),
         makeField("email", .text),
     };
-    var target_tables = [_]schema_manager.Table{.{ .name = "users", .fields = &target_fields }};
+    var target_tables = [_]schema_manager.Table{.{ .name = "users", .name_quoted = "\"users\"", .fields = &target_fields }};
     const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,
@@ -261,7 +263,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
     // Build a simple add_column plan (non-destructive so it won't be refused for that reason)
     // We need a table to exist first
     var fields = [_]schema_manager.Field{makeField("data", .text)};
-    const table = schema_manager.Table{ .name = "docs", .fields = &fields };
+    const table = schema_manager.Table{ .name = "docs", .name_quoted = "\"docs\"", .fields = &fields };
     const ddl = try gen.generateDDL(table);
     defer allocator.free(ddl);
     try execMultiSql(&db, allocator, ddl);
@@ -273,6 +275,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         .table_name = "docs",
         .field = schema_manager.Field{
             .name = "extra",
+            .name_quoted = "\"extra\"",
             .sql_type = .text,
             .items_type = null,
             .required = false,
@@ -291,7 +294,7 @@ test "migration_executor: 5.8 - unparseable version in schema_meta halts startup
         makeField("data", .text),
         makeField("extra", .text),
     };
-    var target_tables = [_]schema_manager.Table{.{ .name = "docs", .fields = &target_fields }};
+    var target_tables = [_]schema_manager.Table{.{ .name = "docs", .name_quoted = "\"docs\"", .fields = &target_fields }};
     const target_schema = schema_manager.Schema{
         .version = "1.0.0",
         .tables = &target_tables,

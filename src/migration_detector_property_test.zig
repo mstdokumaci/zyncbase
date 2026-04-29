@@ -19,9 +19,10 @@ fn execDDL(db: *sqlite.Db, allocator: std.mem.Allocator, ddl: []const u8) !void 
     try db.execMulti(ddl_z, .{});
 }
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+fn makeField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
     return .{
         .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
         .sql_type = sql_type,
         .items_type = if (sql_type == .array) schema_parser.FieldType.text else null,
         .required = false,
@@ -58,7 +59,8 @@ test "migration_detector: migration plan accurately describes schema diff" {
             0 => {
                 // Table doesn't exist in DB → expect create_table
                 var target_fields = [_]schema_parser.Field{makeField("title", .text)};
-                var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+                var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &target_fields }};
+                defer allocator.free(target_tables[0].name_quoted);
                 const target_schema = schema_parser.Schema{
                     .version = "1.0.0",
                     .tables = &target_tables,
@@ -77,7 +79,8 @@ test "migration_detector: migration plan accurately describes schema diff" {
             1 => {
                 // Table exists with one column; target adds a new column → expect add_column
                 var existing_fields = [_]schema_parser.Field{makeField("title", .text)};
-                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &existing_fields }};
+                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &existing_fields }};
+                defer allocator.free(existing_tables[0].name_quoted);
                 const existing_ddl = try gen.generateDDL(existing_tables[0]);
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
@@ -85,9 +88,10 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 const new_fname = field_names[rand.intRangeAtMost(usize, 1, field_names.len - 1)];
                 var target_fields = [_]schema_parser.Field{
                     makeField("title", .text),
-                    makeField(new_fname, .integer),
+                    schema_parser.Field{ .name = new_fname, .sql_type = .integer, .items_type = null, .required = false, .indexed = false, .references = null, .on_delete = null },
                 };
-                var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+                var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &target_fields }};
+                defer allocator.free(target_tables[0].name_quoted);
                 const target_schema = schema_parser.Schema{
                     .version = "1.0.0",
                     .tables = &target_tables,
@@ -107,13 +111,15 @@ test "migration_detector: migration plan accurately describes schema diff" {
             2 => {
                 // Table exists with TEXT column; target changes it to INTEGER → expect change_type
                 var existing_fields = [_]schema_parser.Field{makeField("status", .text)};
-                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &existing_fields }};
+                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &existing_fields }};
+                defer allocator.free(existing_tables[0].name_quoted);
                 const existing_ddl = try gen.generateDDL(existing_tables[0]);
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
                 var target_fields = [_]schema_parser.Field{makeField("status", .integer)};
-                var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+                var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &target_fields }};
+                defer allocator.free(target_tables[0].name_quoted);
                 const target_schema = schema_parser.Schema{
                     .version = "1.0.0",
                     .tables = &target_tables,
@@ -134,13 +140,15 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     makeField("title", .text),
                     makeField("extra_col", .text),
                 };
-                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &existing_fields }};
+                const existing_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &existing_fields }};
+                defer allocator.free(existing_tables[0].name_quoted);
                 const existing_ddl = try gen.generateDDL(existing_tables[0]);
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
                 var target_fields = [_]schema_parser.Field{makeField("title", .text)};
-                var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+                var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = &target_fields }};
+                defer allocator.free(target_tables[0].name_quoted);
                 const target_schema = schema_parser.Schema{
                     .version = "1.0.0",
                     .tables = &target_tables,
@@ -182,7 +190,11 @@ test "migration_detector: matching schema produces empty migration plan" {
         const n_tables = rand.intRangeAtMost(usize, 1, 3);
         const tables = try allocator.alloc(schema_parser.Table, n_tables);
         defer {
-            for (tables) |t| allocator.free(t.fields);
+            for (tables) |t| {
+                allocator.free(t.name_quoted);
+                for (t.fields) |f| allocator.free(f.name_quoted);
+                allocator.free(t.fields);
+            }
             allocator.free(tables);
         }
 
@@ -192,13 +204,21 @@ test "migration_detector: matching schema produces empty migration plan" {
             const fields = try allocator.alloc(schema_parser.Field, n_fields);
 
             for (0..n_fields) |fi| {
-                fields[fi] = makeField(
-                    field_names[fi % field_names.len],
-                    field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)],
-                );
+                const mf_name = field_names[fi % field_names.len];
+                const mf_type = field_types[rand.intRangeAtMost(usize, 0, field_types.len - 1)];
+                fields[fi] = schema_parser.Field{
+                    .name = mf_name,
+                    .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{mf_name}),
+                    .sql_type = mf_type,
+                    .items_type = if (mf_type == .array) schema_parser.FieldType.text else null,
+                    .required = false,
+                    .indexed = false,
+                    .references = null,
+                    .on_delete = null,
+                };
             }
 
-            tables[ti] = .{ .name = tname, .fields = fields };
+            tables[ti] = .{ .name = tname, .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname}), .fields = fields };
 
             const ddl = try gen.generateDDL(tables[ti]);
             defer allocator.free(ddl);

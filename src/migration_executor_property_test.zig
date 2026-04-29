@@ -27,9 +27,10 @@ fn execMultiSql(db: *sqlite.Db, allocator: std.mem.Allocator, sql: []const u8) !
     try db.execMulti(sql_z, .{});
 }
 
-fn makeField(name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
+fn makeField(comptime name: []const u8, sql_type: schema_parser.FieldType) schema_parser.Field {
     return .{
         .name = name,
+        .name_quoted = "\"" ++ name ++ "\"",
         .sql_type = sql_type,
         .items_type = null,
         .required = false,
@@ -69,7 +70,9 @@ test "migration_executor: additive migration preserves existing data" {
 
         // Create table with initial columns
         var initial_fields = [_]schema_parser.Field{makeField("title", .text)};
-        const initial_table = schema_parser.Table{ .name = tname, .fields = &initial_fields };
+        const name_quoted_initial = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted_initial);
+        const initial_table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted_initial, .fields = &initial_fields };
         const initial_ddl = try gen.generateDDL(initial_table);
         defer allocator.free(initial_ddl);
         try execMultiSql(&db, allocator, initial_ddl);
@@ -117,7 +120,9 @@ test "migration_executor: additive migration preserves existing data" {
             makeField("title", .text),
             makeField("score", .integer),
         };
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted_target);
+        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
         const target_schema = schema_parser.Schema{
             .version = "1.0.0",
             .tables = &target_tables,
@@ -182,7 +187,9 @@ test "migration_executor: destructive migration refused when not allowed" {
 
         // Create table
         var fields = [_]schema_parser.Field{makeField("col_a", .text)};
-        const table = schema_parser.Table{ .name = tname, .fields = &fields };
+        const name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted);
+        const table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted, .fields = &fields };
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -225,7 +232,9 @@ test "migration_executor: destructive migration refused when not allowed" {
         };
 
         var target_fields = [_]schema_parser.Field{makeField("col_a", .integer)};
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted_target);
+        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
         const target_schema = schema_parser.Schema{
             .version = "1.0.0",
             .tables = &target_tables,
@@ -301,7 +310,9 @@ test "migration_executor: schema version persisted after migration" {
         };
 
         var target_fields = [_]schema_parser.Field{makeField("name", .text)};
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted_target);
+        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
         const target_schema = schema_parser.Schema{
             .version = version,
             .tables = &target_tables,
@@ -349,7 +360,9 @@ test "migration_executor: major version bump is refused" {
 
         // Create table and insert persisted version with lower major
         var fields = [_]schema_parser.Field{makeField("data", .text)};
-        const table = schema_parser.Table{ .name = tname, .fields = &fields };
+        const name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted);
+        const table = schema_parser.Table{ .name = tname, .name_quoted = name_quoted, .fields = &fields };
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         try execMultiSql(&db, allocator, ddl);
@@ -396,7 +409,9 @@ test "migration_executor: major version bump is refused" {
             makeField("data", .text),
             makeField("extra", .text),
         };
-        var target_tables = [_]schema_parser.Table{.{ .name = tname, .fields = &target_fields }};
+        const name_quoted_target = try std.fmt.allocPrint(allocator, "\"{s}\"", .{tname});
+        defer allocator.free(name_quoted_target);
+        var target_tables = [_]schema_parser.Table{.{ .name = tname, .name_quoted = name_quoted_target, .fields = &target_fields }};
         const target_schema = schema_parser.Schema{
             .version = target_ver,
             .tables = &target_tables,

@@ -17,7 +17,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     var fields_arr = [_]sth.Field{
         sth.makeField("val", .text, false),
     };
-    const table = sth.Table{ .name = "items", .fields = &fields_arr };
+    const table = sth.Table{ .name = "items", .name_quoted = "\"items\"", .fields = &fields_arr };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "write-before-subscribe-capture", table);

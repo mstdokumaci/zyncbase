@@ -25,8 +25,13 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
         var fields = try allocator.alloc(schema_manager.Field, td.fields.len);
         errdefer allocator.free(fields);
         for (td.fields, 0..) |fn_name, j| {
+            const fname = try allocator.dupe(u8, fn_name);
+            errdefer allocator.free(fname);
+            const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
+            errdefer allocator.free(fname_quoted);
             fields[j] = .{
-                .name = try allocator.dupe(u8, fn_name),
+                .name = fname,
+                .name_quoted = fname_quoted,
                 .sql_type = if (td.types) |ts| ts[j] else .text,
                 .items_type = if (td.types) |ts| if (ts[j] == .array) schema_manager.FieldType.text else null else null,
                 .required = false,
@@ -35,7 +40,15 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
                 .on_delete = null,
             };
         }
-        tables[i] = .{ .name = try allocator.dupe(u8, td.name), .fields = fields };
+        const tname = try allocator.dupe(u8, td.name);
+        errdefer allocator.free(tname);
+        const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
+        errdefer allocator.free(tname_quoted);
+        tables[i] = .{
+            .name = tname,
+            .name_quoted = tname_quoted,
+            .fields = fields,
+        };
     }
 
     return schema_manager.Schema{ .version = try allocator.dupe(u8, "1.0.0"), .tables = tables };

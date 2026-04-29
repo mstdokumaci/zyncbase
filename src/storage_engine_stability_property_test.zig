@@ -26,7 +26,7 @@ test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-concurrent", table);
@@ -78,7 +78,7 @@ test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-txn-err", table);
@@ -111,7 +111,7 @@ test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-rapid-err", table);
@@ -138,7 +138,7 @@ test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-recovery", table);
@@ -172,7 +172,7 @@ test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-resource-cleanup", table);
@@ -203,7 +203,7 @@ test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-mixed", table);
@@ -243,7 +243,7 @@ test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
 
     var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-    const table = schema_manager.Table{ .name = "test", .fields = &fields };
+    const table = schema_manager.Table{ .name = "test", .name_quoted = "\"test\"", .fields = &fields };
 
     var ctx: sth.EngineTestContext = undefined;
     try sth.setupEngine(&ctx, allocator, "stability-concurrent-reads", table);

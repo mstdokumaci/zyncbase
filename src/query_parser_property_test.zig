@@ -14,7 +14,7 @@ test "property: random valid query filters" {
         sth.makeField("field", .text, false),
     };
     const tables = [_]schema_manager.Table{
-        .{ .name = "items", .fields = &fields },
+        .{ .name = "items", .name_quoted = "\"items\"", .fields = &fields },
     };
 
     var sm = try sth.createSchemaManager(allocator, &tables);
@@ -72,7 +72,7 @@ test "property: reject unknown field names" {
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
         const tables = [_]schema_manager.Table{
-            .{ .name = "items", .fields = &[_]schema_manager.Field{} },
+            .{ .name = "items", .name_quoted = "\"items\"", .fields = &[_]schema_manager.Field{} },
         };
 
         var sm = try sth.createSchemaManager(allocator, &tables);

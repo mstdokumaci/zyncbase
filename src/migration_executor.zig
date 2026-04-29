@@ -3,7 +3,6 @@ const schema_manager = @import("schema_manager.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
-const sql_identifier = @import("sql_identifier.zig");
 
 pub const AutoMigrateMode = enum { full, additive_only, disabled };
 
@@ -133,20 +132,24 @@ pub const MigrationExecutor = struct {
 
     fn recreateTable(self: *MigrationExecutor, table: schema_manager.Table) !void {
         const name = table.name;
+        const name_quoted = table.name_quoted;
         const backup_name = try std.fmt.allocPrint(self.allocator, "{s}_backup", .{name});
         defer self.allocator.free(backup_name);
+
+        const backup_name_quoted = try std.fmt.allocPrint(self.allocator, "\"{s}_backup\"", .{name});
+        defer self.allocator.free(backup_name_quoted);
 
         // 1. Backup
         const backup_sql = try std.fmt.allocPrint(
             self.allocator,
-            "CREATE TABLE \"{s}_backup\" AS SELECT * FROM \"{s}\"",
-            .{ name, name },
+            "CREATE TABLE \"{s}_backup\" AS SELECT * FROM {s}",
+            .{ name, name_quoted },
         );
         defer self.allocator.free(backup_sql);
         try self.db.execDynamic(backup_sql, .{}, .{});
 
         // 2. Drop original
-        const drop_sql = try std.fmt.allocPrint(self.allocator, "DROP TABLE \"{s}\"", .{name});
+        const drop_sql = try std.fmt.allocPrint(self.allocator, "DROP TABLE {s}", .{name_quoted});
         defer self.allocator.free(drop_sql);
         try self.db.execDynamic(drop_sql, .{}, .{});
 
@@ -188,20 +191,20 @@ pub const MigrationExecutor = struct {
             defer col_list.deinit(self.allocator);
             for (common.items, 0..) |col, i| {
                 if (i > 0) try col_list.appendSlice(self.allocator, ", ");
-                try sql_identifier.appendQuoted(self.allocator, &col_list, col);
+                try appendQuotedIdentifier(self.allocator, &col_list, col);
             }
             const cols_str = col_list.items;
 
             var insert_sql_buf: std.ArrayListUnmanaged(u8) = .empty;
             defer insert_sql_buf.deinit(self.allocator);
             try insert_sql_buf.appendSlice(self.allocator, "INSERT INTO ");
-            try sql_identifier.appendQuoted(self.allocator, &insert_sql_buf, name);
+            try insert_sql_buf.appendSlice(self.allocator, name_quoted);
             try insert_sql_buf.appendSlice(self.allocator, " (");
             try insert_sql_buf.appendSlice(self.allocator, cols_str);
             try insert_sql_buf.appendSlice(self.allocator, ") SELECT ");
             try insert_sql_buf.appendSlice(self.allocator, cols_str);
             try insert_sql_buf.appendSlice(self.allocator, " FROM ");
-            try sql_identifier.appendQuoted(self.allocator, &insert_sql_buf, backup_name);
+            try insert_sql_buf.appendSlice(self.allocator, backup_name_quoted);
             const insert_sql = try insert_sql_buf.toOwnedSlice(self.allocator);
             defer self.allocator.free(insert_sql);
             try self.db.execDynamic(insert_sql, .{}, .{});
@@ -220,7 +223,7 @@ pub const MigrationExecutor = struct {
     fn getTableColumns(self: *MigrationExecutor, table_name: []const u8) ![][]const u8 {
         const pragma_sql = try std.fmt.allocPrint(
             self.allocator,
-            "PRAGMA table_info(\"{s}\")",
+            "PRAGMA table_info('{s}')",
             .{table_name},
         );
         defer self.allocator.free(pragma_sql);
@@ -299,6 +302,16 @@ pub const MigrationExecutor = struct {
         return try parseVersion(ver_row.?.version);
     }
 };
+
+fn appendQuotedIdentifier(
+    allocator: std.mem.Allocator,
+    buf: *std.ArrayListUnmanaged(u8),
+    identifier: []const u8,
+) !void {
+    try buf.append(allocator, '"');
+    try buf.appendSlice(allocator, identifier);
+    try buf.append(allocator, '"');
+}
 
 fn findTable(schema: schema_manager.Schema, name: []const u8) ?schema_manager.Table {
     for (schema.tables) |t| {
