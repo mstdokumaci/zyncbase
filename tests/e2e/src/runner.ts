@@ -31,22 +31,28 @@ type CapturedProcessOutput = {
 };
 
 function captureLines(target: string[], text: string) {
+	if (target.length > MAX_CAPTURED_LOG_LINES) return;
 	for (const line of text.split(/\r?\n/)) {
 		if (line.length === 0) continue;
 		if (target.length < MAX_CAPTURED_LOG_LINES) {
 			target.push(line);
-		} else if (target.length === MAX_CAPTURED_LOG_LINES) {
+		} else {
 			target.push("... captured logs truncated ...");
+			break;
 		}
 	}
 }
 
 if (!VERBOSE) {
 	console.log = (...args: unknown[]) => {
-		if (CAPTURE_LOGS) captureLines(capturedConsoleLogs, format(...args));
+		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
+			captureLines(capturedConsoleLogs, format(...args));
+		}
 	};
 	console.warn = (...args: unknown[]) => {
-		if (CAPTURE_LOGS) captureLines(capturedConsoleLogs, format(...args));
+		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
+			captureLines(capturedConsoleLogs, format(...args));
+		}
 	};
 }
 
@@ -66,14 +72,39 @@ function decodeOutput(output: unknown): string {
 	return String(output);
 }
 
+function countNewlines(text: string): number {
+	let count = 0;
+	for (const ch of text) {
+		if (ch === "\n") count++;
+	}
+	return count;
+}
+
 async function readStream(
 	stream: ReadableStream<Uint8Array> | null | undefined,
 ): Promise<string> {
 	if (!stream) return "";
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	const parts: string[] = [];
+	let lineCount = 0;
 	try {
-		return await new Response(stream).text();
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			const text = decoder.decode(value, { stream: true });
+			lineCount += countNewlines(text);
+			parts.push(text);
+			if (lineCount >= MAX_CAPTURED_LOG_LINES) {
+				reader.cancel().catch(() => {});
+				break;
+			}
+		}
+		return parts.join("");
 	} catch (err) {
 		return `failed to read process output: ${String(err)}`;
+	} finally {
+		reader.releaseLock();
 	}
 }
 
