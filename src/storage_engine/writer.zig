@@ -280,6 +280,25 @@ pub fn writeThreadLoop(ctx: anytype) void {
     };
 }
 
+fn waitForWriteSignal(ctx: anytype, timeout_ns: ?u64) void {
+    ctx.write_mutex.lock();
+    defer ctx.write_mutex.unlock();
+
+    if (ctx.shutdown_requested.load(.acquire) or ctx.write_queue.hasItems()) {
+        return;
+    }
+
+    if (timeout_ns) |ns| {
+        ctx.write_cond.timedWait(&ctx.write_mutex, ns) catch |err| {
+            if (err != error.Timeout) {
+                std.log.err("write_cond.timedWait failed: {}", .{err});
+            }
+        };
+    } else {
+        ctx.write_cond.wait(&ctx.write_mutex);
+    }
+}
+
 fn writeThreadLoopImpl(ctx: anytype) !void {
     // Signal that the write thread is up and running
     ctx.write_thread_ready.store(true, .release);
@@ -287,8 +306,14 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
     ctx.write_cond.signal();
     ctx.write_mutex.unlock();
 
-    const batch_size = 200;
-    const batch_timeout = ctx.performance_config.batch_timeout;
+    const batch_size = if (ctx.performance_config.batch_writes)
+        ctx.performance_config.batch_size
+    else
+        1;
+    const batch_timeout_ms: i64 = if (ctx.performance_config.batch_writes)
+        @intCast(ctx.performance_config.batch_timeout)
+    else
+        0;
 
     var batch = std.ArrayListUnmanaged(WriteOp){};
     try batch.ensureTotalCapacity(ctx.allocator, batch_size);
@@ -426,18 +451,16 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
         const time_since_last = now - last_batch_time;
 
         const should_flush = batch.items.len >= batch_size or
-            (batch.items.len > 0 and time_since_last >= batch_timeout);
+            (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
 
         if (should_flush) {
             flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
         } else {
-            ctx.write_mutex.lock();
-            defer ctx.write_mutex.unlock();
-            ctx.write_cond.timedWait(&ctx.write_mutex, 1 * std.time.ns_per_ms) catch |err| {
-                if (err != error.Timeout) {
-                    std.log.err("write_cond.timedWait failed: {}", .{err});
-                }
-            };
+            const timeout_ns: ?u64 = if (batch.items.len > 0)
+                @as(u64, @intCast(batch_timeout_ms - time_since_last)) * std.time.ns_per_ms
+            else
+                null;
+            waitForWriteSignal(ctx, timeout_ns);
         }
     }
 

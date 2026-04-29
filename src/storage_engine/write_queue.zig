@@ -172,4 +172,8 @@ pub const WriteQueue = struct {
         self.pool.release(head);
         return op;
     }
+
+    pub fn hasItems(self: *WriteQueue) bool {
+        return self.head.next.load(.acquire) != null;
+    }
 };

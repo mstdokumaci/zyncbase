@@ -543,6 +543,7 @@ test "config: round-trip - performance config" {
         \\  "performance": {{
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
+        \\    "batchSize": 50,
         \\    "batchTimeout": 20
         \\  }},
         \\  "schema": "{s}"
@@ -559,7 +560,7 @@ test "config: round-trip - performance config" {
     // Verify values match original
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
     try std.testing.expectEqual(false, config.performance.batch_writes);
-    try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
+    try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 }
 
@@ -602,6 +603,7 @@ test "config: round-trip - complete config" {
         \\  "performance": {{
         \\    "messageBufferSize": 2000,
         \\    "batchWrites": false,
+        \\    "batchSize": 50,
         \\    "batchTimeout": 20
         \\  }},
         \\  "dataDir": "{s}",
@@ -633,6 +635,7 @@ test "config: round-trip - complete config" {
 
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
     try std.testing.expectEqual(false, config.performance.batch_writes);
+    try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 
     try std.testing.expectEqualStrings(context.test_dir, config.data_dir);

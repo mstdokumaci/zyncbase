@@ -174,8 +174,9 @@ SQLite's single-writer limitation is mitigated by an async ring-buffer queue and
 **With batching:** 100+ operations are grouped into one transaction, requiring only one `fsync()` call. This enables 10,000+ writes/sec, a 100x improvement.
 
 ### Batching Strategy
-- **Batch Size**: Triggered when the queue reaches a threshold (e.g., 100 ops).
-- **Timeout**: Triggered if operations have been queued for too long (e.g., 10ms) to maintain low latency.
+- **Batch Size**: Triggered when the queue reaches the configured `performance.batchSize` threshold (default 200 ops).
+- **Timeout**: Triggered if operations have waited past the configured `performance.batchTimeout` (default 10ms) to maintain low latency.
+- **Wakeup policy**: The writer sleeps until new work arrives or the current batch deadline expires; it does not poll on a fixed interval.
 
 ### Batching Trade-off: Asynchronous Error Reporting
 Because writes are asynchronous (fire-and-forget for low latency), the server returns an `ok` as soon as the operation is accepted into the memory queue. If a write fails during background persistence (e.g., disk full, constraint violation), the server is responsible for sending an asynchronous error message (NACK) to the client so the SDK can revert the optimistic update.

@@ -231,7 +231,9 @@ pub const StorageEngine = struct {
         // 1. Signal shutdown to the thread only if it was running
         if (old_state == .running) {
             self.shutdown_requested.store(true, .release);
+            self.write_mutex.lock();
             self.write_cond.signal();
+            self.write_mutex.unlock();
 
             // 2. Wait for the thread to exit cleanly
             if (self.write_thread) |thread| {
@@ -421,7 +423,9 @@ pub const StorageEngine = struct {
     /// Push a write op and wake the write thread immediately.
     fn pushWrite(self: *StorageEngine, op: WriteOp) !void {
         try self.write_queue.push(op);
+        self.write_mutex.lock();
         self.write_cond.signal();
+        self.write_mutex.unlock();
     }
 
     pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {

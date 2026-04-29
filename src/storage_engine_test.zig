@@ -243,6 +243,33 @@ test "StorageEngine: automatic rollback in batch operations" {
     defer managed2.deinit();
     try testing.expect(managed2.rows.len > 0);
 }
+
+test "StorageEngine: batchWrites false flushes single write without timeout delay" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngineWithPerformance(
+        &ctx,
+        allocator,
+        "engine-batch-writes-disabled",
+        table,
+        .{ .batch_writes = false, .batch_timeout = 5_000 },
+        .{ .in_memory = true },
+    );
+    defer ctx.deinit();
+
+    const start = std.time.nanoTimestamp();
+    try ctx.insertText("items", 1, 5, "val", "value1");
+    try ctx.engine.flushPendingWrites();
+    const elapsed = std.time.nanoTimestamp() - start;
+    try testing.expect(elapsed < std.time.ns_per_s);
+
+    var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
+    defer managed.deinit();
+    try testing.expect(managed.rows.len > 0);
+}
+
 test "StorageEngine: concurrent reads" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .integer, false)};

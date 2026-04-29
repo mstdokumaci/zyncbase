@@ -13,6 +13,7 @@ test "ConfigLoader loads defaults when file not found" {
     try std.testing.expectEqual(@as(u16, 3000), config.server.port);
     try std.testing.expectEqualStrings("0.0.0.0", config.server.host);
     try std.testing.expectEqualStrings("./data", config.data_dir);
+    try std.testing.expectEqual(@as(usize, 200), config.performance.batch_size);
 }
 
 test "ConfigLoader parses valid JSON config" {
@@ -28,7 +29,7 @@ test "ConfigLoader parses valid JSON config" {
     const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-schema.json" });
     defer allocator.free(schema_file);
 
-    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{ \"server\": { \"port\": 8080, \"host\": \"127.0.0.1\" }, \"dataDir\": \"", context.test_dir, "\", \"logging\": { \"level\": \"debug\", \"format\": \"text\" }, \"performance\": { \"messageBufferSize\": 2000, \"batchWrites\": false, \"batchTimeout\": 20 }, \"schema\": \"", context.test_dir, "/test-config-schema.json\" }" });
+    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{ \"server\": { \"port\": 8080, \"host\": \"127.0.0.1\" }, \"dataDir\": \"", context.test_dir, "\", \"logging\": { \"level\": \"debug\", \"format\": \"text\" }, \"performance\": { \"messageBufferSize\": 2000, \"batchWrites\": false, \"batchSize\": 50, \"batchTimeout\": 20 }, \"schema\": \"", context.test_dir, "/test-config-schema.json\" }" });
     defer allocator.free(final_config_content);
 
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
@@ -45,6 +46,7 @@ test "ConfigLoader parses valid JSON config" {
     try std.testing.expectEqual(Config.LoggingConfig.LogFormat.text, config.logging.format);
     try std.testing.expectEqual(@as(usize, 2000), config.performance.message_buffer_size);
     try std.testing.expectEqual(false, config.performance.batch_writes);
+    try std.testing.expectEqual(@as(usize, 50), config.performance.batch_size);
     try std.testing.expectEqual(@as(u32, 20), config.performance.batch_timeout);
 }
 
@@ -88,6 +90,27 @@ test "ConfigLoader validates numeric ranges" {
 
     const result = ConfigLoader.load(allocator, temp_file);
     try std.testing.expectError(error.InvalidBufferSize, result);
+}
+
+test "ConfigLoader validates batch size" {
+    const allocator = std.testing.allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-batch-size");
+    defer context.deinit();
+
+    const temp_file = try std.fs.path.join(allocator, &.{ context.test_dir, "test-config-invalid-batch-size.json" });
+    defer allocator.free(temp_file);
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "invalid-batch-size-schema.json" });
+    defer allocator.free(schema_file);
+
+    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"performance\": {\"batchSize\": 0}, \"schema\": \"", context.test_dir, "/invalid-batch-size-schema.json\"}" });
+    defer allocator.free(final_config_content);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
+    try std.fs.cwd().writeFile(.{ .sub_path = schema_file, .data = "{}" });
+
+    const result = ConfigLoader.load(allocator, temp_file);
+    try std.testing.expectError(error.InvalidBatchSize, result);
 }
 
 test "ConfigLoader parses auth config" {

@@ -77,6 +77,7 @@ This document defines the formal grammar and property specification for `zyncbas
 |:---|:---:|:---|:---|
 | `messageBufferSize` | `number` | `1000` | Size of internal ring buffer for routing. |
 | `batchWrites` | `boolean` | `true` | Group multiple writes into single transactions. |
+| `batchSize` | `number` | `200` | Maximum number of writes per storage transaction when `batchWrites` is enabled. |
 | `batchTimeout` | `number` | `10` | Wait time for batching (ms). |
 | `statementCacheSize` | `number` | `100` | Max number of prepared statements to keep in cache per connection. |
 
@@ -93,4 +94,5 @@ The following checks are performed during `validateConfig`:
 | `InvalidSchemaFile` | A provided `schema` object/path is malformed, or an existing schema file contains invalid JSON or fails schema validation. Missing/omitted schema files synthesize the users-only schema instead. |
 | `InvalidAuthorizationFile` | Specified `authorization` file exists but cannot be parsed or fails authorization grammar validation. |
 | `InvalidBufferSize` | `messageBufferSize` is 0. |
+| `InvalidBatchSize` | `batchSize` is 0. |
 | `InvalidMaxMessageSize` | `maxMessageSize` is 0. |

@@ -349,13 +349,16 @@ To avoid disk I/O bottlenecks, ZyncBase groups operations into single transactio
 ```zig
 const StorageLayer = struct {
     write_queue: RingBuffer(WriteOp),
-    batch_size: usize = 100,
+    batch_size: usize = 200,
+    batch_timeout_ms: u32 = 10,
     
     pub fn queueWrite(self: *StorageLayer, op: WriteOp) !void {
         try self.write_queue.push(op);
         if (self.write_queue.len() >= self.batch_size) {
             try self.flushBatch();
         }
+        // Otherwise the writer sleeps until new work arrives or the timeout
+        // deadline expires; it does not poll on a fixed interval.
     }
 
     fn flushBatch(self: *StorageLayer) !void {

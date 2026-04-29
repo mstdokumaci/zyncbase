@@ -54,6 +54,7 @@ pub const Config = struct {
     pub const PerformanceConfig = struct {
         message_buffer_size: usize = 1000,
         batch_writes: bool = true,
+        batch_size: usize = 200,
         batch_timeout: u32 = 10,
         statement_cache_size: usize = 100,
     };
@@ -390,6 +391,12 @@ pub const ConfigLoader = struct {
                     }
                 }
 
+                if (performance_obj.get("batchSize")) |batch_size| {
+                    if (batch_size == .integer) {
+                        config.performance.batch_size = @intCast(batch_size.integer);
+                    }
+                }
+
                 if (performance_obj.get("batchTimeout")) |batch_timeout| {
                     if (batch_timeout == .integer) {
                         config.performance.batch_timeout = @intCast(batch_timeout.integer);
@@ -440,6 +447,10 @@ pub const ConfigLoader = struct {
         // Validate numeric ranges
         if (config.performance.message_buffer_size == 0) {
             return error.InvalidBufferSize;
+        }
+
+        if (config.performance.batch_size == 0) {
+            return error.InvalidBatchSize;
         }
 
         if (config.performance.statement_cache_size == 0) {

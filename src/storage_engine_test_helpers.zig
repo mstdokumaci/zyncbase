@@ -194,6 +194,10 @@ pub const EngineTestContext = struct {
     }
 
     pub fn initWithOptions(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, options: StorageEngine.Options) !void {
+        try self.initWithPerformance(allocator, prefix, tables, .{}, options);
+    }
+
+    pub fn initWithPerformance(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, tables: []const Table, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
         const effective_options = schema_helpers.normalizeTestStorageOptions(options);
         self.allocator = allocator;
         self.test_context = try createTestContext(allocator, prefix, effective_options);
@@ -205,7 +209,7 @@ pub const EngineTestContext = struct {
         self.sm = try createSchemaManager(allocator, tables);
         errdefer self.sm.deinit();
 
-        try schema_helpers.setupTestEngine(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.sm, effective_options);
+        try schema_helpers.setupTestEngineWithPerformance(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.sm, performance_config, effective_options);
         errdefer self.engine.deinit();
     }
 
@@ -376,6 +380,10 @@ pub fn setupEngine(ctx: *EngineTestContext, allocator: Allocator, prefix: []cons
 /// Setup a storage engine with a single table and specific options.
 pub fn setupEngineWithOptions(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table, options: StorageEngine.Options) !void {
     try ctx.initWithOptions(allocator, prefix, &[_]Table{table}, options);
+}
+
+pub fn setupEngineWithPerformance(ctx: *EngineTestContext, allocator: Allocator, prefix: []const u8, table: Table, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+    try ctx.initWithPerformance(allocator, prefix, &[_]Table{table}, performance_config, options);
 }
 
 /// Setup a storage engine with a single table in an existing directory.
