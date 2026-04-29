@@ -53,7 +53,6 @@ test "schema_parser: parse known fixture" {
     var found_zip = false;
 
     for (table.fields) |f| {
-        std.debug.print("Found field: {s}\n", .{f.name});
         if (std.mem.eql(u8, f.name, "name")) {
             found_name = true;
             try std.testing.expectEqual(FieldType.text, f.sql_type);

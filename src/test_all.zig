@@ -1,5 +1,5 @@
 pub const std_options = struct {
-    pub const log_level = .debug;
+    pub const log_level = .warn;
 };
 
 test {

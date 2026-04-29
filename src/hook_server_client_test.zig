@@ -119,9 +119,6 @@ test "HookServerClient: reconnect with exponential backoff" {
     // With 3 retries: 100ms + 200ms + 400ms = 700ms minimum
     // But timing can vary, so just verify it took more than 0ms
     try testing.expect(elapsed > 0);
-
-    // Print for debugging
-    std.debug.print("Reconnect elapsed time: {}ms\n", .{elapsed});
 }
 
 test "HookServerClient: authorize validates request" {

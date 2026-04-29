@@ -11,28 +11,29 @@ test "SubscriptionEngine: handleRowChange performance" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const group_count = 100;
-    const subs_per_group = 10;
+    // 10,000 subscriptions total: 500 groups with 20 subscribers each.
+    // This provides a realistic mix of filter evaluation and result gathering.
+    const group_count = 500;
+    const subs_per_group = 20;
 
-    // Create filters with different conditions
     for (0..group_count) |i| {
-        const field_index: usize = 2 + (i % 10);
+        // Even groups match (field_0 == 0), odd groups reject (field_0 == 999)
+        const match_val: i64 = if (i % 2 == 0) 0 else 999;
 
         const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
-            .{ .field_index = field_index, .op = .eq, .value = tth.valInt(@as(i64, @intCast(i % 5))), .field_type = .integer, .items_type = null },
+            // field_index 3 corresponds to the first user-defined field in rowFromTypedValues
+            .{ .field_index = 3, .op = .eq, .value = tth.valInt(match_val), .field_type = .integer, .items_type = null },
         });
         defer filter.deinit(allocator);
 
         for (0..subs_per_group) |j| {
-            _ = try engine.subscribe(1, 0, filter, @as(u64, @intCast(i * 1000 + j)), 1);
+            // Unique connection/subscription IDs
+            _ = try engine.subscribe(1, 0, filter, @as(u64, @intCast(i + 1)), @as(u64, @intCast(j + 1)));
         }
     }
 
-    var new_row = try tth.rowFromTypedValues(allocator, &.{
-        tth.valInt(0), // field_0
-        tth.valInt(1), // field_1
-        tth.valInt(2), // field_2
-    });
+    // Test row matching user field 0 (internal index 3) == 0
+    var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valInt(0)});
     defer new_row.deinit(allocator);
 
     const change = RowChange{
@@ -43,32 +44,33 @@ test "SubscriptionEngine: handleRowChange performance" {
         .old_row = null,
     };
 
+    // Warm up
+    for (0..5) |_| {
+        const m = try engine.handleRowChange(change, allocator);
+        allocator.free(m);
+    }
+
     var timer = try std.time.Timer.start();
-    const iterations = 1000;
-    var total_matches: usize = 0;
+    const iterations = 500; // Enough to get a stable average without slowing down tests
 
     for (0..iterations) |_| {
         const matches = try engine.handleRowChange(change, allocator);
-        total_matches += matches.len;
+        // Verify we got the expected 5,000 matches (50% of 10k)
+        if (matches.len != (group_count / 2) * subs_per_group) {
+            return error.UnexpectedMatchCount;
+        }
         allocator.free(matches);
     }
 
     const elapsed = timer.read();
-    const ops_per_sec = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(elapsed))) * 1e9;
+    const avg_duration_ms = @as(f64, @floatFromInt(elapsed)) / 1e6 / @as(f64, @floatFromInt(iterations));
 
-    std.debug.print("\nPerformance: {d:.2} handleRowChange/sec, Total matches: {d}\n", .{ ops_per_sec, total_matches });
-
-    // Verify performance requirement: < 10ms for 10k subscriptions
-    const duration_ms = @as(f64, @floatFromInt(elapsed)) / 1e6 / @as(f64, @floatFromInt(iterations));
-    const duration_10k_ms = duration_ms * (10000.0 / @as(f64, @floatFromInt(group_count * subs_per_group)));
-
-    // Performance requirement: < 10ms for 10k subscriptions
     const builtin = @import("builtin");
-    const target_ms: f64 = if (builtin.sanitize_thread) 100.0 else 10.0;
-    try testing.expect(duration_10k_ms < target_ms);
+    const is_debug = builtin.mode == .Debug;
 
-    // Should be very fast since we only check 500 subscriptions (500 evaluations)
-    const duration_us = duration_ms * 1000.0 * (500.0 / @as(f64, @floatFromInt(group_count * subs_per_group)));
-    const target_us: f64 = if (builtin.sanitize_thread) 5000.0 else 1000.0;
-    try testing.expect(duration_us < target_us); // < 1 millisecond (un-sanitized)
+    const target_ms: f64 = if (builtin.sanitize_thread) 10.0 else if (is_debug) 2.0 else 1.0;
+
+    std.debug.print("\nPerformance: 10k subs (5k matches) processed in {d:.3}ms (Target: < {d:.1}ms)\n", .{ avg_duration_ms, target_ms });
+
+    try testing.expect(avg_duration_ms < target_ms);
 }
