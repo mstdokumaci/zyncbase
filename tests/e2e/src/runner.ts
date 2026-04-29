@@ -128,13 +128,14 @@ async function collectServerLogs(server: RunningServer) {
 	}
 }
 
+function clearCapturedLogs() {
+	capturedConsoleLogs.length = 0;
+	capturedServerLogs.length = 0;
+}
+
 function printCapturedLogs() {
-	if (!CAPTURE_LOGS && capturedServerLogs.length === 0) {
-		status(
-			"Suppressed logs were discarded. Re-run with --verbose to stream them.",
-		);
-		return;
-	}
+	if (VERBOSE) return;
+
 	if (capturedConsoleLogs.length > 0) {
 		status("\n--- captured e2e console.log ---");
 		for (const line of capturedConsoleLogs) status(line);
@@ -142,6 +143,15 @@ function printCapturedLogs() {
 	if (capturedServerLogs.length > 0) {
 		status("\n--- captured server logs ---");
 		for (const line of capturedServerLogs) status(line);
+	}
+	if (
+		capturedConsoleLogs.length === 0 &&
+		capturedServerLogs.length === 0 &&
+		!CAPTURE_LOGS
+	) {
+		status(
+			"Suppressed logs were discarded. Re-run with --verbose or --capture-logs to see them.",
+		);
 	}
 }
 
@@ -413,9 +423,12 @@ async function main() {
 
 	try {
 		log("Running consolidated E2E suite...");
+		clearCapturedLogs();
 		await run_scenario_sync_and_errors();
+		clearCapturedLogs();
 		await run_scenario_persistence();
 		log("Scenario 2 passed.");
+		clearCapturedLogs();
 		await run_scenario_filters();
 		log("Scenario 3 passed.");
 		log("=== All E2E Tests Passed! ===");
