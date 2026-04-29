@@ -68,7 +68,7 @@ test "SubscriptionEngine: handleRowChange performance" {
     const builtin = @import("builtin");
     const is_debug = builtin.mode == .Debug;
 
-    const target_ms: f64 = if (builtin.sanitize_thread) 10.0 else if (is_debug) 2.0 else 1.0;
+    const target_ms: f64 = if (builtin.sanitize_thread) 4.0 else if (is_debug) 2.0 else 1.0;
 
     std.debug.print("\nPerformance: 10k subs (5k matches) processed in {d:.3}ms (Target: < {d:.1}ms)\n", .{ avg_duration_ms, target_ms });
 
