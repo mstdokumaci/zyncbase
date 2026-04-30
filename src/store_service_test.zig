@@ -6,7 +6,7 @@ const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const wire = @import("wire.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
@@ -226,7 +226,7 @@ test "StoreService: remove" {
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
-        const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
@@ -242,7 +242,7 @@ test "StoreService: remove" {
         try service.removePath(1, path);
         try app.storage_engine.flushPendingWrites();
 
-        const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
         var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
@@ -259,7 +259,7 @@ test "StoreService: remove" {
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
-        const tbl_md = app.schema_manager.metadata.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
@@ -606,6 +606,6 @@ test "StoreService: validateFieldWrite tests" {
         const val = msgpack.Payload.intToPayload(25);
         const field = try store_service.validateFieldWrite(tbl_md, tbl_md.getFieldIndex("age") orelse unreachable, val);
         try testing.expectEqualStrings("age", field.name);
-        try testing.expectEqual(schema_manager.FieldType.integer, field.sql_type);
+        try testing.expectEqual(schema.FieldType.integer, field.storage_type);
     }
 }

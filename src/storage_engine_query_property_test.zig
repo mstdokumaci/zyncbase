@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const query_parser = @import("query_parser.zig");
 const TypedValue = @import("storage_engine.zig").TypedValue;
 const sth = @import("storage_engine_test_helpers.zig");
@@ -11,7 +11,7 @@ test "property: random query filters on StorageEngine" {
     const seeded_entity_count = 64;
     const random_query_count = 96;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeIndexedField("name", .text, true),
         sth.makeField("age", .integer, false),
         sth.makeField("score", .real, false),
@@ -67,7 +67,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
     const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
     const field_name = fields[field_idx];
-    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field_name, "name"))
+    const ft: schema.FieldType = if (std.mem.eql(u8, field_name, "name"))
         .text
     else if (std.mem.eql(u8, field_name, "id"))
         .doc_id
@@ -144,7 +144,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
         }
     }
 
-    const ft: schema_manager.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
+    const ft: schema.FieldType = if (std.mem.eql(u8, field, "name")) .text else if (std.mem.eql(u8, field, "age")) .integer else .real;
     const field_index: usize = if (std.mem.eql(u8, field, "name"))
         4
     else if (std.mem.eql(u8, field, "age"))

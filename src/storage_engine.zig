@@ -7,8 +7,8 @@ const sqlite = @import("sqlite");
 const reader = @import("storage_engine/reader.zig");
 const writer = @import("storage_engine/writer.zig");
 const connection = @import("storage_engine/connection.zig");
-const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
+const schema = @import("schema.zig");
+const Schema = schema.Schema;
 const query_parser = @import("query_parser.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const storage_values = @import("storage_engine/values.zig");
@@ -25,7 +25,7 @@ pub const ManagedResult = storage_values.ManagedResult;
 pub const ScalarValue = storage_values.ScalarValue;
 pub const TypedValue = storage_values.TypedValue;
 pub const TypedRow = storage_values.TypedRow;
-pub const TableMetadata = schema_manager.TableMetadata;
+pub const TableMetadata = schema.Table;
 pub const TypedCursor = storage_values.TypedCursor;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
@@ -70,7 +70,7 @@ pub const StorageEngine = struct {
     flush_cond: std.Thread.Condition,
     write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
-    schema_manager: *const SchemaManager,
+    schema_manager: *const Schema,
     metadata_cache: typed_cache_type,
     /// Monotonically increasing counter bumped by the write thread after each
     /// successful batch commit, before cache eviction. Readers snapshot this
@@ -88,7 +88,7 @@ pub const StorageEngine = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         data_dir: []const u8,
-        sm: *const SchemaManager,
+        sm: *const Schema,
         performance_config: PerformanceConfig,
         options: Options,
         event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
@@ -476,7 +476,7 @@ pub const StorageEngine = struct {
         }
     }
 
-    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) ![]u8 {
+    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema.Table, namespace_id: i64, id: DocId) ![]u8 {
         return reader.getCacheKey(self.allocator, table_metadata, namespace_id, id);
     }
 
@@ -497,7 +497,7 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
         const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
         errdefer self.allocator.free(sql_string);
@@ -540,7 +540,7 @@ pub const StorageEngine = struct {
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
         const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
 
@@ -595,7 +595,7 @@ pub const StorageEngine = struct {
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
@@ -637,7 +637,7 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
         errdefer self.allocator.free(sql_string);

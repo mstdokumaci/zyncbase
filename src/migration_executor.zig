@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
 const sqlite = @import("sqlite");
@@ -105,7 +105,7 @@ pub const MigrationExecutor = struct {
             },
             .add_column => {
                 const field = change.field orelse return error.MissingFieldInChange;
-                const sql_type_str = field.sql_type.toSqlType();
+                const sql_type_str = field.storage_type.toSqlType();
                 // SQLite ALTER TABLE ADD COLUMN does NOT allow NOT NULL without DEFAULT
                 const sql = try std.fmt.allocPrint(
                     self.allocator,
@@ -122,7 +122,7 @@ pub const MigrationExecutor = struct {
         }
     }
 
-    fn recreateTable(self: *MigrationExecutor, table: schema_manager.Table) !void {
+    fn recreateTable(self: *MigrationExecutor, table: schema.Table) !void {
         const name = table.name;
         const name_quoted = table.name_quoted;
         const backup_name = try std.fmt.allocPrint(self.allocator, "{s}_backup", .{name});
@@ -164,9 +164,9 @@ pub const MigrationExecutor = struct {
         defer common.deinit(self.allocator);
 
         for (backup_cols) |bc| {
-            var in_new = schema_manager.isSystemColumn(bc);
+            var in_new = schema.isSystemColumn(bc);
             if (!in_new) {
-                for (table.fields) |f| {
+                for (table.userFields()) |f| {
                     if (std.mem.eql(u8, bc, f.name)) {
                         in_new = true;
                         break;

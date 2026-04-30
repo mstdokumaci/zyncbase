@@ -14,8 +14,8 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
-const schema_mod = @import("schema_manager.zig");
-const SchemaManager = @import("schema_manager.zig").SchemaManager;
+const schema_mod = @import("schema.zig");
+const Schema = schema_mod.Schema;
 const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
@@ -40,7 +40,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
-    schema_manager: SchemaManager,
+    schema_manager: Schema,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
 
@@ -126,7 +126,7 @@ pub const ZyncBaseServer = struct {
             };
             defer if (config.schema_content == null and json_text.ptr != schema_mod.implicit_users_schema_json.ptr) self.memory_strategy.generalAllocator().free(json_text);
 
-            try self.schema_manager.init(self.memory_strategy.generalAllocator(), json_text);
+            self.schema_manager = try Schema.init(self.memory_strategy.generalAllocator(), json_text);
             errdefer self.schema_manager.deinit();
         }
 
@@ -146,7 +146,7 @@ pub const ZyncBaseServer = struct {
 
         // Run migrations and DDL
         {
-            const schema_ptr = &self.schema_manager.schema;
+            const schema_ptr = &self.schema_manager;
             // Apply DDL for each table
             var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
             for (schema_ptr.tables) |table| {

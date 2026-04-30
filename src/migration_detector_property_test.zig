@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
@@ -20,6 +20,18 @@ fn execDDL(db: *sqlite.Db, allocator: std.mem.Allocator, ddl: []const u8) !void 
     try db.execMulti(ddl_z, .{});
 }
 
+fn execTableDDL(db: *sqlite.Db, allocator: std.mem.Allocator, gen: *ddl_generator.DDLGenerator, table: schema.Table) !void {
+    const ddl = try gen.generateDDL(table);
+    defer allocator.free(ddl);
+    try execDDL(db, allocator, ddl);
+}
+
+fn execSchemaDDL(db: *sqlite.Db, allocator: std.mem.Allocator, gen: *ddl_generator.DDLGenerator, schema_value: *const schema.Schema) !void {
+    for (schema_value.tables) |table| {
+        try execTableDDL(db, allocator, gen, table);
+    }
+}
+
 // Feature: schema-aware-storage, Property 9: Migration plan accurately describes schema diff
 // For any pair of schemas (old, new), the MigrationPlan produced by
 // Migration_Detector.detectChanges SHALL contain exactly one Change entry for each
@@ -30,7 +42,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
     var prng = std.Random.DefaultPrng.init(42);
     const rand = prng.random();
 
-    const table_names = [_][]const u8{ "users", "posts", "items", "orders", "tags" };
+    const table_names = [_][]const u8{ "posts", "items", "orders", "tags", "comments" };
     const field_names = [_][]const u8{ "title", "status", "count", "active", "score" };
 
     var iter: usize = 0;
@@ -46,16 +58,16 @@ test "migration_detector: migration plan accurately describes schema diff" {
         switch (scenario) {
             0 => {
                 // Table doesn't exist in DB → expect create_table
-                var target_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
-                var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+                var target_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
+                var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                const target_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &target_tables,
-                };
+                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                defer target_schema.deinit();
+                const users_table = target_schema.getTable("users") orelse return error.TestExpectedValue;
+                try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 var detector = MigrationDetector.init(allocator, &db, &target_schema);
                 const plan = try detector.detectChanges(&target_schema);
@@ -69,8 +81,8 @@ test "migration_detector: migration plan accurately describes schema diff" {
             },
             1 => {
                 // Table exists with one column; target adds a new column → expect add_column
-                var existing_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
-                const existing_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
+                var existing_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
+                const existing_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
                 defer {
                     allocator.free(existing_tables[0].name);
                     allocator.free(existing_tables[0].name_quoted);
@@ -79,28 +91,26 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                const existing_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &existing_tables,
-                };
+                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                defer existing_schema.deinit();
+                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                try execTableDDL(&db, allocator, &gen, users_table.*);
 
                 const new_fname = field_names[rand.intRangeAtMost(usize, 1, field_names.len - 1)];
                 const new_field = try schema_helpers.makeFieldAlloc(allocator, new_fname, .integer);
-                var target_fields = [_]schema_parser.Field{
+                var target_fields = [_]schema.Field{
                     schema_helpers.makeField("title", .text),
                     new_field,
                 };
-                var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+                var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                     allocator.free(new_field.name);
                     allocator.free(new_field.name_quoted);
                 }
-                const target_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &target_tables,
-                };
+                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
                 const plan = try detector.detectChanges(&target_schema);
@@ -115,8 +125,8 @@ test "migration_detector: migration plan accurately describes schema diff" {
             },
             2 => {
                 // Table exists with TEXT column; target changes it to INTEGER → expect change_type
-                var existing_fields = [_]schema_parser.Field{schema_helpers.makeField("status", .text)};
-                const existing_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
+                var existing_fields = [_]schema.Field{schema_helpers.makeField("status", .text)};
+                const existing_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
                 defer {
                     allocator.free(existing_tables[0].name);
                     allocator.free(existing_tables[0].name_quoted);
@@ -125,21 +135,19 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                const existing_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &existing_tables,
-                };
+                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                defer existing_schema.deinit();
+                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                try execTableDDL(&db, allocator, &gen, users_table.*);
 
-                var target_fields = [_]schema_parser.Field{schema_helpers.makeField("status", .integer)};
-                var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+                var target_fields = [_]schema.Field{schema_helpers.makeField("status", .integer)};
+                var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                const target_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &target_tables,
-                };
+                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
                 const plan = try detector.detectChanges(&target_schema);
@@ -152,11 +160,11 @@ test "migration_detector: migration plan accurately describes schema diff" {
             },
             else => {
                 // Table exists with extra column not in target → expect remove_column
-                var existing_fields = [_]schema_parser.Field{
+                var existing_fields = [_]schema.Field{
                     schema_helpers.makeField("title", .text),
                     schema_helpers.makeField("extra_col", .text),
                 };
-                const existing_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
+                const existing_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &existing_fields)};
                 defer {
                     allocator.free(existing_tables[0].name);
                     allocator.free(existing_tables[0].name_quoted);
@@ -165,21 +173,19 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                const existing_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &existing_tables,
-                };
+                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                defer existing_schema.deinit();
+                const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
+                try execTableDDL(&db, allocator, &gen, users_table.*);
 
-                var target_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
-                var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+                var target_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
+                var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
                 defer {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                const target_schema = schema_parser.Schema{
-                    .version = "1.0.0",
-                    .tables = &target_tables,
-                };
+                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
                 const plan = try detector.detectChanges(&target_schema);
@@ -205,7 +211,7 @@ test "migration_detector: matching schema produces empty migration plan" {
 
     const table_names = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
     const field_names = [_][]const u8{ "col_a", "col_b", "col_c", "col_d" };
-    const field_types = [_]schema_parser.FieldType{ .text, .integer, .real };
+    const field_types = [_]schema.FieldType{ .text, .integer, .real };
 
     var iter: usize = 0;
     while (iter < 100) : (iter += 1) {
@@ -215,7 +221,7 @@ test "migration_detector: matching schema produces empty migration plan" {
         var gen = ddl_generator.DDLGenerator.init(allocator);
 
         const n_tables = rand.intRangeAtMost(usize, 1, 3);
-        const tables = try allocator.alloc(schema_parser.Table, n_tables);
+        const tables = try allocator.alloc(schema.Table, n_tables);
         defer {
             for (tables) |t| {
                 allocator.free(t.name);
@@ -232,7 +238,7 @@ test "migration_detector: matching schema produces empty migration plan" {
         for (0..n_tables) |ti| {
             const tname = table_names[ti % table_names.len];
             const n_fields = rand.intRangeAtMost(usize, 1, 3);
-            const fields = try allocator.alloc(schema_parser.Field, n_fields);
+            const fields = try allocator.alloc(schema.Field, n_fields);
 
             for (0..n_fields) |fi| {
                 const mf_name = field_names[fi % field_names.len];
@@ -241,16 +247,11 @@ test "migration_detector: matching schema produces empty migration plan" {
             }
 
             tables[ti] = try schema_helpers.makeTableAlloc(allocator, tname, fields);
-
-            const ddl = try gen.generateDDL(tables[ti]);
-            defer allocator.free(ddl);
-            try execDDL(&db, allocator, ddl);
         }
 
-        const target_schema = schema_parser.Schema{
-            .version = "1.0.0",
-            .tables = tables,
-        };
+        var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", tables);
+        defer target_schema.deinit();
+        try execSchemaDDL(&db, allocator, &gen, &target_schema);
 
         var detector = MigrationDetector.init(allocator, &db, &target_schema);
         const plan = try detector.detectChanges(&target_schema);

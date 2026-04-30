@@ -1,11 +1,11 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
-const Field = schema_parser.Field;
-const FieldType = schema_parser.FieldType;
-const OnDelete = schema_parser.OnDelete;
+const Field = schema.Field;
+const FieldType = schema.FieldType;
+const OnDelete = schema.OnDelete;
 const sqlite = @import("sqlite");
 
 // Feature: schema-aware-storage, Property 7: DDL contains all required columns and constraints
@@ -73,7 +73,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
 
         // Assert each field appears with correct type and NOT NULL if required
         for (fields) |field| {
-            const expected_type = field.sql_type.toSqlType();
+            const expected_type = field.storage_type.toSqlType();
 
             // Check column definition exists
             const col_def = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}", .{ field.name, expected_type });
@@ -87,7 +87,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
                 try std.testing.expect(std.mem.indexOf(u8, ddl, not_null_def) != null);
             }
 
-            if (field.sql_type == .doc_id) {
+            if (field.storage_type == .doc_id) {
                 const doc_id_check = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}{s} CHECK(length(\"{s}\") = 16)", .{
                     field.name,
                     expected_type,
@@ -237,7 +237,7 @@ test "ddl_generator: DDL emits BLOB for array fields" {
         defer allocator.free(ddl);
 
         for (fields) |f| {
-            const expected_type = f.sql_type.toSqlType();
+            const expected_type = f.storage_type.toSqlType();
             const col_def = try std.fmt.allocPrint(allocator, "  \"{s}\" {s}", .{ f.name, expected_type });
             defer allocator.free(col_def);
             try std.testing.expect(std.mem.indexOf(u8, ddl, col_def) != null);

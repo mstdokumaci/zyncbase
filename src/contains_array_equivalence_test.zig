@@ -1,14 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
 const storage_engine = @import("storage_engine.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema_manager.TableMetadata) !std.AutoHashMap(storage_engine.DocId, void) {
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema.Table) !std.AutoHashMap(storage_engine.DocId, void) {
     var ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {
@@ -21,7 +21,7 @@ fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.Type
 test "contains on array field: SQL and in-memory evaluator return same rows (text)" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("name", .text, false),
         sth.makeField("tags", .array, false),
     };
@@ -126,7 +126,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
 
     var scores_field = sth.makeField("scores", .array, false);
     scores_field.items_type = .integer;
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("name", .text, false),
         scores_field,
     };

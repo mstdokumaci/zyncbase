@@ -34,7 +34,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.
     const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
-    const val_index = items_md.field_index_map.get("val") orelse return error.UnknownField;
+    const val_index = items_md.fieldIndex("val") orelse return error.UnknownField;
     const conditions = try allocator.alloc(query_parser.Condition, 1);
     conditions[0] = query_parser.Condition{
         .field_index = val_index,

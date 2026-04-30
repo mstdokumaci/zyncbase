@@ -2,7 +2,7 @@ const std = @import("std");
 const query_parser = @import("query_parser.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const storage_engine = @import("storage_engine.zig");
 const doc_id = @import("doc_id.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -14,7 +14,7 @@ test "basic query filter parsing" {
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "age", "status" },
-        .types = &[_]schema_manager.FieldType{ .integer, .text },
+        .types = &[_]schema.FieldType{ .integer, .text },
     }});
     defer sm.deinit();
 
@@ -31,8 +31,8 @@ test "basic query filter parsing" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
-    const age_index = users_md.field_index_map.get("age") orelse return error.UnknownField;
-    const status_index = users_md.field_index_map.get("status") orelse return error.UnknownField;
+    const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
+    const status_index = users_md.fieldIndex("status") orelse return error.UnknownField;
 
     try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
     try testing.expectEqual(age_index, filter.conditions.?[0].field_index);
@@ -63,7 +63,7 @@ test "query with orConditions" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
-    const role_index = users_md.field_index_map.get("role") orelse return error.UnknownField;
+    const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
     try testing.expect(filter.or_conditions != null);
     try testing.expectEqual(@as(usize, 2), filter.or_conditions.?.len);
@@ -76,8 +76,8 @@ test "query with orderBy and after" {
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
-        .fields = &[_][]const u8{ "val", "created_at" },
-        .types = &[_]schema_manager.FieldType{ .text, .integer },
+        .fields = &[_][]const u8{"val"},
+        .types = &[_]schema.FieldType{.text},
     }});
     defer sm.deinit();
 
@@ -103,7 +103,7 @@ test "query with orderBy and after" {
     defer filter.deinit(allocator);
 
     const items_md = sm.getTable("items") orelse return error.UnknownTable;
-    const created_at_index = items_md.field_index_map.get("created_at") orelse return error.UnknownField;
+    const created_at_index = items_md.fieldIndex("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
     try testing.expectEqual(cursor_id, filter.after.?.id);
@@ -114,7 +114,7 @@ test "query rejects invalid Base64 after cursor token" {
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
-        .fields = &[_][]const u8{"created_at"},
+        .fields = &[_][]const u8{},
     }});
     defer sm.deinit();
 
@@ -280,7 +280,7 @@ test "contains on array field parses using element type" {
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"tags"},
-        .types = &[_]schema_manager.FieldType{.array},
+        .types = &[_]schema.FieldType{.array},
     }});
     defer sm.deinit();
 
@@ -295,7 +295,7 @@ test "contains on array field parses using element type" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(schema_manager.FieldType.array, filter.conditions.?[0].field_type);
+    try testing.expectEqual(schema.FieldType.array, filter.conditions.?[0].field_type);
     try testing.expectEqualStrings("urgent", filter.conditions.?[0].value.?.scalar.text);
 }
 
@@ -325,7 +325,7 @@ test "startsWith on non-text field is rejected" {
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"age"},
-        .types = &[_]schema_manager.FieldType{.integer},
+        .types = &[_]schema.FieldType{.integer},
     }});
     defer sm.deinit();
 
@@ -346,7 +346,7 @@ test "isNull with operand is rejected" {
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"deleted_at"},
-        .types = &[_]schema_manager.FieldType{.integer},
+        .types = &[_]schema.FieldType{.integer},
     }});
     defer sm.deinit();
 
@@ -391,8 +391,7 @@ test "orderBy rejects invalid direction value" {
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
-        .fields = &[_][]const u8{"created_at"},
-        .types = &[_]schema_manager.FieldType{.integer},
+        .fields = &[_][]const u8{},
     }});
     defer sm.deinit();
 
@@ -413,8 +412,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 
     var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
-        .fields = &[_][]const u8{"created_at"},
-        .types = &[_]schema_manager.FieldType{.integer},
+        .fields = &[_][]const u8{},
     }});
     defer sm.deinit();
 

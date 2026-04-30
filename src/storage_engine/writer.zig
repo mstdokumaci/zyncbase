@@ -5,7 +5,7 @@ const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
 const doc_id = @import("../doc_id.zig");
-const schema_manager = @import("../schema_manager.zig");
+const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
 const storage_values = @import("values.zig");
 const write_queue = @import("write_queue.zig");
@@ -21,7 +21,7 @@ const StorageError = errors.StorageError;
 fn getDocumentHelper(
     allocator: Allocator,
     conn: *sqlite.Db,
-    sm: *const schema_manager.SchemaManager,
+    sm: *const schema.Schema,
     table_index: usize,
     namespace_id: i64,
     id: DocId,
@@ -63,7 +63,7 @@ pub fn executeBatch(
     transaction_active: *std.atomic.Value(bool),
     ops: []const WriteOp,
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
-    sm: *const schema_manager.SchemaManager,
+    sm: *const schema.Schema,
     stmt_cache: *sql.StatementCache,
 ) !void {
     const manual_transaction_active = transaction_active.load(.acquire);
@@ -98,8 +98,8 @@ pub fn executeBatch(
         switch (op) {
             .upsert => |iop| {
                 const table_metadata = sm.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = if (table_metadata.table.namespaced) iop.namespace_id else schema_manager.global_namespace_id;
-                const owner_doc_id = if (table_metadata.table.is_users_table) iop.id else iop.owner_doc_id;
+                const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
+                const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
                 var old_row: ?TypedRow = null;
                 const capture_res = getDocumentHelper(allocator, conn, sm, iop.table_index, namespace_id, iop.id, &sql_cache, stmt_cache);
                 if (capture_res) |orow| {
@@ -110,7 +110,7 @@ pub fn executeBatch(
                 const maybe_new_row = executeUpsert(allocator, conn, iop, namespace_id, owner_doc_id, table_metadata, stmt_cache) catch |err| {
                     if (old_row) |r| r.deinit(allocator);
                     const classified_err = errors.classifyError(err);
-                    errors.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.table.name);
+                    errors.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.name);
                     return classified_err;
                 };
 
@@ -134,10 +134,10 @@ pub fn executeBatch(
             },
             .delete => |dop| {
                 const table_metadata = sm.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
-                const namespace_id = if (table_metadata.table.namespaced) dop.namespace_id else schema_manager.global_namespace_id;
+                const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
                 const maybe_old_row = executeDelete(allocator, conn, dop, namespace_id, table_metadata, stmt_cache) catch |err| {
                     const classified_err = errors.classifyError(err);
-                    errors.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.table.name);
+                    errors.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.name);
                     return classified_err;
                 };
 
@@ -180,7 +180,7 @@ pub fn flushBatch(
     metadata_cache: anytype,
     batch: *std.ArrayListUnmanaged(WriteOp),
     last_batch_time: *i64,
-    sm: *const schema_manager.SchemaManager,
+    sm: *const schema.Schema,
     change_buffer: *ChangeBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
@@ -502,7 +502,7 @@ pub fn executeUpsert(
     op: anytype,
     namespace_id: i64,
     owner_id: DocId,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     stmt_cache: *sql.StatementCache,
 ) !?TypedRow {
     const sql_str = op.sql;
@@ -519,7 +519,7 @@ pub fn executeUpsert(
     const owner_id_bytes = doc_id.toBytes(owner_id);
     if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
     bind_idx += 1;
-    if (table_metadata.table.is_users_table) {
+    if (table_metadata.is_users_table) {
         var external_id_buf: [32]u8 = undefined;
         const external_id = doc_id.hexSlice(op.id, &external_id_buf);
         if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
@@ -549,7 +549,7 @@ pub fn executeDelete(
     conn: *sqlite.Db,
     op: anytype,
     namespace_id: i64,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     stmt_cache: *sql.StatementCache,
 ) !?TypedRow {
     const sql_str = op.sql;

@@ -8,12 +8,12 @@ fn setupTestServer(allocator: std.mem.Allocator, context: *schema_helpers.TestCo
     const schema_path = try std.fs.path.join(allocator, &.{ context.test_dir, schema_name });
     defer allocator.free(schema_path);
 
-    const schema = try schema_helpers.createTestSchema(allocator, &.{
+    var schema_value = try schema_helpers.createTestSchema(allocator, &.{
         .{ .name = "test", .fields = &.{"val"} },
     });
-    defer schema_helpers.deinitTestSchema(allocator, schema);
+    defer schema_helpers.deinitTestSchema(allocator, &schema_value);
 
-    try schema_helpers.writeSchemaToFile(allocator, schema, schema_path);
+    try schema_helpers.writeSchemaToFile(allocator, &schema_value, schema_path);
     // Note: We don't delete schema_path here because server.initDetailed needs it.
     // context.deinit() will clean up everything in its directory.
 

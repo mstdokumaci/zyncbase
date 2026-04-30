@@ -15,8 +15,6 @@ test "SubscriptionEngine: basic subscribe and match" {
 
     var sm = try sth.createSchemaManager(allocator, &.{
         sth.makeTable("items", &.{
-            sth.makeField("id", .text, true),
-            sth.makeField("name", .text, false),
             sth.makeField("status", .text, false),
         }),
     });
@@ -62,7 +60,6 @@ test "SubscriptionEngine: group sharing" {
 
     var sm = try sth.createSchemaManager(allocator, &.{
         sth.makeTable("coll", &.{
-            sth.makeField("id", .text, true),
             sth.makeField("age", .integer, false),
         }),
     });
@@ -89,7 +86,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
     defer filter.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &.{
-        sth.makeTable("c", &.{sth.makeField("id", .text, true)}),
+        sth.makeTable("c", &.{}),
     });
     defer sm.deinit();
 
@@ -135,7 +132,7 @@ test "SubscriptionEngine: canonical filter key includes values" {
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &.{
-        sth.makeTable("items", &.{sth.makeField("id", .text, true)}),
+        sth.makeTable("items", &.{}),
     });
     defer sm.deinit();
 
@@ -173,7 +170,7 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &.{
-        sth.makeTable("users", &.{sth.makeField("id", .text, true)}),
+        sth.makeTable("users", &.{}),
     });
     defer sm.deinit();
 
@@ -199,7 +196,7 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     defer filter_real.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &.{
-        sth.makeTable("scores", &.{sth.makeField("id", .text, true)}),
+        sth.makeTable("scores", &.{}),
     });
     defer sm.deinit();
 
@@ -218,7 +215,7 @@ test "SubscriptionEngine: handleRowChange with long namespace/collection (heap k
 
     const filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    const table = try sth.makeTableAlloc(allocator, long_coll, &.{sth.makeField("id", .text, true)});
+    const table = try sth.makeTableAlloc(allocator, long_coll, &.{});
     defer {
         allocator.free(table.name);
         allocator.free(table.name_quoted);
@@ -310,7 +307,6 @@ test "SubscriptionEngine: group sharing with different condition order" {
 
     var sm = try sth.createSchemaManager(allocator, &.{
         sth.makeTable("coll", &.{
-            sth.makeField("id", .text, true),
             sth.makeField("status", .text, false),
             sth.makeField("type", .text, false),
         }),
@@ -344,7 +340,6 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     var sm = try sth.createSchemaManager(allocator, &.{
         sth.makeTable("users", &.{
-            sth.makeField("id", .text, true),
             sth.makeField("role", .text, false),
         }),
     });
@@ -397,7 +392,7 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     defer filter2.deinit(allocator);
 
     var sm = try sth.createSchemaManager(allocator, &.{
-        sth.makeTable("coll", &.{sth.makeField("id", .text, true)}),
+        sth.makeTable("coll", &.{}),
     });
     defer sm.deinit();
 
@@ -427,7 +422,6 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     var sm = try sth.createSchemaManager(allocator, &.{
         sth.makeTable("users", &.{
-            sth.makeField("id", .text, true),
             sth.makeField("role", .text, false),
         }),
     });

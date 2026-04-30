@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const query_parser = @import("query_parser.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -9,7 +9,7 @@ const tth = @import("typed_test_helpers.zig");
 test "StorageEngine: selectQuery basic equality" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
@@ -51,7 +51,7 @@ test "StorageEngine: selectQuery basic equality" {
 test "StorageEngine: selectQuery with OR and ordering" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("name", .text, false),
         sth.makeField("age", .integer, false),
     };
@@ -100,7 +100,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
 test "StorageEngine: selectQuery pagination (after)" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("score", .integer, false),
     };
     const table = sth.makeTable("scores", &fields_arr);
@@ -161,7 +161,7 @@ fn seedScore(scores: sth.TableFixture, id: u128, score: i64) !void {
 test "StorageEngine: selectQuery array projection uses schema field names for array fields" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("name", .text, false),
         sth.makeField("tags", .array, false),
         sth.makeField("labels", .array, false),
@@ -218,7 +218,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
 test "StorageEngine: LIKE wildcard escaping" {
     const allocator = testing.allocator;
 
-    var fields_arr = [_]schema_manager.Field{
+    var fields_arr = [_]schema.Field{
         sth.makeField("data", .text, false),
     };
     const table = sth.makeTable("wildcards", &fields_arr);

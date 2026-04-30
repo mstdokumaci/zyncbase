@@ -2,13 +2,13 @@ const std = @import("std");
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const SchemaManager = @import("schema_manager.zig").SchemaManager;
+const Schema = @import("schema.zig").Schema;
 const schema_helpers = @import("schema_test_helpers.zig");
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,
-    schema_manager: SchemaManager,
+    schema_manager: Schema,
     test_context: schema_helpers.TestContext,
     storage_engine: StorageEngine,
     manager: CheckpointManager,

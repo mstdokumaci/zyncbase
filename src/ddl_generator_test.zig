@@ -1,9 +1,9 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const DDLGenerator = ddl_generator.DDLGenerator;
-const Field = schema_parser.Field;
+const Field = schema.Field;
 const sqlite = @import("sqlite");
 
 test "ddl_generator: generate DDL for a known table" {

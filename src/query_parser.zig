@@ -1,7 +1,7 @@
 const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
-const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
+const schema = @import("schema.zig");
+const Schema = schema.Schema;
 const doc_id = @import("doc_id.zig");
 const storage_values = @import("storage_engine/values.zig");
 const value_codec = @import("storage_engine/value_codec.zig");
@@ -29,8 +29,8 @@ pub const Condition = struct {
     field_index: usize,
     op: Operator,
     value: ?TypedValue,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
 
     pub fn deinit(self: Condition, allocator: std.mem.Allocator) void {
         if (self.value) |v| v.deinit(allocator);
@@ -50,8 +50,8 @@ pub const Condition = struct {
 pub const SortDescriptor = struct {
     field_index: usize,
     desc: bool,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
 };
 
 pub const Cursor = struct {
@@ -143,8 +143,8 @@ pub const ParserError = error{
 pub fn parseCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
 ) ParserError!Cursor {
     const cursor_payload = msgpack.decodeBase64(allocator, token) catch
         return error.InvalidMessageFormat;
@@ -164,8 +164,8 @@ pub fn parseCursorToken(
 
 fn parseCursorSortValue(
     allocator: std.mem.Allocator,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.InvalidCursorSortValue;
@@ -180,7 +180,7 @@ fn parseCursorSortValue(
 /// The caller is responsible for calling `filter.deinit(allocator)` on success.
 pub fn parseQueryFilter(
     allocator: std.mem.Allocator,
-    sm: *const SchemaManager,
+    sm: *const Schema,
     table_index: usize,
     payload: msgpack.Payload,
 ) ParserError!QueryFilter {
@@ -191,11 +191,11 @@ pub fn parseQueryFilter(
 
     var conditions: ?[]Condition = null;
     var or_conditions: ?[]Condition = null;
-    const id_field = table_metadata.fields[schema_manager.id_field_index];
+    const id_field = table_metadata.fields[schema.id_field_index];
     var order_by: SortDescriptor = .{
-        .field_index = schema_manager.id_field_index,
+        .field_index = schema.id_field_index,
         .desc = false,
-        .field_type = id_field.sql_type,
+        .field_type = id_field.storage_type,
         .items_type = id_field.items_type,
     };
     var limit: ?u32 = null;
@@ -268,20 +268,20 @@ pub fn parseQueryFilter(
 
 pub const ResolvedField = struct {
     field_index: usize,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
 };
 
 /// Resolves the metadata (FieldType and items_type) for a given field by index.
 pub fn resolveFieldMetadata(
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     field_index: usize,
 ) ParserError!ResolvedField {
     if (field_index >= table_metadata.fields.len) return error.UnknownField;
     const f = table_metadata.fields[field_index];
     return .{
         .field_index = field_index,
-        .field_type = f.sql_type,
+        .field_type = f.storage_type,
         .items_type = f.items_type,
     };
 }
@@ -311,7 +311,7 @@ fn parseSortDirection(payload: msgpack.Payload) ParserError!bool {
 
 fn parseScalarValue(
     allocator: std.mem.Allocator,
-    field_type: schema_manager.FieldType,
+    field_type: schema.FieldType,
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
@@ -324,8 +324,8 @@ fn parseScalarValue(
 
 fn parseFieldValue(
     allocator: std.mem.Allocator,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
@@ -337,7 +337,7 @@ fn parseFieldValue(
 
 fn parseArrayElementValue(
     allocator: std.mem.Allocator,
-    items_type: ?schema_manager.FieldType,
+    items_type: ?schema.FieldType,
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     const item_type = items_type orelse return error.TypeMismatch;
@@ -346,7 +346,7 @@ fn parseArrayElementValue(
 
 fn parseInOperand(
     allocator: std.mem.Allocator,
-    field_type: schema_manager.FieldType,
+    field_type: schema.FieldType,
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
@@ -380,8 +380,8 @@ fn parseInOperand(
 fn parseConditionValueForOperator(
     allocator: std.mem.Allocator,
     op: Operator,
-    field_type: schema_manager.FieldType,
-    items_type: ?schema_manager.FieldType,
+    field_type: schema.FieldType,
+    items_type: ?schema.FieldType,
     payload: ?msgpack.Payload,
 ) ParserError!?TypedValue {
     switch (op) {
@@ -420,7 +420,7 @@ fn parseConditionValueForOperator(
 
 fn parseConditions(
     allocator: std.mem.Allocator,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     payload: msgpack.Payload,
 ) ParserError![]Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -441,7 +441,7 @@ fn parseConditions(
 
 fn parseCondition(
     allocator: std.mem.Allocator,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     payload: msgpack.Payload,
 ) ParserError!Condition {
     if (payload != .arr) return error.InvalidConditionFormat;
@@ -467,7 +467,7 @@ fn parseCondition(
 }
 
 fn parseSortDescriptor(
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     payload: msgpack.Payload,
 ) ParserError!SortDescriptor {
     if (payload != .arr) return error.InvalidSortFormat;

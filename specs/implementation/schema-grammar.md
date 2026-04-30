@@ -150,7 +150,7 @@ The following properties are part of the north star spec but are currently **ign
 
 ## Error Catalog
 
-The following errors are returned by `SchemaParser`:
+The following errors are returned by `Schema.init`:
 
 | Error | Condition |
 |:---|:---|

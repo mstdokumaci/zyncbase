@@ -1,6 +1,6 @@
 const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 const testing = std.testing;
@@ -10,10 +10,10 @@ test "property: random valid query filters" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var fields = [_]schema_manager.Field{
+    var fields = [_]schema.Field{
         sth.makeField("field", .text, false),
     };
-    const tables = [_]schema_manager.Table{
+    const tables = [_]schema.Table{
         sth.makeTable("items", &fields),
     };
 
@@ -71,8 +71,8 @@ test "property: reject unknown field names" {
         conds_arr[0] = try generateRandomCondition(allocator, random, true, 0, .text);
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
-        const tables = [_]schema_manager.Table{
-            sth.makeTable("items", &[_]schema_manager.Field{}),
+        const tables = [_]schema.Table{
+            sth.makeTable("items", &[_]schema.Field{}),
         };
 
         var sm = try sth.createSchemaManager(allocator, &tables);
@@ -84,7 +84,7 @@ test "property: reject unknown field names" {
     }
 }
 
-fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_index: usize, field_type: schema_manager.FieldType) !msgpack.Payload {
+fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_index: usize, field_type: schema.FieldType) !msgpack.Payload {
     const resolved_field_index: usize = if (force_unknown_field) 9999 else field_index;
     const op_code = random.intRangeAtMost(u8, 0, 12);
 
@@ -107,7 +107,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
     }
 }
 
-fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_manager.FieldType) !msgpack.Payload {
+fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema.FieldType) !msgpack.Payload {
     return switch (field_type) {
         .text => msgpack.Payload.strToPayload("v", allocator),
         .doc_id => blk: {
@@ -126,7 +126,7 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
     };
 }
 
-fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_manager.FieldType) !msgpack.Payload {
+fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema.FieldType) !msgpack.Payload {
     const len = random.intRangeAtMost(usize, 0, 3);
     const arr = try allocator.alloc(msgpack.Payload, len);
     for (arr) |*item| {

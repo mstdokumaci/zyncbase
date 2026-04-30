@@ -1,12 +1,12 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const doc_id = @import("doc_id.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_parser.QueryFilter;
 const Condition = query_parser.Condition;
-const FieldType = schema_manager.FieldType;
+const FieldType = schema.FieldType;
 const Payload = msgpack_utils.Payload;
 
 /// Creates a QueryFilter with a default order_by = "id" ASC.
@@ -63,7 +63,7 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
 /// tbl_md is used to resolve field names to indices if strings are provided in params.
 pub fn createQueryFilterPayload(
     allocator: std.mem.Allocator,
-    tbl_md: *const schema_manager.TableMetadata,
+    tbl_md: *const schema.Table,
     params: anytype,
 ) !Payload {
     var filter_map = msgpack_utils.Payload.mapPayload(allocator);
@@ -95,7 +95,7 @@ pub fn createQueryFilterPayload(
                 cond_arr[1] = Payload.uintToPayload(@intCast(cond_src[1]));
                 if (cond_info.fields.len > 2) {
                     if (f_idx < tbl_md.fields.len) {
-                        cond_arr[2] = try anyToFieldPayload(allocator, tbl_md.fields[f_idx].sql_type, cond_src[2]);
+                        cond_arr[2] = try anyToFieldPayload(allocator, tbl_md.fields[f_idx].storage_type, cond_src[2]);
                     } else {
                         cond_arr[2] = try mth.anyToPayload(allocator, cond_src[2]);
                     }

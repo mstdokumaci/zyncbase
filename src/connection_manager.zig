@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
-const SchemaManager = @import("schema_manager.zig").SchemaManager;
+const Schema = @import("schema.zig").Schema;
 const wire = @import("wire.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
@@ -32,7 +32,7 @@ pub const ConnectionManager = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
-        schema_manager: *const SchemaManager,
+        schema_manager: *const Schema,
     ) !void {
         // Pre-build SchemaSync message once at startup
         const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema_manager);

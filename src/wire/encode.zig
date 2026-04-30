@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const doc_id = @import("../doc_id.zig");
 const storage_mod = @import("../storage_engine.zig");
-const schema_manager = @import("../schema_manager.zig");
+const schema = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 
@@ -199,7 +199,7 @@ pub fn encodeQuery(
     return list.toOwnedSlice(arena_allocator);
 }
 
-pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema_manager.SchemaManager) ![]const u8 {
+pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
@@ -209,7 +209,7 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema_manager.SchemaMa
     try list.appendSlice(allocator, Keys.type);
     try list.appendSlice(allocator, Values.schema_sync);
 
-    const tables = sm.schema.tables;
+    const tables = sm.tables;
 
     try list.appendSlice(allocator, Keys.tables);
     try msgpack.encodeArrayHeader(writer, tables.len);
@@ -234,8 +234,8 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema_manager.SchemaMa
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             var flags: u8 = 0;
-            if (schema_manager.isSystemColumn(field.name)) flags |= 0b01;
-            if (field.sql_type == .doc_id) flags |= 0b10;
+            if (field.isSystem()) flags |= 0b01;
+            if (field.storage_type == .doc_id) flags |= 0b10;
             try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
     }

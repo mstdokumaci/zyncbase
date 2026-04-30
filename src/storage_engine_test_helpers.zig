@@ -8,13 +8,12 @@ const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
-pub const schema_manager = @import("schema_manager.zig");
-pub const SchemaManager = schema_manager.SchemaManager;
-pub const Schema = schema_manager.Schema;
-pub const Table = schema_manager.Table;
-pub const Field = schema_manager.Field;
-pub const FieldType = schema_manager.FieldType;
-pub const TableMetadata = schema_manager.TableMetadata;
+pub const schema = @import("schema.zig");
+pub const Schema = schema.Schema;
+pub const Table = schema.Table;
+pub const Field = schema.Field;
+pub const FieldType = schema.FieldType;
+pub const TableMetadata = schema.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const query_parser = @import("query_parser.zig");
@@ -30,7 +29,7 @@ pub const TableFixture = struct {
     metadata: *const TableMetadata,
 
     pub fn fieldIndex(self: TableFixture, field: []const u8) !usize {
-        return self.metadata.field_index_map.get(field) orelse StorageError.UnknownField;
+        return self.metadata.fieldIndex(field) orelse StorageError.UnknownField;
     }
 
     pub fn insertNamed(
@@ -185,7 +184,7 @@ fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageE
 pub const EngineTestContext = struct {
     allocator: Allocator,
     engine: StorageEngine,
-    sm: SchemaManager,
+    sm: Schema,
     memory_strategy: MemoryStrategy,
     test_context: TestContext,
 
@@ -324,41 +323,13 @@ pub fn makeTableAlloc(allocator: Allocator, name: []const u8, fields: []const Fi
     return schema_helpers.makeTableAlloc(allocator, name, fields);
 }
 
-/// Internal helper that replaces the old SchemaManager.initWithSchema logic.
-/// Takes a slice of Table values, clones them, builds SchemaMetadata.
-pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !SchemaManager {
-    const cloned_tables = try allocator.alloc(Table, tables.len);
-    var i: usize = 0;
-    errdefer {
-        for (cloned_tables[0..i]) |t| schema_manager.freeTable(allocator, t);
-        allocator.free(cloned_tables);
-    }
-    for (tables) |t| {
-        cloned_tables[i] = try t.clone(allocator);
-        i += 1;
-    }
-
-    const schema = Schema{
-        .version = try allocator.dupe(u8, "1.0.0"),
-        .tables = cloned_tables,
-    };
-    errdefer schema_manager.freeSchema(allocator, schema);
-
-    const metadata = try schema_manager.SchemaMetadata.init(allocator, &schema);
-    errdefer {
-        var m = metadata;
-        m.deinit();
-    }
-
-    return SchemaManager{
-        .allocator = allocator,
-        .schema = schema,
-        .metadata = metadata,
-    };
+/// Creates a canonical runtime schema from declared test tables.
+pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !Schema {
+    return Schema.initFromTables(allocator, "1.0.0", tables);
 }
 
-/// Creates a SchemaManager with a single dummy table.
-pub fn createDummySchemaManager(allocator: Allocator) !SchemaManager {
+/// Creates a schema with a single dummy table.
+pub fn createDummySchemaManager(allocator: Allocator) !Schema {
     const fields = try allocator.alloc(Field, 1);
     fields[0] = makeField("val", .text, false);
 
@@ -427,7 +398,7 @@ fn fillNamedColumns(
     columns: anytype,
 ) !void {
     inline for (columns, 0..) |column, i| {
-        const index = table_metadata.field_index_map.get(column.field) orelse return StorageError.UnknownField;
+        const index = table_metadata.fieldIndex(column.field) orelse return StorageError.UnknownField;
         resolved[i] = .{ .index = index, .value = column.value };
     }
 }
@@ -447,7 +418,7 @@ fn insertNamedWithMetadata(
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───
 
 fn getRowField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?storage_engine.TypedValue {
-    const idx = metadata.field_index_map.get(key) orelse return null;
+    const idx = metadata.fieldIndex(key) orelse return null;
     if (idx >= doc.values.len) return null;
     return doc.values[idx];
 }
