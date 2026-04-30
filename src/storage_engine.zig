@@ -281,10 +281,6 @@ pub const StorageEngine = struct {
         return signal.result orelse error.InvalidOperation;
     }
 
-    fn internalExecuteCheckpoint(self: *StorageEngine, mode: CheckpointMode) !CheckpointStats {
-        return connection.internalExecuteCheckpoint(&self._writer_conn, self.allocator, self.db_path, self.options.in_memory, mode);
-    }
-
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
         return connection.getWalSize(self.allocator, self.db_path, self.options.in_memory);
