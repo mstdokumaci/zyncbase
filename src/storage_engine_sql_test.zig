@@ -2,7 +2,7 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
-const types = @import("storage_engine.zig");
+const ColumnValue = @import("storage_engine.zig").ColumnValue;
 
 test "storage SQL builders quote identifiers" {
     const allocator = std.testing.allocator;
@@ -13,7 +13,7 @@ test "storage SQL builders quote identifiers" {
     defer sm.deinit();
     const table_metadata = sm.getTable("select") orelse return error.TestExpectedValue;
 
-    const columns = [_]types.ColumnValue{
+    const columns = [_]ColumnValue{
         .{ .index = schema.first_user_field_index, .value = undefined },
     };
 

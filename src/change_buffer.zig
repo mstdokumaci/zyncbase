@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const TypedRow = @import("storage_engine/values.zig").TypedRow;
+const TypedRow = @import("storage_engine.zig").TypedRow;
 
 pub const OwnedRowChange = struct {
     table_index: usize,

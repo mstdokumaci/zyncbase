@@ -3,11 +3,10 @@ const msgpack = @import("msgpack_utils.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
 const doc_id = @import("doc_id.zig");
-const storage_values = @import("storage_engine/values.zig");
-const value_codec = @import("storage_engine/value_codec.zig");
-const DocId = storage_values.DocId;
-const ScalarValue = storage_values.ScalarValue;
-const TypedValue = storage_values.TypedValue;
+const typedValueFromPayload = @import("storage_engine.zig").typedValueFromPayload;
+const DocId = @import("storage_engine.zig").DocId;
+const ScalarValue = @import("storage_engine.zig").ScalarValue;
+const TypedValue = @import("storage_engine.zig").TypedValue;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -169,7 +168,7 @@ fn parseCursorSortValue(
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.InvalidCursorSortValue;
-    return value_codec.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+    return typedValueFromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidCursorSortValue,
     };
@@ -316,7 +315,7 @@ fn parseScalarValue(
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
     if (field_type == .array) return error.UnsupportedOperatorForFieldType;
-    return value_codec.fromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
+    return typedValueFromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TypeMismatch,
     };
@@ -329,7 +328,7 @@ fn parseFieldValue(
     payload: msgpack.Payload,
 ) ParserError!TypedValue {
     if (payload == .nil) return error.NullOperandUnsupported;
-    return value_codec.fromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
+    return typedValueFromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TypeMismatch,
     };
