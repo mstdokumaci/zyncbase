@@ -18,6 +18,13 @@ const TypedRow = storage_values.TypedRow;
 const WriteOp = write_queue.WriteOp;
 const StorageError = errors.StorageError;
 
+fn execTransactionControl(conn: *sqlite.Db, statement: [:0]const u8) !void {
+    var err_msg: [*c]u8 = null;
+    const rc = sqlite.c.sqlite3_exec(conn.db, statement.ptr, null, null, &err_msg);
+    if (err_msg != null) sqlite.c.sqlite3_free(err_msg);
+    if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
+}
+
 fn getDocumentHelper(
     allocator: Allocator,
     conn: *sqlite.Db,
@@ -448,6 +455,33 @@ pub fn executeBatchOp(
     stmt_cache: *sql.StatementCache,
 ) void {
     const entries = bop.entries;
+    var tx_started = false;
+    var final_err: ?anyerror = null;
+    defer {
+        if (tx_started) {
+            execTransactionControl(conn, "ROLLBACK") catch |rollback_err| {
+                errors.logDatabaseError("executeBatchOp ROLLBACK", errors.classifyError(rollback_err), "");
+            };
+            transaction_active.store(false, .release);
+        }
+
+        if (bop.completion_signal) |sig| sig.signal(final_err);
+
+        for (entries) |entry| {
+            allocator.free(entry.sql);
+            if (entry.values) |vals| {
+                for (vals) |v| v.deinit(allocator);
+                allocator.free(vals);
+            }
+        }
+        allocator.free(entries);
+
+        _ = pending_writes_count.fetchSub(1, .release);
+        write_mutex.lock();
+        flush_cond.broadcast();
+        write_mutex.unlock();
+        last_batch_time.* = std.time.milliTimestamp();
+    }
 
     // 1. Build eviction keys from all entries
     var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
@@ -469,18 +503,15 @@ pub fn executeBatchOp(
         pending_changes.deinit(allocator);
     }
 
-    conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
-        errors.logDatabaseError("executeBatchOp BEGIN", errors.classifyError(err), "");
+    execTransactionControl(conn, "BEGIN TRANSACTION") catch |err| {
+        const classified_err = errors.classifyError(err);
+        errors.logDatabaseError("executeBatchOp BEGIN", classified_err, "");
+        final_err = classified_err;
         return;
     };
+    tx_started = true;
     transaction_active.store(true, .release);
 
-    errdefer {
-        conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
-            errors.logDatabaseError("executeBatchOp ROLLBACK", errors.classifyError(rollback_err), "");
-        };
-        transaction_active.store(false, .release);
-    }
     var sql_cache = std.AutoHashMap(usize, []const u8).init(allocator);
     defer {
         var it = sql_cache.valueIterator();
@@ -488,9 +519,12 @@ pub fn executeBatchOp(
         sql_cache.deinit();
     }
 
-    var success = true;
     for (entries) |entry| {
-        const table_metadata = sm.getTableByIndex(entry.table_index) orelse continue;
+        const table_metadata = sm.getTableByIndex(entry.table_index) orelse {
+            final_err = StorageError.UnknownTable;
+            std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
+            break;
+        };
         const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
 
         switch (entry.kind) {
@@ -521,8 +555,9 @@ pub fn executeBatchOp(
                     }
                 } else |err| {
                     if (old_row) |r| r.deinit(allocator);
-                    errors.logDatabaseError("executeBatchOp UPSERT", errors.classifyError(err), table_metadata.name);
-                    success = false;
+                    const classified_err = errors.classifyError(err);
+                    errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
+                    final_err = classified_err;
                     break;
                 }
             },
@@ -541,16 +576,18 @@ pub fn executeBatchOp(
                         std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, doc_id.hexSlice(entry.id, &id_hex_buf) });
                     }
                 } else |err| {
-                    errors.logDatabaseError("executeBatchOp DELETE", errors.classifyError(err), table_metadata.name);
-                    success = false;
+                    const classified_err = errors.classifyError(err);
+                    errors.logDatabaseError("executeBatchOp DELETE", classified_err, table_metadata.name);
+                    final_err = classified_err;
                     break;
                 }
             },
         }
     }
 
-    if (success) {
-        if (conn.exec("COMMIT", .{}, .{})) |_| {
+    if (final_err == null) {
+        if (execTransactionControl(conn, "COMMIT")) |_| {
+            tx_started = false;
             transaction_active.store(false, .release);
             _ = write_seq.fetchAdd(1, .acq_rel);
 
@@ -571,35 +608,11 @@ pub fn executeBatchOp(
                 }
             }
         } else |err| {
-            errors.logDatabaseError("executeBatchOp COMMIT", errors.classifyError(err), "");
-            success = false;
+            const classified_err = errors.classifyError(err);
+            errors.logDatabaseError("executeBatchOp COMMIT", classified_err, "");
+            final_err = classified_err;
         }
     }
-
-    if (!success) {
-        if (conn.exec("ROLLBACK", .{}, .{})) |_| {} else |rollback_err| {
-            errors.logDatabaseError("executeBatchOp ROLLBACK", errors.classifyError(rollback_err), "");
-        }
-        transaction_active.store(false, .release);
-    }
-
-    if (bop.completion_signal) |sig| sig.signal(if (success) null else StorageError.SQLiteError);
-
-    // Cleanup
-    for (entries) |entry| {
-        allocator.free(entry.sql);
-        if (entry.values) |vals| {
-            for (vals) |v| v.deinit(allocator);
-            allocator.free(vals);
-        }
-    }
-    allocator.free(entries);
-
-    _ = pending_writes_count.fetchSub(1, .release);
-    write_mutex.lock();
-    flush_cond.broadcast();
-    write_mutex.unlock();
-    last_batch_time.* = std.time.milliTimestamp();
 }
 
 pub fn executeUpsert(

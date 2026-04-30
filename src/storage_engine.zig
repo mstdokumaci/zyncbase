@@ -482,6 +482,10 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
 
+        for (entries) |entry| {
+            _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
+        }
+
         const op = WriteOp{
             .batch = .{
                 .entries = entries,
@@ -490,7 +494,10 @@ pub const StorageEngine = struct {
         };
 
         _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
+        self.pushWrite(op) catch |err| {
+            _ = self.pending_writes_count.fetchSub(1, .release);
+            return err;
+        };
     }
 
     /// Select a single document by ID.

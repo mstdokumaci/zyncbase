@@ -3,6 +3,104 @@ const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
+const storage_mod = @import("storage_engine.zig");
+const writer = @import("storage_engine/writer.zig");
+
+const BatchOpForTest = struct {
+    entries: []storage_mod.BatchEntry,
+    completion_signal: ?*storage_mod.WriteOp.CompletionSignal,
+};
+
+const DirectWriterContext = struct {
+    allocator: std.mem.Allocator,
+    engine: storage_mod.StorageEngine,
+    sm: sth.Schema,
+    memory_strategy: sth.MemoryStrategy,
+    test_context: sth.TestContext,
+
+    fn init(self: *DirectWriterContext, allocator: std.mem.Allocator, table: sth.Table) !void {
+        self.allocator = allocator;
+        self.test_context = try sth.TestContext.initInMemory(allocator);
+        errdefer self.test_context.deinit();
+
+        try self.memory_strategy.init(allocator);
+        errdefer self.memory_strategy.deinit();
+
+        self.sm = try sth.createSchema(allocator, &[_]sth.Table{table});
+        errdefer self.sm.deinit();
+
+        try self.engine.init(
+            allocator,
+            &self.memory_strategy,
+            self.test_context.test_dir,
+            &self.sm,
+            .{},
+            .{ .in_memory = true, .reader_pool_size = 1 },
+            null,
+            null,
+        );
+        errdefer self.engine.deinit();
+    }
+
+    fn deinit(self: *DirectWriterContext) void {
+        self.engine.deinit();
+        self.sm.deinit();
+        self.memory_strategy.deinit();
+        self.test_context.deinit();
+    }
+};
+
+fn makeDeleteBatchEntries(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.BatchEntry {
+    const entries = try allocator.alloc(storage_mod.BatchEntry, 1);
+    errdefer allocator.free(entries);
+    entries[0] = .{
+        .kind = .delete,
+        .table_index = table_index,
+        .id = 1,
+        .namespace_id = 1,
+        .owner_doc_id = 0,
+        .sql = try allocator.dupe(u8, "not used"),
+        .values = null,
+        .timestamp = 0,
+    };
+    return entries;
+}
+
+fn freeBatchEntries(allocator: std.mem.Allocator, entries: []storage_mod.BatchEntry) void {
+    for (entries) |entry| {
+        allocator.free(entry.sql);
+        if (entry.values) |vals| {
+            for (vals) |v| v.deinit(allocator);
+            allocator.free(vals);
+        }
+    }
+    allocator.free(entries);
+}
+
+fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEntry, signal: *storage_mod.WriteOp.CompletionSignal) void {
+    var last_batch_time: i64 = 0;
+    const op = BatchOpForTest{
+        .entries = entries,
+        .completion_signal = signal,
+    };
+    writer.executeBatchOp(
+        ctx.allocator,
+        &ctx.engine._writer_conn,
+        &ctx.engine.transaction_active,
+        &ctx.engine.write_seq,
+        &ctx.engine.pending_writes_count,
+        &ctx.engine.write_mutex,
+        &ctx.engine.flush_cond,
+        &ctx.engine.metadata_cache,
+        op,
+        &last_batch_time,
+        ctx.engine.schema_manager,
+        &ctx.engine.change_buffer,
+        null,
+        null,
+        &ctx.engine.writer_stmt_cache,
+    );
+}
 
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
@@ -214,6 +312,76 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
     defer managed.deinit();
     try testing.expect(managed.rows.len > 0);
+}
+
+test "StorageEngine: low-level batch writer cleans up when begin fails" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+    var signal = storage_mod.WriteOp.CompletionSignal{};
+    ctx.engine.pending_writes_count.store(1, .release);
+
+    try ctx.engine._writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
+    defer ctx.engine._writer_conn.exec("ROLLBACK", .{}, .{}) catch |err| {
+        std.log.warn("failed to roll back test transaction: {}", .{err});
+    };
+
+    executeBatchForTest(&ctx, entries, &signal);
+
+    try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
+    try testing.expect(!ctx.engine.transaction_active.load(.acquire));
+}
+
+test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+    var signal = storage_mod.WriteOp.CompletionSignal{};
+    const write_seq_before = ctx.engine.write_seq.load(.acquire);
+    ctx.engine.pending_writes_count.store(1, .release);
+
+    executeBatchForTest(&ctx, entries, &signal);
+
+    try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
+    try testing.expect(!ctx.engine.transaction_active.load(.acquire));
+    try testing.expectEqual(write_seq_before, ctx.engine.write_seq.load(.acquire));
+
+    try ctx.engine._writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine._writer_conn.exec("ROLLBACK", .{}, .{});
+}
+
+test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-batch-validate-table", table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+    var caller_owns_entries = true;
+    defer if (caller_owns_entries) freeBatchEntries(allocator, entries);
+
+    ctx.engine.batchWrite(entries) catch |err| {
+        try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
+        try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
+        return;
+    };
+
+    caller_owns_entries = false;
+    return error.TestUnexpectedResult;
 }
 
 test "StorageEngine: concurrent reads" {
