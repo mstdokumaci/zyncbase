@@ -17,7 +17,7 @@ test "property: random valid query filters" {
         sth.makeTable("items", &fields),
     };
 
-    var sm = try sth.createSchemaManager(allocator, &tables);
+    var sm = try sth.createSchema(allocator, &tables);
     defer sm.deinit();
 
     const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
@@ -75,7 +75,7 @@ test "property: reject unknown field names" {
             sth.makeTable("items", &[_]schema.Field{}),
         };
 
-        var sm = try sth.createSchemaManager(allocator, &tables);
+        var sm = try sth.createSchema(allocator, &tables);
         defer sm.deinit();
 
         const tbl = sm.getTable("items") orelse return error.TestExpectedValue;

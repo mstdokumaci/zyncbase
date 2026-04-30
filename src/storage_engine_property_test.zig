@@ -13,7 +13,7 @@ test "storage: engine initialization errors" {
 
     // Test 1: Invalid directory path
     const invalid_dir = "";
-    var sm1 = try sth.createDummySchemaManager(allocator);
+    var sm1 = try sth.createDummySchema(allocator);
     defer sm1.deinit();
     var engine1: StorageEngine = undefined;
     const result1 = engine1.init(allocator, &ms, invalid_dir, &sm1, .{}, .{ .in_memory = false }, null, null);
@@ -29,7 +29,7 @@ test "storage: engine initialization errors" {
     const file = try std.fs.cwd().createFile(test_file, .{});
     file.close();
 
-    var sm2 = try sth.createDummySchemaManager(allocator);
+    var sm2 = try sth.createDummySchema(allocator);
     defer sm2.deinit();
     var engine2: StorageEngine = undefined;
     const result2 = engine2.init(allocator, &ms, test_file, &sm2, .{}, .{ .in_memory = false }, null, null);
@@ -40,7 +40,7 @@ test "storage: engine initialization errors" {
     defer context_valid.deinit();
     const test_dir = context_valid.test_dir;
 
-    var sm3 = try sth.createDummySchemaManager(allocator);
+    var sm3 = try sth.createDummySchema(allocator);
     defer sm3.deinit();
     var engine3: StorageEngine = undefined;
     try engine3.init(allocator, &ms, test_dir, &sm3, .{}, .{ .in_memory = false }, null, null);

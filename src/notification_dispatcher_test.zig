@@ -24,7 +24,7 @@ test "NotificationDispatcher: empty poll" {
 
     const empty_fields = [_]schema.Field{};
     const table = sth.makeTable("_test", &empty_fields);
-    var sm = try sth.createSchemaManager(alloc, &[_]schema.Table{table});
+    var sm = try sth.createSchema(alloc, &[_]schema.Table{table});
     defer sm.deinit();
 
     var nd: NotificationDispatcher = undefined;
@@ -50,7 +50,7 @@ test "NotificationDispatcher: poll processes items" {
 
     const empty_fields = [_]schema.Field{};
     const table = sth.makeTable("coll", &empty_fields);
-    var sm = try sth.createSchemaManager(alloc, &[_]schema.Table{table});
+    var sm = try sth.createSchema(alloc, &[_]schema.Table{table});
     defer sm.deinit();
 
     var nd: NotificationDispatcher = undefined;

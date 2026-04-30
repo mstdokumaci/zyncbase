@@ -340,7 +340,7 @@ test "logging: level filtering" {
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm2 = try sth.createSchemaManager(allocator, tables);
+        var sm2 = try sth.createSchema(allocator, tables);
         defer sm2.deinit();
 
         var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
@@ -423,7 +423,7 @@ test "logging: message formatting" {
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm3 = try sth.createSchemaManager(allocator, tables);
+        var sm3 = try sth.createSchema(allocator, tables);
         defer sm3.deinit();
 
         var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
@@ -490,7 +490,7 @@ test "logging: message formatting" {
         var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm4 = try sth.createSchemaManager(allocator, tables);
+        var sm4 = try sth.createSchema(allocator, tables);
         defer sm4.deinit();
 
         var subscription_engine = SubscriptionEngine.init(allocator);

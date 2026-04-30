@@ -7,6 +7,8 @@ const migration_detector = @import("migration_detector.zig");
 const migration_executor = @import("migration_executor.zig");
 const MigrationExecutor = migration_executor.MigrationExecutor;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
+const schema_system = @import("schema/system.zig");
+const schema_index = @import("schema/index.zig");
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
@@ -86,6 +88,84 @@ pub const TableDef = struct {
     types: ?[]const schema.FieldType = null,
 };
 
+pub fn buildRuntimeTestTable(allocator: std.mem.Allocator, declared: *const schema.Table, table_index: usize) !schema.Table {
+    const name = try allocator.dupe(u8, declared.name);
+    errdefer allocator.free(name);
+
+    const name_quoted = try allocator.dupe(u8, declared.name_quoted);
+    errdefer allocator.free(name_quoted);
+
+    const metadata = if (declared.metadata) |md| try md.clone(allocator) else null;
+    errdefer if (metadata) |md| md.deinit(allocator);
+
+    const total_fields = schema_system.leading_system_field_count + declared.fields.len + schema_system.trailing_system_field_count;
+    var fields = try allocator.alloc(schema.Field, total_fields);
+    var count: usize = 0;
+    errdefer {
+        for (fields[0..count]) |f| f.deinit(allocator);
+        allocator.free(fields);
+    }
+
+    for (schema_system.leading_system_fields) |field| {
+        fields[count] = field;
+        count += 1;
+    }
+
+    const user_field_start = count;
+    for (declared.fields) |field| {
+        fields[count] = try field.clone(allocator);
+        fields[count].kind = .user;
+        count += 1;
+    }
+    const user_field_end = count;
+
+    for (schema_system.trailing_system_fields) |field| {
+        fields[count] = field;
+        count += 1;
+    }
+
+    var table = schema.Table{
+        .name = name,
+        .name_quoted = name_quoted,
+        .fields = fields,
+        .namespaced = declared.namespaced,
+        .is_users_table = std.mem.eql(u8, declared.name, "users") or declared.is_users_table,
+        .index = table_index,
+        .canonical_fields = true,
+        .user_field_start = user_field_start,
+        .user_field_end = user_field_end,
+        .metadata = metadata,
+    };
+    errdefer table.deinit(allocator);
+
+    try schema_index.buildFieldIndex(allocator, &table);
+    return table;
+}
+
+pub fn createTestSchemaFromDeclared(allocator: std.mem.Allocator, declared_tables: []const schema.Table) !Schema {
+    var tables = try allocator.alloc(schema.Table, declared_tables.len);
+    var built_count: usize = 0;
+    errdefer {
+        for (tables[0..built_count]) |*t| t.deinit(allocator);
+        allocator.free(tables);
+    }
+
+    for (declared_tables, 0..) |declared, idx| {
+        tables[built_count] = try buildRuntimeTestTable(allocator, &declared, idx);
+        built_count += 1;
+    }
+
+    var result = Schema{
+        .allocator = allocator,
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    errdefer result.deinit();
+
+    try schema_index.buildTableIndex(allocator, &result);
+    return result;
+}
+
 pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
     if (tables_def.len == 0) {
         return Schema{
@@ -97,24 +177,25 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
 
     var tables = try allocator.alloc(schema.Table, tables_def.len);
     var table_count: usize = 0;
-    defer {
+    errdefer {
         for (tables[0..table_count]) |*table| table.deinit(allocator);
         allocator.free(tables);
     }
 
     for (tables_def, 0..) |td, i| {
-        var fields = try allocator.alloc(schema.Field, td.fields.len);
+        // Build user fields
+        var user_fields = try allocator.alloc(schema.Field, td.fields.len);
         var field_count: usize = 0;
         errdefer {
-            for (fields[0..field_count]) |field| field.deinit(allocator);
-            allocator.free(fields);
+            for (user_fields[0..field_count]) |field| field.deinit(allocator);
+            allocator.free(user_fields);
         }
         for (td.fields, 0..) |fn_name, j| {
             const fname = try allocator.dupe(u8, fn_name);
             errdefer allocator.free(fname);
             const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
             errdefer allocator.free(fname_quoted);
-            fields[j] = .{
+            user_fields[j] = .{
                 .name = fname,
                 .name_quoted = fname_quoted,
                 .declared_type = if (td.types) |ts| ts[j] else .text,
@@ -124,25 +205,68 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
                 .indexed = false,
                 .references = null,
                 .on_delete = null,
+                .kind = .user,
             };
             field_count += 1;
         }
+
+        // Build runtime table with system fields
         const tname = try allocator.dupe(u8, td.name);
         errdefer allocator.free(tname);
         const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
         errdefer allocator.free(tname_quoted);
-        tables[i] = .{
+
+        const total_fields = schema_system.leading_system_field_count + td.fields.len + schema_system.trailing_system_field_count;
+        var all_fields = try allocator.alloc(schema.Field, total_fields);
+        var count: usize = 0;
+        errdefer {
+            for (all_fields[0..count]) |f| f.deinit(allocator);
+            allocator.free(all_fields);
+        }
+
+        for (schema_system.leading_system_fields) |field| {
+            all_fields[count] = field;
+            count += 1;
+        }
+
+        const user_field_start = count;
+        @memcpy(all_fields[count..][0..user_fields.len], user_fields);
+        count += user_fields.len;
+        const user_field_end = count;
+
+        for (schema_system.trailing_system_fields) |field| {
+            all_fields[count] = field;
+            count += 1;
+        }
+
+        allocator.free(user_fields);
+
+        tables[table_count] = schema.Table{
             .name = tname,
             .name_quoted = tname_quoted,
-            .fields = fields,
-            .is_users_table = std.mem.eql(u8, td.name, "users"),
+            .fields = all_fields,
             .namespaced = !std.mem.eql(u8, td.name, "users"),
+            .is_users_table = std.mem.eql(u8, td.name, "users"),
+            .index = i,
+            .canonical_fields = true,
+            .user_field_start = user_field_start,
+            .user_field_end = user_field_end,
         };
-        field_count = 0;
+        errdefer tables[table_count].deinit(allocator);
+
+        try schema_index.buildFieldIndex(allocator, &tables[table_count]);
         table_count += 1;
     }
 
-    return Schema.initFromTables(allocator, "1.0.0", tables);
+    var result = Schema{
+        .allocator = allocator,
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = tables,
+    };
+    errdefer result.deinit();
+
+    try schema_index.buildTableIndex(allocator, &result);
+    return result;
 }
 
 pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {

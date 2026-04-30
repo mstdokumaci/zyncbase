@@ -205,7 +205,7 @@ pub const EngineTestContext = struct {
         try self.memory_strategy.init(allocator);
         errdefer self.memory_strategy.deinit();
 
-        self.sm = try createSchemaManager(allocator, tables);
+        self.sm = try createSchema(allocator, tables);
         errdefer self.sm.deinit();
 
         try schema_helpers.setupTestEngineWithPerformance(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.sm, performance_config, effective_options);
@@ -324,18 +324,18 @@ pub fn makeTableAlloc(allocator: Allocator, name: []const u8, fields: []const Fi
 }
 
 /// Creates a canonical runtime schema from declared test tables.
-pub fn createSchemaManager(allocator: Allocator, tables: []const Table) !Schema {
-    return Schema.initFromTables(allocator, "1.0.0", tables);
+pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
+    return schema_helpers.createTestSchemaFromDeclared(allocator, tables);
 }
 
 /// Creates a schema with a single dummy table.
-pub fn createDummySchemaManager(allocator: Allocator) !Schema {
+pub fn createDummySchema(allocator: Allocator) !Schema {
     const fields = try allocator.alloc(Field, 1);
     fields[0] = makeField("val", .text, false);
 
     var tables = try allocator.alloc(Table, 1);
     tables[0] = makeTable("_dummy", fields);
-    const sm = try createSchemaManager(allocator, tables);
+    const sm = try createSchema(allocator, tables);
 
     allocator.free(fields);
     allocator.free(tables);
@@ -381,7 +381,7 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     try ctx.memory_strategy.init(allocator);
     errdefer ctx.memory_strategy.deinit();
 
-    ctx.sm = try createSchemaManager(allocator, tables);
+    ctx.sm = try createSchema(allocator, tables);
     errdefer ctx.sm.deinit();
 
     try schema_helpers.setupTestEngine(&ctx.engine, allocator, &ctx.memory_strategy, &ctx.test_context, &ctx.sm, effective_options);
