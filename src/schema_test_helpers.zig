@@ -87,6 +87,14 @@ pub const TableDef = struct {
 };
 
 pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
+    if (tables_def.len == 0) {
+        return Schema{
+            .allocator = allocator,
+            .version = try allocator.dupe(u8, "1.0.0"),
+            .tables = try allocator.alloc(schema.Table, 0),
+        };
+    }
+
     var tables = try allocator.alloc(schema.Table, tables_def.len);
     var table_count: usize = 0;
     defer {

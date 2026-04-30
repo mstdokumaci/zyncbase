@@ -354,7 +354,7 @@ fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: u
     };
 
     for (system.leading_system_fields) |field| {
-        fields[count] = try field.clone(allocator);
+        fields[count] = field;
         count += 1;
     }
 
@@ -367,7 +367,7 @@ fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: u
     const user_field_end = count;
 
     for (system.trailing_system_fields) |field| {
-        fields[count] = try field.clone(allocator);
+        fields[count] = field;
         count += 1;
     }
 

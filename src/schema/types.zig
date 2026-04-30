@@ -109,6 +109,7 @@ pub const Field = struct {
     }
 
     pub fn deinit(self: Field, allocator: Allocator) void {
+        if (self.kind == .system or self.kind == .timestamp) return;
         allocator.free(self.name);
         allocator.free(self.name_quoted);
         if (self.references) |ref| allocator.free(ref);
