@@ -140,85 +140,14 @@ This guarantees deterministic on-disk representation and deterministic read/quer
 > 3. If the specified `schema.json` file is missing or omitted, the server will still boot successfully, but **only the implicitly defined `users` collection will be available** for data storage. Any mutations to other collections will be safely rejected.
 
 ```zig
-const SchemaParser = struct {
-    allocator: Allocator,
-    
-    pub fn parseTable(self: *SchemaParser, name: []const u8, store_item: json.Value) !Table {
-        const fields_obj = store_item.get("fields") orelse return error.InvalidSchema;
-        const required = store_item.get("required");
-        
-        var fields = ArrayList(Field).init(self.allocator);
-        
-        const is_users = std.mem.eql(u8, name, "users");
-        const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
-        if (is_users) {
-            if (required) |req| if (req.array.items.len > 0) {
-                return error.InvalidSchema; // Identity rows are auto-created before profile fields exist.
-            };
-        }
-        
-        // Always include uniform system columns.
-        try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
-        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Active namespace or reserved global namespace 0.
-        try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
-        
-        if (is_users) {
-            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .indexed = true });
-        }
-        
-        // Parse schema fields
-        for (fields_obj.object.items) |field_entry| {
-            const field_name = field_entry.key;
-            const field_def = field_entry.value;
-            
-            // Check if field is nested object (flatten it)
-            if (self.isNestedObject(field_def)) {
-                const nested_fields = try self.flattenNestedObject(field_name, field_def);
-                try fields.appendSlice(nested_fields);
-            } else {
-                const field = try self.parseField(field_name, field_def, required);
-                try fields.append(field);
-            }
-        }
-        
-        // Always include timestamps
-        try fields.append(.{ .name = "created_at", .type = .integer, .required = true });
-        try fields.append(.{ .name = "updated_at", .type = .integer, .required = true });
-        
-        return Table{
-            .name = name,
-            .namespaced = namespaced,
-            .fields = fields.toOwnedSlice(),
-        };
-    }
-    
-    fn isNestedObject(self: *SchemaParser, field_def: json.Value) bool {
-        const field_type = field_def.get("type") orelse return false;
-        if (!std.mem.eql(u8, field_type.string, "object")) return false;
-        return field_def.get("fields") != null;
-    }
-    
-    fn flattenNestedObject(self: *SchemaParser, prefix: []const u8, field_def: json.Value) ![]Field {
-        var fields = ArrayList(Field).init(self.allocator);
-        const nested_fields_obj = field_def.get("fields") orelse return error.InvalidSchema;
-        for (nested_fields_obj.object.items) |prop_entry| {
-            const flattened_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ prefix, prop_entry.key });
-            const field = try self.parseField(flattened_name, prop_entry.value, null);
-            try fields.append(field);
-        }
-        return fields.toOwnedSlice();
-    }
-    
-    fn parseField(self: *SchemaParser, name: []const u8, field_def: json.Value, required: ?json.Value) !Field {
-        const field_type = field_def.get("type") orelse return error.InvalidSchema;
-        return Field{
-            .name = name,
-            .type = try self.mapType(field_type.string, field_def),
-            .required = self.isRequired(name, required),
-            .indexed = field_def.get("indexed") != null,
-        };
-    }
-};
+const Schema = @import("schema.zig").Schema;
+
+var schema = try Schema.init(allocator, schema_json);
+defer schema.deinit();
+
+// Schema.init parses JSON, validates references and required leaf fields,
+// normalizes canonical table/field ordering, and builds lookup indexes.
+// external_id is storage-internal for users and is not exposed as a wire field.
 
 const DDLGenerator = struct {
     allocator: Allocator,

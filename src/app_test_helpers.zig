@@ -8,8 +8,8 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const schema_manager = @import("schema_manager.zig");
-const SchemaManager = schema_manager.SchemaManager;
+const schema = @import("schema.zig");
+const Schema = schema.Schema;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
@@ -83,7 +83,7 @@ pub const AppTestContext = struct {
     store_service: StoreService,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
-    schema_manager: SchemaManager,
+    schema_manager: Schema,
     test_context: schema_helpers.TestContext,
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
@@ -95,33 +95,22 @@ pub const AppTestContext = struct {
         try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, options);
     }
 
-    pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: schema_manager.Schema) !void {
-        const cloned_schema = try schema.clone(allocator);
-        errdefer schema_manager.freeSchema(allocator, cloned_schema);
+    pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema_value: Schema) !void {
+        const json_text = try schema_value.format(allocator);
+        defer allocator.free(json_text);
 
-        const metadata = try schema_manager.SchemaMetadata.init(allocator, &cloned_schema);
-        errdefer {
-            var m = metadata;
-            m.deinit(allocator);
-        }
-
-        const sm = SchemaManager{
-            .allocator = allocator,
-            .schema = cloned_schema,
-            .metadata = metadata,
-        };
-
+        var sm = try Schema.init(allocator, json_text);
+        errdefer sm.deinit();
         try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
-        // SAFETY: sm is immediately initialized by sm.init() before use.
-        var sm: SchemaManager = undefined;
-        try sm.init(allocator, json);
+        var sm = try Schema.init(allocator, json);
+        errdefer sm.deinit();
         try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
     }
 
-    pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: SchemaManager, options: StorageEngine.Options) !void {
+    pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: Schema, options: StorageEngine.Options) !void {
         self.allocator = allocator;
         self.schema_manager = sm;
         errdefer self.schema_manager.deinit();
@@ -180,7 +169,7 @@ pub const AppTestContext = struct {
         self.memory_strategy.deinit();
     }
 
-    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_manager.TableMetadata {
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema.Table {
         return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
     }
 

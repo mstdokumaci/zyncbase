@@ -7,7 +7,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
@@ -336,11 +336,11 @@ test "logging: level filtering" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-        var tables = try allocator.alloc(schema_manager.Table, 1);
+        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm2 = try sth.createSchemaManager(allocator, tables);
+        var sm2 = try sth.createSchema(allocator, tables);
         defer sm2.deinit();
 
         var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
@@ -419,11 +419,11 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-        var tables = try allocator.alloc(schema_manager.Table, 1);
+        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm3 = try sth.createSchemaManager(allocator, tables);
+        var sm3 = try sth.createSchema(allocator, tables);
         defer sm3.deinit();
 
         var subscription_engine: SubscriptionEngine = SubscriptionEngine.init(allocator);
@@ -486,11 +486,11 @@ test "logging: message formatting" {
         defer context.deinit();
         const test_dir = context.test_dir;
 
-        var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
-        var tables = try allocator.alloc(schema_manager.Table, 1);
+        var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+        var tables = try allocator.alloc(schema.Table, 1);
         defer allocator.free(tables);
         tables[0] = sth.makeTable("test", &fields);
-        var sm4 = try sth.createSchemaManager(allocator, tables);
+        var sm4 = try sth.createSchema(allocator, tables);
         defer sm4.deinit();
 
         var subscription_engine = SubscriptionEngine.init(allocator);

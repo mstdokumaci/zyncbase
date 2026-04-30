@@ -1,5 +1,5 @@
 const std = @import("std");
-const schema_parser = @import("schema_parser.zig");
+const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
@@ -46,7 +46,7 @@ test "migration_executor: additive migration preserves existing data" {
     var prng = std.Random.DefaultPrng.init(42);
     const rand = prng.random();
 
-    const table_names = [_][]const u8{ "users", "posts", "items", "orders", "tags" };
+    const table_names = [_][]const u8{ "posts", "items", "orders", "tags", "comments" };
 
     var iter: usize = 0;
     while (iter < 100) : (iter += 1) {
@@ -57,7 +57,7 @@ test "migration_executor: additive migration preserves existing data" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table with initial columns
-        var initial_fields = [_]schema_parser.Field{schema_helpers.makeField("title", .text)};
+        var initial_fields = [_]schema.Field{schema_helpers.makeField("title", .text)};
         const initial_table = try schema_helpers.makeTableAlloc(allocator, tname, &initial_fields);
         defer {
             allocator.free(initial_table.name);
@@ -78,19 +78,16 @@ test "migration_executor: additive migration preserves existing data" {
         try execSql(&db, allocator, insert_sql);
 
         // Target schema has both columns
-        var target_fields = [_]schema_parser.Field{
+        var target_fields = [_]schema.Field{
             schema_helpers.makeField("title", .text),
             schema_helpers.makeField("score", .integer),
         };
-        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
         defer {
             allocator.free(target_tables[0].name);
             allocator.free(target_tables[0].name_quoted);
         }
-        const target_schema = schema_parser.Schema{
-            .version = "1.0.0",
-            .tables = &target_tables,
-        };
+        const target_version = "1.0.0";
 
         // Build additive migration plan: add a new column
         const new_field = schema_helpers.makeField("score", .integer);
@@ -113,7 +110,7 @@ test "migration_executor: additive migration preserves existing data" {
             .allow_destructive = false,
         });
 
-        try executor.execute(plan, target_schema.version);
+        try executor.execute(plan, target_version);
 
         // Verify the original row still exists with original values
         const check_sql = try std.fmt.allocPrint(
@@ -166,7 +163,7 @@ test "migration_executor: destructive migration refused when not allowed" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table
-        var fields = [_]schema_parser.Field{schema_helpers.makeField("col_a", .text)};
+        var fields = [_]schema.Field{schema_helpers.makeField("col_a", .text)};
         const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
         defer {
             allocator.free(table.name);
@@ -188,16 +185,13 @@ test "migration_executor: destructive migration refused when not allowed" {
         // Build destructive plan
         const kind = destructive_kinds[rand.intRangeAtMost(usize, 0, destructive_kinds.len - 1)];
 
-        var target_fields = [_]schema_parser.Field{schema_helpers.makeField("col_a", .integer)};
-        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        var target_fields = [_]schema.Field{schema_helpers.makeField("col_a", .integer)};
+        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
         defer {
             allocator.free(target_tables[0].name);
             allocator.free(target_tables[0].name_quoted);
         }
-        const target_schema = schema_parser.Schema{
-            .version = "1.0.0",
-            .tables = &target_tables,
-        };
+        const target_version = "1.0.0";
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
@@ -217,7 +211,7 @@ test "migration_executor: destructive migration refused when not allowed" {
             .allow_destructive = false,
         });
 
-        const result = executor.execute(plan, target_schema.version);
+        const result = executor.execute(plan, target_version);
         try std.testing.expectError(error.DestructiveMigrationNotAllowed, result);
 
         // Verify DB is unchanged: original row still exists
@@ -265,16 +259,13 @@ test "migration_executor: schema version persisted after migration" {
         const version = versions[rand.intRangeAtMost(usize, 0, versions.len - 1)];
 
         // Build a create_table plan
-        var target_fields = [_]schema_parser.Field{schema_helpers.makeField("name", .text)};
-        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        var target_fields = [_]schema.Field{schema_helpers.makeField("name", .text)};
+        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
         defer {
             allocator.free(target_tables[0].name);
             allocator.free(target_tables[0].name_quoted);
         }
-        const target_schema = schema_parser.Schema{
-            .version = version,
-            .tables = &target_tables,
-        };
+        const target_version = version;
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
@@ -294,7 +285,7 @@ test "migration_executor: schema version persisted after migration" {
             .allow_destructive = false,
         });
 
-        try executor.execute(plan, target_schema.version);
+        try executor.execute(plan, target_version);
 
         // Verify schema_meta has the correct version
         var stmt = try db.prepare("SELECT version FROM schema_meta LIMIT 1");
@@ -330,7 +321,7 @@ test "migration_executor: major version bump is refused" {
         const tname = table_names[rand.intRangeAtMost(usize, 0, table_names.len - 1)];
 
         // Create table and insert persisted version with lower major
-        var fields = [_]schema_parser.Field{schema_helpers.makeField("data", .text)};
+        var fields = [_]schema.Field{schema_helpers.makeField("data", .text)};
         const table = try schema_helpers.makeTableAlloc(allocator, tname, &fields);
         defer {
             allocator.free(table.name);
@@ -352,19 +343,16 @@ test "migration_executor: major version bump is refused" {
         try insertSchemaMetaVersion(&db, allocator, persisted_ver);
 
         // Build a simple add_column plan
-        var target_fields = [_]schema_parser.Field{
+        var target_fields = [_]schema.Field{
             schema_helpers.makeField("data", .text),
             schema_helpers.makeField("extra", .text),
         };
-        var target_tables = [_]schema_parser.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
+        var target_tables = [_]schema.Table{try schema_helpers.makeTableAlloc(allocator, tname, &target_fields)};
         defer {
             allocator.free(target_tables[0].name);
             allocator.free(target_tables[0].name_quoted);
         }
-        const target_schema = schema_parser.Schema{
-            .version = target_ver,
-            .tables = &target_tables,
-        };
+        const target_version = target_ver;
 
         const changes = try allocator.alloc(migration_detector.Change, 1);
         defer allocator.free(changes);
@@ -384,7 +372,7 @@ test "migration_executor: major version bump is refused" {
             .allow_destructive = false,
         });
 
-        const result = executor.execute(plan, target_schema.version);
+        const result = executor.execute(plan, target_version);
         try std.testing.expectError(error.MajorVersionBumpNotAllowed, result);
 
         // Verify no changes were applied: column 'extra' should not exist

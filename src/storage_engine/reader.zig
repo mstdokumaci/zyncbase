@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
-const schema_manager = @import("../schema_manager.zig");
+const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const doc_id = @import("../doc_id.zig");
 const errors = @import("errors.zig");
@@ -28,7 +28,7 @@ pub const QueryResult = struct {
 
 pub fn buildSelectQuery(
     allocator: Allocator,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     namespace_id: i64,
     filter: query_parser.QueryFilter,
 ) !QueryResult {
@@ -92,11 +92,11 @@ pub fn buildSelectQuery(
                 allocator,
                 &sql_buf,
                 sort_field_name_quoted,
-                filter.order_by.field_index == schema_manager.id_field_index,
+                filter.order_by.field_index == schema.id_field_index,
                 filter.order_by.desc,
             );
 
-            if (filter.order_by.field_index == schema_manager.id_field_index) {
+            if (filter.order_by.field_index == schema.id_field_index) {
                 try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             } else {
                 const sv = try cursor.sort_value.clone(allocator);
@@ -126,8 +126,8 @@ pub fn buildSelectQuery(
     };
 }
 
-pub fn getCacheKey(table_metadata: *const schema_manager.TableMetadata, namespace_id: i64, id: DocId) MetadataCacheKey {
-    const effective_namespace_id = if (table_metadata.table.namespaced) namespace_id else schema_manager.global_namespace_id;
+pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: DocId) MetadataCacheKey {
+    const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
     return MetadataCacheKey{
         .namespace_id = effective_namespace_id,
         .table_index = table_metadata.index,
@@ -151,7 +151,7 @@ pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     cond: query_parser.Condition,
 ) !void {
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
@@ -252,7 +252,7 @@ pub fn appendConditionSql(
 pub fn decodeTypedRow(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
 ) !TypedRow {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
@@ -281,7 +281,7 @@ pub fn execSelectDocumentTyped(
     stmt: *sqlite.c.sqlite3_stmt,
     id: DocId,
     namespace_id: i64,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
 ) !?TypedRow {
     const id_bytes = doc_id.toBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
@@ -299,7 +299,7 @@ pub fn execQueryTyped(
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
     values: []const TypedValue,
-    table_metadata: *const schema_manager.TableMetadata,
+    table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
 ) !struct { rows: []TypedRow, next_cursor: ?TypedCursor } {
@@ -330,7 +330,7 @@ pub fn execQueryTyped(
             if (limit > 0) {
                 const last_row = rows.items[limit - 1];
                 const sort_val = last_row.values[sort_field_index];
-                const id_val = last_row.values[schema_manager.id_field_index];
+                const id_val = last_row.values[schema.id_field_index];
                 if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
                 next_cursor = TypedCursor{
                     .sort_value = try sort_val.clone(allocator),

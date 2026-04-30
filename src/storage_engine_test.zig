@@ -284,9 +284,10 @@ test "StorageEngine: concurrent reads" {
     try ctx.insertInt("items", 2, 2, "val", 1);
     try engine.flushPendingWrites();
     // Perform multiple concurrent reads
+    const items_table_index = ctx.tableIndex("items");
     const Thread = struct {
-        fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, id: u128) !void {
-            var managed = try eng.selectDocument(alloc, 0, id, 2);
+        fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, table_index: usize, id: u128) !void {
+            var managed = try eng.selectDocument(alloc, table_index, id, 2);
             defer managed.deinit();
             try testing.expect(managed.rows.len > 0);
         }
@@ -294,7 +295,7 @@ test "StorageEngine: concurrent reads" {
     var threads: [4]std.Thread = undefined;
     for (&threads, 0..) |*thread, i| {
         const id: u128 = if (i % 2 == 0) 1 else 2;
-        thread.* = try std.Thread.spawn(.{}, Thread.readKey, .{ engine, allocator, id });
+        thread.* = try std.Thread.spawn(.{}, Thread.readKey, .{ engine, allocator, items_table_index, id });
     }
     for (threads) |thread| {
         thread.join();
@@ -375,20 +376,18 @@ test "StorageEngine: manual transaction MUST increment write_seq on commit" {
     const engine = &ctx.engine;
 
     // 1. Initial write_seq
-    // sth.setupEngine executes DDL, so write_seq starts at 1
     const seq0 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(@as(u64, 1), seq0);
     // 2. Begin transaction
     try engine.beginTransaction();
     // 3. Write something
     try ctx.insertText("items", 1, 1, "val", "updated");
-    // 4. Flush batch. This should increment write_seq to 2.
+    // 4. Flush batch. This should increment write_seq once.
     try engine.flushPendingWrites();
     const seq1 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(@as(u64, 2), seq1);
-    // 5. Commit transaction. This SHOULD increment write_seq to 3.
+    try testing.expectEqual(seq0 + 1, seq1);
+    // 5. Commit transaction. This SHOULD increment write_seq again.
     try engine.commitTransaction();
-    // 6. VERIFY: write_seq should have advanced to 3
+    // 6. VERIFY: write_seq should have advanced again.
     const seq2 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(@as(u64, 3), seq2);
+    try testing.expectEqual(seq1 + 1, seq2);
 }

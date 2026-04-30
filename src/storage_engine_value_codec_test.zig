@@ -5,7 +5,7 @@ const sql = @import("storage_engine/sql.zig");
 const values = @import("storage_engine/values.zig");
 const value_codec = @import("storage_engine/value_codec.zig");
 const TypedValue = values.TypedValue;
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
@@ -27,7 +27,7 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
 
     // Helper: TypedValue -> JSON string -> TypedValue -> msgpack -> Payload
     const roundtripJsonValue = struct {
-        fn do(alloc: std.mem.Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, tv: TypedValue) !msgpack.Payload {
+        fn do(alloc: std.mem.Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, tv: TypedValue) !msgpack.Payload {
             const json_str = try value_codec.jsonAlloc(alloc, tv);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();

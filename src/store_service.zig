@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const doc_id_utils = @import("doc_id.zig");
@@ -30,24 +30,24 @@ fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?DocId {
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
-    tbl_md: *const schema_manager.TableMetadata,
+    tbl_md: *const schema.Table,
     field_index: usize,
     value: msgpack.Payload,
-) !schema_manager.Field {
+) !schema.Field {
     if (field_index >= tbl_md.fields.len) return StorageError.UnknownField;
 
     // Leading system columns and trailing timestamps are immutable.
     // The last two fields are created_at and updated_at, which are also immutable by the client.
-    if (field_index < schema_manager.first_user_field_index or
+    if (field_index < schema.first_user_field_index or
         field_index >= tbl_md.fields.len - 2) return StorageError.ImmutableField;
     const field = tbl_md.fields[field_index];
 
     if (field.required and value == .nil) return StorageError.NullNotAllowed;
 
     if (value != .nil) {
-        try storage_mod.validateTypedValuePayload(field.sql_type, value);
+        try storage_mod.validateTypedValuePayload(field.storage_type, value);
 
-        if (field.sql_type == .array) {
+        if (field.storage_type == .array) {
             if (field.items_type) |items_type| {
                 for (value.arr) |item| {
                     storage_mod.validateTypedValuePayload(items_type, item) catch {
@@ -66,9 +66,9 @@ pub fn validateFieldWrite(
 pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
-    schema_manager: *const schema_manager.SchemaManager,
+    schema_manager: *const schema.Schema,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, sm: *const schema_manager.SchemaManager) StoreService {
+    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, sm: *const schema.Schema) StoreService {
         return .{
             .allocator = allocator,
             .storage_engine = storage_engine,
@@ -90,7 +90,7 @@ pub const StoreService = struct {
 
     const StorePath = struct {
         table_index: usize,
-        table: *const schema_manager.TableMetadata,
+        table: *const schema.Table,
         doc_id: DocId,
         segments_len: usize,
         field_index: ?usize,
@@ -133,7 +133,7 @@ pub const StoreService = struct {
         const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
         errdefer filter.deinit(allocator);
 
-        if (isIdEqualsFilter(filter, schema_manager.id_field_index)) |id| {
+        if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
             const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
             return .{
                 .table_index = table_index,
@@ -233,7 +233,7 @@ pub const StoreService = struct {
                 };
 
                 const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.sql_type, field.items_type, entry.value_ptr.*);
+                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .index = f_idx,
@@ -245,7 +245,7 @@ pub const StoreService = struct {
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
-            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.sql_type, field.items_type, value);
+            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, value);
             defer typed.deinit(self.allocator);
 
             const col = [_]storage_mod.ColumnValue{.{
@@ -261,7 +261,7 @@ pub const StoreService = struct {
 
 pub const QueryResult = struct {
     table_index: usize,
-    table: *const schema_manager.TableMetadata,
+    table: *const schema.Table,
     results: storage_mod.ManagedResult,
     filter: query_parser.QueryFilter,
 
@@ -272,7 +272,7 @@ pub const QueryResult = struct {
 };
 
 pub const CursorResult = struct {
-    table: *const schema_manager.TableMetadata,
+    table: *const schema.Table,
     results: storage_mod.ManagedResult,
 
     pub fn deinit(self: *CursorResult) void {

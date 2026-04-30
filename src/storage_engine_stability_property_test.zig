@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const StorageEngine = sth.StorageEngine;
-const schema_manager = sth.schema_manager;
+const schema = sth.schema;
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -25,7 +25,7 @@ fn insertTestValue(ctx: *sth.EngineTestContext, id: u128, value: []const u8) !vo
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -77,7 +77,7 @@ test "storage: stability no crashes on concurrent errors" {
 test "storage: stability continues after transaction errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -110,7 +110,7 @@ test "storage: stability continues after transaction errors" {
 test "storage: stability handles rapid error conditions" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -137,7 +137,7 @@ test "storage: stability handles rapid error conditions" {
 test "storage: stability error recovery with valid operations" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -171,7 +171,7 @@ test "storage: stability error recovery with valid operations" {
 test "storage: stability resource cleanup after errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -202,7 +202,7 @@ test "storage: stability resource cleanup after errors" {
 test "storage: stability mixed error and success scenarios" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -242,7 +242,7 @@ test "storage: stability mixed error and success scenarios" {
 test "storage: stability concurrent reads during write errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema_manager.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;

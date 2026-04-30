@@ -12,7 +12,7 @@ test "storage: error handling invalid database path" {
     const allocator = testing.allocator;
 
     // Try to create storage engine with invalid path
-    var sm = try sth.createSchemaManager(allocator, &.{
+    var sm = try sth.createSchema(allocator, &.{
         sth.makeTable("_dummy", &.{sth.makeField("val", .text, false)}),
         sth.makeTable("data_table", &.{sth.makeField("val", .text, false)}),
     });

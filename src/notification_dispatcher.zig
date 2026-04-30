@@ -10,17 +10,17 @@ const RowChange = @import("subscription_engine.zig").RowChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const wire = @import("wire.zig");
-const schema_manager = @import("schema_manager.zig");
+const schema = @import("schema.zig");
 
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
-    schema_manager: *const schema_manager.SchemaManager,
+    schema_manager: *const schema.Schema,
     allocator: Allocator,
     drain_buf: std.ArrayListUnmanaged(OwnedRowChange) = .empty,
 
-    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema_manager.SchemaManager) !void {
+    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema.Schema) !void {
         self.* = .{
             .change_buffer = change_buffer,
             .subscription_engine = subscription_engine,
@@ -66,7 +66,7 @@ pub const NotificationDispatcher = struct {
         };
 
         const id_val = if (change.new_row orelse change.old_row) |row|
-            if (row.values.len > schema_manager.id_field_index) row.values[schema_manager.id_field_index] else null
+            if (row.values.len > schema.id_field_index) row.values[schema.id_field_index] else null
         else
             null;
 

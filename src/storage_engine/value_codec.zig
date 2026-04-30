@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc_id = @import("../doc_id.zig");
 const msgpack = @import("../msgpack_utils.zig");
-const schema_manager = @import("../schema_manager.zig");
+const schema = @import("../schema.zig");
 const errors = @import("errors.zig");
 const values = @import("values.zig");
 
@@ -71,7 +71,7 @@ fn writeScalarJson(value: ScalarValue, stream: anytype) !void {
     }
 }
 
-pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void {
+pub fn validateValue(ft: schema.FieldType, value: msgpack.Payload) !void {
     const match = switch (ft) {
         .doc_id => value == .bin,
         .text => value == .str,
@@ -83,7 +83,7 @@ pub fn validateValue(ft: schema_manager.FieldType, value: msgpack.Payload) !void
     if (!match) return StorageError.TypeMismatch;
 }
 
-pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: msgpack.Payload) !TypedValue {
+pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: msgpack.Payload) !TypedValue {
     if (value == .nil) return .nil;
     return switch (ft) {
         .array => {
@@ -107,7 +107,7 @@ pub fn fromPayload(allocator: Allocator, ft: schema_manager.FieldType, items_typ
     };
 }
 
-pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, items_type: ?schema_manager.FieldType, value: std.json.Value) !TypedValue {
+pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: std.json.Value) !TypedValue {
     if (value == .null) return .nil;
     return switch (ft) {
         .array => {
@@ -130,7 +130,7 @@ pub fn fromJson(allocator: Allocator, ft: schema_manager.FieldType, items_type: 
     };
 }
 
-fn scalarFromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: msgpack.Payload) !ScalarValue {
+fn scalarFromPayload(allocator: Allocator, ft: schema.FieldType, value: msgpack.Payload) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {
             .bin => |b| ScalarValue{ .doc_id = try doc_id.fromBytes(b.value()) },
@@ -147,7 +147,7 @@ fn scalarFromPayload(allocator: Allocator, ft: schema_manager.FieldType, value: 
     };
 }
 
-fn scalarFromJson(allocator: Allocator, ft: schema_manager.FieldType, value: std.json.Value) !ScalarValue {
+fn scalarFromJson(allocator: Allocator, ft: schema.FieldType, value: std.json.Value) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {
             .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return StorageError.TypeMismatch },
