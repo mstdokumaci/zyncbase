@@ -32,6 +32,7 @@ pub const ReaderNode = connection.ReaderNode;
 pub const CheckpointStats = write_queue.CheckpointStats;
 pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
+pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
 const typed_cache_type = storage_values.typed_cache_type;
 pub const typedValueFromPayload = value_codec.fromPayload;
@@ -61,7 +62,6 @@ pub const StorageEngine = struct {
     shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
     transaction_active: std.atomic.Value(bool),
-    manual_transaction_active: std.atomic.Value(bool),
     migration_active: std.atomic.Value(bool),
     pending_writes_count: std.atomic.Value(usize),
     reconnection_config: ReconnectionConfig,
@@ -195,7 +195,6 @@ pub const StorageEngine = struct {
             .flush_cond = .{},
             .write_mutex = .{},
             .pending_writes_count = std.atomic.Value(usize).init(0),
-            .manual_transaction_active = std.atomic.Value(bool).init(false),
             .migration_active = std.atomic.Value(bool).init(false),
             .reconnection_config = .{},
             .write_cond = .{},
@@ -284,58 +283,6 @@ pub const StorageEngine = struct {
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
         return connection.getWalSize(self.allocator, self.db_path, self.options.in_memory);
-    }
-
-    pub fn beginTransaction(self: *StorageEngine) !void {
-        try self.ensureRunning();
-        if (self.manual_transaction_active.load(.acquire)) {
-            return StorageError.TransactionAlreadyActive;
-        }
-        var signal = WriteOp.CompletionSignal{};
-        const op = WriteOp{
-            .begin_transaction = .{
-                .completion_signal = &signal,
-            },
-        };
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-        return signal.wait();
-    }
-
-    pub fn commitTransaction(self: *StorageEngine) !void {
-        try self.ensureRunning();
-        if (!self.manual_transaction_active.load(.acquire)) {
-            return StorageError.NoActiveTransaction;
-        }
-        var signal = WriteOp.CompletionSignal{};
-        const op = WriteOp{
-            .commit_transaction = .{
-                .completion_signal = &signal,
-            },
-        };
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-        return signal.wait();
-    }
-
-    pub fn rollbackTransaction(self: *StorageEngine) !void {
-        try self.ensureRunning();
-        if (!self.manual_transaction_active.load(.acquire)) {
-            return StorageError.NoActiveTransaction;
-        }
-        var signal = WriteOp.CompletionSignal{};
-        const op = WriteOp{
-            .rollback_transaction = .{
-                .completion_signal = &signal,
-            },
-        };
-        _ = self.pending_writes_count.fetchAdd(1, .release);
-        try self.pushWrite(op);
-        return signal.wait();
-    }
-
-    pub fn isTransactionActive(self: *StorageEngine) bool {
-        return self.manual_transaction_active.load(.acquire);
     }
 
     /// Classify SQLite error into our specific error types
@@ -518,6 +465,26 @@ pub const StorageEngine = struct {
                 .sql = sql_string,
                 .values = values,
                 .timestamp = std.time.timestamp(),
+                .completion_signal = null,
+            },
+        };
+
+        _ = self.pending_writes_count.fetchAdd(1, .release);
+        try self.pushWrite(op);
+    }
+
+    /// Atomically execute a batch of upsert/delete operations in a single transaction.
+    /// Fire-and-forget: returns immediately after enqueue; write thread processes asynchronously.
+    pub fn batchWrite(
+        self: *StorageEngine,
+        entries: []BatchEntry,
+    ) !void {
+        try self.ensureRunning();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+
+        const op = WriteOp{
+            .batch = .{
+                .entries = entries,
                 .completion_signal = null,
             },
         };

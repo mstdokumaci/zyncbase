@@ -35,10 +35,18 @@ pub const ReconnectionConfig = struct {
     backoff_multiplier: f64 = 2.0,
 };
 
+pub const BatchEntry = struct {
+    kind: enum { upsert, delete },
+    table_index: usize,
+    id: values.DocId,
+    namespace_id: i64,
+    owner_doc_id: values.DocId,
+    sql: []const u8,
+    values: ?[]values.TypedValue,
+    timestamp: i64,
+};
+
 pub const WriteOp = union(enum) {
-    begin_transaction: struct { completion_signal: ?*CompletionSignal },
-    commit_transaction: struct { completion_signal: ?*CompletionSignal },
-    rollback_transaction: struct { completion_signal: ?*CompletionSignal },
     checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
     upsert: struct {
         table_index: usize,
@@ -61,6 +69,10 @@ pub const WriteOp = union(enum) {
         namespace: []const u8,
         result: *i64,
         completion_signal: *CompletionSignal,
+    },
+    batch: struct {
+        entries: []BatchEntry,
+        completion_signal: ?*CompletionSignal = null,
     },
 
     pub const CompletionSignal = struct {
@@ -98,13 +110,11 @@ pub const WriteOp = union(enum) {
 
     pub fn getCompletionSignal(self: WriteOp) ?*CompletionSignal {
         return switch (self) {
-            .begin_transaction => |op| op.completion_signal,
-            .commit_transaction => |op| op.completion_signal,
-            .rollback_transaction => |op| op.completion_signal,
             .checkpoint => |op| op.completion_signal,
             .upsert => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
             .upsert_namespace => |op| op.completion_signal,
+            .batch => |op| op.completion_signal,
         };
     }
 
@@ -120,6 +130,16 @@ pub const WriteOp = union(enum) {
             },
             .upsert_namespace => |op| {
                 allocator.free(op.namespace);
+            },
+            .batch => |op| {
+                for (op.entries) |entry| {
+                    allocator.free(entry.sql);
+                    if (entry.values) |vals| {
+                        for (vals) |v| v.deinit(allocator);
+                        allocator.free(vals);
+                    }
+                }
+                allocator.free(op.entries);
             },
             else => {},
         }

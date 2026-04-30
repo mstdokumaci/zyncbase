@@ -120,6 +120,51 @@ pub const StoreService = struct {
         try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, namespace_id);
     }
 
+    pub fn batchWrite(
+        self: *StoreService,
+        ctx: WriteContext,
+        ops_payload: msgpack.Payload,
+    ) !void {
+        if (ops_payload != .arr) return error.InvalidMessageFormat;
+        const ops = ops_payload.arr;
+        if (ops.len == 0) return; // no-op, success
+        if (ops.len > 500) return error.BatchTooLarge;
+
+        var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (entries[0..initialized]) |entry| {
+                self.allocator.free(entry.sql);
+                if (entry.values) |vals| {
+                    for (vals) |v| v.deinit(self.allocator);
+                    self.allocator.free(vals);
+                }
+            }
+            self.allocator.free(entries);
+        }
+
+        const timestamp = std.time.timestamp();
+
+        for (ops) |op_payload| {
+            if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
+            const tuple = op_payload.arr;
+            if (tuple[0] != .str) return error.InvalidMessageFormat;
+            const kind_str = tuple[0].str.value();
+
+            if (std.mem.eql(u8, kind_str, "s")) {
+                if (tuple.len < 3) return error.MissingRequiredFields;
+                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp);
+            } else if (std.mem.eql(u8, kind_str, "r")) {
+                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp);
+            } else {
+                return error.InvalidMessageFormat;
+            }
+            initialized += 1;
+        }
+
+        try self.storage_engine.batchWrite(entries);
+    }
+
     pub fn queryCollection(
         self: *StoreService,
         allocator: Allocator,
@@ -256,6 +301,104 @@ pub const StoreService = struct {
         } else {
             return StorageError.InvalidPath;
         }
+    }
+
+    fn buildBatchSetEntry(
+        self: *StoreService,
+        ctx: WriteContext,
+        path_payload: msgpack.Payload,
+        value: msgpack.Payload,
+        timestamp: i64,
+    ) !storage_mod.BatchEntry {
+        const path = try self.parseStorePath(path_payload, .document_or_field);
+
+        var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+        errdefer {
+            for (columns.items) |col| col.value.deinit(self.allocator);
+            columns.deinit(self.allocator);
+        }
+
+        if (path.segments_len == 2) {
+            if (value != .map) return error.InvalidPayload;
+
+            var it = value.map.iterator();
+            while (it.next()) |entry| {
+                const f_idx = blk: {
+                    if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
+                    if (entry.key_ptr.* == .str) {
+                        const key_str = entry.key_ptr.*.str.value();
+                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
+                    }
+                    return StorageError.UnknownField;
+                };
+
+                const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
+                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+
+                try columns.append(self.allocator, .{
+                    .index = f_idx,
+                    .value = typed,
+                });
+            }
+        } else if (path.segments_len == 3) {
+            const f_index = path.field_index orelse return StorageError.InvalidPath;
+            const field = try validateFieldWrite(path.table, f_index, value);
+            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, value);
+
+            try columns.append(self.allocator, .{
+                .index = f_index,
+                .value = typed,
+            });
+        } else {
+            return StorageError.InvalidPath;
+        }
+
+        const sql_string = try @import("storage_engine/sql.zig").buildInsertOrReplaceSql(self.allocator, path.table, columns.items);
+        errdefer self.allocator.free(sql_string);
+
+        const values = try self.allocator.alloc(storage_mod.TypedValue, columns.items.len);
+        for (columns.items, 0..) |col, i| {
+            values[i] = col.value;
+        }
+        columns.deinit(self.allocator);
+
+        const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
+
+        return .{
+            .kind = .upsert,
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = ctx.owner_doc_id,
+            .sql = sql_string,
+            .values = values,
+            .timestamp = timestamp,
+        };
+    }
+
+    fn buildBatchRemoveEntry(
+        self: *StoreService,
+        ctx: WriteContext,
+        path_payload: msgpack.Payload,
+        timestamp: i64,
+    ) !storage_mod.BatchEntry {
+        const path = try self.parseStorePath(path_payload, .document_only);
+
+        const sql_string = try @import("storage_engine/sql.zig").buildDeleteDocumentSql(self.allocator, path.table);
+        errdefer self.allocator.free(sql_string);
+
+        const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
+
+        return .{
+            .kind = .delete,
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = ctx.owner_doc_id,
+            .sql = sql_string,
+            .values = null,
+            .timestamp = timestamp,
+        };
     }
 };
 

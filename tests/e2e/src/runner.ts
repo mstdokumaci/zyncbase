@@ -335,6 +335,7 @@ async function stop_server(server: RunningServer) {
 	await collectServerLogs(server);
 }
 
+import { run as runBatch } from "./test-batch";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
@@ -355,6 +356,9 @@ async function run_scenario_sync_and_errors() {
 	const server = await start_server(configPath);
 	try {
 		await runSync(PORT);
+
+		log("--- Batch Operations ---");
+		await runBatch(PORT);
 
 		log("--- Error Reporting ---");
 		await runErrors(PORT);

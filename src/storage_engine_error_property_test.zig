@@ -82,26 +82,6 @@ test "storage: error handling constraint violations" {
         _ = try doc.expectFieldString("val", "value2");
     }
 }
-test "storage: error handling transaction rollback on error" {
-    const allocator = testing.allocator;
-    const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngineWithOptions(&ctx, allocator, "storage-error-rollback", table, .{ .in_memory = false });
-    defer ctx.deinit();
-    const storage = &ctx.engine;
-    const tbl = try ctx.table("data_table");
-
-    try storage.beginTransaction();
-    {
-        try ctx.insertText("data_table", 1, 1, "val", "value1");
-    }
-    try storage.rollbackTransaction();
-    {
-        var managed = try tbl.selectDocument(allocator, 1, 1);
-        defer managed.deinit();
-        try testing.expect(managed.rows.len == 0);
-    }
-}
 test "storage: error handling concurrent access safety" {
     const allocator = testing.allocator;
     const table = sth.makeTable("data_table", &.{sth.makeField("val", .text, false)});

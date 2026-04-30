@@ -280,63 +280,6 @@ test "storage: transaction isolation and consistency" {
     try testing.expect(n3.len > 0);
 }
 
-test "storage: automatic transaction rollback on failure" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("test", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "storage-auto-rollback", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Set up initial state
-    {
-        try ctx.insertText("test", 1, 1, "val", "initial");
-    }
-    try engine.flushPendingWrites();
-    const test_table = try ctx.table("test");
-    // Verify initial state
-    var managed_init = try test_table.selectDocument(allocator, 1, 1);
-    defer managed_init.deinit();
-    const init_doc = managed_init.rows;
-    try testing.expect(init_doc.len > 0);
-
-    // Start a transaction manually to test rollback
-    try engine.beginTransaction();
-    try testing.expect(engine.isTransactionActive());
-    // Make changes within transaction
-    {
-        try ctx.insertText("test", 1, 1, "val", "modified");
-        try ctx.insertText("test", 2, 1, "val", "new");
-    }
-    // Rollback the transaction
-    try engine.rollbackTransaction();
-    // Flush any pending writes from before the transaction
-    try engine.flushPendingWrites();
-    // Verify changes were rolled back
-    var managed_arb1 = try test_table.selectDocument(allocator, 1, 1);
-    defer managed_arb1.deinit();
-    const arb1 = managed_arb1.rows;
-    try testing.expect(arb1.len > 0);
-
-    var managed_arb2 = try test_table.selectDocument(allocator, 2, 1);
-    defer managed_arb2.deinit();
-    const arb2 = managed_arb2.rows;
-    try testing.expect(arb2.len == 0);
-
-    // Test successful transaction
-    // First, set up a successful transaction
-    try engine.beginTransaction();
-    {
-        try ctx.insertText("test", 3, 1, "val", "test3");
-    }
-    try engine.commitTransaction();
-    try engine.flushPendingWrites();
-    var managed_succ = try test_table.selectDocument(allocator, 3, 1);
-    defer managed_succ.deinit();
-    try testing.expect(managed_succ.rows.len > 0);
-}
-
 test "storage: concurrent batch processing" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};

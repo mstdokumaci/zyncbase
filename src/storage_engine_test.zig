@@ -189,60 +189,6 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 0), managed.rows.len);
 }
-test "StorageEngine: transaction support" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("_dummy", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-tx", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Initially no transaction should be active
-    try testing.expect(!engine.isTransactionActive());
-    // Begin transaction
-    try engine.beginTransaction();
-    try testing.expect(engine.isTransactionActive());
-    // Cannot begin another transaction while one is active
-    try testing.expectError(error.TransactionAlreadyActive, engine.beginTransaction());
-    // Commit transaction
-    try engine.commitTransaction();
-    try testing.expect(!engine.isTransactionActive());
-    // Cannot commit when no transaction is active
-    try testing.expectError(error.NoActiveTransaction, engine.commitTransaction());
-    // Begin and rollback transaction
-    try engine.beginTransaction();
-    try testing.expect(engine.isTransactionActive());
-    try engine.rollbackTransaction();
-    try testing.expect(!engine.isTransactionActive());
-    // Cannot rollback when no transaction is active
-    try testing.expectError(error.NoActiveTransaction, engine.rollbackTransaction());
-}
-test "StorageEngine: automatic rollback in batch operations" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-auto-rollback", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Queue some operations
-    try ctx.insertText("items", 1, 5, "val", "value1");
-    try ctx.insertText("items", 2, 5, "val", "value1");
-    // Wait for operations to be processed
-    try engine.flushPendingWrites();
-    // Verify no transaction is active after batch completes
-    try testing.expect(!engine.isTransactionActive());
-    // Verify data was written
-    var managed1 = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
-    defer managed1.deinit();
-    try testing.expect(managed1.rows.len > 0);
-
-    var managed2 = try (try ctx.table("items")).selectDocument(allocator, 2, 5);
-    defer managed2.deinit();
-    try testing.expect(managed2.rows.len > 0);
-}
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
     const allocator = testing.allocator;
@@ -365,29 +311,4 @@ test "StorageEngine: client writes blocked during migration" {
     // deleteDocument should be blocked
     const err3 = (try ctx.table("items")).deleteDocument(1, 1);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
-}
-test "StorageEngine: manual transaction MUST increment write_seq on commit" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-tx-race", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // 1. Initial write_seq
-    const seq0 = engine.write_seq.load(.acquire);
-    // 2. Begin transaction
-    try engine.beginTransaction();
-    // 3. Write something
-    try ctx.insertText("items", 1, 1, "val", "updated");
-    // 4. Flush batch. This should increment write_seq once.
-    try engine.flushPendingWrites();
-    const seq1 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(seq0 + 1, seq1);
-    // 5. Commit transaction. This SHOULD increment write_seq again.
-    try engine.commitTransaction();
-    // 6. VERIFY: write_seq should have advanced again.
-    const seq2 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(seq1 + 1, seq2);
 }

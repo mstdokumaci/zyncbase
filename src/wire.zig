@@ -11,6 +11,8 @@ pub const extractStoreLoadMoreFast = decode.extractStoreLoadMoreFast;
 pub const extractStoreTableIndexFast = decode.extractStoreTableIndexFast;
 pub const extractStorePathPayloads = decode.extractStorePathPayloads;
 pub const StorePathPayloads = decode.StorePathPayloads;
+pub const extractStoreBatchPayloads = decode.extractStoreBatchPayloads;
+pub const StoreBatchPayloads = decode.StoreBatchPayloads;
 pub const getMapPayload = decode.getMapPayload;
 
 pub const WireError = errors.WireError;

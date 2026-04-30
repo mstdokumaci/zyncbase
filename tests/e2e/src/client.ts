@@ -1,4 +1,5 @@
 import type {
+	BatchOperation,
 	JsonValue,
 	ZyncBaseClient as SDKClient,
 	Store,
@@ -37,6 +38,10 @@ export class ZyncBaseClient {
 
 	async setNamespace(ns: string): Promise<void> {
 		await this.client.setStoreNamespace(ns);
+	}
+
+	async batch(operations: BatchOperation[]): Promise<void> {
+		return await this.client.store.batch(operations);
 	}
 
 	/**

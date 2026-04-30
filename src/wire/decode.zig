@@ -30,6 +30,7 @@ const Key = struct {
     pub const path = comptimeKeyPayload("path");
     pub const value = comptimeKeyPayload("value");
     pub const table_index = comptimeKeyPayload("table_index");
+    pub const ops = comptimeKeyPayload("ops");
 };
 
 // === Low-Level MessagePack Parser Primitives ===
@@ -386,6 +387,31 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
     }
 
     return .{ .path = path orelse return error.MissingRequiredFields, .value = value };
+}
+
+pub const StoreBatchPayloads = struct {
+    ops: Payload,
+};
+
+pub fn extractStoreBatchPayloads(
+    bytes: []const u8,
+    allocator: std.mem.Allocator,
+) !StoreBatchPayloads {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var ops: ?Payload = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.ops)) {
+            ops = try readSubtree(bytes, &pos, allocator);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{ .ops = ops orelse return error.MissingRequiredFields };
 }
 
 fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {
