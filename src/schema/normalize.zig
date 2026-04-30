@@ -328,7 +328,7 @@ fn parseFields(
     }
 }
 
-fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: usize) !types.Table {
+pub fn buildRuntimeTable(allocator: Allocator, declared: types.Table, table_index: usize) !types.Table {
     const name = try allocator.dupe(u8, declared.name);
     var name_owned_by_table = false;
     errdefer if (!name_owned_by_table) allocator.free(name);

@@ -325,7 +325,27 @@ pub fn makeTableAlloc(allocator: Allocator, name: []const u8, fields: []const Fi
 
 /// Creates a canonical runtime schema from declared test tables.
 pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
-    return schema_helpers.createTestSchemaFromDeclared(allocator, tables);
+    var runtime_tables = try allocator.alloc(Table, tables.len);
+    var built_count: usize = 0;
+    errdefer {
+        for (runtime_tables[0..built_count]) |*t| t.deinit(allocator);
+        allocator.free(runtime_tables);
+    }
+
+    for (tables, 0..) |declared, idx| {
+        runtime_tables[built_count] = try schema.buildRuntimeTable(allocator, declared, idx);
+        built_count += 1;
+    }
+
+    var result = Schema{
+        .allocator = allocator,
+        .version = try allocator.dupe(u8, "1.0.0"),
+        .tables = runtime_tables,
+    };
+    errdefer result.deinit();
+
+    try schema.buildTableIndex(allocator, &result);
+    return result;
 }
 
 /// Creates a schema with a single dummy table.
