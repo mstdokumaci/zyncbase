@@ -157,18 +157,23 @@ pub const MessageHandler = struct {
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
-        const snapshot = conn.snapshotSubscriptionIdsLocked() catch |err| {
-            std.log.err("teardownSession: Failed to snapshot subscription IDs: {}", .{err});
-            conn.resetSessionLocked();
-            conn.mutex.unlock();
-            return;
-        };
+        const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         conn.mutex.unlock();
+        self.unsubscribeDetached(conn, detached);
+    }
 
-        if (snapshot.len > 0) {
-            defer conn.allocator.free(snapshot);
-            self.subscription_engine.unsubscribeMany(conn.id, snapshot);
+    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
+        conn.mutex.lock();
+        const detached = conn.detachSubscriptionsLocked();
+        conn.mutex.unlock();
+        self.unsubscribeDetached(conn, detached);
+    }
+
+    fn unsubscribeDetached(self: *MessageHandler, conn: *Connection, detached: Connection.DetachedSubscriptions) void {
+        defer detached.deinit(conn.allocator);
+        if (detached.ids.len > 0) {
+            self.subscription_engine.unsubscribeMany(conn.id, detached.ids);
         }
     }
 
@@ -186,23 +191,6 @@ pub const MessageHandler = struct {
 
     fn requireStoreNamespace(conn: *Connection) !i64 {
         return (try requireStoreSession(conn)).namespace_id;
-    }
-
-    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
-        conn.mutex.lock();
-        const snapshot = conn.snapshotSubscriptionIdsLocked() catch |err| {
-            std.log.err("clearStoreSubscriptions: Failed to snapshot subscription IDs: {}", .{err});
-            conn.subscription_ids.clearRetainingCapacity();
-            conn.mutex.unlock();
-            return;
-        };
-        conn.subscription_ids.clearRetainingCapacity();
-        conn.mutex.unlock();
-
-        if (snapshot.len > 0) {
-            defer conn.allocator.free(snapshot);
-            self.subscription_engine.unsubscribeMany(conn.id, snapshot);
-        }
     }
 
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----

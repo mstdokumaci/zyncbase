@@ -162,13 +162,27 @@ pub const Connection = struct {
         }
     }
 
-    /// Duplicate and return the current subscription IDs. Caller owns the returned slice
-    /// and must free it. Returns an empty slice if no subscriptions exist.
+    /// Result of detaching subscription IDs from a connection.
+    /// `ids` is the valid slice; `allocated` is the full allocated buffer used for freeing.
+    pub const DetachedSubscriptions = struct {
+        ids: []u64,
+        allocated: []u64,
+
+        pub fn deinit(self: DetachedSubscriptions, allocator: Allocator) void {
+            allocator.free(self.allocated);
+        }
+    };
+
+    /// Transfer ownership of the subscription IDs buffer to the caller,
+    /// leaving the connection with an empty list. Zero-allocation.
     /// Caller must hold self.mutex.
-    pub fn snapshotSubscriptionIdsLocked(self: *Connection) ![]u64 {
-        const items = self.subscription_ids.items;
-        if (items.len == 0) return &.{};
-        return self.allocator.dupe(u64, items);
+    pub fn detachSubscriptionsLocked(self: *Connection) DetachedSubscriptions {
+        const result = DetachedSubscriptions{
+            .ids = self.subscription_ids.items,
+            .allocated = self.subscription_ids.allocatedSlice(),
+        };
+        self.subscription_ids = .empty;
+        return result;
     }
 
     /// Increment the reference count.
