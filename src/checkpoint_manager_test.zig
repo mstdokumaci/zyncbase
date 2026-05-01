@@ -248,7 +248,7 @@ test "CheckpointManager: Config defaults" {
     try testing.expect(config.time_threshold_sec == 300); // 5 minutes
     try testing.expect(config.checkpoint_mode == .passive);
     try testing.expect(config.check_interval_sec == 10);
-    try testing.expect(config.max_retries == 3);
+    try testing.expect(config.max_attempts == 3);
 }
 
 test "CheckpointManager: CheckpointResult structure" {

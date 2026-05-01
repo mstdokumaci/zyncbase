@@ -29,8 +29,8 @@ pub const CheckpointManager = struct {
         checkpoint_mode: CheckpointMode = .passive,
         /// Background check interval in seconds (default: 10 seconds)
         check_interval_sec: u64 = 10,
-        /// Maximum retry attempts for transient checkpoint failures (default: 3)
-        max_retries: u32 = 3,
+        /// Maximum total attempts for transient checkpoint failures (default: 3)
+        max_attempts: u32 = 3,
     };
 
     /// SQLite checkpoint modes
@@ -251,7 +251,8 @@ pub const CheckpointManager = struct {
         const wal_size_before_initial = self.wal_size.load(.acquire);
 
         // Try with configured mode first, with retry on transient failures
-        var result = self.performCheckpointWithRetry(self.config.checkpoint_mode, self.config.max_retries) catch {
+        var result = self.performCheckpointWithRetry(self.config.checkpoint_mode, self.config.max_attempts) catch |err| {
+            if (err != error.CheckpointFailed) return err;
             return CheckpointResult{
                 .mode = self.config.checkpoint_mode,
                 .duration_ms = 0,
@@ -276,7 +277,8 @@ pub const CheckpointManager = struct {
 
             if (reduction_percent < 10) {
                 std.log.warn("Passive checkpoint only reduced WAL by {}%, escalating to full mode", .{reduction_percent});
-                result = self.performCheckpointWithRetry(.full, self.config.max_retries) catch {
+                result = self.performCheckpointWithRetry(.full, self.config.max_attempts) catch |err| {
+                    if (err != error.CheckpointFailed) return err;
                     return CheckpointResult{
                         .mode = .full,
                         .duration_ms = 0,
@@ -298,29 +300,30 @@ pub const CheckpointManager = struct {
     ///
     /// Attempts checkpoint with exponential backoff on failure. Logs all failures
     /// and provides detailed error information for debugging.
-    pub fn performCheckpointWithRetry(self: *CheckpointManager, mode: CheckpointMode, max_retries: u32) !CheckpointResult {
-        var retries: u32 = 0;
+    pub fn performCheckpointWithRetry(self: *CheckpointManager, mode: CheckpointMode, max_attempts: u32) !CheckpointResult {
+        const attempts = if (max_attempts == 0) @as(u32, 1) else max_attempts;
+        var attempt: u32 = 0;
         var backoff_ms: u64 = 100; // Start with 100ms
 
-        while (retries < max_retries) : (retries += 1) {
+        while (attempt < attempts) : (attempt += 1) {
             const result = try self.performCheckpoint(mode);
 
             if (result.success) {
-                if (retries > 0) {
-                    std.log.info("Checkpoint succeeded after {} retries", .{retries});
+                if (attempt > 0) {
+                    std.log.info("Checkpoint succeeded after {} retries", .{attempt});
                 }
                 return result;
             }
 
             // Exponential backoff
-            if (retries < max_retries - 1) {
-                std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, retries + 1, max_retries });
+            if (attempt < attempts - 1) {
+                std.log.warn("Checkpoint failed, retrying in {}ms (attempt {}/{})", .{ backoff_ms, attempt + 1, attempts });
                 std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
                 backoff_ms *= 2; // Double the backoff time
             }
         }
 
-        std.log.err("Checkpoint failed after {} retries", .{max_retries});
+        std.log.err("Checkpoint failed after {} attempts", .{attempts});
         return error.CheckpointFailed;
     }
 

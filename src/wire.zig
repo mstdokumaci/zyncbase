@@ -13,8 +13,6 @@ pub const extractStorePathPayloads = decode.extractStorePathPayloads;
 pub const StorePathPayloads = decode.StorePathPayloads;
 pub const extractStoreBatchPayloads = decode.extractStoreBatchPayloads;
 pub const StoreBatchPayloads = decode.StoreBatchPayloads;
-pub const getMapPayload = decode.getMapPayload;
-
 pub const WireError = errors.WireError;
 pub const getWireError = errors.getWireError;
 
