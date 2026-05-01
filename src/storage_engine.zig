@@ -5,9 +5,8 @@ pub const std_options = struct {
 const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const reader = @import("storage_engine/reader.zig");
-const writer = @import("storage_engine/writer.zig");
-const writer_context = @import("storage_engine/write_context.zig");
-const WriteContext = writer_context.WriteContext;
+const storage_writer = @import("storage_engine/writer.zig");
+const Writer = storage_writer.Writer;
 const connection = @import("storage_engine/connection.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
@@ -55,7 +54,6 @@ pub const StorageEngine = struct {
 
     allocator: Allocator,
     reader_pool: []ReaderNode,
-    write_thread: ?std.Thread = null,
     state: std.atomic.Value(State),
     next_reader_idx: std.atomic.Value(usize),
     migration_active: std.atomic.Value(bool),
@@ -64,7 +62,7 @@ pub const StorageEngine = struct {
     schema_manager: *const Schema,
     metadata_cache: typed_cache_type,
     options: Options,
-    write_context: WriteContext,
+    writer: Writer,
 
     pub fn init(
         self: *StorageEngine,
@@ -167,7 +165,7 @@ pub const StorageEngine = struct {
             .metadata_cache = undefined,
             .migration_active = std.atomic.Value(bool).init(false),
             .reconnection_config = .{},
-            .write_context = .{
+            .writer = .{
                 .allocator = allocator,
                 .conn = writer_conn,
                 // SAFETY: Initialized below
@@ -191,23 +189,23 @@ pub const StorageEngine = struct {
                 .performance_config = performance_config,
                 .db_path = db_path,
                 .in_memory = options.in_memory,
+                .write_thread = null,
             },
-            .write_thread = null,
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
         };
 
-        self.write_context.stmt_cache.init(allocator, self.write_context.performance_config.statement_cache_size);
-        errdefer self.write_context.stmt_cache.deinit(allocator);
+        self.writer.stmt_cache.init(allocator, self.writer.performance_config.statement_cache_size);
+        errdefer self.writer.stmt_cache.deinit(allocator);
 
         try self.metadata_cache.init(allocator, .{});
         errdefer self.metadata_cache.deinit();
-        self.write_context.metadata_cache = &self.metadata_cache;
+        self.writer.metadata_cache = &self.metadata_cache;
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
 
-        try self.write_context.queue.init(allocator, &self.node_pool);
-        errdefer self.write_context.queue.deinit();
+        try self.writer.queue.init(allocator, &self.node_pool);
+        errdefer self.writer.queue.deinit();
     }
 
     pub fn deinit(self: *StorageEngine) void {
@@ -220,16 +218,7 @@ pub const StorageEngine = struct {
 
         // 1. Signal shutdown to the thread only if it was running
         if (old_state == .running) {
-            self.write_context.shutdown_requested.store(true, .release);
-            self.write_context.mutex.lock();
-            self.write_context.work_cond.signal();
-            self.write_context.mutex.unlock();
-
-            // 2. Wait for the thread to exit cleanly
-            if (self.write_thread) |thread| {
-                thread.join();
-                self.write_thread = null;
-            }
+            self.writer.stopThread();
         }
 
         // 3. Deinit cache
@@ -242,8 +231,8 @@ pub const StorageEngine = struct {
         }
         gpa.free(self.reader_pool);
 
-        // 5. Clean up the write context and queues
-        self.write_context.deinit(gpa);
+        // 5. Clean up the writer and queue
+        self.writer.deinit();
         self.node_pool.deinit();
     }
 
@@ -258,7 +247,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.write_context.enqueueOp(op);
+        try self.writer.enqueueOp(op);
 
         try signal.wait();
         return signal.result orelse error.InvalidOperation;
@@ -266,7 +255,7 @@ pub const StorageEngine = struct {
 
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
-        return connection.getWalSize(self.allocator, self.write_context.db_path, self.write_context.in_memory);
+        return connection.getWalSize(self.allocator, self.writer.db_path, self.writer.in_memory);
     }
 
     /// Classify SQLite error into our specific error types
@@ -274,9 +263,9 @@ pub const StorageEngine = struct {
     /// Attempt to reconnect to database with exponential backoff
     fn reconnectWithBackoff(self: *StorageEngine) !void {
         return connection.reconnectWithBackoff(
-            self.write_context.db_path,
-            self.write_context.in_memory,
-            &self.write_context.conn,
+            self.writer.db_path,
+            self.writer.in_memory,
+            &self.writer.conn,
             self.reader_pool,
             self.reconnection_config,
         );
@@ -284,9 +273,9 @@ pub const StorageEngine = struct {
 
     fn attemptReconnect(self: *StorageEngine) !void {
         return connection.attemptReconnect(
-            self.write_context.db_path,
-            self.write_context.in_memory,
-            &self.write_context.conn,
+            self.writer.db_path,
+            self.writer.in_memory,
+            &self.writer.conn,
             self.reader_pool,
         );
     }
@@ -304,15 +293,15 @@ pub const StorageEngine = struct {
             std.log.err("execSetupSQL called outside of setup phase", .{});
             return error.InvalidState;
         }
-        try self.write_context.conn.execMulti(sql_query, .{});
+        try self.writer.conn.execMulti(sql_query, .{});
         // Reset caches since DDL may have modified table structures, invalidating
         // any cached prepared statements and metadata.
-        self.write_context.stmt_cache.deinit(self.allocator);
-        self.write_context.stmt_cache.init(self.allocator, self.write_context.performance_config.statement_cache_size);
+        self.writer.stmt_cache.deinit(self.allocator);
+        self.writer.stmt_cache.init(self.allocator, self.writer.performance_config.statement_cache_size);
         self.metadata_cache.deinit();
         try self.metadata_cache.init(self.allocator, .{});
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
-        self.write_context.bumpVersion();
+        self.writer.bumpVersion();
     }
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
@@ -323,17 +312,11 @@ pub const StorageEngine = struct {
         }
 
         // Spawn the write thread
-        self.write_thread = try std.Thread.spawn(.{}, writer.writeThreadLoop, .{&self.write_context});
+        try self.writer.spawnThread();
         self.state.store(.running, .release);
 
         // Wait deterministically for the write thread to signal readiness
-        {
-            self.write_context.mutex.lock();
-            defer self.write_context.mutex.unlock();
-            while (!self.write_context.is_ready.load(.acquire)) {
-                self.write_context.work_cond.wait(&self.write_context.mutex);
-            }
-        }
+        self.writer.waitUntilReady();
 
         std.log.info("Storage engine started (Runtime Phase)", .{});
     }
@@ -344,7 +327,11 @@ pub const StorageEngine = struct {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
         }
-        return &self.write_context.conn;
+        return self.writer.setupConn();
+    }
+
+    pub fn changeBuffer(self: *StorageEngine) *ChangeBuffer {
+        return &self.writer.change_buffer;
     }
 
     pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
@@ -375,7 +362,7 @@ pub const StorageEngine = struct {
         };
         errdefer if (!queued) op.deinit(self.allocator);
 
-        try self.write_context.enqueueOp(op);
+        try self.writer.enqueueOp(op);
         queued = true;
 
         try signal.wait();
@@ -383,16 +370,7 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        std.log.debug("flushPendingWrites: count={}", .{self.write_context.pendingOpCount()});
-        self.write_context.mutex.lock();
-        defer self.write_context.mutex.unlock();
-        while (self.write_context.pendingOpCount() > 0) {
-            self.write_context.flush_cond.wait(&self.write_context.mutex);
-        }
-    }
-
-    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema.Table, namespace_id: i64, id: DocId) ![]u8 {
-        return reader.getCacheKey(self.allocator, table_metadata, namespace_id, id);
+        self.writer.flushPendingWrites();
     }
 
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
@@ -442,7 +420,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.write_context.enqueueOp(op);
+        try self.writer.enqueueOp(op);
         queued = true;
     }
 
@@ -468,7 +446,7 @@ pub const StorageEngine = struct {
             _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
         }
 
-        try self.write_context.enqueueOp(op);
+        try self.writer.enqueueOp(op);
         queued = true;
     }
 
@@ -507,14 +485,14 @@ pub const StorageEngine = struct {
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
-        const seq_before = self.write_context.snapshotVersion();
+        const seq_before = self.writer.snapshotVersion();
 
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
         const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata);
         if (result) |row| {
-            if (self.write_context.snapshotVersion() == seq_before) {
+            if (self.writer.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
                 const cache_row = try row.clone(self.allocator);
                 errdefer cache_row.deinit(self.allocator);
@@ -595,7 +573,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.write_context.enqueueOp(op);
+        try self.writer.enqueueOp(op);
         queued = true;
     }
 };

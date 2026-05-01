@@ -230,7 +230,7 @@ pub const ZyncBaseServer = struct {
         // Initialize Notification Dispatcher
         try self.notification_dispatcher.init(
             self.memory_strategy.generalAllocator(),
-            &self.storage_engine.write_context.change_buffer,
+            self.storage_engine.changeBuffer(),
             &self.subscription_engine,
             &self.memory_strategy,
             &self.schema_manager,
