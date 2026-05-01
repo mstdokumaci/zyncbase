@@ -66,17 +66,6 @@ fn makeDeleteBatchEntries(allocator: std.mem.Allocator, table_index: usize) ![]s
     return entries;
 }
 
-fn freeBatchEntries(allocator: std.mem.Allocator, entries: []storage_mod.BatchEntry) void {
-    for (entries) |entry| {
-        allocator.free(entry.sql);
-        if (entry.values) |vals| {
-            for (vals) |v| v.deinit(allocator);
-            allocator.free(vals);
-        }
-    }
-    allocator.free(entries);
-}
-
 fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEntry, signal: *storage_mod.WriteOp.CompletionSignal) void {
     var last_batch_time: i64 = 0;
     const op = BatchOpForTest{
@@ -357,8 +346,6 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
-    var caller_owns_entries = true;
-    defer if (caller_owns_entries) freeBatchEntries(allocator, entries);
 
     ctx.engine.batchWrite(entries) catch |err| {
         try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
@@ -366,7 +353,6 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
         return;
     };
 
-    caller_owns_entries = false;
     return error.TestUnexpectedResult;
 }
 

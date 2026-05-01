@@ -258,8 +258,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        self.write_context.beginOp();
-        try self.pushWrite(op);
+        try self.enqueueWrite(op);
 
         try signal.wait();
         return signal.result orelse error.InvalidOperation;
@@ -356,6 +355,14 @@ pub const StorageEngine = struct {
         self.write_context.mutex.unlock();
     }
 
+    fn enqueueWrite(self: *StorageEngine, op: WriteOp) !void {
+        self.write_context.beginOp();
+        self.pushWrite(op) catch |err| {
+            self.write_context.endOp(1);
+            return err;
+        };
+    }
+
     pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
         try self.ensureRunning();
 
@@ -374,7 +381,6 @@ pub const StorageEngine = struct {
         var namespace_id: i64 = 0;
         const ns_owned = try self.allocator.dupe(u8, namespace);
         var queued = false;
-        errdefer if (!queued) self.allocator.free(ns_owned);
 
         const op = WriteOp{
             .upsert_namespace = .{
@@ -383,12 +389,9 @@ pub const StorageEngine = struct {
                 .completion_signal = &signal,
             },
         };
+        errdefer if (!queued) op.deinit(self.allocator);
 
-        self.write_context.beginOp();
-        self.pushWrite(op) catch |err| {
-            self.write_context.endOp(1);
-            return err;
-        };
+        try self.enqueueWrite(op);
         queued = true;
 
         try signal.wait();
@@ -426,16 +429,17 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        var queued = false;
 
         const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
-        errdefer self.allocator.free(sql_string);
+        errdefer if (!queued) self.allocator.free(sql_string);
 
         const values = try self.allocator.alloc(TypedValue, columns.len);
         var initialized_count: usize = 0;
-        errdefer {
+        errdefer if (!queued) {
             for (values[0..initialized_count]) |v| v.deinit(self.allocator);
             self.allocator.free(values);
-        }
+        };
         for (columns, 0..) |col, i| {
             values[i] = try col.value.clone(self.allocator);
             initialized_count += 1;
@@ -454,16 +458,25 @@ pub const StorageEngine = struct {
             },
         };
 
-        self.write_context.beginOp();
-        try self.pushWrite(op);
+        try self.enqueueWrite(op);
+        queued = true;
     }
 
     /// Atomically execute a batch of upsert/delete operations in a single transaction.
-    /// Fire-and-forget: returns immediately after enqueue; write thread processes asynchronously.
+    /// Fire-and-forget: takes ownership of entries and returns immediately after enqueue.
     pub fn batchWrite(
         self: *StorageEngine,
         entries: []BatchEntry,
     ) !void {
+        const op = WriteOp{
+            .batch = .{
+                .entries = entries,
+                .completion_signal = null,
+            },
+        };
+        var queued = false;
+        errdefer if (!queued) op.deinit(self.allocator);
+
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
 
@@ -471,18 +484,8 @@ pub const StorageEngine = struct {
             _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
         }
 
-        const op = WriteOp{
-            .batch = .{
-                .entries = entries,
-                .completion_signal = null,
-            },
-        };
-
-        self.write_context.beginOp();
-        self.pushWrite(op) catch |err| {
-            self.write_context.endOp(1);
-            return err;
-        };
+        try self.enqueueWrite(op);
+        queued = true;
     }
 
     /// Select a single document by ID.
@@ -593,9 +596,10 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        var queued = false;
 
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
-        errdefer self.allocator.free(sql_string);
+        errdefer if (!queued) self.allocator.free(sql_string);
 
         const op = WriteOp{
             .delete = .{
@@ -607,7 +611,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        self.write_context.beginOp();
-        try self.pushWrite(op);
+        try self.enqueueWrite(op);
+        queued = true;
     }
 };

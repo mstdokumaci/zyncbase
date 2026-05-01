@@ -132,7 +132,8 @@ pub const StoreService = struct {
 
         var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
         var initialized: usize = 0;
-        errdefer {
+        var entries_owned = true;
+        errdefer if (entries_owned) {
             for (entries[0..initialized]) |entry| {
                 self.allocator.free(entry.sql);
                 if (entry.values) |vals| {
@@ -141,7 +142,7 @@ pub const StoreService = struct {
                 }
             }
             self.allocator.free(entries);
-        }
+        };
 
         const timestamp = std.time.timestamp();
 
@@ -162,6 +163,7 @@ pub const StoreService = struct {
             initialized += 1;
         }
 
+        entries_owned = false;
         try self.storage_engine.batchWrite(entries);
     }
 
