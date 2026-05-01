@@ -421,14 +421,3 @@ fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Pa
     var reader: std.Io.Reader = .fixed(slice);
     return msgpack.decode(allocator, &reader);
 }
-
-pub fn getMapPayload(map: Payload, key: []const u8) ?Payload {
-    if (map != .map) return null;
-    var it = map.map.iterator();
-    while (it.next()) |entry| {
-        if (entry.key_ptr.* == .str and std.mem.eql(u8, entry.key_ptr.*.str.value(), key)) {
-            return entry.value_ptr.*;
-        }
-    }
-    return null;
-}

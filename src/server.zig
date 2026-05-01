@@ -314,8 +314,8 @@ pub const ZyncBaseServer = struct {
         // Flush pending writes
         try self.storage_engine.flushPendingWrites();
 
-        // Perform final checkpoint
-        _ = try self.checkpoint_manager.performCheckpoint(.full);
+        // Perform final checkpoint with retry for transient failures
+        _ = try self.checkpoint_manager.performCheckpointWithRetry(.full, 5);
 
         std.log.info("Graceful shutdown complete", .{});
     }
