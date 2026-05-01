@@ -18,11 +18,18 @@ const TypedRow = storage_values.TypedRow;
 const WriteOp = write_queue.WriteOp;
 const StorageError = errors.StorageError;
 
+// Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
+// logs an error from Statement.deinit when a control statement is expected to fail.
 fn execTransactionControl(conn: *sqlite.Db, statement: [:0]const u8) !void {
     var err_msg: [*c]u8 = null;
     const rc = sqlite.c.sqlite3_exec(conn.db, statement.ptr, null, null, &err_msg);
-    if (err_msg != null) sqlite.c.sqlite3_free(err_msg);
-    if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(conn);
+    defer if (err_msg != null) sqlite.c.sqlite3_free(err_msg);
+    if (rc != sqlite.c.SQLITE_OK) {
+        if (err_msg != null) {
+            std.log.debug("SQLite transaction control failed for {s}: {s}", .{ statement, std.mem.span(err_msg) });
+        }
+        return errors.classifyStepError(conn);
+    }
 }
 
 fn getDocumentHelper(
