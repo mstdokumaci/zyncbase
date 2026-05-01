@@ -6,6 +6,8 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const reader = @import("storage_engine/reader.zig");
 const writer = @import("storage_engine/writer.zig");
+const writer_context = @import("storage_engine/write_context.zig");
+const WriteContext = writer_context.WriteContext;
 const connection = @import("storage_engine/connection.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
@@ -52,36 +54,17 @@ pub const StorageEngine = struct {
     pub const State = enum(u8) { setup, running, shutdown };
 
     allocator: Allocator,
-    db_path: [:0]const u8,
-    _writer_conn: sqlite.Db,
-    writer_stmt_cache: sql.StatementCache,
     reader_pool: []ReaderNode,
-    write_queue: WriteQueue,
     write_thread: ?std.Thread = null,
     state: std.atomic.Value(State),
-    shutdown_requested: std.atomic.Value(bool),
     next_reader_idx: std.atomic.Value(usize),
-    transaction_active: std.atomic.Value(bool),
     migration_active: std.atomic.Value(bool),
-    pending_writes_count: std.atomic.Value(usize),
     reconnection_config: ReconnectionConfig,
-    write_mutex: std.Thread.Mutex,
-    write_cond: std.Thread.Condition,
-    flush_cond: std.Thread.Condition,
-    write_thread_ready: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const Schema,
     metadata_cache: typed_cache_type,
-    /// Monotonically increasing counter bumped by the write thread after each
-    /// successful batch commit, before cache eviction. Readers snapshot this
-    /// before the DB read and only populate the cache if it hasn't advanced,
-    /// preventing stale values from racing into the cache.
-    write_seq: std.atomic.Value(u64),
-    performance_config: PerformanceConfig,
     options: Options,
-    change_buffer: ChangeBuffer,
-    event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
+    write_context: WriteContext,
 
     pub fn init(
         self: *StorageEngine,
@@ -174,49 +157,57 @@ pub const StorageEngine = struct {
 
         self.* = .{
             .allocator = allocator,
-            .db_path = db_path,
-            ._writer_conn = writer_conn,
-            // SAFETY: Initialized below via .writer_stmt_cache.init().
-            .writer_stmt_cache = undefined,
             .reader_pool = reader_pool,
-            .performance_config = performance_config,
             .options = options,
             // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
-            // SAFETY: Initialized below via .write_queue.init().
-            .write_queue = undefined,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
             .next_reader_idx = std.atomic.Value(usize).init(0),
-            .transaction_active = std.atomic.Value(bool).init(false),
-            .write_seq = std.atomic.Value(u64).init(0),
             .schema_manager = sm,
             // SAFETY: Initialized below
             .metadata_cache = undefined,
-            .flush_cond = .{},
-            .write_mutex = .{},
-            .pending_writes_count = std.atomic.Value(usize).init(0),
             .migration_active = std.atomic.Value(bool).init(false),
             .reconnection_config = .{},
-            .write_cond = .{},
-            .write_thread_ready = std.atomic.Value(bool).init(false),
-            .change_buffer = change_buffer,
-            .event_loop_notifier = event_loop_notifier,
-            .notifier_ctx = notifier_ctx,
+            .write_context = .{
+                .allocator = allocator,
+                .conn = writer_conn,
+                // SAFETY: Initialized below
+                .stmt_cache = undefined,
+                .transaction_active = std.atomic.Value(bool).init(false),
+                .version = std.atomic.Value(u64).init(0),
+                .work_cond = .{},
+                .mutex = .{},
+                .flush_cond = .{},
+                .pending_count = std.atomic.Value(usize).init(0),
+                .change_buffer = change_buffer,
+                .notifier_ptr = event_loop_notifier,
+                .notifier_ctx = notifier_ctx,
+                // SAFETY: Set after metadata_cache init below
+                .metadata_cache = undefined,
+                .schema = sm,
+                .shutdown_requested = std.atomic.Value(bool).init(false),
+                .is_ready = std.atomic.Value(bool).init(false),
+                // SAFETY: Initialized below via .write_queue.init().
+                .queue = undefined,
+                .performance_config = performance_config,
+                .db_path = db_path,
+                .in_memory = options.in_memory,
+            },
             .write_thread = null,
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
         };
 
-        self.writer_stmt_cache.init(allocator, self.performance_config.statement_cache_size);
-        errdefer self.writer_stmt_cache.deinit(allocator);
+        self.write_context.stmt_cache.init(allocator, self.write_context.performance_config.statement_cache_size);
+        errdefer self.write_context.stmt_cache.deinit(allocator);
 
         try self.metadata_cache.init(allocator, .{});
         errdefer self.metadata_cache.deinit();
+        self.write_context.metadata_cache = &self.metadata_cache;
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
 
-        try self.write_queue.init(allocator, &self.node_pool);
-        errdefer self.write_queue.deinit();
+        try self.write_context.queue.init(allocator, &self.node_pool);
+        errdefer self.write_context.queue.deinit();
     }
 
     pub fn deinit(self: *StorageEngine) void {
@@ -229,10 +220,10 @@ pub const StorageEngine = struct {
 
         // 1. Signal shutdown to the thread only if it was running
         if (old_state == .running) {
-            self.shutdown_requested.store(true, .release);
-            self.write_mutex.lock();
-            self.write_cond.signal();
-            self.write_mutex.unlock();
+            self.write_context.shutdown_requested.store(true, .release);
+            self.write_context.mutex.lock();
+            self.write_context.work_cond.signal();
+            self.write_context.mutex.unlock();
 
             // 2. Wait for the thread to exit cleanly
             if (self.write_thread) |thread| {
@@ -243,8 +234,8 @@ pub const StorageEngine = struct {
 
         // 3. Deinit cache
         self.metadata_cache.deinit();
-        self.writer_stmt_cache.deinit(self.allocator);
-        self._writer_conn.deinit();
+        self.write_context.stmt_cache.deinit(self.allocator);
+        self.write_context.conn.deinit();
 
         // 4. Clean up readers
         for (self.reader_pool) |*node| {
@@ -252,14 +243,14 @@ pub const StorageEngine = struct {
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
-        gpa.free(self.db_path);
+        gpa.free(self.write_context.db_path);
 
         // 5. Clean up the queues and objects
-        self.write_queue.deinit();
+        self.write_context.queue.deinit();
         self.node_pool.deinit();
 
         // 6. Clean up change buffer
-        self.change_buffer.deinit();
+        self.write_context.change_buffer.deinit();
     }
 
     /// Returns statistics about the checkpoint operation
@@ -273,7 +264,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
+        _ = self.write_context.pending_count.fetchAdd(1, .release);
         try self.pushWrite(op);
 
         try signal.wait();
@@ -282,7 +273,7 @@ pub const StorageEngine = struct {
 
     /// Get the current WAL file size in bytes
     pub fn getWalSize(self: *StorageEngine) !usize {
-        return connection.getWalSize(self.allocator, self.db_path, self.options.in_memory);
+        return connection.getWalSize(self.allocator, self.write_context.db_path, self.write_context.in_memory);
     }
 
     /// Classify SQLite error into our specific error types
@@ -290,9 +281,9 @@ pub const StorageEngine = struct {
     /// Attempt to reconnect to database with exponential backoff
     fn reconnectWithBackoff(self: *StorageEngine) !void {
         return connection.reconnectWithBackoff(
-            self.db_path,
-            self.options.in_memory,
-            &self._writer_conn,
+            self.write_context.db_path,
+            self.write_context.in_memory,
+            &self.write_context.conn,
             self.reader_pool,
             self.reconnection_config,
         );
@@ -300,9 +291,9 @@ pub const StorageEngine = struct {
 
     fn attemptReconnect(self: *StorageEngine) !void {
         return connection.attemptReconnect(
-            self.db_path,
-            self.options.in_memory,
-            &self._writer_conn,
+            self.write_context.db_path,
+            self.write_context.in_memory,
+            &self.write_context.conn,
             self.reader_pool,
         );
     }
@@ -320,15 +311,15 @@ pub const StorageEngine = struct {
             std.log.err("execSetupSQL called outside of setup phase", .{});
             return error.InvalidState;
         }
-        try self._writer_conn.execMulti(sql_query, .{});
+        try self.write_context.conn.execMulti(sql_query, .{});
         // Reset caches since DDL may have modified table structures, invalidating
         // any cached prepared statements and metadata.
-        self.writer_stmt_cache.deinit(self.allocator);
-        self.writer_stmt_cache.init(self.allocator, self.performance_config.statement_cache_size);
+        self.write_context.stmt_cache.deinit(self.allocator);
+        self.write_context.stmt_cache.init(self.allocator, self.write_context.performance_config.statement_cache_size);
         self.metadata_cache.deinit();
         try self.metadata_cache.init(self.allocator, .{});
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
-        _ = self.write_seq.fetchAdd(1, .release);
+        _ = self.write_context.version.fetchAdd(1, .release);
     }
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
@@ -339,15 +330,15 @@ pub const StorageEngine = struct {
         }
 
         // Spawn the write thread
-        self.write_thread = try std.Thread.spawn(.{}, writer.writeThreadLoop, .{self});
+        self.write_thread = try std.Thread.spawn(.{}, writer.writeThreadLoop, .{&self.write_context});
         self.state.store(.running, .release);
 
         // Wait deterministically for the write thread to signal readiness
         {
-            self.write_mutex.lock();
-            defer self.write_mutex.unlock();
-            while (!self.write_thread_ready.load(.acquire)) {
-                self.write_cond.wait(&self.write_mutex);
+            self.write_context.mutex.lock();
+            defer self.write_context.mutex.unlock();
+            while (!self.write_context.is_ready.load(.acquire)) {
+                self.write_context.work_cond.wait(&self.write_context.mutex);
             }
         }
 
@@ -360,15 +351,15 @@ pub const StorageEngine = struct {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
         }
-        return &self._writer_conn;
+        return &self.write_context.conn;
     }
 
     /// Push a write op and wake the write thread immediately.
     fn pushWrite(self: *StorageEngine, op: WriteOp) !void {
-        try self.write_queue.push(op);
-        self.write_mutex.lock();
-        self.write_cond.signal();
-        self.write_mutex.unlock();
+        try self.write_context.queue.push(op);
+        self.write_context.mutex.lock();
+        self.write_context.work_cond.signal();
+        self.write_context.mutex.unlock();
     }
 
     pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
@@ -399,9 +390,9 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
+        _ = self.write_context.pending_count.fetchAdd(1, .release);
         self.pushWrite(op) catch |err| {
-            _ = self.pending_writes_count.fetchSub(1, .release);
+            _ = self.write_context.pending_count.fetchSub(1, .release);
             return err;
         };
         queued = true;
@@ -411,11 +402,11 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        std.log.debug("flushPendingWrites: count={}", .{self.pending_writes_count.load(.acquire)});
-        self.write_mutex.lock();
-        defer self.write_mutex.unlock();
-        while (self.pending_writes_count.load(.acquire) > 0) {
-            self.flush_cond.wait(&self.write_mutex);
+        std.log.debug("flushPendingWrites: count={}", .{self.write_context.pending_count.load(.acquire)});
+        self.write_context.mutex.lock();
+        defer self.write_context.mutex.unlock();
+        while (self.write_context.pending_count.load(.acquire) > 0) {
+            self.write_context.flush_cond.wait(&self.write_context.mutex);
         }
     }
 
@@ -469,7 +460,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
+        _ = self.write_context.pending_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
 
@@ -493,9 +484,9 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
+        _ = self.write_context.pending_count.fetchAdd(1, .release);
         self.pushWrite(op) catch |err| {
-            _ = self.pending_writes_count.fetchSub(1, .release);
+            _ = self.write_context.pending_count.fetchSub(1, .release);
             return err;
         };
     }
@@ -535,14 +526,14 @@ pub const StorageEngine = struct {
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
-        const seq_before = self.write_seq.load(.acquire);
+        const seq_before = self.write_context.version.load(.acquire);
 
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
         const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata);
         if (result) |row| {
-            if (self.write_seq.load(.acquire) == seq_before) {
+            if (self.write_context.version.load(.acquire) == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
                 const cache_row = try row.clone(self.allocator);
                 errdefer cache_row.deinit(self.allocator);
@@ -622,11 +613,11 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.pending_writes_count.fetchAdd(1, .release);
+        _ = self.write_context.pending_count.fetchAdd(1, .release);
         try self.pushWrite(op);
     }
 
     fn writeThreadLoop(self: *StorageEngine) void {
-        writer.writeThreadLoop(self);
+        writer.writeThreadLoop(&self.write_context);
     }
 };

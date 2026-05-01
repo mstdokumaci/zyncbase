@@ -84,21 +84,9 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEn
         .completion_signal = signal,
     };
     writer.executeBatchOp(
-        ctx.allocator,
-        &ctx.engine._writer_conn,
-        &ctx.engine.transaction_active,
-        &ctx.engine.write_seq,
-        &ctx.engine.pending_writes_count,
-        &ctx.engine.write_mutex,
-        &ctx.engine.flush_cond,
-        &ctx.engine.metadata_cache,
+        &ctx.engine.write_context,
         op,
         &last_batch_time,
-        ctx.engine.schema_manager,
-        &ctx.engine.change_buffer,
-        null,
-        null,
-        &ctx.engine.writer_stmt_cache,
     );
 }
 
@@ -324,18 +312,18 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    ctx.engine.pending_writes_count.store(1, .release);
+    ctx.engine.write_context.pending_count.store(1, .release);
 
-    try ctx.engine._writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
-    defer ctx.engine._writer_conn.exec("ROLLBACK", .{}, .{}) catch |err| {
+    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    defer ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
         std.log.warn("failed to roll back test transaction: {}", .{err});
     };
 
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
-    try testing.expect(!ctx.engine.transaction_active.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pending_count.load(.acquire));
+    try testing.expect(!ctx.engine.write_context.transaction_active.load(.acquire));
 }
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
@@ -348,18 +336,18 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    const write_seq_before = ctx.engine.write_seq.load(.acquire);
-    ctx.engine.pending_writes_count.store(1, .release);
+    const version_before = ctx.engine.write_context.version.load(.acquire);
+    ctx.engine.write_context.pending_count.store(1, .release);
 
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
-    try testing.expect(!ctx.engine.transaction_active.load(.acquire));
-    try testing.expectEqual(write_seq_before, ctx.engine.write_seq.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pending_count.load(.acquire));
+    try testing.expect(!ctx.engine.write_context.transaction_active.load(.acquire));
+    try testing.expectEqual(version_before, ctx.engine.write_context.version.load(.acquire));
 
-    try ctx.engine._writer_conn.exec("BEGIN TRANSACTION", .{}, .{});
-    try ctx.engine._writer_conn.exec("ROLLBACK", .{}, .{});
+    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{});
 }
 
 test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
@@ -376,7 +364,7 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
 
     ctx.engine.batchWrite(entries) catch |err| {
         try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
-        try testing.expectEqual(@as(usize, 0), ctx.engine.pending_writes_count.load(.acquire));
+        try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pending_count.load(.acquire));
         return;
     };
 
@@ -419,7 +407,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     // Regression test for brittle shutdown synchronization.
     // Previously deinit() used a fixed 50ms sleep before joining the write
     // thread, which could race and lose in-flight writes. Now it signals
-    // write_cond and joins cleanly, guaranteeing the write thread has flushed
+    // work_cond and joins cleanly, guaranteeing the write thread has flushed
     // its remaining batch before deinit returns.
     const allocator = testing.allocator;
 

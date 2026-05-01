@@ -9,8 +9,8 @@ const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
 const storage_values = @import("values.zig");
 const write_queue = @import("write_queue.zig");
-const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const OwnedRowChange = @import("../change_buffer.zig").OwnedRowChange;
+const WriteContext = @import("write_context.zig").WriteContext;
 
 const DocId = storage_values.DocId;
 const MetadataCacheKey = storage_values.MetadataCacheKey;
@@ -168,27 +168,15 @@ pub fn executeBatch(
 }
 
 pub fn flushBatch(
-    allocator: Allocator,
-    conn: *sqlite.Db,
-    transaction_active: *std.atomic.Value(bool),
-    write_seq: *std.atomic.Value(u64),
-    pending_writes_count: *std.atomic.Value(usize),
-    write_mutex: *std.Thread.Mutex,
-    flush_cond: *std.Thread.Condition,
-    metadata_cache: anytype,
+    wc: *WriteContext,
     batch: *std.ArrayListUnmanaged(WriteOp),
     last_batch_time: *i64,
-    sm: *const schema.Schema,
-    change_buffer: *ChangeBuffer,
-    notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
-    stmt_cache: *sql.StatementCache,
 ) void {
     const batch_len = batch.items.len;
     std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
     var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-    defer eviction_keys.deinit(allocator);
+    defer eviction_keys.deinit(wc.allocator);
     for (batch.items) |op| {
         // SAFETY: initialized below in the switch statement
         var table_index: usize = undefined;
@@ -212,9 +200,9 @@ pub fn flushBatch(
             else => false,
         };
         if (has_affected) {
-            const table_metadata = sm.getTableByIndex(table_index) orelse continue;
+            const table_metadata = wc.schema.getTableByIndex(table_index) orelse continue;
             const key = reader.getCacheKey(table_metadata, namespace_id, id);
-            eviction_keys.append(allocator, key) catch |err| {
+            eviction_keys.append(wc.allocator, key) catch |err| {
                 std.log.err("Failed to append eviction key: {}", .{err});
                 continue;
             };
@@ -223,28 +211,28 @@ pub fn flushBatch(
 
     var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
     defer {
-        for (pending_changes.items) |*c| c.deinit(allocator);
-        pending_changes.deinit(allocator);
+        for (pending_changes.items) |*c| c.deinit(wc.allocator);
+        pending_changes.deinit(wc.allocator);
     }
 
-    const result = executeBatch(allocator, conn, transaction_active, batch.items, &pending_changes, sm, stmt_cache);
+    const result = executeBatch(wc.allocator, &wc.conn, &wc.transaction_active, batch.items, &pending_changes, wc.schema, &wc.stmt_cache);
     if (result) |_| {
-        _ = write_seq.fetchAdd(1, .acq_rel);
+        _ = wc.version.fetchAdd(1, .acq_rel);
 
         if (eviction_keys.items.len > 0) {
-            metadata_cache.bulkEvict(eviction_keys.items);
+            wc.metadata_cache.bulkEvict(eviction_keys.items);
         }
 
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(null);
-            op.deinit(allocator);
+            op.deinit(wc.allocator);
         }
 
         var dispatcher_woken = false;
         for (pending_changes.items) |*change| {
-            change_buffer.push(change.*) catch |err| {
+            wc.change_buffer.push(change.*) catch |err| {
                 std.log.err("Failed to push to change_buffer: {}", .{err});
-                change.deinit(allocator);
+                change.deinit(wc.allocator);
                 continue;
             };
             dispatcher_woken = true;
@@ -252,8 +240,8 @@ pub fn flushBatch(
         pending_changes.clearRetainingCapacity();
 
         if (dispatcher_woken) {
-            if (notifier_ptr) |n| {
-                n(notifier_ctx);
+            if (wc.notifier_ptr) |n| {
+                n(wc.notifier_ctx);
             }
         }
     } else |err| {
@@ -261,120 +249,120 @@ pub fn flushBatch(
         std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
-            op.deinit(allocator);
+            op.deinit(wc.allocator);
         }
     }
     batch.clearRetainingCapacity();
-    _ = pending_writes_count.fetchSub(batch_len, .release);
-    write_mutex.lock();
-    flush_cond.broadcast();
-    write_mutex.unlock();
+    _ = wc.pending_count.fetchSub(batch_len, .release);
+    wc.mutex.lock();
+    wc.flush_cond.broadcast();
+    wc.mutex.unlock();
     last_batch_time.* = std.time.milliTimestamp();
 }
 
-pub fn writeThreadLoop(ctx: anytype) void {
-    writeThreadLoopImpl(ctx) catch |err| {
+pub fn writeThreadLoop(wc: *WriteContext) void {
+    writeThreadLoopImpl(wc) catch |err| {
         std.log.err("writeThreadLoop fatal error: {}", .{err});
     };
 }
 
-fn waitForWriteSignal(ctx: anytype, timeout_ns: ?u64) void {
-    ctx.write_mutex.lock();
-    defer ctx.write_mutex.unlock();
+fn waitForWriteSignal(wc: *WriteContext, timeout_ns: ?u64) void {
+    wc.mutex.lock();
+    defer wc.mutex.unlock();
 
-    if (ctx.shutdown_requested.load(.acquire) or ctx.write_queue.hasItems()) {
+    if (wc.shutdown_requested.load(.acquire) or wc.queue.hasItems()) {
         return;
     }
 
     if (timeout_ns) |ns| {
-        ctx.write_cond.timedWait(&ctx.write_mutex, ns) catch |err| {
+        wc.work_cond.timedWait(&wc.mutex, ns) catch |err| {
             if (err != error.Timeout) {
                 std.log.err("write_cond.timedWait failed: {}", .{err});
             }
         };
     } else {
-        ctx.write_cond.wait(&ctx.write_mutex);
+        wc.work_cond.wait(&wc.mutex);
     }
 }
 
-fn writeThreadLoopImpl(ctx: anytype) !void {
+fn writeThreadLoopImpl(wc: *WriteContext) !void {
     // Signal that the write thread is up and running
-    ctx.write_thread_ready.store(true, .release);
-    ctx.write_mutex.lock();
-    ctx.write_cond.signal();
-    ctx.write_mutex.unlock();
+    wc.is_ready.store(true, .release);
+    wc.mutex.lock();
+    wc.work_cond.signal();
+    wc.mutex.unlock();
 
-    const batch_size = if (ctx.performance_config.batch_writes)
-        ctx.performance_config.batch_size
+    const batch_size = if (wc.performance_config.batch_writes)
+        wc.performance_config.batch_size
     else
         1;
-    const batch_timeout_ms: i64 = if (ctx.performance_config.batch_writes)
-        @intCast(ctx.performance_config.batch_timeout)
+    const batch_timeout_ms: i64 = if (wc.performance_config.batch_writes)
+        @intCast(wc.performance_config.batch_timeout)
     else
         0;
 
     var batch = std.ArrayListUnmanaged(WriteOp){};
-    try batch.ensureTotalCapacity(ctx.allocator, batch_size);
+    try batch.ensureTotalCapacity(wc.allocator, batch_size);
     defer {
         for (batch.items) |op| {
-            op.deinit(ctx.allocator);
+            op.deinit(wc.allocator);
         }
-        batch.deinit(ctx.allocator);
+        batch.deinit(wc.allocator);
     }
 
     var last_batch_time = std.time.milliTimestamp();
 
-    while (!ctx.shutdown_requested.load(.acquire)) {
+    while (!wc.shutdown_requested.load(.acquire)) {
         // Collect operations for batch
         while (batch.items.len < batch_size) {
-            if (ctx.write_queue.pop()) |op| {
+            if (wc.queue.pop()) |op| {
                 switch (op) {
                     .upsert, .delete => {
-                        batch.append(ctx.allocator, op) catch |err| {
+                        batch.append(wc.allocator, op) catch |err| {
                             std.log.err("Failed to append to batch: {}", .{err});
-                            op.deinit(ctx.allocator);
-                            _ = ctx.pending_writes_count.fetchSub(1, .release);
-                            ctx.write_mutex.lock();
-                            ctx.flush_cond.broadcast();
-                            ctx.write_mutex.unlock();
+                            op.deinit(wc.allocator);
+                            _ = wc.pending_count.fetchSub(1, .release);
+                            wc.mutex.lock();
+                            wc.flush_cond.broadcast();
+                            wc.mutex.unlock();
                             continue;
                         };
                     },
                     .batch => |bop| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                            flushBatch(wc, &batch, &last_batch_time);
                         }
-                        executeBatchOp(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, bop, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                        executeBatchOp(wc, bop, &last_batch_time);
                     },
                     .upsert_namespace => |nop| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                            flushBatch(wc, &batch, &last_batch_time);
                         }
-                        if (sql.resolveNamespaceId(ctx.allocator, &ctx._writer_conn, &ctx.writer_stmt_cache, nop.namespace)) |namespace_id| {
+                        if (sql.resolveNamespaceId(wc.allocator, &wc.conn, &wc.stmt_cache, nop.namespace)) |namespace_id| {
                             nop.result.* = namespace_id;
                             nop.completion_signal.signal(null);
                         } else |err| {
                             nop.completion_signal.signal(errors.classifyError(err));
                         }
-                        op.deinit(ctx.allocator);
-                        _ = ctx.pending_writes_count.fetchSub(1, .release);
-                        ctx.write_mutex.lock();
-                        ctx.flush_cond.broadcast();
-                        ctx.write_mutex.unlock();
+                        op.deinit(wc.allocator);
+                        _ = wc.pending_count.fetchSub(1, .release);
+                        wc.mutex.lock();
+                        wc.flush_cond.broadcast();
+                        wc.mutex.unlock();
                     },
                     .checkpoint => |cop| {
                         if (batch.items.len > 0) {
-                            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                            flushBatch(wc, &batch, &last_batch_time);
                         }
-                        if (connection.internalExecuteCheckpoint(&ctx._writer_conn, ctx.allocator, ctx.db_path, ctx.options.in_memory, cop.mode)) |stats| {
+                        if (connection.internalExecuteCheckpoint(&wc.conn, wc.allocator, wc.db_path, wc.in_memory, cop.mode)) |stats| {
                             cop.completion_signal.signalWithResult(stats);
                         } else |err| {
                             cop.completion_signal.signal(errors.classifyError(err));
                         }
-                        _ = ctx.pending_writes_count.fetchSub(1, .release);
-                        ctx.write_mutex.lock();
-                        ctx.flush_cond.broadcast();
-                        ctx.write_mutex.unlock();
+                        _ = wc.pending_count.fetchSub(1, .release);
+                        wc.mutex.lock();
+                        wc.flush_cond.broadcast();
+                        wc.mutex.unlock();
                     },
                 }
             } else {
@@ -389,47 +377,47 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
             (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
 
         if (should_flush) {
-            flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+            flushBatch(wc, &batch, &last_batch_time);
         } else {
             const timeout_ns: ?u64 = if (batch.items.len > 0)
                 @as(u64, @intCast(batch_timeout_ms - time_since_last)) * std.time.ns_per_ms
             else
                 null;
-            waitForWriteSignal(ctx, timeout_ns);
+            waitForWriteSignal(wc, timeout_ns);
         }
     }
 
     // Drain
-    while (ctx.write_queue.pop()) |op| {
+    while (wc.queue.pop()) |op| {
         switch (op) {
             .upsert, .delete => {
-                batch.append(ctx.allocator, op) catch {
-                    op.deinit(ctx.allocator);
-                    _ = ctx.pending_writes_count.fetchSub(1, .release);
-                    ctx.write_mutex.lock();
-                    ctx.flush_cond.broadcast();
-                    ctx.write_mutex.unlock();
+                batch.append(wc.allocator, op) catch {
+                    op.deinit(wc.allocator);
+                    _ = wc.pending_count.fetchSub(1, .release);
+                    wc.mutex.lock();
+                    wc.flush_cond.broadcast();
+                    wc.mutex.unlock();
                 };
             },
             .batch => |bop| {
                 if (batch.items.len > 0) {
-                    flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                    flushBatch(wc, &batch, &last_batch_time);
                 }
-                executeBatchOp(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, bop, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+                executeBatchOp(wc, bop, &last_batch_time);
             },
             else => {
                 if (op.getCompletionSignal()) |sig| sig.signal(StorageError.InvalidOperation);
-                op.deinit(ctx.allocator);
-                _ = ctx.pending_writes_count.fetchSub(1, .release);
-                ctx.write_mutex.lock();
-                ctx.flush_cond.broadcast();
-                ctx.write_mutex.unlock();
+                op.deinit(wc.allocator);
+                _ = wc.pending_count.fetchSub(1, .release);
+                wc.mutex.lock();
+                wc.flush_cond.broadcast();
+                wc.mutex.unlock();
             },
         }
     }
 
     if (batch.items.len > 0) {
-        flushBatch(ctx.allocator, &ctx._writer_conn, &ctx.transaction_active, &ctx.write_seq, &ctx.pending_writes_count, &ctx.write_mutex, &ctx.flush_cond, &ctx.metadata_cache, &batch, &last_batch_time, ctx.schema_manager, &ctx.change_buffer, ctx.event_loop_notifier, ctx.notifier_ctx, &ctx.writer_stmt_cache);
+        flushBatch(wc, &batch, &last_batch_time);
     }
 }
 
@@ -438,58 +426,46 @@ fn writeThreadLoopImpl(ctx: anytype) !void {
 // For now, we'll assume the functions take a context or specific fields.
 
 pub fn executeBatchOp(
-    allocator: Allocator,
-    conn: *sqlite.Db,
-    transaction_active: *std.atomic.Value(bool),
-    write_seq: *std.atomic.Value(u64),
-    pending_writes_count: *std.atomic.Value(usize),
-    write_mutex: *std.Thread.Mutex,
-    flush_cond: *std.Thread.Condition,
-    metadata_cache: anytype,
+    wc: *WriteContext,
     bop: anytype,
     last_batch_time: *i64,
-    sm: *const schema.Schema,
-    change_buffer: *ChangeBuffer,
-    notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
-    notifier_ctx: ?*anyopaque,
-    stmt_cache: *sql.StatementCache,
 ) void {
     const entries = bop.entries;
     var tx_started = false;
     var final_err: ?anyerror = null;
     defer {
         if (tx_started) {
-            execTransactionControl(conn, "ROLLBACK") catch |rollback_err| {
+            execTransactionControl(&wc.conn, "ROLLBACK") catch |rollback_err| {
                 errors.logDatabaseError("executeBatchOp ROLLBACK", errors.classifyError(rollback_err), "");
             };
-            transaction_active.store(false, .release);
+            wc.transaction_active.store(false, .release);
         }
 
         if (bop.completion_signal) |sig| sig.signal(final_err);
 
         for (entries) |entry| {
-            allocator.free(entry.sql);
+            wc.allocator.free(entry.sql);
             if (entry.values) |vals| {
-                for (vals) |v| v.deinit(allocator);
-                allocator.free(vals);
+                for (vals) |v| v.deinit(wc.allocator);
+                wc.allocator.free(vals);
             }
         }
-        allocator.free(entries);
+        wc.allocator.free(entries);
 
-        _ = pending_writes_count.fetchSub(1, .release);
-        write_mutex.lock();
-        flush_cond.broadcast();
-        write_mutex.unlock();
+        _ = wc.pending_count.fetchSub(1, .release);
+        wc.mutex.lock();
+        wc.flush_cond.broadcast();
+        wc.mutex.unlock();
         last_batch_time.* = std.time.milliTimestamp();
     }
 
     // 1. Build eviction keys from all entries
     var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
-    defer eviction_keys.deinit(allocator);
+    defer eviction_keys.deinit(wc.allocator);
     for (entries) |entry| {
-        const table_metadata = sm.getTableByIndex(entry.table_index) orelse continue;
+        const table_metadata = wc.schema.getTableByIndex(entry.table_index) orelse continue;
         const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
-        eviction_keys.append(allocator, key) catch |err| {
+        eviction_keys.append(wc.allocator, key) catch |err| {
             std.log.err("Failed to allocate eviction key in batch: {}", .{err});
             continue;
         };
@@ -497,28 +473,28 @@ pub fn executeBatchOp(
     // 2. Execute all entries in a single transaction
     var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
     defer {
-        for (pending_changes.items) |*c| c.deinit(allocator);
-        pending_changes.deinit(allocator);
+        for (pending_changes.items) |*c| c.deinit(wc.allocator);
+        pending_changes.deinit(wc.allocator);
     }
 
-    execTransactionControl(conn, "BEGIN TRANSACTION") catch |err| {
+    execTransactionControl(&wc.conn, "BEGIN TRANSACTION") catch |err| {
         const classified_err = errors.classifyError(err);
         errors.logDatabaseError("executeBatchOp BEGIN", classified_err, "");
         final_err = classified_err;
         return;
     };
     tx_started = true;
-    transaction_active.store(true, .release);
+    wc.transaction_active.store(true, .release);
 
-    var sql_cache = std.AutoHashMap(usize, []const u8).init(allocator);
+    var sql_cache = std.AutoHashMap(usize, []const u8).init(wc.allocator);
     defer {
         var it = sql_cache.valueIterator();
-        while (it.next()) |sql_str| allocator.free(sql_str.*);
+        while (it.next()) |sql_str| wc.allocator.free(sql_str.*);
         sql_cache.deinit();
     }
 
     for (entries) |entry| {
-        const table_metadata = sm.getTableByIndex(entry.table_index) orelse {
+        const table_metadata = wc.schema.getTableByIndex(entry.table_index) orelse {
             final_err = StorageError.UnknownTable;
             std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
             break;
@@ -529,30 +505,30 @@ pub fn executeBatchOp(
             .upsert => {
                 const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
                 var old_row: ?TypedRow = null;
-                if (getDocumentHelper(allocator, conn, sm, entry.table_index, namespace_id, entry.id, &sql_cache, stmt_cache)) |orow| {
+                if (getDocumentHelper(wc.allocator, &wc.conn, wc.schema, entry.table_index, namespace_id, entry.id, &sql_cache, &wc.stmt_cache)) |orow| {
                     old_row = orow;
                 } else |err| {
                     std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ entry.table_index, err });
                 }
 
-                if (executeUpsert(allocator, conn, entry, namespace_id, owner_doc_id, table_metadata, stmt_cache)) |maybe_new_row| {
+                if (executeUpsert(wc.allocator, &wc.conn, entry, namespace_id, owner_doc_id, table_metadata, &wc.stmt_cache)) |maybe_new_row| {
                     if (maybe_new_row) |new_row| {
                         const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                        if (pushOwnedChange(allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_row, new_row)) |_| {
+                        if (pushOwnedChange(wc.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_row, new_row)) |_| {
                             // success
                         } else |err| {
                             std.log.err("Failed to capture row change: {}", .{err});
-                            if (old_row) |r| r.deinit(allocator);
+                            if (old_row) |r| r.deinit(wc.allocator);
                             var r = new_row;
-                            r.deinit(allocator);
+                            r.deinit(wc.allocator);
                         }
                     } else {
                         var id_hex_buf: [32]u8 = undefined;
                         std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ entry.table_index, doc_id.hexSlice(entry.id, &id_hex_buf) });
-                        if (old_row) |r| r.deinit(allocator);
+                        if (old_row) |r| r.deinit(wc.allocator);
                     }
                 } else |err| {
-                    if (old_row) |r| r.deinit(allocator);
+                    if (old_row) |r| r.deinit(wc.allocator);
                     const classified_err = errors.classifyError(err);
                     errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
                     final_err = classified_err;
@@ -560,14 +536,14 @@ pub fn executeBatchOp(
                 }
             },
             .delete => {
-                if (executeDelete(allocator, conn, entry, namespace_id, table_metadata, stmt_cache)) |maybe_old_row| {
+                if (executeDelete(wc.allocator, &wc.conn, entry, namespace_id, table_metadata, &wc.stmt_cache)) |maybe_old_row| {
                     if (maybe_old_row) |old_row| {
-                        if (pushOwnedChange(allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_row, null)) |_| {
+                        if (pushOwnedChange(wc.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_row, null)) |_| {
                             // success
                         } else |err| {
                             std.log.err("Failed to capture row change: {}", .{err});
                             var r = old_row;
-                            r.deinit(allocator);
+                            r.deinit(wc.allocator);
                         }
                     } else {
                         var id_hex_buf: [32]u8 = undefined;
@@ -584,20 +560,20 @@ pub fn executeBatchOp(
     }
 
     if (final_err == null) {
-        if (execTransactionControl(conn, "COMMIT")) |_| {
+        if (execTransactionControl(&wc.conn, "COMMIT")) |_| {
             tx_started = false;
-            transaction_active.store(false, .release);
-            _ = write_seq.fetchAdd(1, .acq_rel);
+            wc.transaction_active.store(false, .release);
+            _ = wc.version.fetchAdd(1, .acq_rel);
 
             if (eviction_keys.items.len > 0) {
-                metadata_cache.bulkEvict(eviction_keys.items);
+                wc.metadata_cache.bulkEvict(eviction_keys.items);
             }
 
             var dispatcher_woken = false;
             for (pending_changes.items) |*change| {
-                change_buffer.push(change.*) catch |err| {
+                wc.change_buffer.push(change.*) catch |err| {
                     std.log.err("Failed to push to change_buffer: {}", .{err});
-                    change.deinit(allocator);
+                    change.deinit(wc.allocator);
                     continue;
                 };
                 dispatcher_woken = true;
@@ -605,8 +581,8 @@ pub fn executeBatchOp(
             pending_changes.clearRetainingCapacity();
 
             if (dispatcher_woken) {
-                if (notifier_ptr) |n| {
-                    n(notifier_ctx);
+                if (wc.notifier_ptr) |n| {
+                    n(wc.notifier_ctx);
                 }
             }
         } else |err| {
