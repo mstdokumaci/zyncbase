@@ -103,7 +103,7 @@ fn executeBatch(
     wc.markTransactionActive();
 
     errdefer {
-        wc.conn.exec("ROLLBACK", .{}, .{}) catch |rollback_err| {
+        execTransactionControl(&wc.conn, "ROLLBACK") catch |rollback_err| {
             const classified_err = errors.classifyError(rollback_err);
             errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
         };
@@ -185,7 +185,7 @@ fn executeBatch(
         }
     }
 
-    wc.conn.exec("COMMIT", .{}, .{}) catch |err| {
+    execTransactionControl(&wc.conn, "COMMIT") catch |err| {
         const classified_err = errors.classifyError(err);
         errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
         return classified_err;
