@@ -62,6 +62,26 @@ fn pushOwnedChange(
     });
 }
 
+fn flushPendingChanges(
+    wc: *WriteContext,
+    pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+) void {
+    var dispatcher_woken = false;
+    while (pending_changes.pop()) |change| {
+        wc.change_buffer.push(change) catch |err| {
+            std.log.err("Failed to push to change_buffer: {}", .{err});
+            var owned_change = change;
+            owned_change.deinit(wc.allocator);
+            continue;
+        };
+        dispatcher_woken = true;
+    }
+
+    if (dispatcher_woken) {
+        wc.notifyChanges();
+    }
+}
+
 fn executeBatch(
     wc: *WriteContext,
     ops: []const WriteOp,
@@ -232,20 +252,7 @@ pub fn flushBatch(
             op.deinit(wc.allocator);
         }
 
-        var dispatcher_woken = false;
-        for (pending_changes.items) |*change| {
-            wc.change_buffer.push(change.*) catch |err| {
-                std.log.err("Failed to push to change_buffer: {}", .{err});
-                change.deinit(wc.allocator);
-                continue;
-            };
-            dispatcher_woken = true;
-        }
-        pending_changes.clearRetainingCapacity();
-
-        if (dispatcher_woken) {
-            wc.notifyChanges();
-        }
+        flushPendingChanges(wc, &pending_changes);
     } else |err| {
         const classified_err = errors.classifyError(err);
         std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
@@ -434,13 +441,7 @@ pub fn executeBatchOp(
 
         if (bop.completion_signal) |sig| sig.signal(final_err);
 
-        for (entries) |entry| {
-            wc.allocator.free(entry.sql);
-            if (entry.values) |vals| {
-                for (vals) |v| v.deinit(wc.allocator);
-                wc.allocator.free(vals);
-            }
-        }
+        for (entries) |entry| entry.deinit(wc.allocator);
         wc.allocator.free(entries);
 
         wc.endOp(1);
@@ -561,20 +562,7 @@ pub fn executeBatchOp(
                 wc.metadata_cache.bulkEvict(eviction_keys.items);
             }
 
-            var dispatcher_woken = false;
-            for (pending_changes.items) |*change| {
-                wc.change_buffer.push(change.*) catch |err| {
-                    std.log.err("Failed to push to change_buffer: {}", .{err});
-                    change.deinit(wc.allocator);
-                    continue;
-                };
-                dispatcher_woken = true;
-            }
-            pending_changes.clearRetainingCapacity();
-
-            if (dispatcher_woken) {
-                wc.notifyChanges();
-            }
+            flushPendingChanges(wc, &pending_changes);
         } else |err| {
             const classified_err = errors.classifyError(err);
             errors.logDatabaseError("executeBatchOp COMMIT", classified_err, "");

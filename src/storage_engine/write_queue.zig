@@ -44,6 +44,14 @@ pub const BatchEntry = struct {
     sql: []const u8,
     values: ?[]values.TypedValue,
     timestamp: i64,
+
+    pub fn deinit(self: BatchEntry, allocator: Allocator) void {
+        allocator.free(self.sql);
+        if (self.values) |vals| {
+            for (vals) |v| v.deinit(allocator);
+            allocator.free(vals);
+        }
+    }
 };
 
 pub const WriteOp = union(enum) {
@@ -132,13 +140,7 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.namespace);
             },
             .batch => |op| {
-                for (op.entries) |entry| {
-                    allocator.free(entry.sql);
-                    if (entry.values) |vals| {
-                        for (vals) |v| v.deinit(allocator);
-                        allocator.free(vals);
-                    }
-                }
+                for (op.entries) |entry| entry.deinit(allocator);
                 allocator.free(op.entries);
             },
             else => {},
