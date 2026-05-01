@@ -283,15 +283,24 @@ pub const SubscriptionEngine = struct {
     pub fn unsubscribe(self: *SubscriptionEngine, conn_id: u64, sub_id: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
+        self.removeSubscriberLocked(.{ .connection_id = conn_id, .id = sub_id });
+    }
 
-        const sub_key = SubscriptionGroup.SubscriberKey{ .connection_id = conn_id, .id = sub_id };
+    pub fn unsubscribeMany(self: *SubscriptionEngine, conn_id: u64, sub_ids: []const u64) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (sub_ids) |sub_id| {
+            self.removeSubscriberLocked(.{ .connection_id = conn_id, .id = sub_id });
+        }
+    }
+
+    fn removeSubscriberLocked(self: *SubscriptionEngine, sub_key: SubscriptionGroup.SubscriberKey) void {
         const group_id = self.active_subs.fetchRemove(sub_key) orelse return;
 
         var group = self.groups.getPtr(group_id.value) orelse unreachable;
         _ = group.subscribers.remove(sub_key);
 
         if (group.subscribers.count() == 0) {
-            // Group empty, cleanup
             _ = self.groups_by_filter.remove(group.filter);
             const coll_key = CollectionKey{ .namespace_id = group.namespace_id, .table_index = group.table_index };
             if (self.groups_by_collection.getPtr(coll_key)) |list| {
@@ -308,50 +317,6 @@ pub const SubscriptionEngine = struct {
             }
             group.deinit(self.allocator);
             _ = self.groups.remove(group_id.value);
-            return;
-        }
-    }
-
-    pub fn unsubscribeConnection(self: *SubscriptionEngine, conn_id: u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var it = self.active_subs.iterator();
-        var to_remove = std.ArrayList(SubscriptionGroup.SubscriberKey).init(self.allocator);
-        defer to_remove.deinit();
-
-        while (it.next()) |entry| {
-            if (entry.key_ptr.connection_id == conn_id) {
-                to_remove.append(entry.key_ptr.*) catch |err| {
-                    std.log.err("Failed to append to to_remove: {}", .{err});
-                    continue;
-                };
-            }
-        }
-
-        for (to_remove.items) |key| {
-            const group_id = self.active_subs.fetchRemove(key) orelse unreachable;
-            var group = self.groups.getPtr(group_id.value) orelse unreachable;
-            _ = group.subscribers.remove(key);
-
-            if (group.subscribers.count() == 0) {
-                _ = self.groups_by_filter.remove(group.filter);
-                const coll_key = CollectionKey{ .namespace_id = group.namespace_id, .table_index = group.table_index };
-                if (self.groups_by_collection.getPtr(coll_key)) |list| {
-                    for (list.items, 0..) |gid, i| {
-                        if (gid == group_id.value) {
-                            _ = list.swapRemove(i);
-                            break;
-                        }
-                    }
-                    if (list.items.len == 0) {
-                        list.deinit(self.allocator);
-                        _ = self.groups_by_collection.remove(coll_key);
-                    }
-                }
-                group.deinit(self.allocator);
-                _ = self.groups.remove(group_id.value);
-            }
         }
     }
 

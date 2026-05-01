@@ -157,13 +157,24 @@ pub const MessageHandler = struct {
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
-        defer conn.mutex.unlock();
-
-        for (conn.subscription_ids.items) |sub_id| {
-            self.subscription_engine.unsubscribe(conn.id, sub_id);
-        }
-
+        const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
+        conn.mutex.unlock();
+        self.unsubscribeDetached(conn, detached);
+    }
+
+    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
+        conn.mutex.lock();
+        const detached = conn.detachSubscriptionsLocked();
+        conn.mutex.unlock();
+        self.unsubscribeDetached(conn, detached);
+    }
+
+    fn unsubscribeDetached(self: *MessageHandler, conn: *Connection, detached: Connection.DetachedSubscriptions) void {
+        defer detached.deinit(conn.allocator);
+        if (detached.ids.len > 0) {
+            self.subscription_engine.unsubscribeMany(conn.id, detached.ids);
+        }
     }
 
     pub fn sendError(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
@@ -180,16 +191,6 @@ pub const MessageHandler = struct {
 
     fn requireStoreNamespace(conn: *Connection) !i64 {
         return (try requireStoreSession(conn)).namespace_id;
-    }
-
-    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
-        conn.mutex.lock();
-        defer conn.mutex.unlock();
-
-        for (conn.subscription_ids.items) |sub_id| {
-            self.subscription_engine.unsubscribe(conn.id, sub_id);
-        }
-        conn.subscription_ids.clearRetainingCapacity();
     }
 
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----

@@ -162,6 +162,29 @@ pub const Connection = struct {
         }
     }
 
+    /// Result of detaching subscription IDs from a connection.
+    /// `ids` is the valid slice; `allocated` is the full allocated buffer used for freeing.
+    pub const DetachedSubscriptions = struct {
+        ids: []u64,
+        allocated: []u64,
+
+        pub fn deinit(self: DetachedSubscriptions, allocator: Allocator) void {
+            allocator.free(self.allocated);
+        }
+    };
+
+    /// Transfer ownership of the subscription IDs buffer to the caller,
+    /// leaving the connection with an empty list. Zero-allocation.
+    /// Caller must hold self.mutex.
+    pub fn detachSubscriptionsLocked(self: *Connection) DetachedSubscriptions {
+        const result = DetachedSubscriptions{
+            .ids = self.subscription_ids.items,
+            .allocated = self.subscription_ids.allocatedSlice(),
+        };
+        self.subscription_ids = .empty;
+        return result;
+    }
+
     /// Increment the reference count.
     pub fn acquire(self: *Connection) void {
         _ = self.ref_count.fetchAdd(1, .monotonic);
