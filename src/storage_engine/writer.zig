@@ -35,6 +35,7 @@ fn getDocumentHelper(
     const table_metadata = wc.schema.getTableByIndex(table_index) orelse return null;
     const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
         const s = try sql.buildSelectDocumentSql(wc.allocator, table_metadata);
+        errdefer wc.allocator.free(s);
         try sql_cache.put(table_index, s);
         break :blk s;
     };
@@ -170,6 +171,19 @@ pub fn flushBatch(
 
     var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
     defer eviction_keys.deinit(wc.allocator);
+    eviction_keys.ensureTotalCapacity(wc.allocator, batch_len) catch |err| {
+        const classified_err = errors.classifyError(err);
+        std.log.err("Failed to allocate eviction keys for batch: {}", .{classified_err});
+        for (batch.items) |op| {
+            if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
+            op.deinit(wc.allocator);
+        }
+        batch.clearRetainingCapacity();
+        wc.endOp(batch_len);
+        wc.wakeFlushWaiters();
+        last_batch_time.* = std.time.milliTimestamp();
+        return;
+    };
     for (batch.items) |op| {
         // SAFETY: initialized below in the switch statement
         var table_index: usize = undefined;
@@ -195,10 +209,7 @@ pub fn flushBatch(
         if (has_affected) {
             const table_metadata = wc.schema.getTableByIndex(table_index) orelse continue;
             const key = reader.getCacheKey(table_metadata, namespace_id, id);
-            eviction_keys.append(wc.allocator, key) catch |err| {
-                std.log.err("Failed to append eviction key: {}", .{err});
-                continue;
-            };
+            eviction_keys.appendAssumeCapacity(key);
         }
     }
 
@@ -439,13 +450,16 @@ pub fn executeBatchOp(
     // 1. Build eviction keys from all entries
     var eviction_keys = std.ArrayListUnmanaged(MetadataCacheKey).empty;
     defer eviction_keys.deinit(wc.allocator);
+    eviction_keys.ensureTotalCapacity(wc.allocator, entries.len) catch |err| {
+        const classified_err = errors.classifyError(err);
+        std.log.err("Failed to allocate eviction keys for batch op: {}", .{classified_err});
+        final_err = classified_err;
+        return;
+    };
     for (entries) |entry| {
         const table_metadata = wc.schema.getTableByIndex(entry.table_index) orelse continue;
         const key = reader.getCacheKey(table_metadata, entry.namespace_id, entry.id);
-        eviction_keys.append(wc.allocator, key) catch |err| {
-            std.log.err("Failed to allocate eviction key in batch: {}", .{err});
-            continue;
-        };
+        eviction_keys.appendAssumeCapacity(key);
     }
     // 2. Execute all entries in a single transaction
     var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
