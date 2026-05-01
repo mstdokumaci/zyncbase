@@ -373,10 +373,6 @@ pub const StorageEngine = struct {
         self.writer.flushPendingWrites();
     }
 
-    fn getCacheKey(self: *const StorageEngine, table_metadata: *const schema.Table, namespace_id: i64, id: DocId) ![]u8 {
-        return reader.getCacheKey(self.allocator, table_metadata, namespace_id, id);
-    }
-
     /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
     /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
 
