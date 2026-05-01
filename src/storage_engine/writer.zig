@@ -355,6 +355,7 @@ fn writeThreadLoopImpl(wc: *WriteContext) !void {
                         } else |err| {
                             cop.completion_signal.signal(errors.classifyError(err));
                         }
+                        op.deinit(wc.allocator);
                         wc.endOp(1);
                         wc.wakeFlushWaiters();
                     },
