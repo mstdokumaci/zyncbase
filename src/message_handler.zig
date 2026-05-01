@@ -159,9 +159,7 @@ pub const MessageHandler = struct {
         conn.mutex.lock();
         defer conn.mutex.unlock();
 
-        for (conn.subscription_ids.items) |sub_id| {
-            self.subscription_engine.unsubscribe(conn.id, sub_id);
-        }
+        self.subscription_engine.unsubscribeMany(conn.id, conn.subscription_ids.items);
 
         conn.resetSessionLocked();
     }
@@ -186,9 +184,7 @@ pub const MessageHandler = struct {
         conn.mutex.lock();
         defer conn.mutex.unlock();
 
-        for (conn.subscription_ids.items) |sub_id| {
-            self.subscription_engine.unsubscribe(conn.id, sub_id);
-        }
+        self.subscription_engine.unsubscribeMany(conn.id, conn.subscription_ids.items);
         conn.subscription_ids.clearRetainingCapacity();
     }
 
