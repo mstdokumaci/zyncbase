@@ -471,38 +471,8 @@ pub const Writer = struct {
                                 continue;
                             };
                         },
-                        .batch => |bop| {
-                            if (batch.items.len > 0) {
-                                flushBatch(self, &batch, &last_batch_time);
-                            }
-                            executeBatchOp(self, bop, &last_batch_time);
-                        },
-                        .upsert_namespace => |nop| {
-                            if (batch.items.len > 0) {
-                                flushBatch(self, &batch, &last_batch_time);
-                            }
-                            if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, nop.namespace)) |namespace_id| {
-                                nop.result.* = namespace_id;
-                                nop.completion_signal.signal(null);
-                            } else |err| {
-                                nop.completion_signal.signal(errors.classifyError(err));
-                            }
-                            op.deinit(self.allocator);
-                            self.endOp(1);
-                            self.wakeFlushWaiters();
-                        },
-                        .checkpoint => |cop| {
-                            if (batch.items.len > 0) {
-                                flushBatch(self, &batch, &last_batch_time);
-                            }
-                            if (connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode)) |stats| {
-                                cop.completion_signal.signalWithResult(stats);
-                            } else |err| {
-                                cop.completion_signal.signal(errors.classifyError(err));
-                            }
-                            op.deinit(self.allocator);
-                            self.endOp(1);
-                            self.wakeFlushWaiters();
+                        .batch, .upsert_namespace, .checkpoint => {
+                            self.executeImmediateOp(op, &batch, &last_batch_time);
                         },
                     }
                 } else {
@@ -537,17 +507,8 @@ pub const Writer = struct {
                         self.wakeFlushWaiters();
                     };
                 },
-                .batch => |bop| {
-                    if (batch.items.len > 0) {
-                        flushBatch(self, &batch, &last_batch_time);
-                    }
-                    executeBatchOp(self, bop, &last_batch_time);
-                },
-                else => {
-                    if (op.getCompletionSignal()) |sig| sig.signal(StorageError.InvalidOperation);
-                    op.deinit(self.allocator);
-                    self.endOp(1);
-                    self.wakeFlushWaiters();
+                .batch, .upsert_namespace, .checkpoint => {
+                    self.executeImmediateOp(op, &batch, &last_batch_time);
                 },
             }
         }
@@ -708,6 +669,45 @@ pub const Writer = struct {
                 errors.logDatabaseError("executeBatchOp COMMIT", classified_err, "");
                 final_err = classified_err;
             }
+        }
+    }
+
+    fn executeImmediateOp(
+        self: *Writer,
+        op: WriteOp,
+        batch: *std.ArrayListUnmanaged(WriteOp),
+        last_batch_time: *i64,
+    ) void {
+        if (batch.items.len > 0) {
+            flushBatch(self, batch, last_batch_time);
+        }
+
+        switch (op) {
+            .batch => |bop| {
+                executeBatchOp(self, bop, last_batch_time);
+            },
+            .upsert_namespace => |nop| {
+                if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, nop.namespace)) |namespace_id| {
+                    nop.result.* = namespace_id;
+                    nop.completion_signal.signal(null);
+                } else |err| {
+                    nop.completion_signal.signal(errors.classifyError(err));
+                }
+                op.deinit(self.allocator);
+                self.endOp(1);
+                self.wakeFlushWaiters();
+            },
+            .checkpoint => |cop| {
+                if (connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode)) |stats| {
+                    cop.completion_signal.signalWithResult(stats);
+                } else |err| {
+                    cop.completion_signal.signal(errors.classifyError(err));
+                }
+                op.deinit(self.allocator);
+                self.endOp(1);
+                self.wakeFlushWaiters();
+            },
+            .upsert, .delete => unreachable,
         }
     }
 

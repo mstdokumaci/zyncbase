@@ -74,6 +74,52 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEn
     ctx.engine.writer.executeBatchOp(op, &last_batch_time);
 }
 
+test "StorageEngine: shutdown drain completes immediate writer ops" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    var namespace_id: i64 = -1;
+    var namespace_signal = storage_mod.WriteOp.CompletionSignal{};
+    const namespace_name = try allocator.dupe(u8, "shutdown-drain");
+    var namespace_queued = false;
+    const namespace_op = storage_mod.WriteOp{
+        .upsert_namespace = .{
+            .namespace = namespace_name,
+            .result = &namespace_id,
+            .completion_signal = &namespace_signal,
+        },
+    };
+    errdefer if (!namespace_queued) namespace_op.deinit(allocator);
+
+    var checkpoint_signal = storage_mod.WriteOp.CompletionSignal{};
+    const checkpoint_op = storage_mod.WriteOp{
+        .checkpoint = .{
+            .mode = storage_mod.CheckpointMode.passive,
+            .completion_signal = &checkpoint_signal,
+        },
+    };
+
+    try ctx.engine.writer.enqueueOp(namespace_op);
+    namespace_queued = true;
+    try ctx.engine.writer.enqueueOp(checkpoint_op);
+
+    ctx.engine.writer.shutdown_requested.store(true, .release);
+    try ctx.engine.writer.spawnThread();
+    ctx.engine.writer.waitUntilReady();
+    ctx.engine.writer.stopThread();
+
+    try namespace_signal.wait();
+    try checkpoint_signal.wait();
+    const checkpoint_stats = checkpoint_signal.result orelse return error.TestExpectedValue;
+    try testing.expect(namespace_id > 0);
+    try testing.expectEqual(storage_mod.CheckpointMode.passive, checkpoint_stats.mode);
+    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+}
+
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
 
