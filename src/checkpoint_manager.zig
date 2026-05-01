@@ -29,6 +29,8 @@ pub const CheckpointManager = struct {
         checkpoint_mode: CheckpointMode = .passive,
         /// Background check interval in seconds (default: 10 seconds)
         check_interval_sec: u64 = 10,
+        /// Maximum retry attempts for transient checkpoint failures (default: 3)
+        max_retries: u32 = 3,
     };
 
     /// SQLite checkpoint modes
@@ -239,14 +241,25 @@ pub const CheckpointManager = struct {
     /// PRECONDITION: CheckpointManager is initialized
     /// POSTCONDITION: Checkpoint attempted with escalation if needed
     ///
-    /// Attempts checkpoint with the configured mode. If passive mode fails to
-    /// reduce WAL size, automatically escalates to full mode. Logs all failures
-    /// and updates metrics accordingly.
+    /// Attempts checkpoint with the configured mode and retry logic. If passive
+    /// mode succeeds but doesn't reduce WAL significantly, automatically
+    /// escalates to full mode (also with retry). Logs all failures and updates
+    /// metrics accordingly.
     ///
     /// Returns CheckpointResult with final outcome.
     pub fn performCheckpointWithEscalation(self: *CheckpointManager) !CheckpointResult {
-        // Try with configured mode first
-        var result = try self.performCheckpoint(self.config.checkpoint_mode);
+        const wal_size_before_initial = self.wal_size.load(.acquire);
+
+        // Try with configured mode first, with retry on transient failures
+        var result = self.performCheckpointWithRetry(self.config.checkpoint_mode, self.config.max_retries) catch {
+            return CheckpointResult{
+                .mode = self.config.checkpoint_mode,
+                .duration_ms = 0,
+                .wal_size_before = wal_size_before_initial,
+                .wal_size_after = self.wal_size.load(.acquire),
+                .success = false,
+            };
+        };
 
         // If passive mode didn't reduce WAL size significantly, escalate to full
         if (self.config.checkpoint_mode == .passive and result.success) {
@@ -263,7 +276,15 @@ pub const CheckpointManager = struct {
 
             if (reduction_percent < 10) {
                 std.log.warn("Passive checkpoint only reduced WAL by {}%, escalating to full mode", .{reduction_percent});
-                result = try self.performCheckpoint(.full);
+                result = self.performCheckpointWithRetry(.full, self.config.max_retries) catch {
+                    return CheckpointResult{
+                        .mode = .full,
+                        .duration_ms = 0,
+                        .wal_size_before = wal_size_before_initial,
+                        .wal_size_after = self.wal_size.load(.acquire),
+                        .success = false,
+                    };
+                };
             }
         }
 
