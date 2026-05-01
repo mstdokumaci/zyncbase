@@ -53,6 +53,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
+    "batchSize": 200,
     "batchTimeout": 10,
     "statementCacheSize": 100
   }
@@ -110,6 +111,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
+    "batchSize": 200,
     "batchTimeout": 10,
     "statementCacheSize": 100
   }

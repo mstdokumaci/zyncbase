@@ -54,85 +54,14 @@ const StorageLayer = struct {
     }
 };
 ```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON SQLite `string UTF-8 text 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object Flattened columns `address.city` `address_city TEXT `array` `BLOB` JSONB value unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs Document identity is `id` collection expects `id unique DDL uses `PRIMARY KEY(id) `namespace_id` retained for namespace routing authorization not part of document key System Tables storage engine maintains internal system tables not.json_zync_namespaces (id PRIMARY KEY UNIQUE integer routing dynamic namespaces ID `0` for global namespace client-created/runtime namespaces use positive IDs Array Canonicalization Pipeline schema-defined array fields Validate each element against `items` primitive typeReject invalid elements Normalize sorted form Persist canonicalized array value guarantees deterministic-disk representation read/query semantics for typed arrays `StorageEngine initialization receives parsed `Schema If `schema.json file omitted missing synthesizes users-only schema before storage initialization ZyncBase enforces strict-schema architecture user database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing omitted server boot defined `users collection for data storage mutations to other collections rejected```zig
-const SchemaParser = struct {
-    allocator: Allocator,
-    
-    pub fn parseTable(self: *SchemaParser, name: []const u8, store_item: json.Value) !Table {
-        const fields_obj = store_item.get("fields") orelse return error.InvalidSchema;
-        const required = store_item.get("required");
-        
-        var fields = ArrayList(Field).init(self.allocator);
-        
-        const is_users = std.mem.eql(u8, name, "users");
-        const namespaced = if (store_item.get("namespaced")) |v| v.bool else !is_users;
-        if (is_users) {
-            if (required) |req| if (req.array.items.len > 0) {
-                return error.InvalidSchema; // Identity rows are auto-created before profile fields exist.
-            };
-        }
-        
-        // Always include uniform system columns.
-        try fields.append(.{ .name = "id", .type = .doc_id, .required = true, .primary_key = true });
-        try fields.append(.{ .name = "namespace_id", .type = .integer, .required = true }); // Active namespace or reserved global namespace 0.
-        try fields.append(.{ .name = "owner_id", .type = .doc_id, .required = true });
-        
-        if (is_users) {
-            try fields.append(.{ .name = "external_id", .type = .text, .required = true, .indexed = true });
-        }
-        
-        // Parse schema fields
-        for (fields_obj.object.items) |field_entry| {
-            const field_name = field_entry.key;
-            const field_def = field_entry.value;
-            
-            // Check if field is nested object (flatten it)
-            if (self.isNestedObject(field_def)) {
-                const nested_fields = try self.flattenNestedObject(field_name, field_def);
-                try fields.appendSlice(nested_fields);
-            } else {
-                const field = try self.parseField(field_name, field_def, required);
-                try fields.append(field);
-            }
-        }
-        
-        // Always include timestamps
-        try fields.append(.{ .name = "created_at", .type = .integer, .required = true });
-        try fields.append(.{ .name = "updated_at", .type = .integer, .required = true });
-        
-        return Table{
-            .name = name,
-            .namespaced = namespaced,
-            .fields = fields.toOwnedSlice(),
-        };
-    }
-    
-    fn isNestedObject(self: *SchemaParser, field_def: json.Value) bool {
-        const field_type = field_def.get("type") orelse return false;
-        if (!std.mem.eql(u8, field_type.string, "object")) return false;
-        return field_def.get("fields") != null;
-    }
-    
-    fn flattenNestedObject(self: *SchemaParser, prefix: []const u8, field_def: json.Value) ![]Field {
-        var fields = ArrayList(Field).init(self.allocator);
-        const nested_fields_obj = field_def.get("fields") orelse return error.InvalidSchema;
-        for (nested_fields_obj.object.items) |prop_entry| {
-            const flattened_name = try std.fmt.allocPrint(self.allocator, "{s}_{s}", .{ prefix, prop_entry.key });
-            const field = try self.parseField(flattened_name, prop_entry.value, null);
-            try fields.append(field);
-        }
-        return fields.toOwnedSlice();
-    }
-    
-    fn parseField(self: *SchemaParser, name: []const u8, field_def: json.Value, required: ?json.Value) !Field {
-        const field_type = field_def.get("type") orelse return error.InvalidSchema;
-        return Field{
-            .name = name,
-            .type = try self.mapType(field_type.string, field_def),
-            .required = self.isRequired(name, required),
-            .indexed = field_def.get("indexed") != null,
-        };
-    }
-};
+const Schema = @import("schema.zig").Schema;
+
+var schema = try Schema.init(allocator, schema_json);
+defer schema.deinit();
+
+// Schema.init parses JSON, validates references and required leaf fields,
+// normalizes canonical table/field ordering, and builds lookup indexes.
+// external_id is storage-internal for users and is not exposed as a wire field.
 
 const DDLGenerator = struct {
     allocator: Allocator,
@@ -236,13 +165,16 @@ const MigrationExecutor = struct {
 ```Async Batching avoid I/O bottlenecks ZyncBase transactions```zig
 const StorageLayer = struct {
     write_queue: RingBuffer(WriteOp),
-    batch_size: usize = 100,
+    batch_size: usize = 200,
+    batch_timeout_ms: u32 = 10,
     
     pub fn queueWrite(self: *StorageLayer, op: WriteOp) !void {
         try self.write_queue.push(op);
         if (self.write_queue.len() >= self.batch_size) {
             try self.flushBatch();
         }
+        // Otherwise the writer sleeps until new work arrives or the timeout
+        // deadline expires; it does not poll on a fixed interval.
     }
 
     fn flushBatch(self: *StorageLayer) !void {
