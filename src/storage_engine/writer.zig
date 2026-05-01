@@ -67,8 +67,8 @@ fn flushPendingChanges(
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
 ) void {
     var dispatcher_woken = false;
-    while (pending_changes.items.len > 0) {
-        var change = pending_changes.orderedRemove(0);
+    for (pending_changes.items) |raw_change| {
+        var change = raw_change;
         wc.change_buffer.push(change) catch |err| {
             std.log.err("Failed to push to change_buffer: {}", .{err});
             change.deinit(wc.allocator);
@@ -76,6 +76,7 @@ fn flushPendingChanges(
         };
         dispatcher_woken = true;
     }
+    pending_changes.clearRetainingCapacity();
 
     if (dispatcher_woken) {
         wc.notifyChanges();
@@ -131,10 +132,12 @@ fn executeBatch(
                 if (maybe_new_row) |new_row| {
                     const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
                     pushOwnedChange(wc.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_row, new_row) catch |err| {
-                        std.log.err("Failed to capture row change: {}", .{err});
+                        const classified_err = errors.classifyError(err);
+                        std.log.err("Failed to capture row change: {}", .{classified_err});
                         if (old_row) |r| r.deinit(wc.allocator);
                         var r = new_row;
                         r.deinit(wc.allocator);
+                        return classified_err;
                     };
                 } else {
                     // The upsert is guarded by namespace_id. A missing RETURNING row means
@@ -158,9 +161,11 @@ fn executeBatch(
                 // For DELETE, the RETURNING * result IS the old row.
                 if (maybe_old_row) |old_row| {
                     pushOwnedChange(wc.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_row, null) catch |err| {
-                        std.log.err("Failed to capture row change: {}", .{err});
+                        const classified_err = errors.classifyError(err);
+                        std.log.err("Failed to capture row change: {}", .{classified_err});
                         var r = old_row;
                         r.deinit(wc.allocator);
+                        return classified_err;
                     };
                 } else {
                     // If RETURNING * is empty, the row did not exist or was already deleted.
@@ -510,10 +515,13 @@ pub fn executeBatchOp(
                         if (pushOwnedChange(wc.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_row, new_row)) |_| {
                             // success
                         } else |err| {
-                            std.log.err("Failed to capture row change: {}", .{err});
+                            const classified_err = errors.classifyError(err);
+                            std.log.err("Failed to capture row change: {}", .{classified_err});
                             if (old_row) |r| r.deinit(wc.allocator);
                             var r = new_row;
                             r.deinit(wc.allocator);
+                            final_err = classified_err;
+                            break;
                         }
                     } else {
                         var id_hex_buf: [32]u8 = undefined;
@@ -534,9 +542,12 @@ pub fn executeBatchOp(
                         if (pushOwnedChange(wc.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_row, null)) |_| {
                             // success
                         } else |err| {
-                            std.log.err("Failed to capture row change: {}", .{err});
+                            const classified_err = errors.classifyError(err);
+                            std.log.err("Failed to capture row change: {}", .{classified_err});
                             var r = old_row;
                             r.deinit(wc.allocator);
+                            final_err = classified_err;
+                            break;
                         }
                     } else {
                         var id_hex_buf: [32]u8 = undefined;
