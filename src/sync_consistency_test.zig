@@ -60,7 +60,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
         drain_buf.deinit(allocator);
     }
 
-    try engine.write_context.change_buffer.drainInto(&drain_buf, allocator);
+    try engine.changeBuffer().drainInto(&drain_buf, allocator);
     try testing.expectEqual(@as(usize, 1), drain_buf.items.len);
 
     // 6) Feed the captured change into subscription engine and verify delivery.

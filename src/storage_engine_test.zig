@@ -4,7 +4,6 @@ const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
-const writer = @import("storage_engine/writer.zig");
 
 const BatchOpForTest = struct {
     entries: []storage_mod.BatchEntry,
@@ -72,11 +71,7 @@ fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEn
         .entries = entries,
         .completion_signal = signal,
     };
-    writer.executeBatchOp(
-        &ctx.engine.write_context,
-        op,
-        &last_batch_time,
-    );
+    ctx.engine.writer.executeBatchOp(op, &last_batch_time);
 }
 
 test "StorageEngine: init and deinit" {
@@ -301,17 +296,17 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    ctx.engine.write_context.beginOp();
-    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
-    defer ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
+    ctx.engine.writer.beginOp();
+    try ctx.engine.writer.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    defer ctx.engine.writer.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
         std.log.warn("failed to roll back test transaction: {}", .{err});
     };
 
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
-    try testing.expect(!ctx.engine.write_context.isTransactionActive());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+    try testing.expect(!ctx.engine.writer.isTransactionActive());
 }
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
@@ -324,17 +319,17 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
     var signal = storage_mod.WriteOp.CompletionSignal{};
-    const version_before = ctx.engine.write_context.snapshotVersion();
-    ctx.engine.write_context.beginOp();
+    const version_before = ctx.engine.writer.snapshotVersion();
+    ctx.engine.writer.beginOp();
     executeBatchForTest(&ctx, entries, &signal);
 
     try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
-    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
-    try testing.expect(!ctx.engine.write_context.isTransactionActive());
-    try testing.expectEqual(version_before, ctx.engine.write_context.snapshotVersion());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
+    try testing.expect(!ctx.engine.writer.isTransactionActive());
+    try testing.expectEqual(version_before, ctx.engine.writer.snapshotVersion());
 
-    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
-    try ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{});
+    try ctx.engine.writer.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine.writer.conn.exec("ROLLBACK", .{}, .{});
 }
 
 test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
@@ -349,7 +344,7 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
 
     ctx.engine.batchWrite(entries) catch |err| {
         try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
-        try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
+        try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
         return;
     };
 
