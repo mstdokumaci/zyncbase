@@ -67,11 +67,11 @@ fn flushPendingChanges(
     pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
 ) void {
     var dispatcher_woken = false;
-    while (pending_changes.pop()) |change| {
+    while (pending_changes.items.len > 0) {
+        var change = pending_changes.orderedRemove(0);
         wc.change_buffer.push(change) catch |err| {
             std.log.err("Failed to push to change_buffer: {}", .{err});
-            var owned_change = change;
-            owned_change.deinit(wc.allocator);
+            change.deinit(wc.allocator);
             continue;
         };
         dispatcher_woken = true;

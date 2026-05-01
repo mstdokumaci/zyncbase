@@ -134,13 +134,7 @@ pub const StoreService = struct {
         var initialized: usize = 0;
         var entries_owned = true;
         errdefer if (entries_owned) {
-            for (entries[0..initialized]) |entry| {
-                self.allocator.free(entry.sql);
-                if (entry.values) |vals| {
-                    for (vals) |v| v.deinit(self.allocator);
-                    self.allocator.free(vals);
-                }
-            }
+            for (entries[0..initialized]) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
         };
 
