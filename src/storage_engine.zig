@@ -258,7 +258,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.enqueueWrite(op);
+        try self.write_context.enqueueOp(op);
 
         try signal.wait();
         return signal.result orelse error.InvalidOperation;
@@ -347,22 +347,6 @@ pub const StorageEngine = struct {
         return &self.write_context.conn;
     }
 
-    /// Push a write op and wake the write thread immediately.
-    fn pushWrite(self: *StorageEngine, op: WriteOp) !void {
-        try self.write_context.queue.push(op);
-        self.write_context.mutex.lock();
-        self.write_context.work_cond.signal();
-        self.write_context.mutex.unlock();
-    }
-
-    fn enqueueWrite(self: *StorageEngine, op: WriteOp) !void {
-        self.write_context.beginOp();
-        self.pushWrite(op) catch |err| {
-            self.write_context.endOp(1);
-            return err;
-        };
-    }
-
     pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
         try self.ensureRunning();
 
@@ -391,7 +375,7 @@ pub const StorageEngine = struct {
         };
         errdefer if (!queued) op.deinit(self.allocator);
 
-        try self.enqueueWrite(op);
+        try self.write_context.enqueueOp(op);
         queued = true;
 
         try signal.wait();
@@ -458,7 +442,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.enqueueWrite(op);
+        try self.write_context.enqueueOp(op);
         queued = true;
     }
 
@@ -484,7 +468,7 @@ pub const StorageEngine = struct {
             _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
         }
 
-        try self.enqueueWrite(op);
+        try self.write_context.enqueueOp(op);
         queued = true;
     }
 
@@ -611,7 +595,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        try self.enqueueWrite(op);
+        try self.write_context.enqueueOp(op);
         queued = true;
     }
 };

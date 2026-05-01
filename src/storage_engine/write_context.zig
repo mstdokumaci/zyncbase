@@ -5,7 +5,9 @@ const schema = @import("../schema.zig");
 const storage_values = @import("values.zig");
 const ChangeBuffer = @import("../change_buffer.zig").ChangeBuffer;
 const StatementCache = @import("sql.zig").StatementCache;
-const WriteQueue = @import("write_queue.zig").WriteQueue;
+const write_queue = @import("write_queue.zig");
+const WriteOp = write_queue.WriteOp;
+const WriteQueue = write_queue.WriteQueue;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 
 pub const WriteContext = struct {
@@ -36,6 +38,17 @@ pub const WriteContext = struct {
 
     pub fn endOp(self: *WriteContext, count: usize) void {
         _ = self.pending_count.fetchSub(count, .release);
+    }
+
+    pub fn enqueueOp(self: *WriteContext, op: WriteOp) !void {
+        self.beginOp();
+        self.queue.push(op) catch |err| {
+            self.endOp(1);
+            return err;
+        };
+        self.mutex.lock();
+        self.work_cond.signal();
+        self.mutex.unlock();
     }
 
     pub fn pendingOpCount(self: *const WriteContext) usize {
