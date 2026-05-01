@@ -162,6 +162,15 @@ pub const Connection = struct {
         }
     }
 
+    /// Duplicate and return the current subscription IDs. Caller owns the returned slice
+    /// and must free it. Returns an empty slice if no subscriptions exist.
+    /// Caller must hold self.mutex.
+    pub fn snapshotSubscriptionIdsLocked(self: *Connection) ![]u64 {
+        const items = self.subscription_ids.items;
+        if (items.len == 0) return &.{};
+        return self.allocator.dupe(u64, items);
+    }
+
     /// Increment the reference count.
     pub fn acquire(self: *Connection) void {
         _ = self.ref_count.fetchAdd(1, .monotonic);

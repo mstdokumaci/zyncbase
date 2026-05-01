@@ -157,11 +157,19 @@ pub const MessageHandler = struct {
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
-        defer conn.mutex.unlock();
-
-        self.subscription_engine.unsubscribeMany(conn.id, conn.subscription_ids.items);
-
+        const snapshot = conn.snapshotSubscriptionIdsLocked() catch |err| {
+            std.log.err("teardownSession: Failed to snapshot subscription IDs: {}", .{err});
+            conn.resetSessionLocked();
+            conn.mutex.unlock();
+            return;
+        };
         conn.resetSessionLocked();
+        conn.mutex.unlock();
+
+        if (snapshot.len > 0) {
+            defer conn.allocator.free(snapshot);
+            self.subscription_engine.unsubscribeMany(conn.id, snapshot);
+        }
     }
 
     pub fn sendError(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
@@ -182,10 +190,19 @@ pub const MessageHandler = struct {
 
     fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
-        defer conn.mutex.unlock();
-
-        self.subscription_engine.unsubscribeMany(conn.id, conn.subscription_ids.items);
+        const snapshot = conn.snapshotSubscriptionIdsLocked() catch |err| {
+            std.log.err("clearStoreSubscriptions: Failed to snapshot subscription IDs: {}", .{err});
+            conn.subscription_ids.clearRetainingCapacity();
+            conn.mutex.unlock();
+            return;
+        };
         conn.subscription_ids.clearRetainingCapacity();
+        conn.mutex.unlock();
+
+        if (snapshot.len > 0) {
+            defer conn.allocator.free(snapshot);
+            self.subscription_engine.unsubscribeMany(conn.id, snapshot);
+        }
     }
 
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
