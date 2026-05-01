@@ -221,10 +221,6 @@ pub fn flushBatch(
         }
     }
 
-    if (eviction_keys.items.len > 0) {
-        metadata_cache.bulkEvict(eviction_keys.items);
-    }
-
     var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
     defer {
         for (pending_changes.items) |*c| c.deinit(allocator);
@@ -234,6 +230,10 @@ pub fn flushBatch(
     const result = executeBatch(allocator, conn, transaction_active, batch.items, &pending_changes, sm, stmt_cache);
     if (result) |_| {
         _ = write_seq.fetchAdd(1, .acq_rel);
+
+        if (eviction_keys.items.len > 0) {
+            metadata_cache.bulkEvict(eviction_keys.items);
+        }
 
         for (batch.items) |op| {
             if (op.getCompletionSignal()) |sig| sig.signal(null);
@@ -494,8 +494,6 @@ pub fn executeBatchOp(
             continue;
         };
     }
-    if (eviction_keys.items.len > 0) metadata_cache.bulkEvict(eviction_keys.items);
-
     // 2. Execute all entries in a single transaction
     var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
     defer {
@@ -590,6 +588,10 @@ pub fn executeBatchOp(
             tx_started = false;
             transaction_active.store(false, .release);
             _ = write_seq.fetchAdd(1, .acq_rel);
+
+            if (eviction_keys.items.len > 0) {
+                metadata_cache.bulkEvict(eviction_keys.items);
+            }
 
             var dispatcher_woken = false;
             for (pending_changes.items) |*change| {
