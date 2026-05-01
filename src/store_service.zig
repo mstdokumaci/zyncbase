@@ -113,11 +113,11 @@ pub const StoreService = struct {
 
     pub fn removePath(
         self: *StoreService,
-        namespace_id: i64,
+        ctx: WriteContext,
         path: msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path, .document_only);
-        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, namespace_id);
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id);
     }
 
     pub fn batchWrite(

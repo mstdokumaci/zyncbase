@@ -230,7 +230,7 @@ test "StoreService: remove" {
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
-        const result = service.removePath(1, path);
+        const result = service.removePath(writeCtx(1), path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
@@ -239,7 +239,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
 
-        try service.removePath(1, path);
+        try service.removePath(writeCtx(1), path);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
@@ -253,7 +253,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, 999, 1);
         defer path.free(allocator);
 
-        const result = service.removePath(4, path);
+        const result = service.removePath(writeCtx(4), path);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
@@ -263,7 +263,7 @@ test "StoreService: remove" {
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
-        const result = service.removePath(1, path);
+        const result = service.removePath(writeCtx(1), path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }

@@ -287,9 +287,12 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) ![]const u8 {
         const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
-        const namespace_id = try requireStoreNamespace(conn);
+        const session = try requireStoreSession(conn);
 
-        try self.store_service.removePath(namespace_id, payloads.path);
+        try self.store_service.removePath(
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
+            payloads.path,
+        );
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }

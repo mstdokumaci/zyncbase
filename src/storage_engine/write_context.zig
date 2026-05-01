@@ -29,4 +29,56 @@ pub const WriteContext = struct {
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
     in_memory: bool,
+
+    pub fn beginOp(self: *WriteContext) void {
+        _ = self.pending_count.fetchAdd(1, .release);
+    }
+
+    pub fn endOp(self: *WriteContext, count: usize) void {
+        _ = self.pending_count.fetchSub(count, .release);
+    }
+
+    pub fn pendingOpCount(self: *const WriteContext) usize {
+        return self.pending_count.load(.acquire);
+    }
+
+    pub fn bumpVersion(self: *WriteContext) void {
+        _ = self.version.fetchAdd(1, .acq_rel);
+    }
+
+    pub fn snapshotVersion(self: *const WriteContext) u64 {
+        return self.version.load(.acquire);
+    }
+
+    pub fn markTransactionActive(self: *WriteContext) void {
+        self.transaction_active.store(true, .release);
+    }
+
+    pub fn markTransactionInactive(self: *WriteContext) void {
+        self.transaction_active.store(false, .release);
+    }
+
+    pub fn isTransactionActive(self: *const WriteContext) bool {
+        return self.transaction_active.load(.acquire);
+    }
+
+    pub fn notifyChanges(self: *WriteContext) void {
+        if (self.notifier_ptr) |n| {
+            n(self.notifier_ctx);
+        }
+    }
+
+    pub fn wakeFlushWaiters(self: *WriteContext) void {
+        self.mutex.lock();
+        self.flush_cond.broadcast();
+        self.mutex.unlock();
+    }
+
+    pub fn deinit(self: *WriteContext, gpa: Allocator) void {
+        self.stmt_cache.deinit(gpa);
+        self.conn.deinit();
+        gpa.free(self.db_path);
+        self.queue.deinit();
+        self.change_buffer.deinit();
+    }
 };

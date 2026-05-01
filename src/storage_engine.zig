@@ -234,8 +234,6 @@ pub const StorageEngine = struct {
 
         // 3. Deinit cache
         self.metadata_cache.deinit();
-        self.write_context.stmt_cache.deinit(self.allocator);
-        self.write_context.conn.deinit();
 
         // 4. Clean up readers
         for (self.reader_pool) |*node| {
@@ -243,14 +241,10 @@ pub const StorageEngine = struct {
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
-        gpa.free(self.write_context.db_path);
 
-        // 5. Clean up the queues and objects
-        self.write_context.queue.deinit();
+        // 5. Clean up the write context and queues
+        self.write_context.deinit(gpa);
         self.node_pool.deinit();
-
-        // 6. Clean up change buffer
-        self.write_context.change_buffer.deinit();
     }
 
     /// Returns statistics about the checkpoint operation
@@ -264,7 +258,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.write_context.pending_count.fetchAdd(1, .release);
+        self.write_context.beginOp();
         try self.pushWrite(op);
 
         try signal.wait();
@@ -319,7 +313,7 @@ pub const StorageEngine = struct {
         self.metadata_cache.deinit();
         try self.metadata_cache.init(self.allocator, .{});
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
-        _ = self.write_context.version.fetchAdd(1, .release);
+        self.write_context.bumpVersion();
     }
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
@@ -390,9 +384,9 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.write_context.pending_count.fetchAdd(1, .release);
+        self.write_context.beginOp();
         self.pushWrite(op) catch |err| {
-            _ = self.write_context.pending_count.fetchSub(1, .release);
+            self.write_context.endOp(1);
             return err;
         };
         queued = true;
@@ -402,10 +396,10 @@ pub const StorageEngine = struct {
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {
-        std.log.debug("flushPendingWrites: count={}", .{self.write_context.pending_count.load(.acquire)});
+        std.log.debug("flushPendingWrites: count={}", .{self.write_context.pendingOpCount()});
         self.write_context.mutex.lock();
         defer self.write_context.mutex.unlock();
-        while (self.write_context.pending_count.load(.acquire) > 0) {
+        while (self.write_context.pendingOpCount() > 0) {
             self.write_context.flush_cond.wait(&self.write_context.mutex);
         }
     }
@@ -460,7 +454,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.write_context.pending_count.fetchAdd(1, .release);
+        self.write_context.beginOp();
         try self.pushWrite(op);
     }
 
@@ -484,9 +478,9 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.write_context.pending_count.fetchAdd(1, .release);
+        self.write_context.beginOp();
         self.pushWrite(op) catch |err| {
-            _ = self.write_context.pending_count.fetchSub(1, .release);
+            self.write_context.endOp(1);
             return err;
         };
     }
@@ -526,14 +520,14 @@ pub const StorageEngine = struct {
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
-        const seq_before = self.write_context.version.load(.acquire);
+        const seq_before = self.write_context.snapshotVersion();
 
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
         const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata);
         if (result) |row| {
-            if (self.write_context.version.load(.acquire) == seq_before) {
+            if (self.write_context.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
                 const cache_row = try row.clone(self.allocator);
                 errdefer cache_row.deinit(self.allocator);
@@ -613,11 +607,7 @@ pub const StorageEngine = struct {
             },
         };
 
-        _ = self.write_context.pending_count.fetchAdd(1, .release);
+        self.write_context.beginOp();
         try self.pushWrite(op);
-    }
-
-    fn writeThreadLoop(self: *StorageEngine) void {
-        writer.writeThreadLoop(&self.write_context);
     }
 };
