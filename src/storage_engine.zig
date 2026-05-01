@@ -232,7 +232,7 @@ pub const StorageEngine = struct {
         gpa.free(self.reader_pool);
 
         // 5. Clean up the writer and queue
-        self.writer.deinit(gpa);
+        self.writer.deinit();
         self.node_pool.deinit();
     }
 

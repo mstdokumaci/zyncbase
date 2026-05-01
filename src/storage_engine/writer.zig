@@ -137,10 +137,10 @@ pub const Writer = struct {
         return &self.conn;
     }
 
-    pub fn deinit(self: *Writer, gpa: Allocator) void {
-        self.stmt_cache.deinit(gpa);
+    pub fn deinit(self: *Writer) void {
+        self.stmt_cache.deinit(self.allocator);
         self.conn.deinit();
-        gpa.free(self.db_path);
+        self.allocator.free(self.db_path);
         self.queue.deinit();
         self.change_buffer.deinit();
     }
