@@ -221,7 +221,7 @@ pub const Writer = struct {
         ops: []const WriteOp,
         pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
     ) !void {
-        self.conn.exec("BEGIN TRANSACTION", .{}, .{}) catch |err| {
+        execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
             const classified_err = errors.classifyError(err);
             errors.logDatabaseError("executeBatch BEGIN", classified_err, "");
             return classified_err;
