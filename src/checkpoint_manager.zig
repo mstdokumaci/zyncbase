@@ -282,7 +282,7 @@ pub const CheckpointManager = struct {
                     return CheckpointResult{
                         .mode = .full,
                         .duration_ms = 0,
-                        .wal_size_before = wal_size_before_initial,
+                        .wal_size_before = result.wal_size_after,
                         .wal_size_after = self.wal_size.load(.acquire),
                         .success = false,
                     };
