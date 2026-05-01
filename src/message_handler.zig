@@ -151,6 +151,7 @@ pub const MessageHandler = struct {
             .store_query => try self.handleStoreQuery(arena_allocator, conn, envelope.id, message),
             .store_load_more => try self.handleStoreLoadMore(arena_allocator, conn, envelope.id, message),
             .store_remove => try self.handleStoreRemove(arena_allocator, conn, envelope.id, message),
+            .store_batch => try self.handleStoreBatch(arena_allocator, conn, envelope.id, message),
         };
     }
 
@@ -286,9 +287,30 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) ![]const u8 {
         const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
-        const namespace_id = try requireStoreNamespace(conn);
+        const session = try requireStoreSession(conn);
 
-        try self.store_service.removePath(namespace_id, payloads.path);
+        try self.store_service.removePath(
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
+            payloads.path,
+        );
+
+        return try wire.encodeSuccess(arena_allocator, msg_id);
+    }
+
+    fn handleStoreBatch(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const payloads = try wire.extractStoreBatchPayloads(message, arena_allocator);
+        const session = try requireStoreSession(conn);
+
+        try self.store_service.batchWrite(
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
+            payloads.ops,
+        );
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }
@@ -365,6 +387,7 @@ const MsgType = enum {
     store_query,
     store_load_more,
     store_remove,
+    store_batch,
 };
 
 fn classifyMsgType(t: []const u8) ?MsgType {
@@ -377,6 +400,7 @@ fn classifyMsgType(t: []const u8) ?MsgType {
             return null;
         },
         'R' => if (std.mem.eql(u8, t, "StoreRemove")) return .store_remove else null,
+        'B' => if (std.mem.eql(u8, t, "StoreBatch")) return .store_batch else null,
         'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
         'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
         'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,

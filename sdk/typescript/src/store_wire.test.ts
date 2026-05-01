@@ -47,6 +47,17 @@ describe("store_wire", () => {
 		});
 	});
 
+	test("buildBatch rejects legacy operation type fields", () => {
+		expect(() =>
+			buildBatch([
+				{
+					type: "remove",
+					path: ["users", "u2"],
+				} as never,
+			]),
+		).toThrow(ZyncBaseError);
+	});
+
 	test("shapeGetResult returns collection, document, and field shapes", () => {
 		const rows = [{ name: "Ada", address__city: "London" }];
 

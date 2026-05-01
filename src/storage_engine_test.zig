@@ -3,6 +3,81 @@ const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
+const storage_mod = @import("storage_engine.zig");
+const writer = @import("storage_engine/writer.zig");
+
+const BatchOpForTest = struct {
+    entries: []storage_mod.BatchEntry,
+    completion_signal: ?*storage_mod.WriteOp.CompletionSignal,
+};
+
+const DirectWriterContext = struct {
+    allocator: std.mem.Allocator,
+    engine: storage_mod.StorageEngine,
+    sm: sth.Schema,
+    memory_strategy: sth.MemoryStrategy,
+    test_context: sth.TestContext,
+
+    fn init(self: *DirectWriterContext, allocator: std.mem.Allocator, table: sth.Table) !void {
+        self.allocator = allocator;
+        self.test_context = try sth.TestContext.initInMemory(allocator);
+        errdefer self.test_context.deinit();
+
+        try self.memory_strategy.init(allocator);
+        errdefer self.memory_strategy.deinit();
+
+        self.sm = try sth.createSchema(allocator, &[_]sth.Table{table});
+        errdefer self.sm.deinit();
+
+        try self.engine.init(
+            allocator,
+            &self.memory_strategy,
+            self.test_context.test_dir,
+            &self.sm,
+            .{},
+            .{ .in_memory = true, .reader_pool_size = 1 },
+            null,
+            null,
+        );
+        errdefer self.engine.deinit();
+    }
+
+    fn deinit(self: *DirectWriterContext) void {
+        self.engine.deinit();
+        self.sm.deinit();
+        self.memory_strategy.deinit();
+        self.test_context.deinit();
+    }
+};
+
+fn makeDeleteBatchEntries(allocator: std.mem.Allocator, table_index: usize) ![]storage_mod.BatchEntry {
+    const entries = try allocator.alloc(storage_mod.BatchEntry, 1);
+    errdefer allocator.free(entries);
+    entries[0] = .{
+        .kind = .delete,
+        .table_index = table_index,
+        .id = 1,
+        .namespace_id = 1,
+        .owner_doc_id = 0,
+        .sql = try allocator.dupe(u8, "not used"),
+        .values = null,
+        .timestamp = 0,
+    };
+    return entries;
+}
+
+fn executeBatchForTest(ctx: *DirectWriterContext, entries: []storage_mod.BatchEntry, signal: *storage_mod.WriteOp.CompletionSignal) void {
+    var last_batch_time: i64 = 0;
+    const op = BatchOpForTest{
+        .entries = entries,
+        .completion_signal = signal,
+    };
+    writer.executeBatchOp(
+        &ctx.engine.write_context,
+        op,
+        &last_batch_time,
+    );
+}
 
 test "StorageEngine: init and deinit" {
     const allocator = testing.allocator;
@@ -189,60 +264,6 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 0), managed.rows.len);
 }
-test "StorageEngine: transaction support" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("_dummy", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-tx", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Initially no transaction should be active
-    try testing.expect(!engine.isTransactionActive());
-    // Begin transaction
-    try engine.beginTransaction();
-    try testing.expect(engine.isTransactionActive());
-    // Cannot begin another transaction while one is active
-    try testing.expectError(error.TransactionAlreadyActive, engine.beginTransaction());
-    // Commit transaction
-    try engine.commitTransaction();
-    try testing.expect(!engine.isTransactionActive());
-    // Cannot commit when no transaction is active
-    try testing.expectError(error.NoActiveTransaction, engine.commitTransaction());
-    // Begin and rollback transaction
-    try engine.beginTransaction();
-    try testing.expect(engine.isTransactionActive());
-    try engine.rollbackTransaction();
-    try testing.expect(!engine.isTransactionActive());
-    // Cannot rollback when no transaction is active
-    try testing.expectError(error.NoActiveTransaction, engine.rollbackTransaction());
-}
-test "StorageEngine: automatic rollback in batch operations" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-auto-rollback", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Queue some operations
-    try ctx.insertText("items", 1, 5, "val", "value1");
-    try ctx.insertText("items", 2, 5, "val", "value1");
-    // Wait for operations to be processed
-    try engine.flushPendingWrites();
-    // Verify no transaction is active after batch completes
-    try testing.expect(!engine.isTransactionActive());
-    // Verify data was written
-    var managed1 = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
-    defer managed1.deinit();
-    try testing.expect(managed1.rows.len > 0);
-
-    var managed2 = try (try ctx.table("items")).selectDocument(allocator, 2, 5);
-    defer managed2.deinit();
-    try testing.expect(managed2.rows.len > 0);
-}
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
     const allocator = testing.allocator;
@@ -268,6 +289,71 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
     var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
     defer managed.deinit();
     try testing.expect(managed.rows.len > 0);
+}
+
+test "StorageEngine: low-level batch writer cleans up when begin fails" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+    var signal = storage_mod.WriteOp.CompletionSignal{};
+    ctx.engine.write_context.beginOp();
+    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    defer ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{}) catch |err| {
+        std.log.warn("failed to roll back test transaction: {}", .{err});
+    };
+
+    executeBatchForTest(&ctx, entries, &signal);
+
+    try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
+    try testing.expect(!ctx.engine.write_context.isTransactionActive());
+}
+
+test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: DirectWriterContext = undefined;
+    try ctx.init(allocator, table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+    var signal = storage_mod.WriteOp.CompletionSignal{};
+    const version_before = ctx.engine.write_context.snapshotVersion();
+    ctx.engine.write_context.beginOp();
+    executeBatchForTest(&ctx, entries, &signal);
+
+    try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
+    try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
+    try testing.expect(!ctx.engine.write_context.isTransactionActive());
+    try testing.expectEqual(version_before, ctx.engine.write_context.snapshotVersion());
+
+    try ctx.engine.write_context.conn.exec("BEGIN TRANSACTION", .{}, .{});
+    try ctx.engine.write_context.conn.exec("ROLLBACK", .{}, .{});
+}
+
+test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-batch-validate-table", table);
+    defer ctx.deinit();
+
+    const entries = try makeDeleteBatchEntries(allocator, 999);
+
+    ctx.engine.batchWrite(entries) catch |err| {
+        try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
+        try testing.expectEqual(@as(usize, 0), ctx.engine.write_context.pendingOpCount());
+        return;
+    };
+
+    return error.TestUnexpectedResult;
 }
 
 test "StorageEngine: concurrent reads" {
@@ -305,7 +391,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
     // Regression test for brittle shutdown synchronization.
     // Previously deinit() used a fixed 50ms sleep before joining the write
     // thread, which could race and lose in-flight writes. Now it signals
-    // write_cond and joins cleanly, guaranteeing the write thread has flushed
+    // work_cond and joins cleanly, guaranteeing the write thread has flushed
     // its remaining batch before deinit returns.
     const allocator = testing.allocator;
 
@@ -365,29 +451,4 @@ test "StorageEngine: client writes blocked during migration" {
     // deleteDocument should be blocked
     const err3 = (try ctx.table("items")).deleteDocument(1, 1);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
-}
-test "StorageEngine: manual transaction MUST increment write_seq on commit" {
-    const allocator = testing.allocator;
-    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
-    const table = sth.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-tx-race", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // 1. Initial write_seq
-    const seq0 = engine.write_seq.load(.acquire);
-    // 2. Begin transaction
-    try engine.beginTransaction();
-    // 3. Write something
-    try ctx.insertText("items", 1, 1, "val", "updated");
-    // 4. Flush batch. This should increment write_seq once.
-    try engine.flushPendingWrites();
-    const seq1 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(seq0 + 1, seq1);
-    // 5. Commit transaction. This SHOULD increment write_seq again.
-    try engine.commitTransaction();
-    // 6. VERIFY: write_seq should have advanced again.
-    const seq2 = engine.write_seq.load(.acquire);
-    try testing.expectEqual(seq1 + 1, seq2);
 }

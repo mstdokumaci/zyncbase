@@ -230,7 +230,7 @@ test "StoreService: remove" {
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
-        const result = service.removePath(1, path);
+        const result = service.removePath(writeCtx(1), path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
@@ -239,7 +239,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
 
-        try service.removePath(1, path);
+        try service.removePath(writeCtx(1), path);
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
@@ -253,7 +253,7 @@ test "StoreService: remove" {
         var path = try documentPath(allocator, 999, 1);
         defer path.free(allocator);
 
-        const result = service.removePath(4, path);
+        const result = service.removePath(writeCtx(4), path);
         try testing.expectError(StorageError.UnknownTable, result);
     }
 
@@ -263,7 +263,7 @@ test "StoreService: remove" {
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
-        const result = service.removePath(1, path);
+        const result = service.removePath(writeCtx(1), path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 }
@@ -608,4 +608,282 @@ test "StoreService: validateFieldWrite tests" {
         try testing.expectEqualStrings("age", field.name);
         try testing.expectEqual(schema.FieldType.integer, field.storage_type);
     }
+}
+
+// ── Batch helpers ──────────────────────────────────────────────────────
+
+/// Build a msgpack batch "set" tuple: ["s", path, value]
+fn batchSetTuple(
+    allocator: std.mem.Allocator,
+    table_index: usize,
+    id: doc_id.DocId,
+    value: msgpack.Payload,
+) !msgpack.Payload {
+    const path = try documentPath(allocator, table_index, id);
+    errdefer path.free(allocator);
+
+    const s_str = try msgpack.Payload.strToPayload("s", allocator);
+    errdefer s_str.free(allocator);
+
+    const cloned_value = try value.deepClone(allocator);
+    errdefer cloned_value.free(allocator);
+
+    const arr = try allocator.alloc(msgpack.Payload, 3);
+    arr[0] = s_str;
+    arr[1] = path;
+    arr[2] = cloned_value;
+    return .{ .arr = arr };
+}
+
+/// Build a msgpack batch "remove" tuple: ["r", path]
+fn batchRemoveTuple(
+    allocator: std.mem.Allocator,
+    table_index: usize,
+    id: doc_id.DocId,
+) !msgpack.Payload {
+    const path = try documentPath(allocator, table_index, id);
+    errdefer path.free(allocator);
+
+    const r_str = try msgpack.Payload.strToPayload("r", allocator);
+    errdefer r_str.free(allocator);
+
+    const arr = try allocator.alloc(msgpack.Payload, 2);
+    arr[0] = r_str;
+    arr[1] = path;
+    return .{ .arr = arr };
+}
+
+test "StoreService: batchWrite - multi-set inserts documents atomically" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-multi-set", &.{
+        .{
+            .name = "people",
+            .fields = &.{ "name", "age" },
+            .types = &.{ .text, .integer },
+        },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const people = try app.table("people");
+
+    const val1 = try store_helpers.createDocumentMapPayload(allocator, people.metadata, .{
+        .{ "name", "Alice" },
+        .{ "age", @as(i64, 30) },
+    });
+    defer val1.free(allocator);
+
+    const val2 = try store_helpers.createDocumentMapPayload(allocator, people.metadata, .{
+        .{ "name", "Bob" },
+        .{ "age", @as(i64, 25) },
+    });
+    defer val2.free(allocator);
+
+    const t1 = try batchSetTuple(allocator, app.tableIndex("people"), 1, val1);
+    defer t1.free(allocator);
+    const t2 = try batchSetTuple(allocator, app.tableIndex("people"), 2, val2);
+    defer t2.free(allocator);
+
+    const ops_arr = try allocator.alloc(msgpack.Payload, 2);
+    defer allocator.free(ops_arr);
+    ops_arr[0] = t1;
+    ops_arr[1] = t2;
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try service.batchWrite(writeCtx(1), ops_payload);
+    try app.storage_engine.flushPendingWrites();
+
+    // Verify both documents exist
+    var doc1 = try people.getOne(allocator, 1, 1);
+    defer doc1.deinit();
+    _ = try doc1.expectFieldString("name", "Alice");
+    try testing.expectEqual(@as(i64, 30), try doc1.getFieldInt("age"));
+
+    var doc2 = try people.getOne(allocator, 2, 1);
+    defer doc2.deinit();
+    _ = try doc2.expectFieldString("name", "Bob");
+    try testing.expectEqual(@as(i64, 25), try doc2.getFieldInt("age"));
+}
+
+test "StoreService: batchWrite - mixed set and remove" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-mixed", &.{
+        .{
+            .name = "items",
+            .fields = &.{"status"},
+            .types = &.{.text},
+        },
+    });
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const items = try app.table("items");
+
+    // Seed a document to be deleted later
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "status", "old" },
+        });
+        defer val.free(allocator);
+        var path = try documentPath(allocator, app.tableIndex("items"), 1);
+        defer path.free(allocator);
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+    }
+
+    // Batch: remove doc 1, insert doc 2
+    const val_new = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+        .{ "status", "fresh" },
+    });
+    defer val_new.free(allocator);
+
+    const rm = try batchRemoveTuple(allocator, app.tableIndex("items"), 1);
+    defer rm.free(allocator);
+    const set_op = try batchSetTuple(allocator, app.tableIndex("items"), 2, val_new);
+    defer set_op.free(allocator);
+
+    const ops_arr = try allocator.alloc(msgpack.Payload, 2);
+    defer allocator.free(ops_arr);
+    ops_arr[0] = rm;
+    ops_arr[1] = set_op;
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try service.batchWrite(writeCtx(1), ops_payload);
+    try app.storage_engine.flushPendingWrites();
+
+    // Doc 1 should be gone
+    var managed = try items.selectDocument(allocator, 1, 1);
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 0), managed.rows.len);
+
+    // Doc 2 should exist
+    var doc2 = try items.getOne(allocator, 2, 1);
+    defer doc2.deinit();
+    _ = try doc2.expectFieldString("status", "fresh");
+}
+
+test "StoreService: batchWrite - empty ops is a no-op" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-empty", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const empty_arr = try allocator.alloc(msgpack.Payload, 0);
+    defer allocator.free(empty_arr);
+    const ops_payload = msgpack.Payload{ .arr = empty_arr };
+
+    // Should succeed silently
+    try app.store_service.batchWrite(writeCtx(1), ops_payload);
+}
+
+test "StoreService: batchWrite - rejects invalid kind" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-bad-kind", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    // Build a tuple with unknown kind "x"
+    const x_str = try msgpack.Payload.strToPayload("x", allocator);
+    defer x_str.free(allocator);
+    var path = try documentPath(allocator, app.tableIndex("data"), 1);
+    defer path.free(allocator);
+
+    const tuple_arr = try allocator.alloc(msgpack.Payload, 2);
+    defer allocator.free(tuple_arr);
+    tuple_arr[0] = x_str;
+    tuple_arr[1] = path;
+    const tuple = msgpack.Payload{ .arr = tuple_arr };
+
+    const ops_arr = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops_arr);
+    ops_arr[0] = tuple;
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload));
+}
+
+test "StoreService: batchWrite - rejects set with missing value" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-missing-val", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    // Build a "set" tuple with only 2 elements (missing the value)
+    const s_str = try msgpack.Payload.strToPayload("s", allocator);
+    defer s_str.free(allocator);
+    var path = try documentPath(allocator, app.tableIndex("data"), 1);
+    defer path.free(allocator);
+
+    const tuple_arr = try allocator.alloc(msgpack.Payload, 2);
+    defer allocator.free(tuple_arr);
+    tuple_arr[0] = s_str;
+    tuple_arr[1] = path;
+    const tuple = msgpack.Payload{ .arr = tuple_arr };
+
+    const ops_arr = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops_arr);
+    ops_arr[0] = tuple;
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload));
+}
+
+test "StoreService: batchWrite - rejects unknown table" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-unknown-tbl", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const val = try store_helpers.createDocumentMapPayload(allocator, (try app.table("data")).metadata, .{
+        .{ "val", "test" },
+    });
+    defer val.free(allocator);
+
+    const t = try batchSetTuple(allocator, 999, 1, val);
+    defer t.free(allocator);
+
+    const ops_arr = try allocator.alloc(msgpack.Payload, 1);
+    defer allocator.free(ops_arr);
+    ops_arr[0] = t;
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload));
+}
+
+test "StoreService: batchWrite - rejects non-array payload" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-not-array", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil));
+}
+
+test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "batch-too-large", &.{
+        .{ .name = "data", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    // Allocate 501 nil entries — the length check happens before parsing
+    const ops_arr = try allocator.alloc(msgpack.Payload, 501);
+    defer allocator.free(ops_arr);
+    @memset(ops_arr, .nil);
+    const ops_payload = msgpack.Payload{ .arr = ops_arr };
+
+    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }

@@ -133,6 +133,17 @@ export function buildBatch(
 
 	const ops: StoreBatch["ops"] = [];
 	for (const op of operations) {
+		if (op.op !== "set" && op.op !== "remove") {
+			throw new ZyncBaseError(
+				"Batch operation must specify op as set or remove",
+				{
+					code: ErrorCodes.INVALID_MESSAGE,
+					category: "client",
+					retryable: false,
+				},
+			);
+		}
+
 		const segments = normalizePath(op.path);
 		const wirePath = encodeWirePath(segments);
 		if (op.op === "remove") {

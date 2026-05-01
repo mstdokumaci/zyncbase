@@ -46,6 +46,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.RateLimited => wireError("RATE_LIMITED", "Too many requests"),
         error.HookServerUnavailable => wireError("HOOK_SERVER_UNAVAILABLE", "Logic runtime down"),
         error.HookDenied => wireError("HOOK_DENIED", "Logic rejected write"),
+        error.BatchTooLarge => wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations"),
         else => wireError("INTERNAL_ERROR", "Zig core failure"),
     };
 }
