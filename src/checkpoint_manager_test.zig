@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const CheckpointManager = @import("checkpoint_manager.zig").CheckpointManager;
 const checkpoint_helpers = @import("checkpoint_test_helpers.zig");
+const storage_mod = @import("storage_engine.zig");
 
 // Unit tests for CheckpointManager
 // These tests verify specific examples and edge cases
@@ -130,7 +131,7 @@ test "CheckpointManager: performCheckpoint - all modes" {
     const manager = &ctx.manager;
 
     // Test each checkpoint mode
-    const modes = [_]CheckpointManager.CheckpointMode{ .passive, .full, .restart, .truncate };
+    const modes = [_]storage_mod.CheckpointMode{ .passive, .full, .restart, .truncate };
 
     for (modes) |mode| {
         const result = try manager.performCheckpoint(mode);
@@ -159,13 +160,6 @@ test "CheckpointManager: performCheckpoint - metrics update" {
 
     // Verify timestamp was updated
     try testing.expect(metrics_after.last_checkpoint_time >= metrics_before.last_checkpoint_time);
-}
-
-test "CheckpointManager: CheckpointMode.toPragma" {
-    try testing.expectEqualStrings("PRAGMA wal_checkpoint(PASSIVE)", CheckpointManager.CheckpointMode.passive.toPragma());
-    try testing.expectEqualStrings("PRAGMA wal_checkpoint(FULL)", CheckpointManager.CheckpointMode.full.toPragma());
-    try testing.expectEqualStrings("PRAGMA wal_checkpoint(RESTART)", CheckpointManager.CheckpointMode.restart.toPragma());
-    try testing.expectEqualStrings("PRAGMA wal_checkpoint(TRUNCATE)", CheckpointManager.CheckpointMode.truncate.toPragma());
 }
 
 test "CheckpointManager: getMetrics" {

@@ -26,37 +26,16 @@ pub const CheckpointManager = struct {
         /// Time threshold in seconds (default: 5 minutes)
         time_threshold_sec: u64 = 300,
         /// Default checkpoint mode
-        checkpoint_mode: CheckpointMode = .passive,
+        checkpoint_mode: storage_mod.CheckpointMode = .passive,
         /// Background check interval in seconds (default: 10 seconds)
         check_interval_sec: u64 = 10,
         /// Maximum total attempts for transient checkpoint failures (default: 3)
         max_attempts: u32 = 3,
     };
 
-    /// SQLite checkpoint modes
-    pub const CheckpointMode = enum {
-        /// Passive mode: checkpoint without blocking readers/writers
-        passive,
-        /// Full mode: wait for readers to finish, then checkpoint
-        full,
-        /// Restart mode: checkpoint and reset WAL
-        restart,
-        /// Truncate mode: checkpoint and truncate WAL to zero bytes
-        truncate,
-
-        pub fn toPragma(self: CheckpointMode) []const u8 {
-            return switch (self) {
-                .passive => "PRAGMA wal_checkpoint(PASSIVE)",
-                .full => "PRAGMA wal_checkpoint(FULL)",
-                .restart => "PRAGMA wal_checkpoint(RESTART)",
-                .truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
-            };
-        }
-    };
-
     /// Result of a checkpoint operation
     pub const CheckpointResult = struct {
-        mode: CheckpointMode,
+        mode: storage_mod.CheckpointMode,
         duration_ms: u64,
         wal_size_before: usize,
         wal_size_after: usize,
@@ -180,19 +159,12 @@ pub const CheckpointManager = struct {
     /// increments failed checkpoint count.
     ///
     /// Returns CheckpointResult with timing and size information.
-    pub fn performCheckpoint(self: *CheckpointManager, mode: CheckpointMode) !CheckpointResult {
+    pub fn performCheckpoint(self: *CheckpointManager, mode: storage_mod.CheckpointMode) !CheckpointResult {
         const start_time = std.time.milliTimestamp();
         const wal_size_before = self.wal_size.load(.acquire);
 
-        const storage_mode: storage_mod.CheckpointMode = switch (mode) {
-            .passive => .passive,
-            .full => .full,
-            .restart => .restart,
-            .truncate => .truncate,
-        };
-
         // Execute checkpoint
-        _ = self.storage_engine.executeCheckpoint(storage_mode) catch |err| {
+        _ = self.storage_engine.executeCheckpoint(mode) catch |err| {
             // Increment failure counter
             _ = self.failed_checkpoint_count.fetchAdd(1, .acq_rel);
 
@@ -300,7 +272,7 @@ pub const CheckpointManager = struct {
     ///
     /// Attempts checkpoint with exponential backoff on failure. Logs all failures
     /// and provides detailed error information for debugging.
-    pub fn performCheckpointWithRetry(self: *CheckpointManager, mode: CheckpointMode, max_attempts: u32) !CheckpointResult {
+    pub fn performCheckpointWithRetry(self: *CheckpointManager, mode: storage_mod.CheckpointMode, max_attempts: u32) !CheckpointResult {
         const attempts = if (max_attempts == 0) @as(u32, 1) else max_attempts;
         var attempt: u32 = 0;
         var backoff_ms: u64 = 100; // Start with 100ms
