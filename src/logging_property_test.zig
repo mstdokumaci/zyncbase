@@ -1,8 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub var global_capture: ?*LogCapture = null;
-
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;

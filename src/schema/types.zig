@@ -135,37 +135,6 @@ pub const Table = struct {
     user_field_end: usize = 0,
     metadata: ?Metadata = null,
 
-    pub fn cloneDeclared(self: Table, allocator: Allocator) !Table {
-        const cloned_name = try allocator.dupe(u8, self.name);
-        errdefer allocator.free(cloned_name);
-
-        const cloned_name_quoted = try allocator.dupe(u8, self.name_quoted);
-        errdefer allocator.free(cloned_name_quoted);
-
-        const cloned_metadata = if (self.metadata) |metadata| try metadata.clone(allocator) else null;
-        errdefer if (cloned_metadata) |metadata| metadata.deinit(allocator);
-
-        const cloned_fields = try allocator.alloc(Field, self.fields.len);
-        var i: usize = 0;
-        errdefer {
-            for (cloned_fields[0..i]) |f| f.deinit(allocator);
-            allocator.free(cloned_fields);
-        }
-        for (self.fields) |f| {
-            cloned_fields[i] = try f.clone(allocator);
-            i += 1;
-        }
-
-        return .{
-            .name = cloned_name,
-            .name_quoted = cloned_name_quoted,
-            .fields = cloned_fields,
-            .namespaced = self.namespaced,
-            .is_users_table = self.is_users_table,
-            .metadata = cloned_metadata,
-        };
-    }
-
     pub fn deinit(self: *Table, allocator: Allocator) void {
         if (self.has_index) {
             if (self.field_index_map) |*map| map.deinit();
