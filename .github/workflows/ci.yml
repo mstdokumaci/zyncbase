@@ -59,7 +59,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Check TypeScript formatting and lint
-        run: bunx biome check --write
+        run: bunx biome check
 
       - name: Test TypeScript SDK
         run: bun test sdk
