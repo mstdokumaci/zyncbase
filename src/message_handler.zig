@@ -1,7 +1,4 @@
 const std = @import("std");
-pub const std_options = struct {
-    pub const log_level = .debug;
-};
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;

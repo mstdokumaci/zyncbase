@@ -170,7 +170,6 @@ pub const StorageEngine = struct {
                 .conn = writer_conn,
                 // SAFETY: Initialized below
                 .stmt_cache = undefined,
-                .transaction_active = std.atomic.Value(bool).init(false),
                 .version = std.atomic.Value(u64).init(0),
                 .work_cond = .{},
                 .mutex = .{},

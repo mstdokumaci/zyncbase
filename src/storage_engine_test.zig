@@ -352,7 +352,6 @@ test "StorageEngine: low-level batch writer cleans up when begin fails" {
 
     try testing.expectError(storage_mod.StorageError.SQLiteError, signal.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
-    try testing.expect(!ctx.engine.writer.isTransactionActive());
 }
 
 test "StorageEngine: low-level batch writer rejects unknown tables and rolls back" {
@@ -371,7 +370,6 @@ test "StorageEngine: low-level batch writer rejects unknown tables and rolls bac
 
     try testing.expectError(storage_mod.StorageError.UnknownTable, signal.wait());
     try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
-    try testing.expect(!ctx.engine.writer.isTransactionActive());
     try testing.expectEqual(version_before, ctx.engine.writer.snapshotVersion());
 
     try ctx.engine.writer.conn.exec("BEGIN TRANSACTION", .{}, .{});

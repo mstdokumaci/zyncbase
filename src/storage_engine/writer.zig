@@ -26,7 +26,6 @@ pub const Writer = struct {
     allocator: Allocator,
     conn: sqlite.Db,
     stmt_cache: StatementCache,
-    transaction_active: std.atomic.Value(bool),
     version: std.atomic.Value(u64),
     work_cond: std.Thread.Condition,
     mutex: std.Thread.Mutex,
@@ -74,18 +73,6 @@ pub const Writer = struct {
 
     pub fn snapshotVersion(self: *const Writer) u64 {
         return self.version.load(.acquire);
-    }
-
-    pub fn markTransactionActive(self: *Writer) void {
-        self.transaction_active.store(true, .release);
-    }
-
-    pub fn markTransactionInactive(self: *Writer) void {
-        self.transaction_active.store(false, .release);
-    }
-
-    pub fn isTransactionActive(self: *const Writer) bool {
-        return self.transaction_active.load(.acquire);
     }
 
     pub fn notifyChanges(self: *Writer) void {
@@ -226,14 +213,11 @@ pub const Writer = struct {
             errors.logDatabaseError("executeBatch BEGIN", classified_err, "");
             return classified_err;
         };
-        self.markTransactionActive();
-
         errdefer {
             execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
                 const classified_err = errors.classifyError(rollback_err);
                 errors.logDatabaseError("executeBatch ROLLBACK", classified_err, "");
             };
-            self.markTransactionInactive();
         }
         var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
         defer {
@@ -316,7 +300,6 @@ pub const Writer = struct {
             errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
             return classified_err;
         };
-        self.markTransactionInactive();
     }
 
     pub fn flushBatch(
@@ -531,7 +514,6 @@ pub const Writer = struct {
                 execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
                     errors.logDatabaseError("executeBatchOp ROLLBACK", errors.classifyError(rollback_err), "");
                 };
-                self.markTransactionInactive();
             }
 
             if (bop.completion_signal) |sig| sig.signal(final_err);
@@ -572,7 +554,6 @@ pub const Writer = struct {
             return;
         };
         tx_started = true;
-        self.markTransactionActive();
 
         var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
         defer {
@@ -656,7 +637,6 @@ pub const Writer = struct {
         if (final_err == null) {
             if (execTransactionControl(&self.conn, "COMMIT")) |_| {
                 tx_started = false;
-                self.markTransactionInactive();
                 self.bumpVersion();
 
                 if (eviction_keys.items.len > 0) {
