@@ -43,6 +43,33 @@ jobs:
         env:
           TSAN_OPTIONS: second_deadlock_stack=1:history_size=7
 
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup project
+        uses: ./.github/actions/setup-project
+
+      - name: Install Bun dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check TypeScript formatting and lint
+        run: bunx biome check --write
+
+      - name: Test TypeScript SDK
+        run: bun test sdk
+
+      - name: Build TypeScript SDK
+        run: bun run --filter @zyncbase/client build
+
+      - name: Run TypeScript E2E tests
+        run: bun run test:e2e
+
   build:
     name: Build (${{ matrix.optimize }})
     runs-on: ubuntu-latest
