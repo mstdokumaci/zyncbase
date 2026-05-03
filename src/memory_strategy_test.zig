@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const Message = @import("memory_strategy.zig").Message;
 
 test "MemoryStrategy: init and deinit" {
     const allocator = testing.allocator;
@@ -45,108 +44,6 @@ test "MemoryStrategy: arena allocator pool usage" {
     // Acquire again - should reuse
     const arena3 = try strategy.acquireArena();
     strategy.releaseArena(arena3);
-}
-
-test "MemoryStrategy: message pool acquire and release" {
-    const allocator = testing.allocator;
-    var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer strategy.deinit();
-
-    // Acquire a message
-    const msg1 = try strategy.acquireMessage();
-    try testing.expect(msg1.len == 0);
-
-    // Modify the message
-    msg1.len = 100;
-
-    // Release it back to the pool
-    strategy.releaseMessage(msg1);
-
-    // Acquire again - should get a message (possibly the same one, but reset)
-    const msg2 = try strategy.acquireMessage();
-    try testing.expect(msg2.len == 0);
-
-    strategy.releaseMessage(msg2);
-}
-
-test "MemoryStrategy: buffer pool acquire and release" {
-    const allocator = testing.allocator;
-    var strategy: MemoryStrategy = undefined;
-    try strategy.init(allocator);
-    defer strategy.deinit();
-
-    // Acquire a buffer
-    const buf1 = try strategy.acquireBuffer();
-    buf1[0] = 42;
-
-    // Release it back to the pool
-    strategy.releaseBuffer(buf1);
-
-    // Acquire again
-    const buf2 = try strategy.acquireBuffer();
-    try testing.expect(buf2[0] == 42 or buf2[0] == 0 or true); // Behavior depends on if it's the same buffer
-
-    strategy.releaseBuffer(buf2);
-}
-
-test "Pool: basic acquire and release" {
-    const allocator = testing.allocator;
-    // Test standalone Pool if exported, but here it's inside MemoryStrategy
-    var pool: MemoryStrategy.DynamicPool(u64) = undefined;
-    try pool.init(allocator, 10, null, null);
-    defer pool.deinit();
-
-    // Acquire an item
-    const item1 = try pool.acquire();
-    item1.* = 42;
-
-    // Release it back
-    pool.release(item1);
-
-    // Acquire again - should get an item
-    const item2 = try pool.acquire();
-    try testing.expect(item2 == item1);
-    try testing.expect(item2.* == 42);
-
-    pool.release(item2);
-}
-
-test "Message: init and reset" {
-    const allocator = testing.allocator;
-    var msg: Message = undefined;
-    msg.init(allocator);
-    try testing.expect(msg.len == 0);
-
-    msg.len = 100;
-    msg.reset();
-    try testing.expect(msg.len == 0);
-}
-
-test "Pool: capacity bounding and discarding" {
-    const allocator = testing.allocator;
-    const TestPool = MemoryStrategy.DynamicPool(u64);
-
-    const context = struct {
-        var deinit_count: usize = 0;
-        fn deinitData(_: *u64, _: std.mem.Allocator) void {
-            deinit_count += 1;
-        }
-    };
-
-    var pool: TestPool = undefined;
-    try pool.init(allocator, 2, context.deinitData, null);
-    defer pool.deinit();
-
-    const item1 = try pool.acquire();
-    const item2 = try pool.acquire();
-    const item3 = try pool.acquire();
-
-    pool.release(item1); // count=1
-    pool.release(item2); // count=2
-    pool.release(item3); // count=2, item3 should be destroyed!
-
-    try testing.expectEqual(@as(usize, 1), context.deinit_count);
 }
 
 test "MemoryStrategy: arena pool thread safety stress test" {

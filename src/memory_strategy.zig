@@ -5,7 +5,7 @@ const Connection = @import("connection.zig").Connection;
 
 /// MemoryStrategy provides different allocator strategies for different use cases in ZyncBase.
 /// It combines GeneralPurposeAllocator for long-lived allocations, ArenaAllocator for
-/// per-request temporary allocations, and object pools for high-churn objects.
+/// per-request temporary allocations, and connection object pool for high-churn connections.
 pub const MemoryStrategy = struct {
     /// Parent allocator used to allocate the GPA itself
     parent_allocator: Allocator,
@@ -17,16 +17,12 @@ pub const MemoryStrategy = struct {
     /// Pool of Arena allocators for per-request temporary allocations (freed in bulk).
     arena_pool: IndexPool(std.heap.ArenaAllocator),
 
-    /// Object pools for high-churn objects to avoid allocation overhead
-    message_pool: DynamicPool(Message),
-    buffer_pool: DynamicPool(Buffer),
+    /// Object pool for high-churn connection objects to avoid allocation overhead
     connection_pool: IndexPool(Connection),
 
     /// Memory Strategy configuration for pools
     pub const Config = struct {
         arena_pool: PoolConfig = .{ .pre_allocate = 1024, .max_capacity = 1024 },
-        message_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 1024 },
-        buffer_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 16 },
         connection_pool: PoolConfig = .{ .pre_allocate = 0, .max_capacity = 100_000 },
 
         pub const PoolConfig = struct {
@@ -63,10 +59,6 @@ pub const MemoryStrategy = struct {
             // SAFETY: Initialized below via the .init() calls.
             .arena_pool = undefined,
             // SAFETY: Initialized below via the .init() calls.
-            .message_pool = undefined,
-            // SAFETY: Initialized below via the .init() calls.
-            .buffer_pool = undefined,
-            // SAFETY: Initialized below via the .init() calls.
             .connection_pool = undefined,
         };
 
@@ -78,22 +70,6 @@ pub const MemoryStrategy = struct {
             initArena,
         );
         errdefer self.arena_pool.deinit();
-
-        try self.message_pool.init(
-            gpa_alloc,
-            config.message_pool.max_capacity,
-            deinitMessage,
-            Message.init,
-        );
-        errdefer self.message_pool.deinit();
-
-        try self.buffer_pool.init(
-            gpa_alloc,
-            config.buffer_pool.max_capacity,
-            null,
-            null,
-        );
-        errdefer self.buffer_pool.deinit();
 
         try self.connection_pool.init(
             gpa_alloc,
@@ -112,17 +88,12 @@ pub const MemoryStrategy = struct {
         for (0..config.connection_pool.pre_allocate) |_| {
             try self.connection_pool.pushInitial();
         }
-
-        // Pre-allocate messages
-        try self.message_pool.preAllocate(config.message_pool.pre_allocate);
     }
 
     /// Deinitialize the memory strategy and free all resources
     pub fn deinit(self: *MemoryStrategy) void {
         // Deinit pools (this frees the Nodes and cleans up contents via deinitData callbacks)
         self.arena_pool.deinit();
-        self.message_pool.deinit();
-        self.buffer_pool.deinit();
         self.connection_pool.deinit();
 
         const status = self.gpa.deinit();
@@ -139,10 +110,6 @@ pub const MemoryStrategy = struct {
 
     fn deinitArena(arena: *std.heap.ArenaAllocator, _: Allocator) void {
         arena.deinit();
-    }
-
-    fn deinitMessage(msg: *Message, _: Allocator) void {
-        msg.reset();
     }
 
     fn deinitConnection(conn: *Connection, _: Allocator) void {
@@ -169,28 +136,6 @@ pub const MemoryStrategy = struct {
         self.arena_pool.release(arena);
     }
 
-    /// Acquire a message from the pool
-    pub fn acquireMessage(self: *MemoryStrategy) !*Message {
-        const msg = try self.message_pool.acquire();
-        msg.reset();
-        return msg;
-    }
-
-    /// Release a message back to the pool
-    pub fn releaseMessage(self: *MemoryStrategy, msg: *Message) void {
-        self.message_pool.release(msg);
-    }
-
-    /// Acquire a buffer from the pool
-    pub fn acquireBuffer(self: *MemoryStrategy) !*Buffer {
-        return self.buffer_pool.acquire();
-    }
-
-    /// Release a buffer back to the pool
-    pub fn releaseBuffer(self: *MemoryStrategy, buffer: *Buffer) void {
-        self.buffer_pool.release(buffer);
-    }
-
     /// Acquire a connection from the pool
     pub fn acquireConnection(self: *MemoryStrategy) !*Connection {
         return self.connection_pool.acquire();
@@ -199,169 +144,6 @@ pub const MemoryStrategy = struct {
     /// Release a connection back to the pool
     pub fn releaseConnection(self: *MemoryStrategy, connection: *Connection) void {
         self.connection_pool.release(connection);
-    }
-
-    /// Generic object pool for reusing fixed-size objects.
-    /// Uses a lock-free atomic stack to avoid mutex contention.
-    /// Prefers DynamicPool for large objects, or IndexPool for performance-critical small objects.
-    pub fn DynamicPool(comptime T: type) type { // zwanzig-disable-line: unused-parameter identifier-style
-        return struct {
-            const Self = @This();
-
-            /// Node structure for the intrusive linked list
-            const Node = struct {
-                next: std.atomic.Value(?*Node),
-                data: T,
-            };
-
-            /// Combined state for atomic head and count
-            const CombinedState = packed struct {
-                ptr: ?*Node,
-                gen: u32,
-                count: u32,
-            };
-
-            /// List head
-            head: ?*Node,
-            mutex: std.Thread.Mutex,
-            count: u32,
-            active_count: u32,
-            allocator: Allocator,
-            maxCapacity: u32,
-            deinitData: ?*const fn (*T, Allocator) void,
-            initData: ?*const fn (*T, Allocator) void,
-
-            /// Initialize the pool
-            pub fn init(
-                self: *Self,
-                allocator: Allocator,
-                maxCapacity: u32,
-                deinitData: ?*const fn (*T, Allocator) void,
-                initData: ?*const fn (*T, Allocator) void,
-            ) !void {
-                self.* = .{
-                    .head = null,
-                    .mutex = .{},
-                    .count = 0,
-                    .active_count = 0,
-                    .allocator = allocator,
-                    .maxCapacity = maxCapacity,
-                    .deinitData = deinitData,
-                    .initData = initData,
-                };
-            }
-
-            /// Deinitialize the pool and free all memory
-            pub fn deinit(self: *Self) void {
-                self.mutex.lock();
-                defer self.mutex.unlock();
-
-                // Assert no active objects are leaked
-                std.debug.assert(self.active_count == 0);
-
-                var current_node = self.head;
-                while (current_node) |node| {
-                    const next_node = node.next.load(.monotonic);
-                    if (self.deinitData) |deinit_fn| {
-                        deinit_fn(&node.data, self.allocator);
-                    }
-                    self.allocator.destroy(node);
-                    current_node = next_node;
-                }
-                self.head = null;
-                self.count = 0;
-            }
-
-            /// Internal method to push initial nodes
-            pub fn pushInitial(self: *Self, data: T) !void {
-                const node = try self.allocator.create(Node);
-                node.next = std.atomic.Value(?*Node).init(null);
-                node.data = data;
-                self.release(&node.data);
-            }
-
-            /// Pre-allocate nodes in the pool
-            pub fn preAllocate(self: *Self, count: usize) !void {
-                for (0..count) |_| {
-                    const node = try self.allocator.create(Node);
-                    node.next = std.atomic.Value(?*Node).init(null);
-                    if (self.initData) |initData| {
-                        initData(&node.data, self.allocator);
-                    } else {
-                        if (comptime @typeInfo(T) != .pointer) {
-                            @memset(std.mem.asBytes(&node.data), 0);
-                        }
-                    }
-                    self.release(&node.data);
-                }
-            }
-
-            /// Pop an object from the pool without allocating new ones
-            pub fn pop(self: *Self) ?T {
-                self.mutex.lock();
-                defer self.mutex.unlock();
-                if (self.head) |node| {
-                    self.head = node.next.load(.monotonic);
-                    self.count -= 1;
-                    const data = node.data;
-                    self.allocator.destroy(node);
-                    return data;
-                }
-                return null;
-            }
-
-            /// Acquire an object from the pool
-            pub fn acquire(self: *Self) !*T {
-                self.mutex.lock();
-                if (self.head) |node| {
-                    self.head = node.next.load(.monotonic);
-                    self.count -= 1;
-                    self.active_count += 1;
-                    self.mutex.unlock();
-                    return &node.data;
-                }
-                self.mutex.unlock();
-
-                // Allocate new node
-                const node = try self.allocator.create(Node);
-                node.next = std.atomic.Value(?*Node).init(null);
-                if (self.initData) |initData| {
-                    initData(&node.data, self.allocator);
-                } else {
-                    if (comptime @typeInfo(T) != .pointer) {
-                        @memset(std.mem.asBytes(&node.data), 0);
-                    }
-                }
-
-                self.mutex.lock();
-                self.active_count += 1;
-                self.mutex.unlock();
-
-                return &node.data;
-            }
-
-            /// Release an object back to the pool
-            pub fn release(self: *Self, data: *T) void {
-                const node: *Node = @alignCast(@fieldParentPtr("data", data));
-
-                self.mutex.lock();
-                defer self.mutex.unlock();
-
-                self.active_count -= 1;
-
-                if (self.count >= self.maxCapacity) {
-                    if (self.deinitData) |deinit_fn| {
-                        deinit_fn(&node.data, self.allocator);
-                    }
-                    self.allocator.destroy(node);
-                    return;
-                }
-
-                node.next.store(self.head, .monotonic);
-                self.head = node;
-                self.count += 1;
-            }
-        };
     }
 
     /// Fixed-size contiguous block pool using 64-bit array indices.
@@ -542,20 +324,3 @@ pub const MemoryStrategy = struct {
         };
     }
 };
-
-/// Message type for pooling
-pub const Message = struct {
-    data: [64 * 1024]u8,
-    len: usize,
-
-    pub fn init(self: *Message, _: Allocator) void {
-        self.len = 0;
-    }
-
-    pub fn reset(self: *Message) void {
-        self.len = 0;
-    }
-};
-
-/// Buffer type for pooling
-pub const Buffer = [64 * 1024]u8;

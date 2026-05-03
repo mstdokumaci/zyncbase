@@ -1,8 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const Message = @import("memory_strategy.zig").Message;
-const Buffer = @import("memory_strategy.zig").Buffer;
 const Connection = @import("connection.zig").Connection;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
@@ -64,39 +62,6 @@ test "memory: safety and pool invariants" {
         var strategy: MemoryStrategy = undefined;
         try strategy.init(alloc);
         defer strategy.deinit();
-
-        // Test message pool
-        var messages: [20]*Message = undefined;
-        for (&messages) |*msg| {
-            msg.* = try strategy.acquireMessage();
-            msg.*.len = 100;
-        }
-
-        // Release all messages back to pool
-        for (messages) |msg| {
-            strategy.releaseMessage(msg);
-        }
-
-        // Acquire again - should reuse from pool
-        for (&messages) |*msg| {
-            msg.* = try strategy.acquireMessage();
-        }
-
-        // Release again
-        for (messages) |msg| {
-            strategy.releaseMessage(msg);
-        }
-
-        // Test buffer pool
-        var buffers: [20]*Buffer = undefined;
-        for (&buffers) |*buf| {
-            buf.* = try strategy.acquireBuffer();
-            buf.*[0] = 42;
-        }
-
-        for (buffers) |buf| {
-            strategy.releaseBuffer(buf);
-        }
 
         var connections: [20]*Connection = undefined;
         for (&connections, 0..) |*conn, i| {
@@ -161,13 +126,7 @@ test "memory: safety and pool invariants" {
         _ = try arena.alloc(u8, 300);
         strategy.releaseArena(arena_ptr);
 
-        // Pool allocations
-        const msg = try strategy.acquireMessage();
-        strategy.releaseMessage(msg);
-
-        const buf = try strategy.acquireBuffer();
-        strategy.releaseBuffer(buf);
-
+        // Pool allocation
         const dummy_ws = WebSocket{ .ws = null, .ssl = false };
         const conn = try strategy.acquireConnection();
         conn.activate(1, dummy_ws);
@@ -193,10 +152,6 @@ test "memory: safety and pool invariants" {
             _ = try arena.alloc(u8, 64);
             _ = try arena.alloc(u8, 128);
             _ = try arena.alloc(u8, 256);
-
-            // Acquire and release from pools
-            const msg = try strategy.acquireMessage();
-            strategy.releaseMessage(msg);
 
             // Release arena
             strategy.releaseArena(arena_ptr);
@@ -234,37 +189,6 @@ test "memory: safety and pool invariants" {
 
         strategy.releaseArena(arena_ptr2);
     }
-
-    // Test 7: Pool capacity limits
-    {
-        var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-        defer _ = test_gpa.deinit();
-        const alloc = test_gpa.allocator();
-
-        var strategy: MemoryStrategy = undefined;
-        try strategy.init(alloc);
-        defer strategy.deinit();
-
-        // Acquire more messages than pool capacity
-        var messages: [1100]*Message = undefined;
-        for (&messages) |*msg| {
-            msg.* = try strategy.acquireMessage();
-        }
-
-        // Release all - some will be freed, some will be pooled
-        for (messages) |msg| {
-            strategy.releaseMessage(msg);
-        }
-
-        // Acquire again - should work without issues
-        for (&messages) |*msg| {
-            msg.* = try strategy.acquireMessage();
-        }
-
-        for (messages) |msg| {
-            strategy.releaseMessage(msg);
-        }
-    }
 }
 
 test "memory: concurrent pool access" {
@@ -285,16 +209,6 @@ test "memory: concurrent pool access" {
         fn run(ctx: *ThreadContext) !void {
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                // Acquire and release messages
-                const msg = ctx.strategy.acquireMessage() catch unreachable; // zwanzig-disable-line: swallowed-error
-                msg.len = i;
-                ctx.strategy.releaseMessage(msg);
-
-                // Acquire and release buffers
-                const buf = ctx.strategy.acquireBuffer() catch unreachable; // zwanzig-disable-line: swallowed-error
-                buf[0] = @intCast(i % 256);
-                ctx.strategy.releaseBuffer(buf);
-
                 // Acquire and release connections
                 const dummy_ws = WebSocket{ .ws = null, .ssl = false };
                 const conn = try ctx.strategy.acquireConnection();
@@ -375,31 +289,4 @@ test "memory: GPA allocation tracking" {
     for (allocations) |alloc_item| {
         gpa.free(alloc_item);
     }
-}
-
-test "memory: subscription pool reuse" {
-    var test_gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer _ = test_gpa.deinit();
-    const alloc = test_gpa.allocator();
-
-    var strategy: MemoryStrategy = undefined;
-    try strategy.init(alloc);
-    defer strategy.deinit();
-
-    // Acquire a message and mark it
-    const msg1 = try strategy.acquireMessage();
-    const msg1_addr = @intFromPtr(msg1);
-    msg1.len = 999;
-
-    // Release it
-    strategy.releaseMessage(msg1);
-
-    // Acquire again - should get the same message from pool
-    const msg2 = try strategy.acquireMessage();
-    defer strategy.releaseMessage(msg2);
-    const msg2_addr = @intFromPtr(msg2);
-
-    // Verify it's the same object (reused from pool)
-    try testing.expect(msg1_addr == msg2_addr);
-    try testing.expect(msg2.len == 0); // Data was reset on acquire
 }

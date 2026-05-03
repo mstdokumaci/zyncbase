@@ -2,7 +2,7 @@
 
 **Drivers**: [Threading Model Architecture](../../architecture/threading-model.md), [ADR-001: Zig as Core Language](../architecture/adrs.md#adr-001-zig-as-core-system-language)
 
-This document contains technical implementation details for ZyncBase's memory management, focusing on the "Duality Pool" strategy, request-scoped lifetimes, and object lifecycle maintenance.
+This document contains technical implementation details for ZyncBase's memory management, focusing on the object pool strategy, request-scoped lifetimes, and object lifecycle maintenance.
 
 ---
 
@@ -17,9 +17,7 @@ ZyncBase avoids a global garbage collector. Instead, it uses a tiered allocator 
       |
       +--- [Arena Allocator]      -> Request-scoped data (Message parsing, temporary buffers)
       |
-      +--- [DynamicPool]          -> Large, sparse objects (Messages, 64KB buffers)
-      |
-      +--- [IndexPool]            -> High-churn, small objects (Connections, Arenas, DeferNodes)
+      +--- [IndexPool]            -> High-churn objects (Connections, Arenas, DeferNodes)
 ```
 
 ## Implementation Artifacts
@@ -29,24 +27,15 @@ ZyncBase uses specialized allocators for different memory lifetimes to minimize 
 
 ```zig
 const MemoryStrategy = struct {
-    // DynamicPool: Sparse/Large objects (Lazy heap allocation)
-    message_pool: DynamicPool(Message),
-    
     // IndexPool: High-churn/Small objects (Contiguous pre-allocated memory)
     connection_pool: IndexPool(Connection),
     arena_pool: IndexPool(std.heap.ArenaAllocator),
 };
 ```
 
-### Object Pooling Duality
+### Object Pooling
 
-#### 1. DynamicPool(T)
-Ideal for large objects where upfront memory reservation is expensive. Uses a `std.Thread.Mutex` protected intrusive linked-list to ensure absolute thread-safety and address stability under LLVM ThreadSanitizer (TSAN) on Apple Silicon.
-- **Backing**: Lazy heap allocation (`allocator.create`).
-- **Safety**: Mutex-protected stack prevents raw pointer races and 128-bit atomic incompatibilities.
-- **Use Case**: `Message`, `Buffer`.
-
-#### 2. IndexPool(T)
+#### IndexPool(T)
 Optimized for high-concurrency, high-churn objects where fragmentation and cache locality are critical.
 - **Backing**: Contiguous slice of `Node(T)`.
 - **Logic**: Uses 64-bit atomics to pack a 32-bit array index and a 32-bit ABA tag.
@@ -79,8 +68,7 @@ pub fn release(self: *Self, data: *T) void {
 
 | Pool Type | Backing | Sync Type | Locality | Best For |
 |-----------|---------|-------------|----------|----------|
-| **Dynamic** | Heap | Mutex Stack | Sparse | Rare/Large objects |
-| **Index** | Contiguous | 64-bit Index | Excellent | Frequent/Small objects |
+| **IndexPool** | Contiguous | 64-bit Atomic Index | Excellent | Frequent/Small objects |
 
 ### Memory Safety Best Practices
 - **No Unbounded Allocations**: All parsers (MessagePack) enforce strict depth and size limits to prevent OOM attacks.
