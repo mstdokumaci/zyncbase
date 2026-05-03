@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
-const doc_id = @import("../doc_id.zig");
 const storage_mod = @import("../storage_engine.zig");
 const schema = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
@@ -154,6 +153,7 @@ pub const QueryResponse = struct {
     sub_id: ?u64 = null,
     results: *const storage_mod.ManagedResult,
     table: *const storage_mod.TableMetadata,
+    next_cursor: ?[]const u8 = null,
 };
 
 pub fn encodeQuery(
@@ -182,16 +182,14 @@ pub fn encodeQuery(
     }
 
     if (response.sub_id != null) {
-        const has_more = response.results.next_cursor != null;
+        const has_more = response.next_cursor != null;
         try list.appendSlice(arena_allocator, Keys.has_more);
         try msgpack.encode(msgpack.Payload{ .bool = has_more }, writer);
     }
 
     try list.appendSlice(arena_allocator, Keys.next_cursor);
-    if (response.results.next_cursor) |cursor| {
-        const encoded_cursor = try encodeCursor(arena_allocator, cursor);
-        defer arena_allocator.free(encoded_cursor);
-        try msgpack.writeMsgPackStr(writer, encoded_cursor);
+    if (response.next_cursor) |cursor_str| {
+        try msgpack.writeMsgPackStr(writer, cursor_str);
     } else {
         try msgpack.encode(.nil, writer);
     }
@@ -241,23 +239,6 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const
     }
 
     return list.toOwnedSlice(allocator);
-}
-
-// === Cursor encoding ===
-
-pub fn encodeCursor(allocator: Allocator, cursor: storage_mod.TypedCursor) ![]const u8 {
-    var list = std.ArrayListUnmanaged(u8).empty;
-    defer list.deinit(allocator);
-    const writer = list.writer(allocator);
-    try msgpack.encodeArrayHeader(writer, 2);
-    try storage_mod.writeTypedValueMsgPack(cursor.sort_value, writer);
-    const id_bytes = doc_id.toBytes(cursor.id);
-    try msgpack.writeMsgPackBin(writer, &id_bytes);
-    const encoded_len = std.base64.standard.Encoder.calcSize(list.items.len);
-    const dest = try allocator.alloc(u8, encoded_len);
-    errdefer allocator.free(dest);
-    _ = std.base64.standard.Encoder.encode(dest, list.items);
-    return dest;
 }
 
 // === Delta encoding ===

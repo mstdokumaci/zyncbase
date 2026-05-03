@@ -5,7 +5,6 @@ const storage_mod = @import("storage_engine.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const helpers = @import("app_test_helpers.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const wire = @import("wire.zig");
 const schema = @import("schema.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -538,16 +537,14 @@ test "StoreService: queryMore - pagination" {
     defer qr.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
-    try testing.expect(qr.results.next_cursor != null);
+    try testing.expect(qr.next_cursor_str != null);
 
-    // Save the cursor token (encoded)
-    const cursor_val = qr.results.next_cursor orelse return error.TestExpectedValue;
-    const encoded_cursor = try wire.encodeCursor(allocator, cursor_val);
-    defer allocator.free(encoded_cursor);
+    // Use the pre-encoded cursor token from QueryResult
+    const encoded_cursor = qr.next_cursor_str orelse return error.TestExpectedValue;
 
     // 2. Query with cursor: fetch next 2
     var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor);
-    defer next_page.deinit();
+    defer next_page.deinit(allocator);
 
     if (next_page.results.rows.len == 0) return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), next_page.results.rows.len);

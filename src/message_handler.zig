@@ -242,13 +242,14 @@ pub const MessageHandler = struct {
         defer sub_query.deinit(arena_allocator);
 
         var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor);
-        defer page.deinit();
+        defer page.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{
             .msg_id = msg_id,
             .sub_id = req.subId,
             .results = &page.results,
             .table = page.table,
+            .next_cursor = page.next_cursor_str,
         });
     }
 
@@ -342,6 +343,7 @@ pub const MessageHandler = struct {
             .sub_id = sub_id,
             .results = &qr.results,
             .table = qr.table,
+            .next_cursor = qr.next_cursor_str,
         });
     }
 

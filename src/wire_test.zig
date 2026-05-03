@@ -6,6 +6,7 @@ const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
 const storage_types = @import("storage_engine.zig");
+const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
 
 fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !storage_types.TypedRow {
@@ -285,11 +286,18 @@ test "encodeQuery: includes subscription pagination fields" {
         },
     };
 
+    const next_cursor_str = if (result.next_cursor) |c|
+        try query_parser.encodeCursorToken(allocator, c)
+    else
+        null;
+    defer if (next_cursor_str) |s| allocator.free(s);
+
     const response = try wire.encodeQuery(allocator, .{
         .msg_id = 44,
         .sub_id = 7,
         .results = &result,
         .table = table_metadata,
+        .next_cursor = next_cursor_str,
     });
     defer allocator.free(response);
 
