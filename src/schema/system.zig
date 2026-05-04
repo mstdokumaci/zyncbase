@@ -33,16 +33,6 @@ pub const trailing_system_fields = [_]types.Field{
     .{ .name = "updated_at", .name_quoted = quoted_updated_at, .declared_type = .integer, .storage_type = .integer, .required = true, .indexed = false, .kind = .timestamp },
 };
 
-pub const users_external_id_field = types.Field{
-    .name = "external_id",
-    .name_quoted = quoted_external_id,
-    .declared_type = .text,
-    .storage_type = .text,
-    .required = true,
-    .indexed = true,
-    .kind = .system,
-};
-
 pub fn getSystemColumn(name: []const u8) ?types.Field {
     for (leading_system_fields) |field| {
         if (std.mem.eql(u8, name, field.name)) return field;

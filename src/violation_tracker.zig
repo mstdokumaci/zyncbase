@@ -43,11 +43,4 @@ pub const ConnectionViolationTracker = struct {
         defer self.mutex.unlock();
         _ = self.violations.remove(connection_id);
     }
-
-    /// Get violation count for a connection
-    pub fn getViolationCount(self: *ConnectionViolationTracker, connection_id: u64) u32 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.violations.get(connection_id) orelse 0;
-    }
 };

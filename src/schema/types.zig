@@ -151,10 +151,6 @@ pub const Table = struct {
         return self.fields[idx];
     }
 
-    pub fn getField(self: *const Table, name: []const u8) ?Field {
-        return self.field(name);
-    }
-
     pub fn fieldIndex(self: *const Table, name: []const u8) ?usize {
         if (self.has_index) {
             const map = self.field_index_map orelse return null;
