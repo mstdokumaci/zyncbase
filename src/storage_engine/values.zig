@@ -24,7 +24,6 @@ pub const ColumnValue = struct {
 /// Caller MUST call deinit() to release any potential cache handles and memory.
 pub const ManagedResult = struct {
     rows: []TypedRow,
-    next_cursor: ?TypedCursor = null,
     handle: ?typed_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
@@ -34,7 +33,6 @@ pub const ManagedResult = struct {
         } else if (self.allocator) |alloc| {
             for (self.rows) |r| r.deinit(alloc);
             alloc.free(self.rows);
-            if (self.next_cursor) |*nc| nc.deinit(alloc);
         }
     }
 };

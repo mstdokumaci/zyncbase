@@ -161,13 +161,6 @@ pub const StoreService = struct {
         try self.storage_engine.batchWrite(entries);
     }
 
-    fn encodeNextCursorStr(allocator: Allocator, results: *const storage_mod.ManagedResult) !?[]const u8 {
-        if (results.next_cursor) |c| {
-            return try query_parser.encodeCursorToken(allocator, c);
-        }
-        return null;
-    }
-
     pub fn queryCollection(
         self: *StoreService,
         allocator: Allocator,
@@ -184,25 +177,23 @@ pub const StoreService = struct {
         if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
             var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
             errdefer result.deinit();
-            const next_cursor_str = try encodeNextCursorStr(allocator, &result);
             return .{
                 .table_index = table_index,
                 .table = table,
                 .results = result,
                 .filter = filter,
-                .next_cursor_str = next_cursor_str,
+                .next_cursor_str = null,
             };
         }
 
         var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
-        errdefer results.deinit();
-        const next_cursor_str = try encodeNextCursorStr(allocator, &results);
+        errdefer results.result.deinit();
         return .{
             .table_index = table_index,
             .table = table,
-            .results = results,
+            .results = results.result,
             .filter = filter,
-            .next_cursor_str = next_cursor_str,
+            .next_cursor_str = results.next_cursor_str,
         };
     }
 
@@ -221,12 +212,11 @@ pub const StoreService = struct {
         filter.after = cursor;
 
         var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
-        errdefer results.deinit();
-        const next_cursor_str = try encodeNextCursorStr(allocator, &results);
+        errdefer results.result.deinit();
         return .{
             .table = table,
-            .results = results,
-            .next_cursor_str = next_cursor_str,
+            .results = results.result,
+            .next_cursor_str = results.next_cursor_str,
         };
     }
 

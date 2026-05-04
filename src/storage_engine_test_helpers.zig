@@ -90,7 +90,9 @@ pub const TableFixture = struct {
         namespace_id: i64,
         filter: query_parser.QueryFilter,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter);
+        const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter);
+        if (res.next_cursor_str) |s| allocator.free(s);
+        return res.result;
     }
 
     pub fn deleteDocument(

@@ -62,15 +62,16 @@ pub const QueryFilter = struct {
     after: ?TypedCursor = null,
 
     pub fn deinit(self: QueryFilter, allocator: std.mem.Allocator) void {
-        if (self.conditions) |conds| {
+        var mutable = self;
+        if (mutable.conditions) |conds| {
             for (conds) |c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (self.or_conditions) |or_conds| {
+        if (mutable.or_conditions) |or_conds| {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (self.after) |*a| @constCast(a).deinit(allocator);
+        if (mutable.after) |*a| a.deinit(allocator);
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {

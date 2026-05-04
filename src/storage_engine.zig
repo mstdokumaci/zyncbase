@@ -511,7 +511,7 @@ pub const StorageEngine = struct {
         table_index: usize,
         namespace_id: i64,
         filter: query_parser.QueryFilter,
-    ) !ManagedResult {
+    ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
@@ -538,11 +538,9 @@ pub const StorageEngine = struct {
             sort_field_index,
         );
 
-        return ManagedResult{
-            .rows = exec_res.rows,
-            .next_cursor = exec_res.next_cursor,
-            .handle = null,
-            .allocator = allocator,
+        return .{
+            .result = ManagedResult{ .rows = exec_res.rows, .allocator = allocator },
+            .next_cursor_str = exec_res.next_cursor_str,
         };
     }
 
