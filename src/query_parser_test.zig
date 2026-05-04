@@ -349,7 +349,7 @@ test "isNull with operand is rejected" {
     // Manually construct null condition with extra operand to bypass helper's valid construction
     var cond_arr = try allocator.alloc(msgpack.Payload, 3);
     const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
-    cond_arr[0] = msgpack.Payload.uintToPayload(tbl.getFieldIndex("deleted_at") orelse return error.TestExpectedValue);
+    cond_arr[0] = msgpack.Payload.uintToPayload(tbl.fieldIndex("deleted_at") orelse return error.TestExpectedValue);
     cond_arr[1] = msgpack.Payload.uintToPayload(11); // isNull
     cond_arr[2] = msgpack.Payload.uintToPayload(1); // unexpected operand
 
@@ -396,7 +396,7 @@ test "orderBy rejects invalid direction value" {
     defer root.free(allocator);
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
     const tbl_items = sm.getTable("items") orelse return error.TestExpectedValue;
-    order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.getFieldIndex("created_at") orelse return error.TestExpectedValue);
+    order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(2); // invalid direction
     try root.mapPut("orderBy", .{ .arr = order_arr });
 
@@ -425,7 +425,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
     const tbl_items = sm.getTable("items") orelse return error.TestExpectedValue;
-    order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.getFieldIndex("created_at") orelse return error.TestExpectedValue);
+    order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(1);
     try root.mapPut("orderBy", .{ .arr = order_arr });
 

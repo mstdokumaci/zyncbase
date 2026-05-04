@@ -145,7 +145,7 @@ test "Verification: StoreLoadMore uses subscription state and returns requested 
     defer filter.free(allocator);
 
     const table = try app.tableMetadata("data_table");
-    const created_at_index = table.getFieldIndex("created_at") orelse return error.UnknownField;
+    const created_at_index = table.fieldIndex("created_at") orelse return error.UnknownField;
     const order_tuple = try allocator.alloc(msgpack.Payload, 2);
     order_tuple[0] = msgpack.Payload.uintToPayload(created_at_index);
     order_tuple[1] = msgpack.Payload.uintToPayload(1);

@@ -166,10 +166,6 @@ pub const Table = struct {
         return null;
     }
 
-    pub fn getFieldIndex(self: *const Table, name: []const u8) ?usize {
-        return self.fieldIndex(name);
-    }
-
     pub fn userFields(self: *const Table) []const Field {
         if (!self.canonical_fields) return self.fields;
         return self.fields[self.user_field_start..self.user_field_end];

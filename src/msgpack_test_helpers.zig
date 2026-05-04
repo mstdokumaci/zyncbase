@@ -88,7 +88,7 @@ pub fn getMapValueByUint(payload: Payload, index: usize) !?Payload {
 }
 
 pub fn getMapValueByName(payload: Payload, tbl: *const TableMetadata, name: []const u8) !?Payload {
-    const index = tbl.getFieldIndex(name) orelse return null;
+    const index = tbl.fieldIndex(name) orelse return null;
     return try getMapValueByUint(payload, index);
 }
 

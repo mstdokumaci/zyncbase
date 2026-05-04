@@ -244,7 +244,7 @@ pub fn createDocumentMapPayload(allocator: std.mem.Allocator, tbl: *const schema
 
         const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
             .int, .comptime_int => @as(usize, @intCast(raw_field)),
-            else => tbl.getFieldIndex(raw_field) orelse return error.UnknownField,
+            else => tbl.fieldIndex(raw_field) orelse return error.UnknownField,
         };
 
         // Encode numeric key

@@ -21,7 +21,7 @@ test "property: random valid query filters" {
     defer sm.deinit();
 
     const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
-    const field_index = tbl.getFieldIndex("field") orelse return error.TestExpectedValue;
+    const field_index = tbl.fieldIndex("field") orelse return error.TestExpectedValue;
 
     for (0..100) |_| {
         var root = msgpack.Payload.mapPayload(allocator);

@@ -70,7 +70,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     // --- SQL path: tags contains "urgent" ---
     var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field_index = items_md.getFieldIndex("tags") orelse return error.UnknownField,
+            .field_index = items_md.fieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valText("urgent"),
             .field_type = .array,
@@ -88,7 +88,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     // --- In-memory path ---
     var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field_index = items_md.getFieldIndex("tags") orelse return error.UnknownField,
+            .field_index = items_md.fieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valText("urgent"),
             .field_type = .array,
@@ -171,7 +171,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     // --- SQL path: scores contains 20 ---
     var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field_index = players_md.getFieldIndex("scores") orelse return error.UnknownField,
+            .field_index = players_md.fieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valInt(20),
             .field_type = .array,
@@ -189,7 +189,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     // --- In-memory path ---
     var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
         .{
-            .field_index = players_md.getFieldIndex("scores") orelse return error.UnknownField,
+            .field_index = players_md.fieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,
             .value = tth.valInt(20),
             .field_type = .array,

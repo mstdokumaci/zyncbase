@@ -58,7 +58,7 @@ test "message: representative frames route at protocol boundary" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     {
         const message = try store_helpers.createStoreSetFieldMessage(allocator, 11, 1, table.index, 1, field_index, "value-a");
@@ -103,7 +103,7 @@ test "message: response id is preserved across routed requests" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     {
         const message = try store_helpers.createStoreSetFieldMessage(allocator, 101, 1, table.index, 1, field_index, "value-b");
@@ -157,7 +157,7 @@ test "message: repeated routed requests release per-message allocations" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     var i: usize = 0;
     while (i < 32) : (i += 1) {
@@ -181,7 +181,7 @@ test "message: concurrent routed requests release response allocations" {
     defer app.deinit();
 
     const table = try app.tableMetadata("items");
-    const field_index = table.getFieldIndex("value") orelse return error.UnknownField;
+    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     const ThreadContext = struct {
         app: *AppTestContext,

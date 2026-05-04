@@ -62,7 +62,7 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
     defer sc.deinit();
     const conn = sc.conn;
     const table = try app.tableMetadata("items");
-    const field_index = table.getFieldIndex("tags") orelse return error.UnknownField;
+    const field_index = table.fieldIndex("tags") orelse return error.UnknownField;
 
     {
         const tags = try allocator.alloc(msgpack.Payload, 2);

@@ -180,7 +180,7 @@ pub const AppTestContext = struct {
 
     pub fn fieldIndex(self: *const AppTestContext, table_name: []const u8, field_name: []const u8) usize {
         const tbl = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
-        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
+        return tbl.fieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 
     pub fn table(self: *AppTestContext, table_name: []const u8) !sth.TableFixture {

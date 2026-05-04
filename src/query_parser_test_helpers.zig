@@ -86,7 +86,7 @@ pub fn createQueryFilterPayload(
                 const raw_field = cond_src[0];
                 const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
                     .int, .comptime_int => @as(usize, @intCast(raw_field)),
-                    else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
+                    else => tbl_md.fieldIndex(raw_field) orelse return error.UnknownField,
                 };
 
                 var cond_arr = try allocator.alloc(Payload, cond_info.fields.len);
@@ -109,7 +109,7 @@ pub fn createQueryFilterPayload(
             const raw_field = order_by[0];
             const f_idx = switch (@typeInfo(@TypeOf(raw_field))) {
                 .int, .comptime_int => @as(usize, @intCast(raw_field)),
-                else => tbl_md.getFieldIndex(raw_field) orelse return error.UnknownField,
+                else => tbl_md.fieldIndex(raw_field) orelse return error.UnknownField,
             };
 
             var order_arr = try allocator.alloc(Payload, 2);
