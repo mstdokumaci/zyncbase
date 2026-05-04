@@ -37,7 +37,7 @@ pub const ConnectionViolationTracker = struct {
         return result.value_ptr.* >= self.threshold;
     }
 
-    /// Clear violations for a connection (e.g., after successful parse)
+    /// Clear violations for a connection after session teardown
     pub fn clearViolations(self: *ConnectionViolationTracker, connection_id: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();

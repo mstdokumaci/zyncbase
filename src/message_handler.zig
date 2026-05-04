@@ -153,6 +153,8 @@ pub const MessageHandler = struct {
     }
 
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
+        self.violation_tracker.clearViolations(conn.id);
+
         conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();

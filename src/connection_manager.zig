@@ -81,6 +81,8 @@ pub const ConnectionManager = struct {
     pub fn onOpen(self: *ConnectionManager, ws: *WebSocket) !void {
         const conn_id = ws.getConnId();
 
+        self.message_handler.violation_tracker.clearViolations(conn_id);
+
         self.mutex.lock();
         defer self.mutex.unlock();
 
