@@ -182,7 +182,8 @@ pub const StoreService = struct {
         errdefer filter.deinit(allocator);
 
         if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
-            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            errdefer result.deinit();
             const next_cursor_str = try encodeNextCursorStr(allocator, &result);
             return .{
                 .table_index = table_index,
@@ -193,7 +194,8 @@ pub const StoreService = struct {
             };
         }
 
-        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        errdefer results.deinit();
         const next_cursor_str = try encodeNextCursorStr(allocator, &results);
         return .{
             .table_index = table_index,
@@ -218,7 +220,8 @@ pub const StoreService = struct {
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
-        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
+        errdefer results.deinit();
         const next_cursor_str = try encodeNextCursorStr(allocator, &results);
         return .{
             .table = table,
