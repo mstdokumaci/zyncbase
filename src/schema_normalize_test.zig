@@ -1,5 +1,6 @@
 const std = @import("std");
 const schema = @import("schema.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 
 test "schema_normalize: implicit users is canonical first table" {
     const allocator = std.testing.allocator;
@@ -48,9 +49,9 @@ test "schema_normalize: builds canonical field order and user range" {
     try std.testing.expectEqualStrings("created_at", tasks.fields[5].name);
     try std.testing.expectEqualStrings("updated_at", tasks.fields[6].name);
     try std.testing.expectEqual(@as(usize, 2), tasks.userFields().len);
-    try std.testing.expect(tasks.isClientWritableFieldIndex(3));
-    try std.testing.expect(!tasks.isClientWritableFieldIndex(0));
-    try std.testing.expect(!tasks.isClientWritableFieldIndex(6));
+    try std.testing.expect(schema_helpers.isClientWritableFieldIndex(tasks, 3));
+    try std.testing.expect(!schema_helpers.isClientWritableFieldIndex(tasks, 0));
+    try std.testing.expect(!schema_helpers.isClientWritableFieldIndex(tasks, 6));
 }
 
 test "schema_normalize: users external_id is internal only" {

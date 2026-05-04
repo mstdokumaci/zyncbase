@@ -52,6 +52,11 @@ pub fn makeTable(comptime name: []const u8, fields: []const schema.Field) schema
     };
 }
 
+pub fn isClientWritableFieldIndex(table: *const schema.Table, index: usize) bool {
+    if (!table.canonical_fields) return index < table.fields.len;
+    return index >= table.user_field_start and index < table.user_field_end;
+}
+
 /// Runtime field builder (for property tests with randomized names).
 /// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
 pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema.FieldType) !schema.Field {
