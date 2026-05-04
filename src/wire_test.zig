@@ -280,17 +280,14 @@ test "encodeQuery: includes subscription pagination fields" {
 
     var result = storage_types.ManagedResult{
         .rows = rows,
-        .next_cursor = .{
-            .sort_value = tth.valInt(10),
-            .id = 1,
-        },
     };
 
-    const next_cursor_str = if (result.next_cursor) |c|
-        try query_parser.encodeCursorToken(allocator, c)
-    else
-        null;
-    defer if (next_cursor_str) |s| allocator.free(s);
+    const cursor = storage_types.TypedCursor{
+        .sort_value = tth.valInt(10),
+        .id = 1,
+    };
+    const next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
+    defer allocator.free(next_cursor_str);
 
     const response = try wire.encodeQuery(allocator, .{
         .msg_id = 44,

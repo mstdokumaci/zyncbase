@@ -302,17 +302,17 @@ pub fn execQueryTyped(
     table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
-) !struct { rows: []TypedRow, next_cursor: ?TypedCursor } {
+) !struct { rows: []TypedRow, next_cursor_str: ?[]const u8 } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
         try sql.bindTypedValue(v, db, stmt, @intCast(i + 1), allocator);
     }
 
-    var rows: std.ArrayListUnmanaged(TypedRow) = .empty;
+    var rows_list: std.ArrayListUnmanaged(TypedRow) = .empty;
     errdefer {
-        for (rows.items) |r| r.deinit(allocator);
-        rows.deinit(allocator);
+        for (rows_list.items) |r| r.deinit(allocator);
+        rows_list.deinit(allocator);
     }
 
     while (true) {
@@ -320,35 +320,49 @@ pub fn execQueryTyped(
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-        try rows.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
+        try rows_list.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
     }
 
-    var next_cursor: ?TypedCursor = null;
+    const has_more = if (requested_limit) |limit_u32| blk: {
+        const limit: usize = @intCast(limit_u32);
+        break :blk rows_list.items.len > limit;
+    } else false;
+
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
-        if (rows.items.len > limit) {
-            if (limit > 0) {
-                const last_row = rows.items[limit - 1];
-                const sort_val = last_row.values[sort_field_index];
-                const id_val = last_row.values[schema.id_field_index];
-                if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
-                next_cursor = TypedCursor{
-                    .sort_value = try sort_val.clone(allocator),
-                    .id = id_val.scalar.doc_id,
-                };
-            }
+        while (rows_list.items.len > limit) {
+            if (rows_list.pop()) |extra_row| {
+                var row = extra_row;
+                row.deinit(allocator);
+            } else unreachable;
+        }
+    }
 
-            while (rows.items.len > limit) {
-                if (rows.pop()) |extra_row| {
-                    var row = extra_row;
-                    row.deinit(allocator);
-                } else unreachable;
-            }
+    const owned_rows = try rows_list.toOwnedSlice(allocator);
+    errdefer {
+        for (owned_rows) |r| r.deinit(allocator);
+        allocator.free(owned_rows);
+    }
+
+    var next_cursor_str: ?[]const u8 = null;
+    if (has_more) {
+        const limit: usize = @intCast(requested_limit.?);
+        if (limit > 0) {
+            const last_row = owned_rows[limit - 1];
+            const sort_val = last_row.values[sort_field_index];
+            const id_val = last_row.values[schema.id_field_index];
+            if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
+
+            const cursor = TypedCursor{
+                .sort_value = sort_val,
+                .id = id_val.scalar.doc_id,
+            };
+            next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
         }
     }
 
     return .{
-        .rows = try rows.toOwnedSlice(allocator),
-        .next_cursor = next_cursor,
+        .rows = owned_rows,
+        .next_cursor_str = next_cursor_str,
     };
 }

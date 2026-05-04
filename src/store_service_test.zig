@@ -471,7 +471,7 @@ test "StoreService: query - orderBy and limit" {
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
-    try testing.expect(qr.results.next_cursor != null);
+    try testing.expect(qr.next_cursor_str != null);
 }
 
 test "StoreService: query - negative cases" {
