@@ -53,6 +53,31 @@ test "ConnectionManager - onClose clears violation state" {
     try testing.expectEqual(@as(u32, 0), app.violation_tracker.getViolationCount(conn_id));
 }
 
+test "ConnectionManager - onOpen clears stale violation state" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-stale-violations", &.{});
+    defer app.deinit();
+
+    var dummy_ws = createMockWebSocket();
+    const conn_id = dummy_ws.getConnId();
+
+    {
+        const sc = try app.openScopedConnection(&dummy_ws);
+        defer sc.deinit();
+    }
+
+    _ = try app.violation_tracker.recordViolation(conn_id);
+    try testing.expectEqual(@as(u32, 1), app.violation_tracker.getViolationCount(conn_id));
+
+    {
+        const sc = try app.openScopedConnection(&dummy_ws);
+        defer sc.deinit();
+
+        try testing.expectEqual(@as(u32, 0), app.violation_tracker.getViolationCount(conn_id));
+    }
+}
+
 test "ConnectionManager - max connections" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
