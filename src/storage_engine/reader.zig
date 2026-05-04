@@ -359,6 +359,7 @@ pub fn execQueryTyped(
                     .id = id_val.scalar.doc_id,
                 };
                 next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
+                errdefer if (next_cursor_str) |s| allocator.free(s);
             }
         }
     }
