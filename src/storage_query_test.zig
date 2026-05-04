@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
 const query_parser = @import("query_parser.zig");
+const storage_engine = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -133,7 +134,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter2 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.after = query_parser.Cursor{
+    filter2.after = storage_engine.TypedCursor{
         .sort_value = tth.valInt(100),
         .id = 2,
     };

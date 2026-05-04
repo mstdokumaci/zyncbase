@@ -23,7 +23,6 @@ pub const encodeConnected = encode.encodeConnected;
 pub const encodeError = encode.encodeError;
 pub const encodeQuery = encode.encodeQuery;
 pub const encodeSchemaSync = encode.encodeSchemaSync;
-pub const encodeCursor = encode.encodeCursor;
 pub const encodeDeleteDeltaSuffix = encode.encodeDeleteDeltaSuffix;
 pub const encodeSetDeltaSuffix = encode.encodeSetDeltaSuffix;
 pub const encodeTypedRow = encode.encodeTypedRow;

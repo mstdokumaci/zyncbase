@@ -4,7 +4,6 @@ const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema = @import("schema.zig");
 const storage_engine = @import("storage_engine.zig");
-const doc_id = @import("doc_id.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
 
@@ -82,14 +81,11 @@ test "query with orderBy and after" {
     defer sm.deinit();
 
     // cursor: Base64(MsgPack([42, doc_id(2)]))
-    var cursor_payload_arr = try allocator.alloc(msgpack.Payload, 2);
-    const cursor_id: storage_engine.DocId = 2;
-    const cursor_bytes = doc_id.toBytes(cursor_id);
-    cursor_payload_arr[0] = msgpack.Payload.uintToPayload(42);
-    cursor_payload_arr[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
-    const cursor_payload = msgpack.Payload{ .arr = cursor_payload_arr };
-    defer cursor_payload.free(allocator);
-    const after_token = try msgpack.encodeBase64(allocator, cursor_payload);
+    const cursor: storage_engine.TypedCursor = .{
+        .sort_value = .{ .scalar = .{ .integer = 42 } },
+        .id = 2,
+    };
+    const after_token = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(after_token);
 
     const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
@@ -106,7 +102,7 @@ test "query with orderBy and after" {
     const created_at_index = items_md.fieldIndex("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
-    try testing.expectEqual(cursor_id, filter.after.?.id);
+    try testing.expectEqual(cursor.id, filter.after.?.id);
 }
 
 test "query rejects invalid Base64 after cursor token" {
@@ -416,14 +412,11 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     }});
     defer sm.deinit();
 
-    var cursor_payload_arr = try allocator.alloc(msgpack.Payload, 2);
-    const cursor_id: storage_engine.DocId = 2;
-    const cursor_bytes = doc_id.toBytes(cursor_id);
-    cursor_payload_arr[0] = msgpack.Payload.uintToPayload(42);
-    cursor_payload_arr[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
-    const cursor_payload = msgpack.Payload{ .arr = cursor_payload_arr };
-    defer cursor_payload.free(allocator);
-    const after_token = try msgpack.encodeBase64(allocator, cursor_payload);
+    const cursor: storage_engine.TypedCursor = .{
+        .sort_value = .{ .scalar = .{ .integer = 42 } },
+        .id = 2,
+    };
+    const after_token = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(after_token);
 
     var root = msgpack.Payload.mapPayload(allocator);
@@ -445,15 +438,12 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 test "cursor token rejects wrong sort type" {
     const allocator = testing.allocator;
 
-    var cursor_payload = try allocator.alloc(msgpack.Payload, 2);
-    const cursor_id: storage_engine.DocId = 2;
-    const cursor_bytes = doc_id.toBytes(cursor_id);
-    cursor_payload[0] = try msgpack.Payload.strToPayload("not-an-int", allocator);
-    cursor_payload[1] = try msgpack.Payload.binToPayload(&cursor_bytes, allocator);
-    const token_value = msgpack.Payload{ .arr = cursor_payload };
-    defer token_value.free(allocator);
-    const token = try msgpack.encodeBase64(allocator, token_value);
+    const cursor: storage_engine.TypedCursor = .{
+        .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
+        .id = 2,
+    };
+    const token = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(token);
 
-    try testing.expectError(error.InvalidCursorSortValue, query_parser.parseCursorToken(allocator, token, .integer, null));
+    try testing.expectError(error.InvalidCursorSortValue, query_parser.decodeCursorToken(allocator, token, .integer, null));
 }

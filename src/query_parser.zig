@@ -4,9 +4,10 @@ const schema = @import("schema.zig");
 const Schema = schema.Schema;
 const doc_id = @import("doc_id.zig");
 const typedValueFromPayload = @import("storage_engine.zig").typedValueFromPayload;
-const DocId = @import("storage_engine.zig").DocId;
+const writeTypedValueMsgPack = @import("storage_engine.zig").writeTypedValueMsgPack;
 const ScalarValue = @import("storage_engine.zig").ScalarValue;
 const TypedValue = @import("storage_engine.zig").TypedValue;
+const TypedCursor = @import("storage_engine.zig").TypedCursor;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -53,30 +54,12 @@ pub const SortDescriptor = struct {
     items_type: ?schema.FieldType,
 };
 
-pub const Cursor = struct {
-    sort_value: TypedValue,
-    id: DocId,
-
-    pub fn deinit(self: Cursor, allocator: std.mem.Allocator) void {
-        self.sort_value.deinit(allocator);
-    }
-
-    pub fn clone(self: Cursor, allocator: std.mem.Allocator) !Cursor {
-        const sort_value = try self.sort_value.clone(allocator);
-        errdefer sort_value.deinit(allocator);
-        return .{
-            .sort_value = sort_value,
-            .id = self.id,
-        };
-    }
-};
-
 pub const QueryFilter = struct {
     conditions: ?[]const Condition = null,
     or_conditions: ?[]const Condition = null,
     order_by: SortDescriptor,
     limit: ?u32 = null,
-    after: ?Cursor = null,
+    after: ?TypedCursor = null,
 
     pub fn deinit(self: QueryFilter, allocator: std.mem.Allocator) void {
         if (self.conditions) |conds| {
@@ -87,7 +70,7 @@ pub const QueryFilter = struct {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (self.after) |a| a.deinit(allocator);
+        if (self.after) |*a| @constCast(a).deinit(allocator);
     }
 
     pub fn clone(self: QueryFilter, allocator: std.mem.Allocator) !QueryFilter {
@@ -137,31 +120,54 @@ pub const ParserError = error{
     OutOfMemory,
 };
 
-/// Parse a Base64-encoded MessagePack cursor tuple token into a Cursor.
+/// Decodes a Base64-encoded MessagePack cursor tuple token into a TypedCursor.
 /// Expected decoded MessagePack shape: [sort_value, id_bin]
-pub fn parseCursorToken(
+pub fn decodeCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
-) ParserError!Cursor {
-    const cursor_payload = msgpack.decodeBase64(allocator, token) catch
+) ParserError!TypedCursor {
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(token) catch
+        return error.InvalidMessageFormat;
+    const decoded = try allocator.alloc(u8, decoded_len);
+    defer allocator.free(decoded);
+    std.base64.standard.Decoder.decode(decoded, token) catch return error.InvalidMessageFormat;
+
+    var reader: std.Io.Reader = .fixed(decoded);
+    const cursor_payload = msgpack.decodeTrusted(allocator, &reader) catch
         return error.InvalidMessageFormat;
     defer cursor_payload.free(allocator);
 
     if (cursor_payload != .arr or cursor_payload.arr.len != 2) return error.InvalidMessageFormat;
     if (cursor_payload.arr[1] != .bin) return error.InvalidMessageFormat;
 
-    const sort_value = try parseCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
+    const sort_value = try decodeCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
     errdefer sort_value.deinit(allocator);
 
-    return Cursor{
+    return TypedCursor{
         .sort_value = sort_value,
         .id = doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
     };
 }
 
-fn parseCursorSortValue(
+/// Encodes a TypedCursor to a Base64-encoded MessagePack cursor tuple token.
+/// Encoded shape: [sort_value, id_bin]
+pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: TypedCursor) ![]const u8 {
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+    try msgpack.encodeArrayHeader(writer, 2);
+    try writeTypedValueMsgPack(cursor.sort_value, writer);
+    const id_bytes = doc_id.toBytes(cursor.id);
+    try msgpack.writeMsgPackBin(writer, &id_bytes);
+    const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    _ = std.base64.standard.Encoder.encode(encoded, buf.items);
+    return encoded;
+}
+
+fn decodeCursorSortValue(
     allocator: std.mem.Allocator,
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
@@ -198,7 +204,7 @@ pub fn parseQueryFilter(
         .items_type = id_field.items_type,
     };
     var limit: ?u32 = null;
-    var after: ?Cursor = null;
+    var after: ?TypedCursor = null;
     var after_token: ?[]u8 = null;
 
     errdefer {
@@ -210,7 +216,7 @@ pub fn parseQueryFilter(
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
-        if (after) |a| a.deinit(allocator);
+        if (after) |*a| a.deinit(allocator);
         if (after_token) |token| allocator.free(token);
     }
 
@@ -251,7 +257,7 @@ pub fn parseQueryFilter(
     }
 
     if (after_token) |token| {
-        after = try parseCursorToken(allocator, token, order_by.field_type, order_by.items_type);
+        after = try decodeCursorToken(allocator, token, order_by.field_type, order_by.items_type);
         allocator.free(token);
         after_token = null;
     }

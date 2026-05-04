@@ -161,6 +161,13 @@ pub const StoreService = struct {
         try self.storage_engine.batchWrite(entries);
     }
 
+    fn encodeNextCursorStr(allocator: Allocator, results: *const storage_mod.ManagedResult) !?[]const u8 {
+        if (results.next_cursor) |c| {
+            return try query_parser.encodeCursorToken(allocator, c);
+        }
+        return null;
+    }
+
     pub fn queryCollection(
         self: *StoreService,
         allocator: Allocator,
@@ -175,21 +182,27 @@ pub const StoreService = struct {
         errdefer filter.deinit(allocator);
 
         if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
-            const result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            errdefer result.deinit();
+            const next_cursor_str = try encodeNextCursorStr(allocator, &result);
             return .{
                 .table_index = table_index,
                 .table = table,
                 .results = result,
                 .filter = filter,
+                .next_cursor_str = next_cursor_str,
             };
         }
 
-        const results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        errdefer results.deinit();
+        const next_cursor_str = try encodeNextCursorStr(allocator, &results);
         return .{
             .table_index = table_index,
             .table = table,
             .results = results,
             .filter = filter,
+            .next_cursor_str = next_cursor_str,
         };
     }
 
@@ -202,14 +215,18 @@ pub const StoreService = struct {
         next_cursor: []const u8,
     ) !CursorResult {
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
-        const cursor = try query_parser.parseCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
+        const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
 
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
+        errdefer results.deinit();
+        const next_cursor_str = try encodeNextCursorStr(allocator, &results);
         return .{
             .table = table,
-            .results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*),
+            .results = results,
+            .next_cursor_str = next_cursor_str,
         };
     }
 
@@ -403,18 +420,22 @@ pub const QueryResult = struct {
     table: *const schema.Table,
     results: storage_mod.ManagedResult,
     filter: query_parser.QueryFilter,
+    next_cursor_str: ?[]const u8 = null,
 
     pub fn deinit(self: *QueryResult, allocator: Allocator) void {
         self.results.deinit();
         self.filter.deinit(allocator);
+        if (self.next_cursor_str) |s| allocator.free(s);
     }
 };
 
 pub const CursorResult = struct {
     table: *const schema.Table,
     results: storage_mod.ManagedResult,
+    next_cursor_str: ?[]const u8 = null,
 
-    pub fn deinit(self: *CursorResult) void {
+    pub fn deinit(self: *CursorResult, allocator: Allocator) void {
         self.results.deinit();
+        if (self.next_cursor_str) |s| allocator.free(s);
     }
 };
