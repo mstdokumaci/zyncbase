@@ -346,21 +346,18 @@ pub fn execQueryTyped(
 
     var next_cursor_str: ?[]const u8 = null;
     if (has_more) {
-        if (requested_limit) |limit_u32| {
-            const limit: usize = @intCast(limit_u32);
-            if (limit > 0) {
-                const last_row = owned_rows[limit - 1];
-                const sort_val = last_row.values[sort_field_index];
-                const id_val = last_row.values[schema.id_field_index];
-                if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
+        const limit: usize = @intCast(requested_limit.?);
+        if (limit > 0) {
+            const last_row = owned_rows[limit - 1];
+            const sort_val = last_row.values[sort_field_index];
+            const id_val = last_row.values[schema.id_field_index];
+            if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
 
-                const cursor = TypedCursor{
-                    .sort_value = sort_val,
-                    .id = id_val.scalar.doc_id,
-                };
-                next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
-                errdefer if (next_cursor_str) |s| allocator.free(s);
-            }
+            const cursor = TypedCursor{
+                .sort_value = sort_val,
+                .id = id_val.scalar.doc_id,
+            };
+            next_cursor_str = try query_parser.encodeCursorToken(allocator, cursor);
         }
     }
 
