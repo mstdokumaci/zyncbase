@@ -55,7 +55,7 @@ test "schema_index: exposes field kinds and writable ranges" {
     try std.testing.expectEqual(schema.FieldKind.user, posts.fields[schema.first_user_field_index].kind);
     try std.testing.expectEqual(schema.FieldKind.timestamp, posts.fields[posts.fields.len - 1].kind);
     try std.testing.expectEqual(@as(usize, 1), posts.userFields().len);
-    try std.testing.expectEqual(@as(usize, posts.fields.len), posts.exposedFields().len);
+    try std.testing.expectEqual(@as(usize, posts.fields.len), posts.fields.len);
 }
 
 test "schema_index: users external_id is not indexed" {

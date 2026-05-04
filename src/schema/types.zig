@@ -175,10 +175,6 @@ pub const Table = struct {
         return self.fields[self.user_field_start..self.user_field_end];
     }
 
-    pub fn exposedFields(self: *const Table) []const Field {
-        return self.fields;
-    }
-
     pub fn isClientWritableFieldIndex(self: *const Table, index: usize) bool {
         if (!self.canonical_fields) return index < self.fields.len;
         return index >= self.user_field_start and index < self.user_field_end;
