@@ -188,6 +188,7 @@ pub const StoreService = struct {
 
         var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
         errdefer results.result.deinit();
+        errdefer if (results.next_cursor_str) |s| allocator.free(s);
         return .{
             .table_index = table_index,
             .table = table,
@@ -213,6 +214,7 @@ pub const StoreService = struct {
 
         var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
         errdefer results.result.deinit();
+        errdefer if (results.next_cursor_str) |s| allocator.free(s);
         return .{
             .table = table,
             .results = results.result,
