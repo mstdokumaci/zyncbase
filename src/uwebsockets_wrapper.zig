@@ -167,11 +167,6 @@ pub const WebSocket = struct {
         c.uws_ws_close(if (self.ssl) 1 else 0, self.ws.?);
     }
 
-    pub fn getUserData(self: *WebSocket) ?*anyopaque {
-        if (self.ws == null) return self.user_data;
-        return c.uws_ws_get_user_data(if (self.ssl) 1 else 0, self.ws.?);
-    }
-
     pub fn getClientId(self: WebSocket) ?[]const u8 {
         return self.client_id;
     }
@@ -184,15 +179,6 @@ pub const WebSocket = struct {
             return @intFromPtr(ws_ptr);
         }
         return @as(u64, @intFromPtr(self.user_data));
-    }
-
-    pub fn setUserData(self: *WebSocket, user_data: ?*anyopaque) void {
-        if (self.ws == null) {
-            self.user_data = user_data;
-            return;
-        }
-        // Note: uws_ws_set_user_data is not exposed in this wrapper.
-        // If needed, we would need to add it to the C wrapper.
     }
 };
 

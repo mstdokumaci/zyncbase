@@ -320,22 +320,6 @@ pub const SubscriptionEngine = struct {
         }
     }
 
-    pub fn getSubscribers(self: *SubscriptionEngine, group_id: u64) ![]SubscriptionGroup.SubscriberKey {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
-
-        const group = self.groups.get(group_id) orelse return error.GroupNotFound;
-        var subs = std.ArrayList(SubscriptionGroup.SubscriberKey).init(self.allocator);
-        errdefer subs.deinit();
-
-        var it = group.subscribers.keyIterator();
-        while (it.next()) |k| {
-            try subs.append(k.*);
-        }
-
-        return subs.toOwnedSlice();
-    }
-
     pub const SubscriptionQuery = struct {
         namespace_id: i64,
         table_index: usize,
