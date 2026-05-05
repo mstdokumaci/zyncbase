@@ -149,14 +149,9 @@ pub const ConnectionManager = struct {
             break :blk c;
         };
 
-        // 3. Ensure resources are returned even if execution below fails
-        defer {
-            if (conn.release()) {
-                self.memory_strategy.releaseConnection(conn);
-            }
-        }
+        // 3. Release the connection after message handling
+        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-        // 4. Relay to MessageHandler (The Brain)
         self.message_handler.handleMessage(conn, data) catch |err| {
             std.log.debug("MessageHandler error for connection {}: {}", .{ conn_id, err });
         };
