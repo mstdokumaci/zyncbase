@@ -12,8 +12,6 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
-export type JsonObject = { [key: string]: JsonValue };
-
 /** A data address: dot-notation string or string array. */
 export type Path = string | string[];
 

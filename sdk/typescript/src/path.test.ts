@@ -1,13 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fc from "fast-check";
 import { ErrorCodes, ZyncBaseError } from "./errors";
-import {
-	decodeWirePath,
-	encodeWirePath,
-	flatten,
-	normalizePath,
-	unflatten,
-} from "./path";
+import { flatten, normalizePath, unflatten } from "./path";
 
 function hasNoEmptyObjects(val: unknown): boolean {
 	if (val === null || typeof val !== "object" || Array.isArray(val))
@@ -90,76 +84,6 @@ describe("normalizePath", () => {
 			expect(e).toBeInstanceOf(ZyncBaseError);
 			expect((e as ZyncBaseError).code).toBe(ErrorCodes.INVALID_PATH);
 		}
-	});
-});
-
-/**
- * Property 16: Wire path encoding round-trip
- * Validates: Requirements 4.6, 4.7
- */
-describe("encodeWirePath / decodeWirePath", () => {
-	test("Property 16: round-trip — decodeWirePath(encodeWirePath(path)) deep-equals original for depth 3+", () => {
-		fc.assert(
-			fc.property(
-				// Allow underscores in segments but avoid leading/trailing ones to prevent ambiguity with "__"
-				// Also ensure segments don't contain "__" themselves.
-				fc.array(
-					fc
-						.string({ minLength: 1 })
-						.filter(
-							(s) =>
-								!s.includes("__") &&
-								!s.includes(".") &&
-								!s.startsWith("_") &&
-								!s.endsWith("_"),
-						),
-					{ minLength: 3 },
-				),
-				(path) => {
-					const encoded = encodeWirePath(path);
-					const decoded = decodeWirePath(encoded);
-					expect(decoded).toEqual(path);
-				},
-			),
-			{ numRuns: 100 },
-		);
-	});
-
-	test("Property 16: explicit underscore preservation — ['tasks', '1', 'must_be_complete', 'before'] → ['tasks', '1', 'must_be_complete__before']", () => {
-		const path = ["tasks", "1", "must_be_complete", "before"];
-		const encoded = encodeWirePath(path);
-		expect(encoded).toEqual(["tasks", "1", "must_be_complete__before"]);
-		expect(decodeWirePath(encoded)).toEqual(path);
-	});
-
-	test("Property 16: depth-1 paths are returned unchanged by encodeWirePath", () => {
-		fc.assert(
-			fc.property(
-				fc.array(
-					fc.string({ minLength: 1 }).filter((s) => !s.includes("__")),
-					{ minLength: 1, maxLength: 1 },
-				),
-				(path) => {
-					expect(encodeWirePath(path)).toEqual(path);
-				},
-			),
-			{ numRuns: 100 },
-		);
-	});
-
-	test("Property 16: depth-2 paths are returned unchanged by encodeWirePath", () => {
-		fc.assert(
-			fc.property(
-				fc.array(
-					fc.string({ minLength: 1 }).filter((s) => !s.includes("__")),
-					{ minLength: 2, maxLength: 2 },
-				),
-				(path) => {
-					expect(encodeWirePath(path)).toEqual(path);
-				},
-			),
-			{ numRuns: 100 },
-		);
 	});
 });
 

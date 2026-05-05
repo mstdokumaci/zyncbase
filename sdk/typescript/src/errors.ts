@@ -22,8 +22,6 @@ export const ErrorCodes = {
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
 } as const;
 
-export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
-
 interface ZyncBaseErrorOptions {
 	code: string;
 	category: string;

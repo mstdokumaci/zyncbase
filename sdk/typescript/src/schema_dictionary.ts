@@ -7,6 +7,7 @@
 import xxhash from "xxhash-wasm";
 import { packDocId, unpackDocId } from "./doc_id.js";
 import { ErrorCodes, SchemaError } from "./errors.js";
+import { joinFieldPath, splitFieldPath } from "./path.js";
 
 /**
  * SchemaDictionary provides O(1) bidirectional lookups between
@@ -202,7 +203,7 @@ export class SchemaDictionary {
 		}
 
 		// Join segments[2:] with "__" to match flattened field name
-		const flatField = segments.slice(2).join("__");
+		const flatField = joinFieldPath(...segments.slice(2));
 		const fieldIndex = this.getFieldIndex(tableIndex, flatField);
 
 		return [tableIndex, docId, fieldIndex];
@@ -243,7 +244,7 @@ export class SchemaDictionary {
 		const flatField = this.getFieldName(tableIndex, fieldIndex);
 
 		// Split flattened field name on "__" to restore nested segments
-		const fieldSegments = flatField.split("__");
+		const fieldSegments = splitFieldPath(flatField);
 
 		return [tableName, docId, ...fieldSegments];
 	}

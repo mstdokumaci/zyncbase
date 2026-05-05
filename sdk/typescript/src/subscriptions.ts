@@ -1,6 +1,6 @@
 // Subscription Tracker
 
-import { unflatten } from "./path.js";
+import { joinFieldPath, unflatten } from "./path.js";
 import type {
 	JsonValue,
 	QueryOptions,
@@ -289,7 +289,7 @@ export class SubscriptionTracker {
 		flat: Record<string, JsonValue>,
 		relativePath: string[],
 	): void {
-		const key = relativePath.join("__");
+		const key = joinFieldPath(...relativePath);
 		flat[key] = op.op === "set" ? op.value : null;
 	}
 

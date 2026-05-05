@@ -1,5 +1,5 @@
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
-import { encodeWirePath, flatten, normalizePath, unflatten } from "./path.js";
+import { flatten, joinFieldPath, normalizePath, unflatten } from "./path.js";
 import type {
 	BatchOperation,
 	JsonValue,
@@ -57,7 +57,7 @@ export function buildSet(
 		segments,
 		message: {
 			type: "StoreSet",
-			path: encodeWirePath(segments),
+			path: segments,
 			value: encodeWriteValue(segments, value),
 		},
 	};
@@ -78,7 +78,7 @@ export function buildRemove(path: Path): StoreCommand<WithoutId<StoreRemove>> {
 
 	return {
 		segments,
-		message: { type: "StoreRemove", path: encodeWirePath(segments) },
+		message: { type: "StoreRemove", path: segments },
 	};
 }
 
@@ -92,7 +92,7 @@ export function buildCreate(
 		segments,
 		message: {
 			type: "StoreSet",
-			path: encodeWirePath(segments),
+			path: segments,
 			value: encodeWriteValue(segments, value),
 		},
 	};
@@ -145,12 +145,11 @@ export function buildBatch(
 		}
 
 		const segments = normalizePath(op.path);
-		const wirePath = encodeWirePath(segments);
 		if (op.op === "remove") {
-			ops.push(["r", wirePath]);
+			ops.push(["r", segments]);
 			continue;
 		}
-		ops.push(["s", wirePath, encodeWriteValue(segments, op.value ?? null)]);
+		ops.push(["s", segments, encodeWriteValue(segments, op.value ?? null)]);
 	}
 
 	return { type: "StoreBatch", ops };
@@ -325,7 +324,7 @@ function encodeConditionObject(
 ): WireCondition[] {
 	const conditions: WireCondition[] = [];
 	for (const [key, val] of Object.entries(obj)) {
-		const fieldKey = prefix ? `${prefix}__${key}` : key;
+		const fieldKey = prefix ? joinFieldPath(prefix, key) : key;
 
 		if (val === null || typeof val !== "object" || Array.isArray(val)) {
 			conditions.push([fieldKey, OP_CODES.eq, val as JsonValue]);

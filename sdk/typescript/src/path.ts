@@ -6,38 +6,18 @@ import type { JsonValue } from "./types.js";
 export type Path = string | string[];
 
 /**
- * Encode a normalized path for the wire protocol.
- *
- * The server expects paths as:
- *   depth 1: ["collection"]
- *   depth 2: ["collection", "docId"]
- *   depth 3+: ["collection", "docId", "field__nested__deep"]
- *
- * Segments at index 2+ are joined with "__" into a single flat field key.
- * Single underscores are escaped as "\x00" before joining to avoid ambiguity
- * when a segment ends or starts with "_".
- *
- * Examples:
- *   ["users", "u1"]                    → ["users", "u1"]
- *   ["users", "u1", "name"]            → ["users", "u1", "name"]
- *   ["users", "u1", "address", "city"] → ["users", "u1", "address__city"]
+ * Join path segments with "__" to form a flattened field key.
+ * This is the single authority for the "__" delimiter in the entire codebase.
  */
-export function encodeWirePath(segments: string[]): string[] {
-	if (segments.length <= 2) return segments;
-	// Join nested segments with "__" to match server's flattened schema columns.
-	const fieldPath = segments.slice(2).join("__");
-	return [segments[0], segments[1], fieldPath];
+export function joinFieldPath(...segments: string[]): string {
+	return segments.join("__");
 }
 
 /**
- * Decode a wire-format path back to a normalized path.
- *
- * Splits the field segment (index 2) on "__" to restore nested segments.
+ * Split a flattened field key on "__" back into path segments.
  */
-export function decodeWirePath(wirePath: string[]): string[] {
-	if (wirePath.length <= 2) return wirePath;
-	const parts = wirePath[2].split("__");
-	return [wirePath[0], wirePath[1], ...parts];
+export function splitFieldPath(flat: string): string[] {
+	return flat.split("__");
 }
 
 export function normalizePath(path: Path): string[] {
@@ -77,7 +57,7 @@ export function flatten(
 ): Record<string, JsonValue> {
 	const result: Record<string, JsonValue> = {};
 	for (const key of Object.keys(obj)) {
-		const fullKey = prefix ? `${prefix}__${key}` : key;
+		const fullKey = prefix ? joinFieldPath(prefix, key) : key;
 		const value = obj[key];
 		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
 			const nested = flatten(value as Record<string, JsonValue>, fullKey);
@@ -102,7 +82,7 @@ export function unflatten(
 ): Record<string, JsonValue> {
 	const result: Record<string, JsonValue> = {};
 	for (const key of Object.keys(flat)) {
-		setDeepProperty(result, key.split("__"), flat[key]);
+		setDeepProperty(result, splitFieldPath(key), flat[key]);
 	}
 	return result;
 }
