@@ -20,7 +20,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | Category | Typical Codes | Retryable? | SDK Behavior |
 |----------|---------------|------------|--------------|
 | **Connection** | `CONNECTION_FAILED`, `TIMEOUT` | **Yes (Auto)** | Exponential backoff + jitter until reconnected. |
-| **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED` | **Partial** | Fire `tokenExpired` event; wait for `authRefresh`. |
+| **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED`, `SESSION_NOT_READY` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`, or wait for scope readiness. |
 | **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface error immediately; revert optimistic update. |
 | **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface error; revert optimistic update. |
 | **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Auto-retry with backoff if `RATE_LIMITED`. |
@@ -35,6 +35,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 |------|----------|-------------|---------|-------------|----------------|
 | `AUTH_FAILED` | Authentication | Identity verification failed | Invalid ticket or expired initial JWT | 401 | No - Get new token |
 | `TOKEN_EXPIRED` | Authentication | Session has expired | Connection closed by server; requires re-auth | 401 | Yes - Refresh token |
+| `SESSION_NOT_READY` | Authentication | Scoped session is not ready | Store/presence operation sent before namespace and user resolution completed | 409 | No - Wait for namespace acknowledgement |
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
 | `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` or Hook Server returned `false` | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
@@ -323,5 +324,4 @@ interface ZyncBaseError extends Error {
 - [Security Model](./security.md) — Rate limiter and circuit breaker implementation
 - [Wire Protocol](./wire-protocol.md) — Error envelope wire format
 - [ADR-019](../architecture/adrs.md#adr-019-formal-error-taxonomy-and-handling-strategy) — Decision record for this taxonomy
-
 

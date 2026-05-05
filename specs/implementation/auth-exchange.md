@@ -11,7 +11,8 @@ The `$session` object is the unified source of truth for authorization. It repla
 
 - **Source**: Populated via the `onConnect` hook in the Hook Server.
 - **Default**: If no Hook Server is present, `$session` defaults to the standard claims found in the validated external JWT.
-- **Persistence**: Fixed for the duration of the WebSocket connection (unless refreshed).
+- **Identity**: `$session.userId` is always the internal `users.id` resolved through SQLite, never a raw JWT subject or SDK client ID.
+- **Persistence**: Fixed for a resolved scope until auth refresh or namespace switching requires re-resolution.
 
 ## 3. The Connection Lifecycle (Ticket Exchange)
 
@@ -54,7 +55,17 @@ The SDK connects to the WebSocket providing the ticket in the query string.
 ws://server/ws?ticket=zyc_tk_8s2k...
 ```
 
-Zig verifies the ticket signature, extracts the `$session`, hydrates the connection context, and accepts the upgrade. **No Hook Server call is required during this step.**
+Zig verifies the ticket signature, extracts the external identity and base `$session`, hydrates transport state, and accepts the upgrade. Store and presence operations are still gated until their namespaces are selected and their scoped `users.id` values are resolved. **No Hook Server call is required during this step.**
+
+### Step 5: Scoped Readiness
+
+The SDK sends the initial store and presence namespace selections as part of its connection flow. For each scope, Zig resolves:
+
+1. the namespace string to `_zync_namespaces.id`
+2. the external identity string to `users.id`
+3. `$session.userId` for that scope
+
+`connect()` resolves only after required initial scopes are ready.
 
 ---
 
@@ -64,10 +75,10 @@ Since external JWTs and ZyncBase tickets are short-lived, but WebSockets are lon
 1. **Client**: Sends `AuthRefresh` message over the existing WebSocket with a new external JWT.
 2. **Zig**: Re-validates the new JWT.
 3. **Zig**: (Optional) Calls Hook Server `onConnect` again for updated enrichment.
-4. **Zig**: Updates the internal `$session` context in-place for that connection.
-5. **Zig**: Sends an `ok` response to the client.
+4. **Zig**: Temporarily marks active scopes not ready, updates the base `$session`, and re-resolves `users.id` for each active scope.
+5. **Zig**: Sends an `ok` response to the client after active scopes are ready again.
 
-Subsequent operations on the same connection now evaluate against the updated `$session`.
+Subsequent operations on the same connection now evaluate against the updated scoped `$session`.
 
 ## 5. Security & Performance
 - **Zero-Trust Handshake**: Zig never accepts a WebSocket connection without a valid ticket.

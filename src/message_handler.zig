@@ -162,9 +162,10 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
     }
 
-    fn clearStoreSubscriptions(self: *MessageHandler, conn: *Connection) void {
+    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection) void {
         conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
+        conn.resetStoreScopeLocked();
         conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
     }
@@ -184,7 +185,7 @@ pub const MessageHandler = struct {
 
     fn requireStoreSession(conn: *Connection) !Connection.StoreSession {
         const session = conn.getStoreSession();
-        if (session.namespace_id == connection_mod.unset_namespace_id) return error.NamespaceUnauthorized;
+        if (!session.ready or session.namespace_id == connection_mod.unset_namespace_id) return error.SessionNotReady;
         return session;
     }
 
@@ -202,11 +203,11 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) ![]const u8 {
         const req = try wire.extractStoreSetNamespaceFast(message);
+        const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
-        const namespace_id = try self.store_service.resolveNamespace(req.namespace);
-
-        self.clearStoreSubscriptions(conn);
-        conn.setNamespaceId(namespace_id);
+        self.resetStoreScopeAndClearSubscriptions(conn);
+        const scope = try self.store_service.resolveStoreScope(req.namespace, external_user_id);
+        conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
     }

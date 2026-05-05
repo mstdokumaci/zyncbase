@@ -91,64 +91,101 @@ pub const TableDef = struct {
     types: ?[]const schema.FieldType = null,
 };
 
-pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
-    if (tables_def.len == 0) {
-        return Schema{
-            .allocator = allocator,
-            .version = try allocator.dupe(u8, "1.0.0"),
-            .tables = try allocator.alloc(schema.Table, 0),
-        };
+fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema.Table {
+    var fields = try allocator.alloc(schema.Field, td.fields.len);
+    var field_count: usize = 0;
+    errdefer {
+        for (fields[0..field_count]) |field| field.deinit(allocator);
+        allocator.free(fields);
     }
 
-    // Build declared tables from TableDef
-    var declared = try allocator.alloc(schema.Table, tables_def.len);
+    for (td.fields, 0..) |fn_name, j| {
+        const fname = try allocator.dupe(u8, fn_name);
+        errdefer allocator.free(fname);
+        const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
+        errdefer allocator.free(fname_quoted);
+        fields[j] = .{
+            .name = fname,
+            .name_quoted = fname_quoted,
+            .declared_type = if (td.types) |ts| ts[j] else .text,
+            .storage_type = if (td.types) |ts| ts[j] else .text,
+            .items_type = if (td.types) |ts| if (ts[j] == .array) schema.FieldType.text else null else null,
+            .required = false,
+            .indexed = false,
+            .references = null,
+            .on_delete = null,
+        };
+        field_count += 1;
+    }
+
+    const tname = try allocator.dupe(u8, td.name);
+    errdefer allocator.free(tname);
+    const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
+    errdefer allocator.free(tname_quoted);
+
+    return .{
+        .name = tname,
+        .name_quoted = tname_quoted,
+        .fields = fields,
+        .is_users_table = std.mem.eql(u8, td.name, "users"),
+        .namespaced = !std.mem.eql(u8, td.name, "users"),
+    };
+}
+
+fn buildImplicitUsersTable(allocator: std.mem.Allocator) !schema.Table {
+    const fields = try allocator.alloc(schema.Field, 0);
+    errdefer allocator.free(fields);
+    const name = try allocator.dupe(u8, "users");
+    errdefer allocator.free(name);
+    const name_quoted = try allocator.dupe(u8, "\"users\"");
+    errdefer allocator.free(name_quoted);
+
+    return .{
+        .name = name,
+        .name_quoted = name_quoted,
+        .fields = fields,
+        .is_users_table = true,
+        .namespaced = false,
+    };
+}
+
+pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
+    const has_users = blk: {
+        for (tables_def) |td| {
+            if (std.mem.eql(u8, td.name, "users")) break :blk true;
+        }
+        break :blk false;
+    };
+
+    const declared_len = tables_def.len + @intFromBool(!has_users);
+    var declared = try allocator.alloc(schema.Table, declared_len);
     var decl_count: usize = 0;
     defer {
         for (declared[0..decl_count]) |*t| t.deinit(allocator);
         allocator.free(declared);
     }
 
-    for (tables_def, 0..) |td, i| {
-        var fields = try allocator.alloc(schema.Field, td.fields.len);
-        var field_count: usize = 0;
-        errdefer {
-            for (fields[0..field_count]) |field| field.deinit(allocator);
-            allocator.free(fields);
+    if (has_users) {
+        for (tables_def) |td| {
+            if (std.mem.eql(u8, td.name, "users")) {
+                declared[decl_count] = try buildDeclaredTableFromDef(allocator, td);
+                decl_count += 1;
+                break;
+            }
         }
-        for (td.fields, 0..) |fn_name, j| {
-            const fname = try allocator.dupe(u8, fn_name);
-            errdefer allocator.free(fname);
-            const fname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{fn_name});
-            errdefer allocator.free(fname_quoted);
-            fields[j] = .{
-                .name = fname,
-                .name_quoted = fname_quoted,
-                .declared_type = if (td.types) |ts| ts[j] else .text,
-                .storage_type = if (td.types) |ts| ts[j] else .text,
-                .items_type = if (td.types) |ts| if (ts[j] == .array) schema.FieldType.text else null else null,
-                .required = false,
-                .indexed = false,
-                .references = null,
-                .on_delete = null,
-            };
-            field_count += 1;
-        }
-        const tname = try allocator.dupe(u8, td.name);
-        errdefer allocator.free(tname);
-        const tname_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{td.name});
-        errdefer allocator.free(tname_quoted);
-        declared[i] = .{
-            .name = tname,
-            .name_quoted = tname_quoted,
-            .fields = fields,
-            .is_users_table = std.mem.eql(u8, td.name, "users"),
-            .namespaced = !std.mem.eql(u8, td.name, "users"),
-        };
+    } else {
+        declared[decl_count] = try buildImplicitUsersTable(allocator);
+        decl_count += 1;
+    }
+
+    for (tables_def) |td| {
+        if (std.mem.eql(u8, td.name, "users")) continue;
+        declared[decl_count] = try buildDeclaredTableFromDef(allocator, td);
         decl_count += 1;
     }
 
     // Build runtime tables
-    var runtime_tables = try allocator.alloc(schema.Table, tables_def.len);
+    var runtime_tables = try allocator.alloc(schema.Table, decl_count);
     var built_count: usize = 0;
     errdefer {
         for (runtime_tables[0..built_count]) |*t| t.deinit(allocator);

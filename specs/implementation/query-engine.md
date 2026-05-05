@@ -244,13 +244,13 @@ Cursor movement (100/sec) × SQL query (1ms) = 100ms latency
 
 ### The Solution: Permission Snapshots
 
-**1. On connection:**
+**1. On scoped readiness:**
 ```zig
-fn onConnect(conn: *Connection) !void {
+fn onStoreScopeReady(conn: *Connection) !void {
     // Execute SQL queries to determine permissions
     const permissions = try db.query(
         "SELECT room_id FROM room_members WHERE user_id = ?",
-        .{conn.user_id}
+        .{conn.store_scope.user_doc_id}
     );
     
     // Cache in memory
@@ -271,10 +271,10 @@ fn checkPermission(conn: *Connection, room_id: []const u8) bool {
 
 **3. Invalidation (rare case):**
 ```zig
-fn onRoomMembershipChange(user_id: []const u8) !void {
+fn onRoomMembershipChange(user_id: DocId) !void {
     // Find all connections for this user
     for (connections) |conn| {
-        if (conn.user_id == user_id) {
+        if (conn.store_scope.user_doc_id == user_id) {
             // Re-query permissions
             conn.permissions = try refreshPermissions(conn);
         }

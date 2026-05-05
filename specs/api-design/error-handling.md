@@ -91,6 +91,7 @@ Error codes relevant to SDK consumers, grouped by category:
 |------|-------------|-------------|
 | `AUTH_FAILED` | Invalid ticket or expired initial JWT | No — get new token |
 | `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
+| `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
 | `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
 | `PERMISSION_DENIED` | Rule blocked the operation (via `authorization.json` or Hook Server) | No |
 | `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |

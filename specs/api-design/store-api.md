@@ -2,6 +2,8 @@
 
 The Store API handles durable, synchronized data. Everything in this namespace is validated against your [Schema](./configuration.md#schemajson), persisted to SQLite, and synchronized across all connected clients.
 
+Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`; calling store methods before that point fails with `SESSION_NOT_READY`.
+
 ## Table of Contents
 
 1.  [Direct Path Access](#direct-path-access-crud)

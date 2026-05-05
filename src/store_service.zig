@@ -83,6 +83,11 @@ pub const StoreService = struct {
         owner_doc_id: DocId,
     };
 
+    pub const ScopedSession = struct {
+        namespace_id: i64,
+        user_doc_id: DocId,
+    };
+
     const PathKind = enum {
         document_or_field,
         document_only,
@@ -99,6 +104,20 @@ pub const StoreService = struct {
     pub fn resolveNamespace(self: *StoreService, namespace: []const u8) !i64 {
         if (namespace.len == 0) return error.InvalidMessageFormat;
         return (try self.storage_engine.lookupNamespaceId(namespace)) orelse try self.storage_engine.resolveNamespaceId(namespace);
+    }
+
+    pub fn resolveStoreScope(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !ScopedSession {
+        if (external_user_id.len == 0) return error.InvalidMessageFormat;
+
+        const namespace_id = try self.resolveNamespace(namespace);
+        const users_table = self.schema_manager.table("users") orelse return error.UnknownTable;
+        const identity_namespace_id = if (users_table.namespaced) namespace_id else schema.global_namespace_id;
+        const user_doc_id = try self.storage_engine.resolveUserId(identity_namespace_id, external_user_id);
+
+        return .{
+            .namespace_id = namespace_id,
+            .user_doc_id = user_doc_id,
+        };
     }
 
     pub fn setPath(

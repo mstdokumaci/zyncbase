@@ -50,7 +50,8 @@ The file is organized into two decoupled arrays: **`namespaces`** and **`store`*
 
 - **Top-Down Evaluation**: Rules within the `namespaces` and `store` arrays are evaluated top-down independently. The first matching pattern wins.
 - **Early Exit**: As soon as a rule explicitly grants access (`true` or matching condition), evaluation stops and access is permitted.
-- **Namespace-First**: A frame's namespace is always evaluated via `StoreSetNamespace` or `PresenceSetNamespace` first. If no namespace rule matches, the connection context is not set, and subsequent path evaluations are irrelevant.
+- **Namespace-First**: A frame's namespace is always evaluated via `StoreSetNamespace` or `PresenceSetNamespace` first. If no namespace rule matches, the corresponding scope is not marked ready, and subsequent path evaluations are irrelevant.
+- **Ready-Scope Gate**: Store rules are evaluated only after the store scope has a resolved namespace and internal `$session.userId`. Presence rules are evaluated only after the presence scope has a resolved namespace and internal `$session.userId`.
 
 ## 4. Namespace Wildcard Behavior & Session Expectations
 
@@ -58,6 +59,8 @@ Namespaces use a colon-separated segment model. Wildcards (`*`) can be used to m
 
 **Crucial understanding: ZyncBase is stateless for authorization.**
 Any hierarchical namespace authorization requires that data to be present in the `$session`.
+
+`$session.userId` is not the raw external identity. It is the persisted internal `users.id` resolved for the scope being authorized. If `users.namespaced = false`, this ID is resolved in global namespace `0`. If `users.namespaced = true`, the ID is resolved in the namespace of the store or presence scope.
 
 **Example 1: Tenant Isolation (Common)**
 - Session contains: `{ "tenant_id": "acme" }`
@@ -88,7 +91,7 @@ Therefore, presence authorization is defined directly at the `namespace` level a
 - **`read`**: Permission to subscribe to the presence channel and see who is online.
 - **`write`**: Permission to broadcast your own presence object to the channel (schema validation still applies).
 
-Because presence is ephemeral, there is no `$doc` equivalent and no path-level routing. 
+Because presence is ephemeral, there is no `$doc` equivalent and no path-level routing. Presence still requires a ready presence scope so presence entries are keyed by the resolved internal user ID.
 
 **Hook Server Support:**
 Presence rules fully support Hook Server Delegation. If you need relational lookups before letting a user join a presence channel (e.g., "is this user a paid subscriber?"), you can delegate it:

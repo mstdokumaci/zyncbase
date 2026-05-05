@@ -83,6 +83,17 @@ pub const ConnectionManager = struct {
 
         self.message_handler.violation_tracker.clearViolations(conn_id);
 
+        const external_user_id = ws.getClientId() orelse {
+            std.log.warn("Rejecting connection {}: missing external identity", .{conn_id});
+            ws.close();
+            return error.MissingExternalIdentity;
+        };
+        if (external_user_id.len == 0) {
+            std.log.warn("Rejecting connection {}: empty external identity", .{conn_id});
+            ws.close();
+            return error.MissingExternalIdentity;
+        }
+
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -102,9 +113,7 @@ pub const ConnectionManager = struct {
         };
 
         conn.activate(ws.getConnId(), ws.*);
-        if (ws.getClientId()) |client_id| {
-            try conn.setAnonymousUserId(client_id);
-        }
+        try conn.setExternalUserId(external_user_id);
 
         const connected_msg = try wire.encodeConnected(self.allocator, conn.user_id);
         defer self.allocator.free(connected_msg);
