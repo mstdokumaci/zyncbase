@@ -516,10 +516,12 @@ pub const Writer = struct {
                 };
             }
 
-            if (bop.completion_signal) |sig| sig.signal(final_err);
-
+            // Free op-owned memory before signaling so the caller cannot
+            // resume while these heap allocations are still live.
             for (entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
+
+            if (bop.completion_signal) |sig| sig.signal(final_err);
 
             self.endOp(1);
             self.wakeFlushWaiters();
@@ -667,34 +669,42 @@ pub const Writer = struct {
                 executeBatchOp(self, bop, last_batch_time);
             },
             .upsert_namespace => |nop| {
-                if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, nop.namespace)) |namespace_id| {
+                const ns_result = sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, nop.namespace);
+                // Free op-owned memory (namespace slice) before signaling so the
+                // caller cannot resume while the allocation is still live.
+                op.deinit(self.allocator);
+                if (ns_result) |namespace_id| {
                     nop.result.* = namespace_id;
                     nop.completion_signal.signal(null);
                 } else |err| {
                     nop.completion_signal.signal(errors.classifyError(err));
                 }
-                op.deinit(self.allocator);
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },
             .resolve_user => |uop| {
-                if (sql.resolveUserId(self.allocator, &self.conn, &self.stmt_cache, uop.namespace_id, uop.external_id, uop.timestamp)) |user_doc_id| {
+                const user_result = sql.resolveUserId(self.allocator, &self.conn, &self.stmt_cache, uop.namespace_id, uop.external_id, uop.timestamp);
+                // Free op-owned memory (external_id slice) before signaling so the
+                // caller cannot resume while the allocation is still live.
+                op.deinit(self.allocator);
+                if (user_result) |user_doc_id| {
                     uop.result.* = user_doc_id;
                     uop.completion_signal.signal(null);
                 } else |err| {
                     uop.completion_signal.signal(errors.classifyError(err));
                 }
-                op.deinit(self.allocator);
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },
             .checkpoint => |cop| {
-                if (connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode)) |stats| {
+                const ckpt_result = connection.internalExecuteCheckpoint(&self.conn, self.allocator, self.db_path, self.in_memory, cop.mode);
+                // No-op for checkpoint, but keeps the pattern uniform.
+                op.deinit(self.allocator);
+                if (ckpt_result) |stats| {
                     cop.completion_signal.signalWithResult(stats);
                 } else |err| {
                     cop.completion_signal.signal(errors.classifyError(err));
                 }
-                op.deinit(self.allocator);
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },
