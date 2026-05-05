@@ -687,7 +687,7 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 2. Store `owner_id` as the same packed `doc_id` representation as `id` (`BLOB(16)` UUIDv7), never as an external identity string.
 3. Implement an implicit `users` system table that maps external string identity claims (e.g., Auth0 `sub`) in its `external_id` (`TEXT`) column to an internal ZyncBase `id` (`BLOB(16)` UUIDv7).
 4. Keep `owner_id` on `users` for table-shape consistency; for each `users` row, `owner_id` is equal to `id`.
-5. On WebSocket connection, the Zig engine maps the JWT's `sub` to this internal UUIDv7, storing it in `$session.userId` to ensure `owner_id` on all tables is safely typed as `BLOB(16)`.
+5. During scoped session resolution, the Zig engine maps the external identity string (SDK anonymous client ID or authenticated JWT `sub`) to this internal UUIDv7, storing it in `$session.userId` to ensure `owner_id` on all tables is safely typed as `BLOB(16)`.
 6. Automatically populate `owner_id` with the internal `$session.userId` upon document creation.
 7. Treat `id` as the document identity for a collection. It is expected to be unique across the whole collection/table; `namespace_id` is not part of the primary key and is only a routing/filtering column.
 8. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
@@ -721,7 +721,7 @@ By default, all ZyncBase collections are horizontally partitioned by a `namespac
 3. If `namespaced` is omitted, it defaults to `true`, and Zig stores the active namespace ID in `namespace_id` and filters reads/writes by that active namespace.
 4. If `namespaced` is set to `false`, Zig stores reserved global namespace ID `0` in `namespace_id` and routes queries through that global namespace instead of the client's active namespace.
 5. The reserved `users` system collection defaults to `"namespaced": false`.
-6. `users` MAY be configured with `"namespaced": true` for tenant-isolated identity realms. In that mode, external identity mapping is scoped by `(namespace_id, external_id)`, `$session.userId` is resolved for the active namespace, and namespace switching requires re-resolving or re-authenticating the session.
+6. `users` MAY be configured with `"namespaced": true` for tenant-isolated identity realms. In that mode, external identity mapping is scoped by `(namespace_id, external_id)`, and store/presence namespace switching requires re-resolving the affected scoped `$session.userId`.
 
 **Rationale**:  
 - Provides developers with the flexibility to define multiple global data collections without opinionated server-side logic.
@@ -733,3 +733,37 @@ By default, all ZyncBase collections are horizontally partitioned by a `namespac
 **Principles Alignment**:  
 - #1 Primitives over Magic
 - #3 SQLite as the Source of Truth
+
+---
+
+## ADR-029: Scoped Session Readiness Gate
+
+**Date**: 2026-05-05  
+**Status**: Accepted  
+
+**Context**:  
+ADR-026 established integer namespace routing, ADR-027 established `owner_id` as an internal `users.id`, and ADR-028 allowed `users.namespaced = true`. Implementing these together exposed a missing invariant: a WebSocket transport can be open before the server has enough scoped context to safely process store or presence operations. In particular, when `users.namespaced = true`, the same external identity string can resolve to a different `users.id` per namespace. Therefore identity resolution cannot be treated as a hardcoded anonymous UUID or as transport-only state.
+
+**Decision**:  
+1. Distinguish transport connectivity from scoped session readiness.
+2. Store the external identity string on the connection. For anonymous clients this is the SDK client ID; for authenticated clients this is the JWT subject or Hook Server-resolved identity.
+3. Resolve every operation-domain scope through SQLite before accepting scoped operations. A scope consists of:
+   - the namespace string resolved to `_zync_namespaces.id`
+   - the external identity resolved to `users.id`
+   - the resolved `users.id` stored as the scope's `$session.userId`
+4. Store and presence maintain separate scopes because their namespaces can differ. Store operations require the store scope to be ready. Presence operations require the presence scope to be ready.
+5. If `users.namespaced = false`, identity resolution always uses reserved global namespace ID `0`, so store and presence scopes usually share the same `users.id`.
+6. If `users.namespaced = true`, identity resolution uses the namespace ID of the scope being resolved. Store namespace switching re-resolves the store user ID; presence namespace switching re-resolves the presence user ID.
+7. Before a scope is ready, the server only accepts lifecycle messages needed to establish or refresh scope: authentication/identity refresh, store namespace selection, presence namespace selection, ping/pong, and close. Store, query, subscription, and presence data messages are rejected with `SESSION_NOT_READY`.
+8. Namespace or identity changes invalidate dependent scoped state. Store namespace changes clear store subscriptions. Presence namespace changes clear old presence and presence subscriptions. Auth refresh re-resolves all active scopes before they become ready again.
+
+**Rationale**:
+- Preserves the `users.namespaced = true` feature without making identity ambiguous.
+- Ensures `owner_id` and presence `userId` always correspond to persisted `users.id` rows.
+- Keeps SDK ergonomics simple: `connect({ storeNamespace, presenceNamespace })` can still resolve only after both initial scopes are ready.
+- Avoids special anonymous-user shortcuts that bypass SQLite and later break foreign keys, authorization, or auditability.
+
+**Principles Alignment**:  
+- #1 Primitives over Magic
+- #3 SQLite as the Source of Truth
+- #7 Secure by Default

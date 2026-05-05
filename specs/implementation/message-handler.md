@@ -43,6 +43,16 @@ pub const MessageHandler = struct {
 };
 ```
 
+### Scoped Session Gate
+
+`routeMessage` enforces scoped readiness before dispatching domain operations:
+
+- `StoreSet`, `StoreRemove`, `StoreBatch`, `StoreQuery`, `StoreSubscribe`, `StoreUnsubscribe`, and `StoreLoadMore` require a ready store scope.
+- `PresenceSet`, `PresenceSubscribe`, `PresenceUnsubscribe`, and `PresenceRemove` require a ready presence scope.
+- `AuthRefresh`, `StoreSetNamespace`, `PresenceSetNamespace`, ping/pong, and close are accepted before scoped readiness because they establish or refresh scope.
+
+If a scoped operation arrives before the required scope is ready, the handler returns `SESSION_NOT_READY` without touching storage, subscriptions, or presence state.
+
 ### Memory Management Strategy
 
 | Allocation | Allocator | Lifecycle |
@@ -72,6 +82,7 @@ The `MessageHandler` is shared across all worker threads. Thread safety is achie
 | `error.OutOfMemory` | ArenaPool or GPA exhausted | `INTERNAL_ERROR` sent; connection may be throttled |
 | `error.InvalidMessage` | MessagePack parse failure | `INVALID_MESSAGE` sent; violation tracked |
 | `error.Unauthorized` | Permission check failed | `UNAUTHORIZED` sent |
+| `error.SessionNotReady` | Scoped operation before namespace/user resolution | `SESSION_NOT_READY` sent |
 
 ---
 
@@ -79,6 +90,7 @@ The `MessageHandler` is shared across all worker threads. Thread safety is achie
 
 - [x] Arena is released after every message (checked via pooled arena stats)
 - [x] Correct routing for all wire protocol operations (`StoreSet`, `StoreRemove`, `StoreBatch`, `StoreQuery`, `StoreSubscribe`, etc.)
+- [x] Scoped store and presence operations are rejected until their scopes are ready
 - [x] ThreadSanitizer passes for concurrent message processing across multiple connections
 
 ---

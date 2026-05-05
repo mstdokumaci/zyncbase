@@ -884,3 +884,55 @@ test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
 
     try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
+
+test "StoreService: resolveStoreScope uses global users table by default" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "scope-global-users", &.{
+        .{ .name = "items", .fields = &.{"name"} },
+    });
+    defer app.deinit();
+
+    const scope_a = try app.store_service.resolveStoreScope("alpha", "client-a");
+    const scope_b = try app.store_service.resolveStoreScope("beta", "client-a");
+    const scope_c = try app.store_service.resolveStoreScope("alpha", "client-b");
+
+    try testing.expect(scope_a.namespace_id != scope_b.namespace_id);
+    try testing.expectEqual(scope_a.user_doc_id, scope_b.user_doc_id);
+    try testing.expect(scope_a.user_doc_id != scope_c.user_doc_id);
+
+    const users = try app.tableMetadata("users");
+    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_a.user_doc_id, schema.global_namespace_id);
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 1), managed.rows.len);
+}
+
+test "StoreService: resolveStoreScope isolates user ids when users is namespaced" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "users": { "namespaced": true, "fields": {} },
+        \\    "items": { "fields": { "name": { "type": "string" } } }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "scope-namespaced-users", schema_json);
+    defer app.deinit();
+
+    const scope_a1 = try app.store_service.resolveStoreScope("alpha", "client-a");
+    const scope_a2 = try app.store_service.resolveStoreScope("alpha", "client-a");
+    const scope_b = try app.store_service.resolveStoreScope("beta", "client-a");
+
+    try testing.expectEqual(scope_a1.namespace_id, scope_a2.namespace_id);
+    try testing.expectEqual(scope_a1.user_doc_id, scope_a2.user_doc_id);
+    try testing.expect(scope_a1.namespace_id != scope_b.namespace_id);
+    try testing.expect(scope_a1.user_doc_id != scope_b.user_doc_id);
+
+    const users = try app.tableMetadata("users");
+    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id);
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 1), managed.rows.len);
+}

@@ -23,12 +23,19 @@ const tth = @import("typed_test_helpers.zig");
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
 
+pub const test_external_user_id = "test-client";
+
 /// Helper function to create a mock WebSocket for testing
 pub fn createMockWebSocket() WebSocket {
+    return createMockWebSocketWithClientId(test_external_user_id);
+}
+
+pub fn createMockWebSocketWithClientId(client_id: ?[]const u8) WebSocket {
     return WebSocket{
         .ws = null,
         .ssl = false,
         .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
+        .client_id = client_id,
     };
 }
 
@@ -282,7 +289,8 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
-        conn.setNamespaceId(1);
+        const scope = try self.store_service.resolveStoreScope("default", test_external_user_id);
+        conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
         return ScopedConnection{
             .app = self,
             .ws = ws,

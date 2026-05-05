@@ -78,6 +78,13 @@ pub const WriteOp = union(enum) {
         result: *i64,
         completion_signal: *CompletionSignal,
     },
+    resolve_user: struct {
+        namespace_id: i64,
+        external_id: []const u8,
+        timestamp: i64,
+        result: *values.DocId,
+        completion_signal: *CompletionSignal,
+    },
     batch: struct {
         entries: []BatchEntry,
         completion_signal: ?*CompletionSignal = null,
@@ -122,6 +129,7 @@ pub const WriteOp = union(enum) {
             .upsert => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
             .upsert_namespace => |op| op.completion_signal,
+            .resolve_user => |op| op.completion_signal,
             .batch => |op| op.completion_signal,
         };
     }
@@ -138,6 +146,9 @@ pub const WriteOp = union(enum) {
             },
             .upsert_namespace => |op| {
                 allocator.free(op.namespace);
+            },
+            .resolve_user => |op| {
+                allocator.free(op.external_id);
             },
             .batch => |op| {
                 for (op.entries) |entry| entry.deinit(allocator);

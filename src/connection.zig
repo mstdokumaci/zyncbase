@@ -3,8 +3,6 @@ const Allocator = std.mem.Allocator;
 const doc_id = @import("doc_id.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
-/// Deterministic owner for unauthenticated connections with no clientId.
-pub const anonymous_owner_doc_id: doc_id.DocId = doc_id.fromStableString("anonymous");
 pub const unset_namespace_id: i64 = -1;
 
 /// Connection represents a single client session.
@@ -13,6 +11,7 @@ pub const Connection = struct {
     pub const StoreSession = struct {
         namespace_id: i64,
         user_doc_id: doc_id.DocId,
+        ready: bool,
     };
 
     /// Allocator used for internal metadata (user_id, subscription_ids)
@@ -21,14 +20,17 @@ pub const Connection = struct {
     /// Unique identifier for this connection
     id: u64,
 
-    /// Optional user identity after authentication
+    /// External identity string from auth or the SDK anonymous client id.
     user_id: ?[]const u8,
 
-    /// Resolved namespace ID for this connection's active namespace
+    /// Resolved namespace ID for this connection's active store scope.
     namespace_id: i64,
 
-    /// Resolved owner doc ID for writes on this connection
+    /// Resolved users.id for writes in the active store scope.
     user_doc_id: doc_id.DocId,
+
+    /// True only after namespace and scoped users.id resolution completed.
+    store_ready: bool,
 
     /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
@@ -60,7 +62,8 @@ pub const Connection = struct {
         self.allocator = allocator;
         self.user_id = null;
         self.namespace_id = unset_namespace_id;
-        self.user_doc_id = anonymous_owner_doc_id;
+        self.user_doc_id = doc_id.zero;
+        self.store_ready = false;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
         self.mutex = .{};
@@ -92,15 +95,16 @@ pub const Connection = struct {
     pub fn resetSessionLocked(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.user_id = null;
-        self.namespace_id = unset_namespace_id;
-        self.user_doc_id = anonymous_owner_doc_id;
+        self.resetStoreScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
     }
 
-    /// Set unauthenticated identity from a client-provided stable ID.
-    pub fn setAnonymousUserId(self: *Connection, user_id: []const u8) !void {
-        const owned = try self.allocator.dupe(u8, user_id);
+    /// Set the transport external identity. Scoped users.id resolution happens later.
+    pub fn setExternalUserId(self: *Connection, external_user_id: []const u8) !void {
+        if (external_user_id.len == 0) return error.MissingExternalIdentity;
+
+        const owned = try self.allocator.dupe(u8, external_user_id);
         errdefer self.allocator.free(owned);
 
         self.mutex.lock();
@@ -108,15 +112,38 @@ pub const Connection = struct {
 
         if (self.user_id) |old| self.allocator.free(old);
         self.user_id = owned;
-        self.user_doc_id = doc_id.fromStableString(user_id);
+        self.resetStoreScopeLocked();
     }
 
-    /// Replace the active store namespace ID.
-    pub fn setNamespaceId(self: *Connection, namespace_id: i64) void {
+    pub fn dupeExternalUserId(self: *Connection, allocator: Allocator) ![]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const external_user_id = self.user_id orelse return error.MissingExternalIdentity;
+        return allocator.dupe(u8, external_user_id);
+    }
+
+    pub fn resetStoreScopeLocked(self: *Connection) void {
+        self.namespace_id = unset_namespace_id;
+        self.user_doc_id = doc_id.zero;
+        self.store_ready = false;
+    }
+
+    pub fn resetStoreScope(self: *Connection) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.resetStoreScopeLocked();
+    }
+
+    /// Replace the active store scope after namespace and users.id resolution.
+    pub fn setStoreScope(self: *Connection, namespace_id: i64, user_doc_id: doc_id.DocId) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         self.namespace_id = namespace_id;
+        self.user_doc_id = user_doc_id;
+        self.store_ready = true;
     }
 
     pub fn getStoreSession(self: *Connection) StoreSession {
@@ -126,6 +153,7 @@ pub const Connection = struct {
         return .{
             .namespace_id = self.namespace_id,
             .user_doc_id = self.user_doc_id,
+            .ready = self.store_ready,
         };
     }
 

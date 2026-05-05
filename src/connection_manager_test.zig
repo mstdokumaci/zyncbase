@@ -34,6 +34,17 @@ test "ConnectionManager - onOpen and onClose" {
     try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
 }
 
+test "ConnectionManager - onOpen rejects missing external identity" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "conn-mgr-missing-identity", &.{});
+    defer app.deinit();
+
+    var dummy_ws = helpers.createMockWebSocketWithClientId(null);
+    try testing.expectError(error.MissingExternalIdentity, app.connection_manager.onOpen(&dummy_ws));
+    try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
+}
+
 test "ConnectionManager - onClose clears violation state" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;

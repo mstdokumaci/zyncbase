@@ -8,7 +8,9 @@ This document covers the architectural details, performance optimizations, and i
 
 ## Logical Architecture
 
-Presence is strictly scoped to `presenceNamespace`. The server manages a hash map of namespaces, each containing a map of active users. This ensures that a user's presence updates only affect others in the same logical context.
+Presence is strictly scoped to `presenceNamespace`. The server manages a hash map of namespaces, each containing a map of active resolved users. This ensures that a user's presence updates only affect others in the same logical context.
+
+Presence operations require a ready presence scope: the namespace string has been resolved to `_zync_namespaces.id`, and the external identity has been resolved to a persisted `users.id`. If `users.namespaced = true`, that identity resolution uses the presence namespace ID.
 
 ```
 [WebSocket Client] -> [PresenceManager (In-Memory)]
@@ -29,7 +31,7 @@ const PresenceManager = struct {
     allocator: Allocator,
     
     // In-memory only (ephemeral)
-    // namespace -> user_id -> presence_data
+    // namespace -> resolved users.id -> presence_data
     presence: HashMap([]const u8, HashMap([]const u8, PresenceData)),
     
     // History buffer (last 5 seconds) for late joiners
@@ -177,6 +179,8 @@ The server batches presence updates every 50ms. If multiple users update their s
 
 ### Automatic Cleanup
 When a WebSocket connection is closed (manual disconnect or heartbeats fail), the server automatically removes the associated presence data using `PresenceManager.remove()` and broadcasts a removal message.
+
+When a presence namespace changes or auth refresh changes the resolved presence user ID, the old presence entry is removed before the new presence scope becomes ready.
 
 ---
 

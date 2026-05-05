@@ -117,6 +117,7 @@ Document identity is `id` alone. Each collection/table expects `id` to be global
 ### System Tables
 The storage engine maintains internal system tables that are not defined in `schema.json`:
 - `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)`: Serves as the internal dictionary for integer routing of dynamic namespaces (ADR-026). ID `0` is reserved for the global namespace (`$global`); client-created/runtime namespaces use positive IDs.
+- `users`: Always present as a hybrid system collection. Its `external_id` column maps external identity strings to internal `BLOB(16)` user IDs used by `owner_id`, `$session.userId`, and presence `userId` values.
 
 ### Array Canonicalization Pipeline
 
@@ -185,6 +186,10 @@ At write/query time, `namespaced` controls the namespace predicate, not the tabl
 - For `namespaced: true`, writes store the active namespace ID and queries use `namespace_id = :active_namespace_id`.
 - For `namespaced: false`, writes store namespace ID `0` and queries use `namespace_id = 0`.
 - In both modes, `id` remains collection-wide unique. The engine does not support namespace-local duplicate IDs via a composite `(namespace_id, id)` key.
+
+Identity resolution is a storage operation, not an in-memory hash shortcut. `resolveUserId(namespace_id, external_id)` inserts a new `users` row when needed, returns the persisted `users.id`, and sets `owner_id = id` for that row. All document `owner_id` values and presence user keys must come from this resolver.
+
+When `users.namespaced = false`, callers pass global namespace ID `0`. When `users.namespaced = true`, callers pass the namespace ID of the store or presence scope being resolved.
 
 ### Relational Features
 - **Foreign Keys**: Generated from `references` field. Supports `cascade`, `restrict`, and `set_null`.

@@ -393,7 +393,7 @@ Remove the local user's presence data (also done automatically on disconnect).
 
 #### `AuthRefresh`
 
-Update the connection's session context with a new external JWT.
+Update the connection's base session context with a new external JWT.
 
 ```
 {
@@ -409,9 +409,11 @@ Update the connection's session context with a new external JWT.
 {
   "type":    "ok",
   "id":      11,
-  "session": { ... } // The newly resolved $session context
+  "session": { ... } // The newly resolved base $session context
 }
 ```
+
+Active store and presence scopes are marked not ready while `AuthRefresh` is processed. The server re-resolves `users.id` for each active scope before returning `ok`; scoped operations sent during this window receive `SESSION_NOT_READY`.
 
 ---
 
@@ -419,7 +421,7 @@ Update the connection's session context with a new external JWT.
 
 #### `StoreSetNamespace`
 
-Switch the connection's active store namespace.
+Switch the connection's active store namespace and resolve the store scope.
 
 ```
 {
@@ -433,18 +435,19 @@ Switch the connection's active store namespace.
 
 ```
 {
-  "type": "ok",
-  "id":   12
+  "type":    "ok",
+  "id":      12,
+  "session": { "userId": "018f..." } // Store-scoped session fragment
 }
 ```
 
-Active store subscriptions are invalidated when the namespace changes. The client must re-subscribe.
+Active store subscriptions are invalidated when the namespace changes. The client must re-subscribe. Store operations are rejected with `SESSION_NOT_READY` until this response is sent.
 
 ---
 
 #### `PresenceSetNamespace`
 
-Switch the connection's active presence namespace. Clears old presence, joins new namespace.
+Switch the connection's active presence namespace and resolve the presence scope. Clears old presence, joins new namespace.
 
 ```
 {
@@ -458,10 +461,13 @@ Switch the connection's active presence namespace. Clears old presence, joins ne
 
 ```
 {
-  "type": "ok",
-  "id":   13
+  "type":    "ok",
+  "id":      13,
+  "session": { "userId": "018f..." } // Presence-scoped session fragment
 }
 ```
+
+Presence operations are rejected with `SESSION_NOT_READY` until this response is sent.
 
 ---
 
@@ -619,19 +625,19 @@ Provides the structural dictionary for integer-based routing. The SDK must dynam
 ```
 
 **2. `Connected`**
-Provides session context.
+Provides transport-level session context. It does not by itself authorize scoped store or presence operations.
 
 ```
 {
   "type":               "Connected",
-  "userId":             "user-123",       // Authenticated user ID (from sub claim)
-  "session":            { ... },          // The full resolved $session context
-  "storeNamespace":     "tenant:acme",    
-  "presenceNamespace":  "tenant:acme"     
+  "externalUserId":     "user-123",       // External identity string (JWT sub or SDK client ID)
+  "session":            { ... },          // Base $session context, before per-scope userId injection
+  "storeReady":         false,
+  "presenceReady":      false
 }
 ```
 
-The client should wait for this message before sending any other messages.
+The client should wait for this message before sending namespace selection messages. Store and presence data operations require the corresponding `StoreSetNamespace` or `PresenceSetNamespace` acknowledgement first.
 
 ### 4. Heartbeat
 
@@ -672,6 +678,7 @@ All errors follow a consistent envelope:
 |------|----------|-------------|
 | `AUTH_FAILED` | auth | Invalid ticket or expired initial JWT |
 | `TOKEN_EXPIRED` | auth | Session expired; client should re-authenticate |
+| `SESSION_NOT_READY` | auth | Scoped operation sent before namespace and user resolution completed |
 | `NAMESPACE_UNAUTHORIZED` | authorization | Not authorized to access this namespace |
 | `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
@@ -775,8 +782,8 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId` + `users` |
 | C→S | `PresenceUnsubscribe` | (unsubscribe function) | `ok` |
 | C→S | `PresenceRemove` | `presence.remove()` | `ok` |
-| C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` |
-| C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` |
+| C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` with store-scoped `session` |
+| C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` with presence-scoped `session` |
 | C→S | `AuthRefresh` | `client.authRefresh(token)` | `ok` with `session` |
 | S→C | `SchemaSync` | — | Push (no `id`) |
 | S→C | `Connected` | — | Push (no `id`) |

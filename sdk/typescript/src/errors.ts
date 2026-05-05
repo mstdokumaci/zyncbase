@@ -4,6 +4,7 @@ import type { JsonValue } from "./types.js";
 export const ErrorCodes = {
 	AUTH_FAILED: "AUTH_FAILED",
 	TOKEN_EXPIRED: "TOKEN_EXPIRED",
+	SESSION_NOT_READY: "SESSION_NOT_READY",
 	NAMESPACE_UNAUTHORIZED: "NAMESPACE_UNAUTHORIZED",
 	PERMISSION_DENIED: "PERMISSION_DENIED",
 	COLLECTION_NOT_FOUND: "COLLECTION_NOT_FOUND",
@@ -43,6 +44,9 @@ function deriveCategory(code: string): {
 		case ErrorCodes.NAMESPACE_UNAUTHORIZED:
 		case ErrorCodes.PERMISSION_DENIED:
 			return { category: "auth", retryable: false };
+
+		case ErrorCodes.SESSION_NOT_READY:
+			return { category: "state", retryable: false };
 
 		case ErrorCodes.RATE_LIMITED:
 			return { category: "rate_limit", retryable: true };

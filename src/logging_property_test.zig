@@ -226,6 +226,7 @@ test "logging: error details" {
             .ws = null,
             .ssl = false,
             .user_data = undefined,
+            .client_id = helpers.test_external_user_id,
         };
         ws.user_data = &ws;
 
@@ -248,6 +249,7 @@ test "logging: error details" {
             .ws = null,
             .ssl = false,
             .user_data = undefined,
+            .client_id = helpers.test_external_user_id,
         };
         ws.user_data = &ws;
 
@@ -285,6 +287,7 @@ test "logging: error details" {
             .ws = null,
             .ssl = false,
             .user_data = undefined,
+            .client_id = helpers.test_external_user_id,
         };
         ws.user_data = &ws;
 

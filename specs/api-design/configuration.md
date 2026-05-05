@@ -312,7 +312,7 @@ Define your data structure using ZyncBase store-based schema format.
 
 ### Example: The Reserved `users` Collection
 
-The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps to the external identity token (e.g. Auth0 `sub`), while its `id` column is the internal `BLOB(16)` UUIDv7 used by `owner_id` and foreign keys. You can extend it with optional custom fields:
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps the external identity string (SDK anonymous client ID or authenticated JWT subject) to an internal `BLOB(16)` UUIDv7 used by `owner_id`, `$session.userId`, presence `userId`, and foreign keys. You can extend it with optional custom fields:
 
 ```json
 {
@@ -346,7 +346,7 @@ The `users` collection is a reserved hybrid table that is automatically managed 
 }
 ```
 
-Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as an authenticated connection needs an internal user ID, before application profile data is available.
+Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as a scoped session needs an internal user ID, before application profile data is available. If `users.namespaced = true`, the same external identity may resolve to different internal user IDs for different store or presence namespaces.
 
 **What ZyncBase generates (automatic flattening):**
 

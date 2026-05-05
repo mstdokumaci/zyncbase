@@ -82,13 +82,14 @@ Initiates the connection sequence:
 1. **Ticket exchange** (HTTP POST `/auth/ticket`) — obtains a single-use ticket from the external JWT
 2. **WebSocket upgrade** (`GET /ws?ticket=...`) — opens the WebSocket connection
 3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-025)
-4. **`Connected` push** — the server sends a `Connected` message with `userId`, `session`, and active namespaces
+4. **`Connected` push** — the server sends transport-level session context
+5. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
 
-The SDK should wait for both `SchemaSync` and `Connected` pushes before resolving the `connect()` promise.
+The SDK should wait for `SchemaSync`, `Connected`, and the initial required namespace acknowledgements before resolving the `connect()` promise.
 
 ```typescript
 await client.connect()
-// Connection is fully established, ready to use store and presence APIs
+// Required store and presence scopes are ready.
 ```
 
 **Returns:** `Promise<void>`  
@@ -111,7 +112,7 @@ client.disconnect()
 
 ### `client.setStoreNamespace(namespace)`
 
-Switch the active store namespace at runtime. Active store subscriptions are invalidated — the client must re-subscribe.
+Switch the active store namespace at runtime. The returned promise resolves after the server resolves both the namespace ID and store-scoped internal user ID. Active store subscriptions are invalidated — the client must re-subscribe.
 
 ```typescript
 await client.setStoreNamespace('tenant:acme:workspace:ws-2')
@@ -123,7 +124,7 @@ await client.setStoreNamespace('tenant:acme:workspace:ws-2')
 
 ### `client.setPresenceNamespace(namespace)`
 
-Switch the active presence namespace. Automatically clears your presence in the old namespace and joins the new one.
+Switch the active presence namespace. The returned promise resolves after the server resolves both the namespace ID and presence-scoped internal user ID. Automatically clears your presence in the old namespace and joins the new one.
 
 ```typescript
 await client.setPresenceNamespace('tenant:acme:document:doc-456')
@@ -167,7 +168,7 @@ client.on('tokenExpired', async () => {
 
 | Event | Callback Signature | Description |
 |-------|-------------------|-------------|
-| `connected` | `() => void` | WebSocket established and `Connected` push received |
+| `connected` | `() => void` | WebSocket established and initial required scopes are ready |
 | `disconnected` | `() => void` | Connection closed (manually or after max retries) |
 | `reconnecting` | `() => void` | Attempting to reconnect after unexpected disconnect |
 | `error` | `(error: ZyncBaseError) => void` | Error from a fire-and-forget write or subscription |
@@ -178,7 +179,7 @@ client.on('tokenExpired', async () => {
 
 ```typescript
 client.on('statusChange', (status, detail) => {
-  // status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  // status: 'connecting' | 'scoping' | 'connected' | 'reconnecting' | 'disconnected'
   // detail.previousStatus: the state before this transition
   // detail.retryCount: current attempt number (0 when first connecting)
   // detail.retryIn: ms until next attempt (null if not reconnecting)
@@ -216,7 +217,7 @@ The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emi
 
 ### `client.authRefresh(token)`
 
-Update the connection's session with a new external JWT without disconnecting.
+Update the connection's session with a new external JWT without disconnecting. Active scopes temporarily become not ready and are re-resolved before the returned promise resolves.
 
 ```typescript
 client.on('tokenExpired', async () => {

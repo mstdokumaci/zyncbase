@@ -18,6 +18,7 @@ const storage_errors = @import("storage_engine/errors.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
+const doc_id = @import("doc_id.zig");
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = storage_values.ColumnValue;
@@ -366,6 +367,32 @@ pub const StorageEngine = struct {
 
         try signal.wait();
         return namespace_id;
+    }
+
+    pub fn resolveUserId(self: *StorageEngine, namespace_id: i64, external_id: []const u8) !DocId {
+        try self.ensureRunning();
+
+        var signal = WriteOp.CompletionSignal{};
+        var user_doc_id: DocId = doc_id.zero;
+        const external_id_owned = try self.allocator.dupe(u8, external_id);
+        var queued = false;
+
+        const op = WriteOp{
+            .resolve_user = .{
+                .namespace_id = namespace_id,
+                .external_id = external_id_owned,
+                .timestamp = std.time.timestamp(),
+                .result = &user_doc_id,
+                .completion_signal = &signal,
+            },
+        };
+        errdefer if (!queued) op.deinit(self.allocator);
+
+        try self.writer.enqueueOp(op);
+        queued = true;
+
+        try signal.wait();
+        return user_doc_id;
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {

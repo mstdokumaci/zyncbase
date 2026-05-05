@@ -2,6 +2,8 @@
 
 The Presence API tracks ephemeral user state in real-time, such as cursor positions, selections, and typing indicators. This data is stored in-memory, is schemaless (not validated against `schema.json`), and automatically cleaned up on disconnect.
 
+Presence methods require a ready presence scope. `client.connect()` and `client.setPresenceNamespace(namespace)` resolve only after the server has resolved the namespace and internal presence user ID; calling presence methods before that point fails with `SESSION_NOT_READY`.
+
 ## Table of Contents
 1. [Methods](#presence-methods)
 2. [Namespaces](#presence-namespaces)
@@ -29,7 +31,7 @@ const unsubscribe = client.presence.subscribe((users) => {
 **Callback receives**: `Array<PresenceEntry>` where each entry contains:
 ```typescript
 {
-  userId: string,        // Authenticated user ID
+  userId: string,        // Internal users.id for the active presence scope
   data: object,          // User's presence data (cursor, status, etc.)
   joinedAt: number       // Unix timestamp of when the user joined
 }
@@ -65,7 +67,7 @@ client.presence.remove()
 
 ## Presence Namespaces
 
-Presence is scoped to the `presenceNamespace` set during [Client Initialization](./configuration.md). Only users in the same namespace see each other.
+Presence is scoped to the `presenceNamespace` set during [Client Initialization](./configuration.md). Only users in the same namespace see each other. When `users.namespaced = true`, this namespace also determines which internal user ID is used for presence.
 
 **Example: Document-Scoped Presence**
 ```typescript

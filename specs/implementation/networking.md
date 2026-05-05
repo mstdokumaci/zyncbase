@@ -200,7 +200,8 @@ pub const Server = struct {
 │  4. WebSocket Connection Established            │
 │     - Binary frames (MessagePack)               │
 │     - Bidirectional communication               │
-│     - Real-time state updates                   │
+│     - Transport-level Connected push            │
+│     - Store/presence scopes resolve separately  │
 └─────────────────────────────────────────────────┘
                     │
                     ▼
@@ -211,6 +212,8 @@ pub const Server = struct {
 │     - Cleanup subscriptions                     │
 └─────────────────────────────────────────────────┘
 ```
+
+Transport establishment is not the same as scoped session readiness. After the WebSocket is accepted, only lifecycle messages are valid until the relevant scope is ready: `AuthRefresh`, `StoreSetNamespace`, `PresenceSetNamespace`, ping/pong, and close. Store messages require a ready store scope. Presence messages require a ready presence scope.
 
 ### Frame Format
 
@@ -329,6 +332,9 @@ const Connection = struct {
     id: u64,
     socket: WebSocket,
     auth_context: AuthContext,
+    external_user_id: []const u8,
+    store_scope: ?ScopedSession,
+    presence_scope: ?ScopedSession,
     subscriptions: ArrayList(SubscriptionId),
     presence: ?json.Value,
     
@@ -336,6 +342,12 @@ const Connection = struct {
         const bytes = try msgpack.encode(msg);
         try self.socket.send(bytes);
     }
+};
+
+const ScopedSession = struct {
+    namespace_id: i64,
+    user_doc_id: DocId,
+    ready: bool,
 };
 ```
 
@@ -356,7 +368,9 @@ const Connection = struct {
 3. Client connects with ticket
    ws://server/ws?ticket=abc123...
    
-4. Server validates ticket, establishes connection
+4. Server validates ticket, establishes transport connection
+5. Client selects store/presence namespaces
+6. Server resolves scoped `users.id` values and marks scopes ready
 ```
 
 **Why tickets?**
