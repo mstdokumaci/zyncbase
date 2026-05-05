@@ -45,6 +45,19 @@ pub const MessageHandler = struct {
     /// Clean up message handler resources
     pub fn deinit(_: *MessageHandler) void {}
 
+    pub const ProcessResult = union(enum) {
+        response: []const u8,
+        close,
+        none,
+
+        pub fn deinit(self: ProcessResult, allocator: Allocator) void {
+            switch (self) {
+                .response => |bytes| allocator.free(bytes),
+                .close, .none => {},
+            }
+        }
+    };
+
     /// Handle WebSocket message event
     /// Parses MessagePack, extracts message info, routes to handler, and sends response
     pub fn handleMessage(
@@ -53,6 +66,22 @@ pub const MessageHandler = struct {
         message: []const u8,
     ) !void {
         const ws = &conn.ws;
+        var result = try self.processMessageOwned(self.allocator, conn, message);
+        defer result.deinit(self.allocator);
+
+        switch (result) {
+            .response => |bytes| ws.send(bytes, .binary),
+            .close => ws.close(),
+            .none => {},
+        }
+    }
+
+    pub fn processMessageOwned(
+        self: *MessageHandler,
+        allocator: Allocator,
+        conn: *Connection,
+        message: []const u8,
+    ) !ProcessResult {
         const conn_id = conn.id;
 
         // 1. Enforce rate limiting under isolated lock
@@ -90,8 +119,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(ws, null, wire.getWireError(error.RateLimited));
-                return;
+                return .{ .response = try wire.encodeError(allocator, null, wire.getWireError(error.RateLimited)) };
             }
         }
 
@@ -101,17 +129,15 @@ pub const MessageHandler = struct {
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
                     std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
-                    ws.close();
-                    return;
+                    return .close;
                 }
             }
-            try self.sendError(ws, null, wire.getWireError(err));
-            return;
+            return .{ .response = try wire.encodeError(allocator, null, wire.getWireError(err)) };
         };
 
         // 3. Acquire arena for response encoding
-        const arena = try self.memory_strategy.acquireArena();
-        defer self.memory_strategy.releaseArena(arena);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
         const arena_allocator = arena.allocator();
 
         // 4. Route and handle errors
@@ -119,17 +145,13 @@ pub const MessageHandler = struct {
             if (isSecurityError(err)) {
                 if (try self.violation_tracker.recordViolation(conn_id)) {
                     std.log.warn("Closing connection {} due to repeated security violations", .{conn_id});
-                    ws.close();
-                    return;
+                    return .close;
                 }
             }
-            const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
-            ws.send(response_err, .binary);
-            return;
+            return .{ .response = try wire.encodeError(allocator, envelope.id, wire.getWireError(err)) };
         };
 
-        // 5. Send response
-        ws.send(response, .binary);
+        return .{ .response = try allocator.dupe(u8, response) };
     }
 
     pub fn routeMessageFast(
