@@ -17,6 +17,7 @@ runs:
       uses: mlugg/setup-zig@v2
       with:
         version: 0.15.2
+        mirror: https://zigmirror.com/
 
     - name: Setup Go
       uses: actions/setup-go@v5
