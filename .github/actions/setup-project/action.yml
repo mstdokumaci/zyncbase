@@ -14,9 +14,9 @@ runs:
   using: "composite"
   steps:
     - name: Setup Zig
-      uses: goto-bus-stop/setup-zig@v2
+      uses: mlugg/setup-zig@v1
       with:
-        version: 0.15.2
+        zig-version: 0.15.2
 
     - name: Setup Go
       uses: actions/setup-go@v5
