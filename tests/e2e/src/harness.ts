@@ -347,7 +347,6 @@ async function startServer(
 	};
 	try {
 		await waitForPort(port);
-		await new Promise((resolve) => setTimeout(resolve, 500));
 		return server;
 	} catch (err) {
 		serverProcess.kill();
@@ -398,7 +397,7 @@ export function cleanupE2EArtifacts() {
 export async function createE2ETestContext(
 	name: string,
 ): Promise<E2ETestContext> {
-	const slug = `${slugify(name)}-${Date.now().toString(36)}`;
+	const slug = slugify(name) + '-' + crypto.randomUUID().slice(0, 8);
 	const artifactDir = path.join(ARTIFACT_DIR, slug);
 	const dataDir = path.join(DATA_DIR, slug);
 	ensureDir(artifactDir);
