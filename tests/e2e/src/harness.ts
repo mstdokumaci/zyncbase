@@ -397,7 +397,7 @@ export function cleanupE2EArtifacts() {
 export async function createE2ETestContext(
 	name: string,
 ): Promise<E2ETestContext> {
-	const slug = slugify(name) + '-' + crypto.randomUUID().slice(0, 8);
+	const slug = `${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`;
 	const artifactDir = path.join(ARTIFACT_DIR, slug);
 	const dataDir = path.join(DATA_DIR, slug);
 	ensureDir(artifactDir);
