@@ -2,6 +2,11 @@ import * as fs from "node:fs";
 import * as path_pkg from "node:path";
 import { ZyncBaseClient } from "./client";
 
+type PersistenceRecord = {
+	status?: string;
+	timestamp?: number;
+};
+
 export async function run(
 	mode: "set" | "get",
 	port: number = 3000,
@@ -38,7 +43,10 @@ export async function run(
 				10,
 			);
 
-			const data = await client.get(namespace, path);
+			const data = (await client.get(
+				namespace,
+				path,
+			)) as PersistenceRecord | null;
 			console.log("Retrieved data:", data);
 
 			if (

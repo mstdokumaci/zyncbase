@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { format } from "node:util";
 
-const PORT = 3000;
 const DATA_DIR = "tests/e2e/data";
 const ARTIFACT_DIR = "test-artifacts/e2e";
 const SERVER_BIN = "./zig-out/bin/zyncbase";
@@ -30,6 +30,27 @@ type CapturedProcessOutput = {
 	stderr?: unknown;
 };
 
+export type E2ETestContext = {
+	artifactDir: string;
+	dataDir: string;
+	port: number;
+	artifactPath: (...parts: string[]) => string;
+	dataPath: (...parts: string[]) => string;
+	schemaPath: (fileName: string) => string;
+};
+
+export type ServerOptions = {
+	schemaPath: string;
+	dataDir: string;
+	configName?: string;
+};
+
+export type ServerHandle = {
+	port: number;
+	configPath: string;
+	dataDir: string;
+};
+
 function captureLines(target: string[], text: string) {
 	if (target.length > MAX_CAPTURED_LOG_LINES) return;
 	for (const line of text.split(/\r?\n/)) {
@@ -41,19 +62,6 @@ function captureLines(target: string[], text: string) {
 			break;
 		}
 	}
-}
-
-if (!VERBOSE) {
-	console.log = (...args: unknown[]) => {
-		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
-			captureLines(capturedConsoleLogs, format(...args));
-		}
-	};
-	console.warn = (...args: unknown[]) => {
-		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
-			captureLines(capturedConsoleLogs, format(...args));
-		}
-	};
 }
 
 function log(message: string) {
@@ -155,15 +163,35 @@ function printCapturedLogs() {
 	}
 }
 
-function ensureArtifactDir() {
-	if (!fs.existsSync(ARTIFACT_DIR)) {
-		fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
-	}
+function withConsoleCapture<T>(callback: () => Promise<T>): Promise<T> {
+	if (VERBOSE) return callback();
+
+	const previousLog = console.log;
+	const previousWarn = console.warn;
+	console.log = (...args: unknown[]) => {
+		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
+			captureLines(capturedConsoleLogs, format(...args));
+		}
+	};
+	console.warn = (...args: unknown[]) => {
+		if (CAPTURE_LOGS && capturedConsoleLogs.length <= MAX_CAPTURED_LOG_LINES) {
+			captureLines(capturedConsoleLogs, format(...args));
+		}
+	};
+
+	return callback().finally(() => {
+		console.log = previousLog;
+		console.warn = previousWarn;
+	});
 }
 
-function cleanupArtifactDir() {
-	if (fs.existsSync(ARTIFACT_DIR)) {
-		fs.rmSync(ARTIFACT_DIR, { recursive: true, force: true });
+function ensureDir(dir: string) {
+	fs.mkdirSync(dir, { recursive: true });
+}
+
+function removeDir(dir: string) {
+	if (fs.existsSync(dir)) {
+		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
@@ -235,28 +263,34 @@ function printBuildFailure(result: CapturedProcessOutput) {
 	if (stderr.trim().length > 0) console.error(stderr);
 }
 
-function checkBuild() {
-	if (!shouldBuildServer()) {
-		log("Server binary up to date, skipping build.");
-		return;
-	}
-
-	log(`Building ZyncBase server (ReleaseFast)...`);
-	const start = Date.now();
-	const result = Bun.spawnSync(["zig", "build", "-Doptimize=ReleaseFast"], {
-		stdio: VERBOSE
-			? ["inherit", "inherit", "inherit"]
-			: ["ignore", "pipe", "pipe"],
-	});
-	if (result.exitCode !== 0) {
-		printBuildFailure(result);
-		process.exit(1);
-	}
-	const duration = ((Date.now() - start) / 1000).toFixed(1);
-	log(`Build finished in ${duration}s.`);
+function slugify(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug.length > 0 ? slug : "scenario";
 }
 
-async function wait_for_port(port: number, retries = 50): Promise<void> {
+async function getFreePort(): Promise<number> {
+	return await new Promise((resolve, reject) => {
+		const server = net.createServer();
+		server.on("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (typeof address !== "object" || address === null) {
+				server.close(() => reject(new Error("Failed to allocate a free port")));
+				return;
+			}
+			const port = address.port;
+			server.close((err) => {
+				if (err) reject(err);
+				else resolve(port);
+			});
+		});
+	});
+}
+
+async function waitForPort(port: number, retries = 50): Promise<void> {
 	for (let i = 0; i < retries; i++) {
 		try {
 			await new Promise<void>((resolve, reject) => {
@@ -291,16 +325,10 @@ async function wait_for_port(port: number, retries = 50): Promise<void> {
 	throw new Error(`Timeout waiting for port ${port}`);
 }
 
-async function start_server(configPath: string): Promise<RunningServer> {
-	// Kill any process on the port first to avoid stale connections
-	try {
-		Bun.spawnSync([
-			"sh",
-			"-c",
-			`lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true`,
-		]);
-	} catch (_e) {}
-
+async function startServer(
+	configPath: string,
+	port: number,
+): Promise<RunningServer> {
 	const serverProcess = Bun.spawn([SERVER_BIN, "--config", configPath], {
 		stdio: VERBOSE
 			? ["inherit", "inherit", "inherit"]
@@ -318,8 +346,7 @@ async function start_server(configPath: string): Promise<RunningServer> {
 		configPath,
 	};
 	try {
-		await wait_for_port(PORT);
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		await waitForPort(port);
 		return server;
 	} catch (err) {
 		serverProcess.kill();
@@ -329,120 +356,107 @@ async function start_server(configPath: string): Promise<RunningServer> {
 	}
 }
 
-async function stop_server(server: RunningServer) {
+async function stopServer(server: RunningServer) {
 	server.process.kill();
-	await server.process.exited;
+	await server.process.exited.catch(() => {});
 	await collectServerLogs(server);
 }
 
-import { run as runBatch } from "./test-batch";
-import { run as runErrors } from "./test-errors";
-import { run as runFilters } from "./test-filters";
-import { run as runPersistence } from "./test-persistence";
-import { run as runSync } from "./test-sync";
-
-async function run_scenario_sync_and_errors() {
-	log("--- Bi-directional Sync ---");
-	const schemaPath = "tests/e2e/schema-sync.json";
-	const dataDir = path.join(DATA_DIR, "sync");
-	const config = {
-		server: { port: PORT },
-		dataDir: dataDir,
-		schema: schemaPath,
-	};
-	const configPath = path.join(ARTIFACT_DIR, "zyncbase-config-sync.json");
-	fs.writeFileSync(configPath, JSON.stringify(config));
-	log(`Starting server with ${schemaPath}...`);
-	const server = await start_server(configPath);
-	try {
-		await runSync(PORT);
-
-		log("--- Batch Operations ---");
-		await runBatch(PORT);
-
-		log("--- Error Reporting ---");
-		await runErrors(PORT);
-	} finally {
-		await stop_server(server);
+export function buildServerIfNeeded() {
+	if (!shouldBuildServer()) {
+		log("Server binary up to date, skipping build.");
+		return;
 	}
+
+	log("Building ZyncBase server (ReleaseFast)...");
+	const start = Date.now();
+	const result = Bun.spawnSync(["zig", "build", "-Doptimize=ReleaseFast"], {
+		stdio: VERBOSE
+			? ["inherit", "inherit", "inherit"]
+			: ["ignore", "pipe", "pipe"],
+	});
+	if (result.exitCode !== 0) {
+		printBuildFailure(result);
+		throw new Error("Failed to build ZyncBase server");
+	}
+	const duration = ((Date.now() - start) / 1000).toFixed(1);
+	log(`Build finished in ${duration}s.`);
 }
 
-async function run_scenario_persistence() {
-	log("--- Persistence ---");
-	const schemaPath = "tests/e2e/schema-persistence.json";
-	const config = {
-		server: { port: PORT },
-		dataDir: DATA_DIR,
-		schema: schemaPath,
-	};
-	const configPath = path.join(ARTIFACT_DIR, "zyncbase-config.json");
-	fs.writeFileSync(configPath, JSON.stringify(config));
-
-	// Step 1: Set
-	let server = await start_server(configPath);
-	try {
-		await runPersistence("set", PORT, ARTIFACT_DIR);
-	} finally {
-		await stop_server(server);
-	}
-
-	// Step 2: Get
-	server = await start_server(configPath);
-	try {
-		await runPersistence("get", PORT, ARTIFACT_DIR);
-	} finally {
-		await stop_server(server);
-	}
-	console.log("Scenario 2 passed.");
+export function resetE2ERoots() {
+	removeDir(DATA_DIR);
+	removeDir(ARTIFACT_DIR);
+	ensureDir(DATA_DIR);
+	ensureDir(ARTIFACT_DIR);
 }
 
-async function run_scenario_filters() {
-	log("--- Filtered Subscriptions ---");
-	const schemaPath = "tests/e2e/schema-filters.json";
-	const dataDir = path.join(DATA_DIR, "filters");
-	const config = {
-		server: { port: PORT },
-		dataDir: dataDir,
-		schema: schemaPath,
-	};
-	const configPath = path.join(ARTIFACT_DIR, "zyncbase-config-filters.json");
-	fs.writeFileSync(configPath, JSON.stringify(config));
-	log(`Starting server with ${schemaPath}...`);
-	const server = await start_server(configPath);
-	try {
-		await runFilters(PORT);
-	} finally {
-		await stop_server(server);
-	}
+export function cleanupE2EArtifacts() {
+	removeDir(ARTIFACT_DIR);
 }
 
-async function main() {
-	log("=== ZyncBase E2E Test Suite (Optimized) ===");
+export async function createE2ETestContext(
+	name: string,
+): Promise<E2ETestContext> {
+	const slug = `${slugify(name)}-${crypto.randomUUID().slice(0, 8)}`;
+	const artifactDir = path.join(ARTIFACT_DIR, slug);
+	const dataDir = path.join(DATA_DIR, slug);
+	ensureDir(artifactDir);
+	ensureDir(dataDir);
+	const port = await getFreePort();
 
-	checkBuild();
-	ensureArtifactDir();
+	return {
+		artifactDir,
+		dataDir,
+		port,
+		artifactPath: (...parts: string[]) => path.join(artifactDir, ...parts),
+		dataPath: (...parts: string[]) => path.join(dataDir, ...parts),
+		schemaPath: (fileName: string) => path.join("tests/e2e", fileName),
+	};
+}
 
-	if (fs.existsSync(DATA_DIR)) fs.rmSync(DATA_DIR, { recursive: true });
-	fs.mkdirSync(DATA_DIR, { recursive: true });
+export async function runE2ETest(
+	name: string,
+	callback: (ctx: E2ETestContext) => Promise<void>,
+) {
+	clearCapturedLogs();
+	log(`--- ${name} ---`);
+	const ctx = await createE2ETestContext(name);
 
 	try {
-		log("Running consolidated E2E suite...");
-		clearCapturedLogs();
-		await run_scenario_sync_and_errors();
-		clearCapturedLogs();
-		await run_scenario_persistence();
-		log("Scenario 2 passed.");
-		clearCapturedLogs();
-		await run_scenario_filters();
-		log("Scenario 3 passed.");
-		log("=== All E2E Tests Passed! ===");
+		await withConsoleCapture(() => callback(ctx));
 	} catch (err) {
-		console.error("E2E Test Suite Failed:", err);
 		printCapturedLogs();
-		process.exit(1);
-	} finally {
-		cleanupArtifactDir();
+		throw err;
 	}
 }
 
-main();
+export async function withServer<T>(
+	ctx: E2ETestContext,
+	options: ServerOptions,
+	callback: (server: ServerHandle) => Promise<T>,
+): Promise<T> {
+	ensureDir(options.dataDir);
+	const configPath = ctx.artifactPath(
+		options.configName ?? "zyncbase-config.json",
+	);
+	fs.writeFileSync(
+		configPath,
+		JSON.stringify({
+			server: { port: ctx.port },
+			dataDir: options.dataDir,
+			schema: options.schemaPath,
+		}),
+	);
+
+	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);
+	const server = await startServer(configPath, ctx.port);
+	try {
+		return await callback({
+			port: ctx.port,
+			configPath,
+			dataDir: options.dataDir,
+		});
+	} finally {
+		await stopServer(server);
+	}
+}

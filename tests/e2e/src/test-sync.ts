@@ -172,11 +172,15 @@ export async function run(port: number = 3000) {
 			},
 		]);
 
-		const tasksA = (await clientA.get(namespace, ["tasks"])) as MockTask[];
+		const tasksA = (await clientA.get(namespace, [
+			"tasks",
+		])) as unknown as MockTask[];
 		if (getSnapshot(tasksA) !== expected)
 			throw new Error(`Client A mismatch. Got: ${getSnapshot(tasksA)}`);
 
-		const tasksB = (await clientB.get(namespace, ["tasks"])) as MockTask[];
+		const tasksB = (await clientB.get(namespace, [
+			"tasks",
+		])) as unknown as MockTask[];
 		if (getSnapshot(tasksB) !== expected)
 			throw new Error(`Client B mismatch. Got: ${getSnapshot(tasksB)}`);
 
