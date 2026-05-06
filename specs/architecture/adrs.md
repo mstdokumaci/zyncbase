@@ -767,3 +767,61 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 - #1 Primitives over Magic
 - #3 SQLite as the Source of Truth
 - #7 Secure by Default
+
+---
+
+## ADR-030: Async Session Resolution (Non-Blocking Reactor Handoff)
+
+**Date**: 2026-05-06  
+**Status**: Proposed  
+
+**Context**:  
+ADR-029 established the scoped session readiness gate, where `StoreSetNamespace` triggers namespace and user identity resolution through the writer thread. The initial implementation uses `CompletionSignal.wait()` — a Mutex+Condition blocking call — on the uWS event loop thread to synchronously wait for the writer thread's result. This blocks the entire reactor for 500μs–2ms per resolution, stalling all concurrent WebSocket connections and violating the p50 < 1ms latency target (ADR-020).
+
+The problem is specific to `StoreSetNamespace` (and the future `PresenceSetNamespace` / `AuthRefresh`). All other operations are either fire-and-forget writes (ADR-007) or fast reader-pool reads. Resolution is the only code path that performs a blocking round-trip to the writer thread from the uWS reactor.
+
+**Decision**:  
+Replace blocking `CompletionSignal.wait()` resolution with a two-tier strategy: an in-memory identity cache for the common case, and an async SPSC ring buffer + event loop wakeup handoff for cache misses.
+
+1. **Two-tier resolution**:
+   - **Tier 1 (sync, ~1μs)**: Check lock-free namespace and user identity caches on the uWS thread. If both hit, set scope and respond immediately — zero I/O, zero blocking.
+   - **Tier 2 (async, non-blocking)**: On cache miss, enqueue a combined `resolve_session` WriteOp to the writer thread and return immediately without sending a response. The uWS reactor is free.
+
+2. **Identity caches**: Two new `lockFreeCache` instances on `StorageEngine`:
+   - `namespace_cache`: Maps `hash(namespace_string)` → `namespace_id` (i64). Populated by the writer thread after `INSERT OR IGNORE INTO _zync_namespaces ... RETURNING id`. Immutable once set (namespace IDs never change).
+   - `identity_cache`: Maps `hash(identity_namespace_id, external_user_id)` → `users.id` (DocId). Populated by the writer thread after `INSERT OR IGNORE INTO users ... RETURNING id`. Immutable once set (user ID mappings never change).
+   - Both caches reuse the existing `lockFreeCache` generic with epoch-based reclamation, atomic ref-counting, and COW map swaps. Values are trivial (no heap allocations), so `deinit` is a no-op.
+
+3. **Combined `resolve_session` WriteOp**: Replaces the separate `upsert_namespace` and `resolve_user` WriteOp variants. Performs both namespace and user resolution in a single writer-thread pass, reducing two sequential round-trips to zero blocking round-trips.
+
+4. **`SessionResolutionBuffer`**: An SPSC ring buffer (capacity 256) following the same pattern as `ChangeBuffer`. The writer thread pushes `SessionResolutionResult` structs; the uWS post_handler drains them.
+
+5. **`SessionResolver`**: A new component (parallel to `NotificationDispatcher`) that runs in the uWS post_handler. It drains the `SessionResolutionBuffer`, acquires the target connection by ID, applies the resolved scope, encodes the success/error response, and calls `ws.send()`.
+
+6. **`scope_seq` monotonic counter**: A per-connection counter incremented on each store scope reset (under `Connection.mutex`). Carried in the `resolve_session` WriteOp and checked at delivery time. If the connection's current `scope_seq` doesn't match the result's `scope_seq`, the result is stale (client sent another `StoreSetNamespace` in the meantime) and is discarded.
+
+7. **Buffer capacity rationale (256)**:
+   - `StoreSetNamespace` is a lifecycle message sent ~1x per connection session, not in hot data paths.
+   - The writer thread processes ~5,000–10,000 resolutions/second; the post_handler drains every uWS loop iteration (~1ms).
+   - Worst-case thundering herd (100k reconnections): the buffer accumulates at most ~10–50 results between drain cycles.
+   - 256 provides 25x headroom over the realistic worst case. On overflow, the writer logs an error and the client retries via SDK timeout.
+
+**Rationale**:
+- **Tier 1 eliminates I/O for the common case**: After the first resolution of a given (namespace, user) pair, all subsequent connections with the same pair resolve in ~1μs from the lock-free cache — no reader pool mutex, no SQLite, no writer thread.
+- **Tier 2 eliminates reactor blocking for cold starts**: New (namespace, user) pairs resolve on the writer thread without blocking the uWS reactor. The response is delivered asynchronously via the same battle-tested `ChangeBuffer` + `us_wakeup_loop()` + `post_handler` pattern used by `NotificationDispatcher`.
+- **Single WriteOp**: Combining namespace + user resolution reduces the number of WriteOp variants (2 → 1) and eliminates the need for two sequential writer thread round-trips on cache miss.
+- **ADR-029 correctness preserved**: `store_ready` remains `false` until the resolver delivers the result (or the cache fast-path sets it synchronously). Messages arriving before resolution still receive `SESSION_NOT_READY`.
+- **Connection safety**: Connections may disconnect during async resolution. The `SessionResolver` uses `ConnectionManager.acquireConnection()` (ref-counted) to safely discard results for disconnected clients — identical to `NotificationDispatcher`'s pattern.
+
+**Supersedes / Modifies**:  
+- Extends ADR-026: Namespace string → integer resolution now happens through a lock-free cache first, writer thread second.
+- Extends ADR-029: Scoped session resolution is now non-blocking on the uWS reactor.
+- Extends ADR-011: Lock-free cache role expanded to include namespace and user identity mappings alongside auth/schema metadata.
+
+**Consequences**:  
+- ✅ Zero blocking on the uWS reactor thread for session resolution.
+- ✅ Common case (warm cache) resolves in ~1μs — 500x faster than the blocking path.
+- ✅ Simpler WriteOp surface: `upsert_namespace` + `resolve_user` consolidated into `resolve_session`.
+- ✅ Other connections completely unaffected during cold-start resolution.
+- ⚠️ Async response delivery adds ~1 event loop iteration of latency for cache misses (negligible in practice).
+- ⚠️ Two new lock-free cache instances add memory proportional to the number of unique (namespace, user) pairs — typically small.
