@@ -12,7 +12,7 @@ const write_queue = @import("write_queue.zig");
 const change_buffer = @import("../change_buffer.zig");
 const OwnedRowChange = change_buffer.OwnedRowChange;
 const ChangeBuffer = change_buffer.ChangeBuffer;
-const session_resolution = @import("../session_resolution.zig");
+const session_resolution = @import("../session_resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
@@ -684,7 +684,7 @@ pub const Writer = struct {
             const users_table = self.schema.table("users") orelse {
                 result.err = error.UnknownTable;
                 sop.result_buffer.push(result) catch |err| {
-                    std.log.err("SessionResolutionBuffer full: {}", .{err});
+                    std.log.err("Failed to queue session resolution result: {}", .{err});
                 };
                 self.notifyChanges();
                 return;
@@ -714,7 +714,7 @@ pub const Writer = struct {
         }
 
         sop.result_buffer.push(result) catch |err| {
-            std.log.err("SessionResolutionBuffer full: {}", .{err});
+            std.log.err("Failed to queue session resolution result: {}", .{err});
         };
         self.notifyChanges();
     }

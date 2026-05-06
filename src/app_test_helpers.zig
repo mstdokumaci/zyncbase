@@ -4,7 +4,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
-const session_resolution = @import("session_resolution.zig");
+const session_resolution = @import("session_resolution_buffer.zig");
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
@@ -25,6 +25,7 @@ const tth = @import("typed_test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
+var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
 
@@ -96,6 +97,7 @@ pub const AppTestContext = struct {
     connection_manager: ConnectionManager,
     schema_manager: Schema,
     test_context: schema_helpers.TestContext,
+    test_resolution_mutex: std.Thread.Mutex,
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
         try self.initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true });
@@ -123,6 +125,7 @@ pub const AppTestContext = struct {
 
     pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: Schema, options: StorageEngine.Options) !void {
         self.allocator = allocator;
+        self.test_resolution_mutex = .{};
         self.schema_manager = sm;
         errdefer self.schema_manager.deinit();
 
@@ -279,18 +282,35 @@ pub const AppTestContext = struct {
         namespace: []const u8,
         external_user_id: []const u8,
     ) !StoreService.ScopedSession {
+        self.test_resolution_mutex.lock();
+        defer self.test_resolution_mutex.unlock();
+
         if (try self.store_service.tryResolveScopeCached(namespace, external_user_id)) |scope| {
             return scope;
         }
 
-        try self.store_service.enqueueResolveScope(0, 0, 0, namespace, external_user_id);
+        const resolution_id = next_test_resolution_id.fetchAdd(1, .monotonic);
+        const conn_id = resolution_id;
+        const msg_id = resolution_id +% 1;
+        const scope_seq = resolution_id +% 2;
+
+        try self.store_service.enqueueResolveScope(conn_id, msg_id, scope_seq, namespace, external_user_id);
         try self.storage_engine.flushPendingWrites();
 
         var out = std.ArrayListUnmanaged(SessionResolutionResult).empty;
         defer out.deinit(self.allocator);
         try self.storage_engine.sessionResolutionBuffer().drainInto(&out, self.allocator);
 
+        var matched_result: ?SessionResolutionResult = null;
         for (out.items) |result| {
+            if (result.conn_id != conn_id or result.msg_id != msg_id or result.scope_seq != scope_seq) {
+                return error.TestUnexpectedSessionResolutionResult;
+            }
+            if (matched_result != null) return error.TestUnexpectedSessionResolutionResult;
+            matched_result = result;
+        }
+
+        if (matched_result) |result| {
             if (result.err) |err| return err;
             return .{
                 .namespace_id = result.namespace_id,

@@ -18,7 +18,7 @@ const storage_errors = @import("storage_engine/errors.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
-const SessionResolutionBuffer = @import("session_resolution.zig").SessionResolutionBuffer;
+const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = storage_values.ColumnValue;
