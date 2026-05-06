@@ -16,7 +16,7 @@ runs:
     - name: Setup Zig
       uses: mlugg/setup-zig@v1
       with:
-        zig-version: 0.15.2
+        version: 0.15.2
 
     - name: Setup Go
       uses: actions/setup-go@v5
