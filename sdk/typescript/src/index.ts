@@ -5,6 +5,7 @@ export { ErrorCodes, ZyncBaseError } from "./errors.js";
 export type {
 	BatchOperation,
 	ClientOptions,
+	JsonValue,
 	LifecycleEvent,
 	Path,
 	QueryOptions,

@@ -467,10 +467,10 @@ export async function run(port: number = 3000) {
 	console.log("Fetching authoritative state from server...");
 	const allItems = (await readWriteClients[0].client.store.get([
 		"items",
-	])) as ItemRecord[];
+	])) as unknown as ItemRecord[];
 	const allEvents = (await readWriteClients[0].client.store.get([
 		"events",
-	])) as EventRecord[];
+	])) as unknown as EventRecord[];
 	console.log(
 		`Server has ${allItems.length} items and ${allEvents.length} events.`,
 	);
