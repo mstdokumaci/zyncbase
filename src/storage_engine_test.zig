@@ -4,6 +4,8 @@ const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const storage_mod = @import("storage_engine.zig");
+const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
+const SessionResolutionResult = @import("session_resolution_buffer.zig").SessionResolutionResult;
 
 const BatchOpForTest = struct {
     entries: []storage_mod.BatchEntry,
@@ -25,7 +27,9 @@ const DirectWriterContext = struct {
         try self.memory_strategy.init(allocator);
         errdefer self.memory_strategy.deinit();
 
-        self.sm = try sth.createSchema(allocator, &[_]sth.Table{table});
+        const users_fields = [_]sth.Field{};
+        const users_table = sth.makeTable("users", &users_fields);
+        self.sm = try sth.createSchema(allocator, &[_]sth.Table{ users_table, table });
         errdefer self.sm.deinit();
 
         try self.engine.init(
@@ -39,6 +43,15 @@ const DirectWriterContext = struct {
             null,
         );
         errdefer self.engine.deinit();
+
+        var gen = DDLGenerator.init(allocator);
+        for (self.sm.tables) |schema_table| {
+            const ddl = try gen.generateDDL(schema_table);
+            defer allocator.free(ddl);
+            const ddl_z = try allocator.dupeZ(u8, ddl);
+            defer allocator.free(ddl_z);
+            try self.engine.execSetupSQL(ddl_z);
+        }
     }
 
     fn deinit(self: *DirectWriterContext) void {
@@ -82,18 +95,21 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     try ctx.init(allocator, table);
     defer ctx.deinit();
 
-    var namespace_id: i64 = -1;
-    var namespace_signal = storage_mod.WriteOp.CompletionSignal{};
     const namespace_name = try allocator.dupe(u8, "shutdown-drain");
-    var namespace_queued = false;
-    const namespace_op = storage_mod.WriteOp{
-        .upsert_namespace = .{
+    const external_user_id = try allocator.dupe(u8, "shutdown-user");
+    var session_queued = false;
+    const session_op = storage_mod.WriteOp{
+        .resolve_session = .{
+            .conn_id = 0,
+            .msg_id = 1,
+            .scope_seq = 0,
             .namespace = namespace_name,
-            .result = &namespace_id,
-            .completion_signal = &namespace_signal,
+            .external_user_id = external_user_id,
+            .timestamp = 0,
+            .result_buffer = ctx.engine.sessionResolutionBuffer(),
         },
     };
-    errdefer if (!namespace_queued) namespace_op.deinit(allocator);
+    errdefer if (!session_queued) session_op.deinit(allocator);
 
     var checkpoint_signal = storage_mod.WriteOp.CompletionSignal{};
     const checkpoint_op = storage_mod.WriteOp{
@@ -103,8 +119,8 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
         },
     };
 
-    try ctx.engine.writer.enqueueOp(namespace_op);
-    namespace_queued = true;
+    try ctx.engine.writer.enqueueOp(session_op);
+    session_queued = true;
     try ctx.engine.writer.enqueueOp(checkpoint_op);
 
     ctx.engine.writer.shutdown_requested.store(true, .release);
@@ -112,10 +128,17 @@ test "StorageEngine: shutdown drain completes immediate writer ops" {
     ctx.engine.writer.waitUntilReady();
     ctx.engine.writer.stopThread();
 
-    try namespace_signal.wait();
     try checkpoint_signal.wait();
     const checkpoint_stats = checkpoint_signal.result orelse return error.TestExpectedValue;
-    try testing.expect(namespace_id > 0);
+
+    var results = std.ArrayListUnmanaged(SessionResolutionResult).empty;
+    defer results.deinit(allocator);
+    try ctx.engine.sessionResolutionBuffer().drainInto(&results, allocator);
+
+    try testing.expectEqual(@as(usize, 1), results.items.len);
+    if (results.items[0].err) |err| return err;
+    try testing.expect(results.items[0].namespace_id > 0);
+    try testing.expect(results.items[0].user_doc_id != 0);
     try testing.expectEqual(storage_mod.CheckpointMode.passive, checkpoint_stats.mode);
     try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
 }

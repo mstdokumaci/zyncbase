@@ -18,7 +18,7 @@ const storage_errors = @import("storage_engine/errors.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
-const doc_id = @import("doc_id.zig");
+const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = storage_values.ColumnValue;
@@ -37,6 +37,8 @@ pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
 const typed_cache_type = storage_values.typed_cache_type;
+const namespace_cache_type = storage_values.namespace_cache_type;
+const identity_cache_type = storage_values.identity_cache_type;
 pub const typedValueFromPayload = value_codec.fromPayload;
 pub const validateTypedValuePayload = value_codec.validateValue;
 pub const writeTypedValueMsgPack = value_codec.writeMsgPack;
@@ -62,6 +64,8 @@ pub const StorageEngine = struct {
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const Schema,
     metadata_cache: typed_cache_type,
+    namespace_cache: namespace_cache_type,
+    identity_cache: identity_cache_type,
     options: Options,
     writer: Writer,
 
@@ -153,6 +157,11 @@ pub const StorageEngine = struct {
             var cb = change_buffer;
             cb.deinit();
         }
+        const session_resolution_buffer = try SessionResolutionBuffer.init(allocator);
+        errdefer {
+            var rb = session_resolution_buffer;
+            rb.deinit();
+        }
 
         self.* = .{
             .allocator = allocator,
@@ -164,6 +173,10 @@ pub const StorageEngine = struct {
             .schema_manager = sm,
             // SAFETY: Initialized below
             .metadata_cache = undefined,
+            // SAFETY: Initialized below
+            .namespace_cache = undefined,
+            // SAFETY: Initialized below
+            .identity_cache = undefined,
             .migration_active = std.atomic.Value(bool).init(false),
             .reconnection_config = .{},
             .writer = .{
@@ -177,10 +190,15 @@ pub const StorageEngine = struct {
                 .flush_cond = .{},
                 .pending_count = std.atomic.Value(usize).init(0),
                 .change_buffer = change_buffer,
+                .session_resolution_buffer = session_resolution_buffer,
                 .notifier_ptr = event_loop_notifier,
                 .notifier_ctx = notifier_ctx,
                 // SAFETY: Set after metadata_cache init below
                 .metadata_cache = undefined,
+                // SAFETY: Set after cache init below
+                .namespace_cache = undefined,
+                // SAFETY: Set after cache init below
+                .identity_cache = undefined,
                 .schema = sm,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_ready = std.atomic.Value(bool).init(false),
@@ -200,6 +218,14 @@ pub const StorageEngine = struct {
         try self.metadata_cache.init(allocator, .{});
         errdefer self.metadata_cache.deinit();
         self.writer.metadata_cache = &self.metadata_cache;
+
+        try self.namespace_cache.init(allocator, .{});
+        errdefer self.namespace_cache.deinit();
+        self.writer.namespace_cache = &self.namespace_cache;
+
+        try self.identity_cache.init(allocator, .{});
+        errdefer self.identity_cache.deinit();
+        self.writer.identity_cache = &self.identity_cache;
 
         try self.node_pool.init(memory_strategy.generalAllocator(), 1024, null, null);
         errdefer self.node_pool.deinit();
@@ -223,6 +249,8 @@ pub const StorageEngine = struct {
 
         // 3. Deinit cache
         self.metadata_cache.deinit();
+        self.namespace_cache.deinit();
+        self.identity_cache.deinit();
 
         // 4. Clean up readers
         for (self.reader_pool) |*node| {
@@ -300,6 +328,10 @@ pub const StorageEngine = struct {
         self.writer.stmt_cache.init(self.allocator, self.writer.performance_config.statement_cache_size);
         self.metadata_cache.deinit();
         try self.metadata_cache.init(self.allocator, .{});
+        self.namespace_cache.deinit();
+        try self.namespace_cache.init(self.allocator, .{});
+        self.identity_cache.deinit();
+        try self.identity_cache.init(self.allocator, .{});
         // Increment write_seq to notify readers that the state has changed (DDL/setup)
         self.writer.bumpVersion();
     }
@@ -334,65 +366,51 @@ pub const StorageEngine = struct {
         return &self.writer.change_buffer;
     }
 
-    pub fn lookupNamespaceId(self: *StorageEngine, namespace: []const u8) !?i64 {
-        try self.ensureRunning();
-
-        const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
-        const node = &self.reader_pool[reader_idx];
-        node.mutex.lock();
-        defer node.mutex.unlock();
-
-        return try sql.lookupNamespaceId(self.allocator, &node.conn, &node.stmt_cache, namespace);
+    pub fn sessionResolutionBuffer(self: *StorageEngine) *SessionResolutionBuffer {
+        return &self.writer.session_resolution_buffer;
     }
 
-    pub fn resolveNamespaceId(self: *StorageEngine, namespace: []const u8) !i64 {
-        try self.ensureRunning();
-
-        var signal = WriteOp.CompletionSignal{};
-        var namespace_id: i64 = 0;
-        const ns_owned = try self.allocator.dupe(u8, namespace);
-        var queued = false;
-
-        const op = WriteOp{
-            .upsert_namespace = .{
-                .namespace = ns_owned,
-                .result = &namespace_id,
-                .completion_signal = &signal,
-            },
-        };
-        errdefer if (!queued) op.deinit(self.allocator);
-
-        try self.writer.enqueueOp(op);
-        queued = true;
-
-        try signal.wait();
-        return namespace_id;
+    pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
+        const handle = self.namespace_cache.get(storage_values.namespaceCacheKey(namespace)) catch return null;
+        defer handle.release();
+        return handle.data().namespace_id;
     }
 
-    pub fn resolveUserId(self: *StorageEngine, namespace_id: i64, external_id: []const u8) !DocId {
+    pub fn cachedUserId(self: *StorageEngine, identity_namespace_id: i64, external_user_id: []const u8) ?DocId {
+        const key = storage_values.identityCacheKey(identity_namespace_id, external_user_id);
+        const handle = self.identity_cache.get(key) catch return null;
+        defer handle.release();
+        return handle.data().user_doc_id;
+    }
+
+    pub fn enqueueSessionResolution(
+        self: *StorageEngine,
+        conn_id: u64,
+        msg_id: u64,
+        scope_seq: u64,
+        namespace: []const u8,
+        external_user_id: []const u8,
+    ) !void {
         try self.ensureRunning();
 
-        var signal = WriteOp.CompletionSignal{};
-        var user_doc_id: DocId = doc_id.zero;
-        const external_id_owned = try self.allocator.dupe(u8, external_id);
-        var queued = false;
+        const namespace_owned = try self.allocator.dupe(u8, namespace);
+        errdefer self.allocator.free(namespace_owned);
+        const external_user_id_owned = try self.allocator.dupe(u8, external_user_id);
+        errdefer self.allocator.free(external_user_id_owned);
 
         const op = WriteOp{
-            .resolve_user = .{
-                .namespace_id = namespace_id,
-                .external_id = external_id_owned,
+            .resolve_session = .{
+                .conn_id = conn_id,
+                .msg_id = msg_id,
+                .scope_seq = scope_seq,
+                .namespace = namespace_owned,
+                .external_user_id = external_user_id_owned,
                 .timestamp = std.time.timestamp(),
-                .result = &user_doc_id,
-                .completion_signal = &signal,
+                .result_buffer = self.sessionResolutionBuffer(),
             },
         };
-        errdefer if (!queued) op.deinit(self.allocator);
 
         try self.writer.enqueueOp(op);
-        queued = true;
-
-        try signal.wait();
-        return user_doc_id;
     }
 
     pub fn flushPendingWrites(self: *StorageEngine) !void {

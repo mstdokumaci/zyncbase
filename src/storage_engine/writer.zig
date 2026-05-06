@@ -12,6 +12,9 @@ const write_queue = @import("write_queue.zig");
 const change_buffer = @import("../change_buffer.zig");
 const OwnedRowChange = change_buffer.OwnedRowChange;
 const ChangeBuffer = change_buffer.ChangeBuffer;
+const session_resolution = @import("../session_resolution_buffer.zig");
+const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
+const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 
 const DocId = storage_values.DocId;
@@ -32,9 +35,12 @@ pub const Writer = struct {
     flush_cond: std.Thread.Condition,
     pending_count: std.atomic.Value(usize),
     change_buffer: ChangeBuffer,
+    session_resolution_buffer: SessionResolutionBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     metadata_cache: *storage_values.typed_cache_type,
+    namespace_cache: *storage_values.namespace_cache_type,
+    identity_cache: *storage_values.identity_cache_type,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
@@ -130,6 +136,7 @@ pub const Writer = struct {
         self.allocator.free(self.db_path);
         self.queue.deinit();
         self.change_buffer.deinit();
+        self.session_resolution_buffer.deinit();
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -454,7 +461,7 @@ pub const Writer = struct {
                                 continue;
                             };
                         },
-                        .batch, .upsert_namespace, .resolve_user, .checkpoint => {
+                        .batch, .resolve_session, .checkpoint => {
                             self.executeImmediateOp(op, &batch, &last_batch_time);
                         },
                     }
@@ -490,7 +497,7 @@ pub const Writer = struct {
                         self.wakeFlushWaiters();
                     };
                 },
-                .batch, .upsert_namespace, .resolve_user, .checkpoint => {
+                .batch, .resolve_session, .checkpoint => {
                     self.executeImmediateOp(op, &batch, &last_batch_time);
                 },
             }
@@ -654,6 +661,64 @@ pub const Writer = struct {
         }
     }
 
+    fn executeResolveSessionOp(self: *Writer, sop: anytype) void {
+        var result = SessionResolutionResult{
+            .conn_id = sop.conn_id,
+            .msg_id = sop.msg_id,
+            .scope_seq = sop.scope_seq,
+            .namespace_id = 0,
+            .user_doc_id = doc_id.zero,
+            .err = null,
+        };
+
+        if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |namespace_id| {
+            result.namespace_id = namespace_id;
+
+            self.namespace_cache.update(
+                storage_values.namespaceCacheKey(sop.namespace),
+                .{ .namespace_id = namespace_id },
+            ) catch |err| {
+                std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
+            };
+
+            const users_table = self.schema.table("users") orelse {
+                result.err = error.UnknownTable;
+                sop.result_buffer.push(result) catch |err| {
+                    std.log.err("Failed to queue session resolution result: {}", .{err});
+                };
+                self.notifyChanges();
+                return;
+            };
+            const identity_namespace_id = if (users_table.namespaced) namespace_id else schema.global_namespace_id;
+
+            if (sql.resolveUserId(
+                self.allocator,
+                &self.conn,
+                &self.stmt_cache,
+                identity_namespace_id,
+                sop.external_user_id,
+                sop.timestamp,
+            )) |user_doc_id| {
+                result.user_doc_id = user_doc_id;
+                self.identity_cache.update(
+                    storage_values.identityCacheKey(identity_namespace_id, sop.external_user_id),
+                    .{ .user_doc_id = user_doc_id },
+                ) catch |err| {
+                    std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
+                };
+            } else |err| {
+                result.err = errors.classifyError(err);
+            }
+        } else |err| {
+            result.err = errors.classifyError(err);
+        }
+
+        sop.result_buffer.push(result) catch |err| {
+            std.log.err("Failed to queue session resolution result: {}", .{err});
+        };
+        self.notifyChanges();
+    }
+
     fn executeImmediateOp(
         self: *Writer,
         op: WriteOp,
@@ -668,31 +733,9 @@ pub const Writer = struct {
             .batch => |bop| {
                 executeBatchOp(self, bop, last_batch_time);
             },
-            .upsert_namespace => |nop| {
-                const ns_result = sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, nop.namespace);
-                // Free op-owned memory (namespace slice) before signaling so the
-                // caller cannot resume while the allocation is still live.
+            .resolve_session => |sop| {
+                self.executeResolveSessionOp(sop);
                 op.deinit(self.allocator);
-                if (ns_result) |namespace_id| {
-                    nop.result.* = namespace_id;
-                    nop.completion_signal.signal(null);
-                } else |err| {
-                    nop.completion_signal.signal(errors.classifyError(err));
-                }
-                self.endOp(1);
-                self.wakeFlushWaiters();
-            },
-            .resolve_user => |uop| {
-                const user_result = sql.resolveUserId(self.allocator, &self.conn, &self.stmt_cache, uop.namespace_id, uop.external_id, uop.timestamp);
-                // Free op-owned memory (external_id slice) before signaling so the
-                // caller cannot resume while the allocation is still live.
-                op.deinit(self.allocator);
-                if (user_result) |user_doc_id| {
-                    uop.result.* = user_doc_id;
-                    uop.completion_signal.signal(null);
-                } else |err| {
-                    uop.completion_signal.signal(errors.classifyError(err));
-                }
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },

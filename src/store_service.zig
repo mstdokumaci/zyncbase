@@ -101,23 +101,31 @@ pub const StoreService = struct {
         field_index: ?usize,
     };
 
-    pub fn resolveNamespace(self: *StoreService, namespace: []const u8) !i64 {
+    pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?ScopedSession {
         if (namespace.len == 0) return error.InvalidMessageFormat;
-        return (try self.storage_engine.lookupNamespaceId(namespace)) orelse try self.storage_engine.resolveNamespaceId(namespace);
-    }
-
-    pub fn resolveStoreScope(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !ScopedSession {
         if (external_user_id.len == 0) return error.InvalidMessageFormat;
 
-        const namespace_id = try self.resolveNamespace(namespace);
+        const namespace_id = self.storage_engine.cachedNamespaceId(namespace) orelse return null;
         const users_table = self.schema_manager.table("users") orelse return error.UnknownTable;
         const identity_namespace_id = if (users_table.namespaced) namespace_id else schema.global_namespace_id;
-        const user_doc_id = try self.storage_engine.resolveUserId(identity_namespace_id, external_user_id);
+        const user_doc_id = self.storage_engine.cachedUserId(identity_namespace_id, external_user_id) orelse return null;
 
         return .{
             .namespace_id = namespace_id,
             .user_doc_id = user_doc_id,
         };
+    }
+
+    pub fn enqueueResolveScope(
+        self: *StoreService,
+        conn_id: u64,
+        msg_id: u64,
+        scope_seq: u64,
+        namespace: []const u8,
+        external_user_id: []const u8,
+    ) !void {
+        if (namespace.len == 0 or external_user_id.len == 0) return error.InvalidMessageFormat;
+        try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, scope_seq, namespace, external_user_id);
     }
 
     pub fn setPath(

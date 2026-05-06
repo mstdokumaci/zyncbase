@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
+const SessionResolutionBuffer = @import("../session_resolution_buffer.zig").SessionResolutionBuffer;
 const values = @import("values.zig");
 
 pub const CheckpointMode = enum {
@@ -73,17 +74,14 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         completion_signal: ?*CompletionSignal = null,
     },
-    upsert_namespace: struct {
+    resolve_session: struct {
+        conn_id: u64,
+        msg_id: u64,
+        scope_seq: u64,
         namespace: []const u8,
-        result: *i64,
-        completion_signal: *CompletionSignal,
-    },
-    resolve_user: struct {
-        namespace_id: i64,
-        external_id: []const u8,
+        external_user_id: []const u8,
         timestamp: i64,
-        result: *values.DocId,
-        completion_signal: *CompletionSignal,
+        result_buffer: *SessionResolutionBuffer,
     },
     batch: struct {
         entries: []BatchEntry,
@@ -128,8 +126,7 @@ pub const WriteOp = union(enum) {
             .checkpoint => |op| op.completion_signal,
             .upsert => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
-            .upsert_namespace => |op| op.completion_signal,
-            .resolve_user => |op| op.completion_signal,
+            .resolve_session => null,
             .batch => |op| op.completion_signal,
         };
     }
@@ -144,11 +141,9 @@ pub const WriteOp = union(enum) {
             .delete => |op| {
                 allocator.free(op.sql);
             },
-            .upsert_namespace => |op| {
+            .resolve_session => |op| {
                 allocator.free(op.namespace);
-            },
-            .resolve_user => |op| {
-                allocator.free(op.external_id);
+                allocator.free(op.external_user_id);
             },
             .batch => |op| {
                 for (op.entries) |entry| entry.deinit(allocator);

@@ -128,8 +128,10 @@ pub const MessageHandler = struct {
             return;
         };
 
-        // 5. Send response
-        ws.send(response, .binary);
+        // 5. Send immediate response when the route completed synchronously.
+        if (response) |payload| {
+            ws.send(payload, .binary);
+        }
     }
 
     pub fn routeMessageFast(
@@ -138,7 +140,7 @@ pub const MessageHandler = struct {
         conn: *Connection,
         envelope: wire.Envelope,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const msg_type = classifyMsgType(envelope.type) orelse return error.UnknownMessageType;
         return switch (msg_type) {
             .store_set_namespace => try self.handleStoreSetNamespace(arena_allocator, conn, envelope.id, message),
@@ -162,12 +164,14 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
     }
 
-    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection) void {
+    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection) u64 {
         conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
         conn.resetStoreScopeLocked();
+        const scope_seq = conn.scope_seq;
         conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
+        return scope_seq;
     }
 
     fn unsubscribeDetached(self: *MessageHandler, conn: *Connection, detached: Connection.DetachedSubscriptions) void {
@@ -201,15 +205,20 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const req = try wire.extractStoreSetNamespaceFast(message);
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
-        self.resetStoreScopeAndClearSubscriptions(conn);
-        const scope = try self.store_service.resolveStoreScope(req.namespace, external_user_id);
-        conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
+        const scope_seq = self.resetStoreScopeAndClearSubscriptions(conn);
+        if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
+            if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
+                return try wire.encodeSuccess(arena_allocator, msg_id);
+            }
+            return error.RequestSuperseded;
+        }
 
-        return try wire.encodeSuccess(arena_allocator, msg_id);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id);
+        return null;
     }
 
     fn handleStoreUnsubscribe(

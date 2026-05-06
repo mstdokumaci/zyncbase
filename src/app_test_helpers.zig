@@ -4,6 +4,9 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const session_resolution = @import("session_resolution_buffer.zig");
+const SessionResolutionResult = session_resolution.SessionResolutionResult;
+const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -22,6 +25,7 @@ const tth = @import("typed_test_helpers.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
+var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
 
@@ -47,10 +51,10 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const result = handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
+    const result = (handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
         const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
         return try allocator.dupe(u8, error_msg);
-    };
+    }) orelse return error.AsyncResponsePending;
 
     return try allocator.dupe(u8, result);
 }
@@ -86,12 +90,14 @@ pub const AppTestContext = struct {
     memory_strategy: MemoryStrategy,
     violation_tracker: ViolationTracker,
     storage_engine: StorageEngine,
+    session_resolver: SessionResolver,
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema_manager: Schema,
     test_context: schema_helpers.TestContext,
+    test_resolution_mutex: std.Thread.Mutex,
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
         try self.initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true });
@@ -119,6 +125,7 @@ pub const AppTestContext = struct {
 
     pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: Schema, options: StorageEngine.Options) !void {
         self.allocator = allocator;
+        self.test_resolution_mutex = .{};
         self.schema_manager = sm;
         errdefer self.schema_manager.deinit();
 
@@ -155,21 +162,27 @@ pub const AppTestContext = struct {
         // 8. Initialize Connection Manager
         try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
         errdefer self.connection_manager.deinit();
+
+        self.session_resolver.init(allocator, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
+        errdefer self.session_resolver.deinit();
     }
 
     pub fn deinit(self: *AppTestContext) void {
-        // 1. Stop background activity (write worker) first
+        // 1. Stop async session delivery before its storage buffer is released.
+        self.session_resolver.deinit();
+
+        // 2. Stop background activity (write worker)
         self.storage_engine.deinit();
 
-        // 2. Shut down subsystems
+        // 3. Shut down subsystems
         self.connection_manager.deinit();
 
-        // 3. Now safe to tear down subsystems that were needed for session teardown
+        // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
         self.store_service.deinit();
 
-        // 4. Cleanup remaining infrastructure
+        // 5. Cleanup remaining infrastructure
         self.schema_manager.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
@@ -260,6 +273,54 @@ pub const AppTestContext = struct {
         self.memory_strategy.releaseConnection(conn);
     }
 
+    pub fn pollSessionResolver(self: *AppTestContext) void {
+        self.session_resolver.poll(&self.connection_manager);
+    }
+
+    pub fn resolveStoreScopeForTest(
+        self: *AppTestContext,
+        namespace: []const u8,
+        external_user_id: []const u8,
+    ) !StoreService.ScopedSession {
+        self.test_resolution_mutex.lock();
+        defer self.test_resolution_mutex.unlock();
+
+        if (try self.store_service.tryResolveScopeCached(namespace, external_user_id)) |scope| {
+            return scope;
+        }
+
+        const resolution_id = next_test_resolution_id.fetchAdd(1, .monotonic);
+        const conn_id = resolution_id;
+        const msg_id = resolution_id +% 1;
+        const scope_seq = resolution_id +% 2;
+
+        try self.store_service.enqueueResolveScope(conn_id, msg_id, scope_seq, namespace, external_user_id);
+        try self.storage_engine.flushPendingWrites();
+
+        var out = std.ArrayListUnmanaged(SessionResolutionResult).empty;
+        defer out.deinit(self.allocator);
+        try self.storage_engine.sessionResolutionBuffer().drainInto(&out, self.allocator);
+
+        var matched_result: ?SessionResolutionResult = null;
+        for (out.items) |result| {
+            if (result.conn_id != conn_id or result.msg_id != msg_id or result.scope_seq != scope_seq) {
+                return error.TestUnexpectedSessionResolutionResult;
+            }
+            if (matched_result != null) return error.TestUnexpectedSessionResolutionResult;
+            matched_result = result;
+        }
+
+        if (matched_result) |result| {
+            if (result.err) |err| return err;
+            return .{
+                .namespace_id = result.namespace_id,
+                .user_doc_id = result.user_doc_id,
+            };
+        }
+
+        return error.TestExpectedValue;
+    }
+
     /// Scoped wrapper for a connection's test lifecycle.
     pub const ScopedConnection = struct {
         app: *AppTestContext,
@@ -289,7 +350,7 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
-        const scope = try self.store_service.resolveStoreScope("default", test_external_user_id);
+        const scope = try self.resolveStoreScopeForTest("default", test_external_user_id);
         conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
         return ScopedConnection{
             .app = self,

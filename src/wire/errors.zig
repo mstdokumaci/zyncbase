@@ -46,6 +46,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.NamespaceUnauthorized => wireError("NAMESPACE_UNAUTHORIZED", "No access to namespace"),
         error.MaxDepthExceeded => wireError("MESSAGE_TOO_LARGE", "Payload too big"),
         error.RateLimited => wireError("RATE_LIMITED", "Too many requests"),
+        error.RequestSuperseded => wireError("REQUEST_SUPERSEDED", "Scope superseded by newer request"),
         error.HookServerUnavailable => wireError("HOOK_SERVER_UNAVAILABLE", "Logic runtime down"),
         error.HookDenied => wireError("HOOK_DENIED", "Logic rejected write"),
         error.BatchTooLarge => wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations"),

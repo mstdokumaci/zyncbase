@@ -32,6 +32,9 @@ pub const Connection = struct {
     /// True only after namespace and scoped users.id resolution completed.
     store_ready: bool,
 
+    /// Incremented whenever the active store scope is reset.
+    scope_seq: u64,
+
     /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
 
@@ -64,6 +67,7 @@ pub const Connection = struct {
         self.namespace_id = unset_namespace_id;
         self.user_doc_id = doc_id.zero;
         self.store_ready = false;
+        self.scope_seq = 0;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
         self.mutex = .{};
@@ -127,6 +131,7 @@ pub const Connection = struct {
         self.namespace_id = unset_namespace_id;
         self.user_doc_id = doc_id.zero;
         self.store_ready = false;
+        self.scope_seq +%= 1;
     }
 
     pub fn resetStoreScope(self: *Connection) void {
@@ -144,6 +149,24 @@ pub const Connection = struct {
         self.namespace_id = namespace_id;
         self.user_doc_id = user_doc_id;
         self.store_ready = true;
+    }
+
+    pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: doc_id.DocId) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.scope_seq != expected_scope_seq) return false;
+        self.namespace_id = namespace_id;
+        self.user_doc_id = user_doc_id;
+        self.store_ready = true;
+        return true;
+    }
+
+    pub fn isScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        return self.scope_seq == expected_scope_seq;
     }
 
     pub fn getStoreSession(self: *Connection) StoreSession {

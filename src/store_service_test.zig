@@ -893,9 +893,9 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     });
     defer app.deinit();
 
-    const scope_a = try app.store_service.resolveStoreScope("alpha", "client-a");
-    const scope_b = try app.store_service.resolveStoreScope("beta", "client-a");
-    const scope_c = try app.store_service.resolveStoreScope("alpha", "client-b");
+    const scope_a = try app.resolveStoreScopeForTest("alpha", "client-a");
+    const scope_b = try app.resolveStoreScopeForTest("beta", "client-a");
+    const scope_c = try app.resolveStoreScopeForTest("alpha", "client-b");
 
     try testing.expect(scope_a.namespace_id != scope_b.namespace_id);
     try testing.expectEqual(scope_a.user_doc_id, scope_b.user_doc_id);
@@ -922,9 +922,9 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     try app.initWithSchemaJSON(allocator, "scope-namespaced-users", schema_json);
     defer app.deinit();
 
-    const scope_a1 = try app.store_service.resolveStoreScope("alpha", "client-a");
-    const scope_a2 = try app.store_service.resolveStoreScope("alpha", "client-a");
-    const scope_b = try app.store_service.resolveStoreScope("beta", "client-a");
+    const scope_a1 = try app.resolveStoreScopeForTest("alpha", "client-a");
+    const scope_a2 = try app.resolveStoreScopeForTest("alpha", "client-a");
+    const scope_b = try app.resolveStoreScopeForTest("beta", "client-a");
 
     try testing.expectEqual(scope_a1.namespace_id, scope_a2.namespace_id);
     try testing.expectEqual(scope_a1.user_doc_id, scope_a2.user_doc_id);
