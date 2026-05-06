@@ -20,6 +20,7 @@ export const ErrorCodes = {
 	INTERNAL_ERROR: "INTERNAL_ERROR",
 	INVALID_PATH: "INVALID_PATH",
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
+	REQUEST_SUPERSEDED: "REQUEST_SUPERSEDED",
 } as const;
 
 interface ZyncBaseErrorOptions {
@@ -44,6 +45,7 @@ function deriveCategory(code: string): {
 			return { category: "auth", retryable: false };
 
 		case ErrorCodes.SESSION_NOT_READY:
+		case ErrorCodes.REQUEST_SUPERSEDED:
 			return { category: "state", retryable: false };
 
 		case ErrorCodes.RATE_LIMITED:

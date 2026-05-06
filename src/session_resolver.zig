@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const connection_mod = @import("connection.zig");
+const Connection = connection_mod.Connection;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const session_resolution = @import("session_resolution_buffer.zig");
@@ -41,6 +43,20 @@ pub const SessionResolver = struct {
         }
     }
 
+    fn sendStaleScopeError(self: *SessionResolver, conn: *Connection, msg_id: u64) void {
+        const arena = self.memory_strategy.acquireArena() catch |arena_err| {
+            std.log.err("SessionResolver acquireArena failed: {}", .{arena_err});
+            return;
+        };
+        defer self.memory_strategy.releaseArena(arena);
+
+        const msg = wire.encodeError(arena.allocator(), msg_id, wire.getWireError(error.RequestSuperseded)) catch |encode_err| {
+            std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
+            return;
+        };
+        conn.ws.send(msg, .binary);
+    }
+
     fn deliverResult(self: *SessionResolver, result: SessionResolutionResult, cm: *ConnectionManager) void {
         const conn = cm.acquireConnection(result.conn_id) catch |err| {
             std.log.debug("Failed to acquire connection {} for session resolution: {}", .{ result.conn_id, err });
@@ -49,7 +65,10 @@ pub const SessionResolver = struct {
         defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
         if (result.err) |err| {
-            if (!conn.isScopeSeqCurrent(result.scope_seq)) return;
+            if (!conn.isScopeSeqCurrent(result.scope_seq)) {
+                self.sendStaleScopeError(conn, result.msg_id);
+                return;
+            }
             const arena = self.memory_strategy.acquireArena() catch |arena_err| {
                 std.log.err("SessionResolver acquireArena failed: {}", .{arena_err});
                 return;
@@ -64,18 +83,21 @@ pub const SessionResolver = struct {
             return;
         }
 
-        const arena = self.memory_strategy.acquireArena() catch |err| {
-            std.log.err("SessionResolver acquireArena failed: {}", .{err});
+        if (!conn.setStoreScopeIfSeq(result.scope_seq, result.namespace_id, result.user_doc_id)) {
+            self.sendStaleScopeError(conn, result.msg_id);
+            return;
+        }
+
+        const arena = self.memory_strategy.acquireArena() catch |arena_err| {
+            std.log.err("SessionResolver acquireArena failed: {}", .{arena_err});
             return;
         };
         defer self.memory_strategy.releaseArena(arena);
 
-        const msg = wire.encodeSuccess(arena.allocator(), result.msg_id) catch |err| {
-            std.log.err("SessionResolver failed to encode success response: {}", .{err});
+        const msg = wire.encodeSuccess(arena.allocator(), result.msg_id) catch |encode_err| {
+            std.log.err("SessionResolver failed to encode success response: {}", .{encode_err});
             return;
         };
-
-        if (!conn.setStoreScopeIfSeq(result.scope_seq, result.namespace_id, result.user_doc_id)) return;
         conn.ws.send(msg, .binary);
     }
 

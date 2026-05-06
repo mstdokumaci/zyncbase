@@ -214,7 +214,7 @@ pub const MessageHandler = struct {
             if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }
-            return null;
+            return error.RequestSuperseded;
         }
 
         try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id);
