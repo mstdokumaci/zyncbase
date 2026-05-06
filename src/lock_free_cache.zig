@@ -75,6 +75,8 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         config: Config,
         reclaim_handle: ?std.Thread = null,
         reclaim_active: std.atomic.Value(bool),
+        reclaim_mutex: std.Thread.Mutex,
+        reclaim_cond: std.Thread.Condition,
 
         pub const Config = struct {
             max_deferred_nodes: usize = 100_000,
@@ -157,6 +159,8 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
                 .config = config,
                 .reclaim_active = std.atomic.Value(bool).init(true),
                 .reclaim_handle = null,
+                .reclaim_mutex = .{},
+                .reclaim_cond = .{},
             };
 
             try self.pool.init(allocator, @intCast(@as(u32, @intCast(config.max_deferred_nodes))), null, null);
@@ -174,6 +178,9 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
 
         pub fn deinit(self: *Self) void {
             self.reclaim_active.store(false, .release);
+            self.reclaim_mutex.lock();
+            self.reclaim_cond.signal();
+            self.reclaim_mutex.unlock();
             if (self.reclaim_handle) |h| h.join();
 
             self.reclaim(true);
@@ -478,7 +485,18 @@ pub fn lockFreeCache(comptime t: type, comptime KeyType: type) type { // zwanzig
         fn reclaimLoop(self: *Self) void {
             while (self.reclaim_active.load(.acquire)) {
                 self.reclaim(false);
-                std.Thread.sleep(self.config.reclamation_interval_ms * std.time.ns_per_ms);
+                self.reclaim_mutex.lock();
+                if (self.reclaim_active.load(.acquire)) {
+                    self.reclaim_cond.timedWait(
+                        &self.reclaim_mutex,
+                        self.config.reclamation_interval_ms * std.time.ns_per_ms,
+                    ) catch |err| {
+                        if (err != error.Timeout) {
+                            std.log.err("cache reclaim timedWait failed: {}", .{err});
+                        }
+                    };
+                }
+                self.reclaim_mutex.unlock();
             }
         }
 
