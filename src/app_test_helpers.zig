@@ -4,6 +4,9 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const session_resolution = @import("session_resolution.zig");
+const SessionResolutionResult = session_resolution.SessionResolutionResult;
+const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
@@ -47,10 +50,10 @@ pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Con
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const result = handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
+    const result = (handler.routeMessageFast(arena_allocator, conn, envelope, bytes) catch |err| {
         const error_msg = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
         return try allocator.dupe(u8, error_msg);
-    };
+    }) orelse return error.AsyncResponsePending;
 
     return try allocator.dupe(u8, result);
 }
@@ -86,6 +89,7 @@ pub const AppTestContext = struct {
     memory_strategy: MemoryStrategy,
     violation_tracker: ViolationTracker,
     storage_engine: StorageEngine,
+    session_resolver: SessionResolver,
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
     handler: MessageHandler,
@@ -155,21 +159,27 @@ pub const AppTestContext = struct {
         // 8. Initialize Connection Manager
         try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
         errdefer self.connection_manager.deinit();
+
+        self.session_resolver.init(allocator, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
+        errdefer self.session_resolver.deinit();
     }
 
     pub fn deinit(self: *AppTestContext) void {
-        // 1. Stop background activity (write worker) first
+        // 1. Stop async session delivery before its storage buffer is released.
+        self.session_resolver.deinit();
+
+        // 2. Stop background activity (write worker)
         self.storage_engine.deinit();
 
-        // 2. Shut down subsystems
+        // 3. Shut down subsystems
         self.connection_manager.deinit();
 
-        // 3. Now safe to tear down subsystems that were needed for session teardown
+        // 4. Now safe to tear down subsystems that were needed for session teardown
         self.subscription_engine.deinit();
         self.handler.deinit();
         self.store_service.deinit();
 
-        // 4. Cleanup remaining infrastructure
+        // 5. Cleanup remaining infrastructure
         self.schema_manager.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
@@ -260,6 +270,37 @@ pub const AppTestContext = struct {
         self.memory_strategy.releaseConnection(conn);
     }
 
+    pub fn pollSessionResolver(self: *AppTestContext) void {
+        self.session_resolver.poll(&self.connection_manager);
+    }
+
+    pub fn resolveStoreScopeForTest(
+        self: *AppTestContext,
+        namespace: []const u8,
+        external_user_id: []const u8,
+    ) !StoreService.ScopedSession {
+        if (try self.store_service.tryResolveScopeCached(namespace, external_user_id)) |scope| {
+            return scope;
+        }
+
+        try self.store_service.enqueueResolveScope(0, 0, 0, namespace, external_user_id);
+        try self.storage_engine.flushPendingWrites();
+
+        var out = std.ArrayListUnmanaged(SessionResolutionResult).empty;
+        defer out.deinit(self.allocator);
+        try self.storage_engine.sessionResolutionBuffer().drainInto(&out, self.allocator);
+
+        for (out.items) |result| {
+            if (result.err) |err| return err;
+            return .{
+                .namespace_id = result.namespace_id,
+                .user_doc_id = result.user_doc_id,
+            };
+        }
+
+        return error.TestExpectedValue;
+    }
+
     /// Scoped wrapper for a connection's test lifecycle.
     pub const ScopedConnection = struct {
         app: *AppTestContext,
@@ -289,7 +330,7 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
-        const scope = try self.store_service.resolveStoreScope("default", test_external_user_id);
+        const scope = try self.resolveStoreScopeForTest("default", test_external_user_id);
         conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
         return ScopedConnection{
             .app = self,

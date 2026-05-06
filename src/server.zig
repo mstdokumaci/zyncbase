@@ -12,6 +12,7 @@ const Config = @import("config_loader.zig").Config;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
+const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
@@ -35,6 +36,7 @@ pub const ZyncBaseServer = struct {
     checkpoint_manager: CheckpointManager,
     storage_engine: StorageEngine,
     notification_dispatcher: NotificationDispatcher,
+    session_resolver: SessionResolver,
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
     store_service: StoreService,
@@ -236,6 +238,14 @@ pub const ZyncBaseServer = struct {
             &self.schema_manager,
         );
         errdefer self.notification_dispatcher.deinit();
+
+        self.session_resolver.init(
+            self.memory_strategy.generalAllocator(),
+            self.storage_engine.sessionResolutionBuffer(),
+            &self.memory_strategy,
+        );
+        errdefer self.session_resolver.deinit();
+
         // Wire Notification Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
@@ -356,6 +366,9 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
+        std.log.debug("Deinitializing session_resolver", .{});
+        self.session_resolver.deinit();
+
         std.log.debug("Deinitializing notification_dispatcher", .{});
         self.notification_dispatcher.deinit();
 
@@ -395,6 +408,7 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
         self.notification_dispatcher.poll(&self.connection_manager);
+        self.session_resolver.poll(&self.connection_manager);
     }
 };
 
