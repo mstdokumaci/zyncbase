@@ -12,7 +12,7 @@
 		"generate": "./dist/cli/generate.js"
 	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist"
+		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",
