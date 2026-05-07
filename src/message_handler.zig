@@ -172,10 +172,15 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
     }
 
-    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection) u64 {
+    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
+        const namespace_owned = try conn.allocator.dupe(u8, namespace);
+        var transferred = false;
+        errdefer if (!transferred) conn.allocator.free(namespace_owned);
+
         conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
-        conn.resetStoreScopeLocked();
+        conn.beginStoreScopeResolutionLocked(namespace_owned);
+        transferred = true;
         const scope_seq = conn.scope_seq;
         conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
@@ -205,6 +210,58 @@ pub const MessageHandler = struct {
         return (try requireStoreSession(conn)).namespace_id;
     }
 
+    const StoreAuthScope = struct {
+        session: Connection.StoreSession,
+        namespace: []const u8,
+        external_user_id: []const u8,
+        namespace_match: authorization.AuthConfig.NamespaceRuleMatch,
+
+        fn deinit(self: *StoreAuthScope, allocator: std.mem.Allocator) void {
+            self.namespace_match.deinit(allocator);
+            allocator.free(self.external_user_id);
+            allocator.free(self.namespace);
+        }
+
+        fn evalContext(
+            self: *const StoreAuthScope,
+            allocator: std.mem.Allocator,
+            table: ?*const schema.Table,
+            value: ?*const msgpack.Payload,
+        ) authorization.EvalContext {
+            return .{
+                .allocator = allocator,
+                .session_user_id = self.session.user_doc_id,
+                .session_external_id = self.external_user_id,
+                .namespace_captures = &self.namespace_match.captures.captures,
+                .path_table = if (table) |t| t.name else null,
+                .value_payload = value,
+                .value_table = table,
+            };
+        }
+    };
+
+    fn makeStoreAuthScope(
+        self: *MessageHandler,
+        allocator: std.mem.Allocator,
+        conn: *Connection,
+        session: Connection.StoreSession,
+    ) !StoreAuthScope {
+        const namespace = (try conn.dupeStoreNamespace(allocator)) orelse return error.SessionNotReady;
+        errdefer allocator.free(namespace);
+
+        const external_user_id = try conn.dupeExternalUserId(allocator);
+        errdefer allocator.free(external_user_id);
+
+        const namespace_match = (try self.auth_config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
+
+        return .{
+            .session = session,
+            .namespace = namespace,
+            .external_user_id = external_user_id,
+            .namespace_match = namespace_match,
+        };
+    }
+
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
 
     fn handleStoreSetNamespace(
@@ -217,8 +274,10 @@ pub const MessageHandler = struct {
         const req = try wire.extractStoreSetNamespaceFast(message);
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
-        const scope_seq = self.resetStoreScopeAndClearSubscriptions(conn);
+        const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
+        errdefer _ = conn.resetStoreScopeIfSeq(scope_seq);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
+            try authorization.authorizeStoreNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id);
             if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }
@@ -283,21 +342,6 @@ pub const MessageHandler = struct {
         return msgpack.extractPayloadUint(path.arr[0]) orelse return error.InvalidMessageFormat;
     }
 
-    fn makeAuthEvalContext(
-        arena: std.mem.Allocator,
-        session: Connection.StoreSession,
-        table: ?*const schema.Table,
-        value: ?*const msgpack.Payload,
-    ) authorization.EvalContext {
-        return .{
-            .allocator = arena,
-            .session_user_id = session.user_doc_id,
-            .path_table = if (table) |t| t.name else null,
-            .value_payload = value,
-            .value_table = table,
-        };
-    }
-
     fn evaluateStoreWriteAuth(
         self: *MessageHandler,
         arena: std.mem.Allocator,
@@ -307,8 +351,10 @@ pub const MessageHandler = struct {
     ) !?authorization.InjectedClause {
         const session = try requireStoreSession(conn);
         const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
+        defer auth_scope.deinit(arena);
 
-        const eval_ctx = makeAuthEvalContext(arena, session, table, value);
+        const eval_ctx = auth_scope.evalContext(arena, table, value);
         const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
 
         return switch (eval_result) {
@@ -326,8 +372,10 @@ pub const MessageHandler = struct {
     ) !?authorization.InjectedClause {
         const session = try requireStoreSession(conn);
         const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
+        defer auth_scope.deinit(arena);
 
-        const eval_ctx = makeAuthEvalContext(arena, session, table, null);
+        const eval_ctx = auth_scope.evalContext(arena, table, null);
         const eval_result = authorization.evaluateCondition(store_rule.read, eval_ctx);
 
         return switch (eval_result) {
@@ -396,6 +444,8 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const payloads = try wire.extractStoreBatchPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
+        var auth_scope = try self.makeStoreAuthScope(arena_allocator, conn, session);
+        defer auth_scope.deinit(arena_allocator);
 
         var auth_clauses: ?[]?authorization.InjectedClause = null;
         if (payloads.ops == .arr and payloads.ops.arr.len > 0) {
@@ -411,7 +461,7 @@ pub const MessageHandler = struct {
 
                 const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
-                const eval_ctx = makeAuthEvalContext(arena_allocator, session, table, value_ptr);
+                const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
                 const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
                 switch (eval_result) {
                     .allow => {},

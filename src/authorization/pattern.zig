@@ -80,7 +80,7 @@ pub fn matchNamespace(
 
     for (parts.items, segments) |part, seg| {
         switch (seg) {
-            .literal => |lit| if (!std.mem.eql(u8, lit, part)) {
+            .literal => |lit| if (!std.mem.eql(u8, lit, "*") and !std.mem.eql(u8, lit, part)) {
                 var it = captures.iterator();
                 while (it.next()) |entry| {
                     allocator.free(entry.key_ptr.*);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const TypedValue = @import("../storage_engine/values.zig").TypedValue;
 
 pub const AuthConfig = struct {
     allocator: Allocator,
@@ -40,10 +41,10 @@ pub const AuthConfig = struct {
 
     /// Find the first NamespaceRule whose pattern matches the given namespace string.
     /// Caller must call deinit() on the returned match to free captures.
-    pub fn namespaceRuleFor(self: *const AuthConfig, namespace: []const u8) !?NamespaceRuleMatch {
+    pub fn namespaceRuleFor(self: *const AuthConfig, allocator: Allocator, namespace: []const u8) !?NamespaceRuleMatch {
         const pattern_mod = @import("pattern.zig");
         for (self.namespace_rules) |*rule| {
-            if (try pattern_mod.matchNamespace(self.allocator, rule.segments, namespace)) |match| {
+            if (try pattern_mod.matchNamespace(allocator, rule.segments, namespace)) |match| {
                 return .{ .rule = rule, .captures = match };
             }
         }
@@ -159,23 +160,13 @@ pub const VarScope = enum {
 };
 
 pub const Value = union(enum) {
-    string: []const u8,
-    integer: i64,
-    real: f64,
-    boolean: bool,
+    literal: TypedValue,
     context_var: ContextVar,
-    string_array: []const []const u8,
-    integer_array: []const i64,
 
     pub fn deinit(self: Value, allocator: Allocator) void {
         switch (self) {
-            .string => |s| allocator.free(s),
+            .literal => |v| v.deinit(allocator),
             .context_var => |cv| cv.deinit(allocator),
-            .string_array => |arr| {
-                for (arr) |s| allocator.free(s);
-                allocator.free(arr);
-            },
-            else => {},
         }
     }
 };

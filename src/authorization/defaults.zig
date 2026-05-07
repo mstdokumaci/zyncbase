@@ -10,33 +10,32 @@ const PatternSegment = types.PatternSegment;
 /// Returns a pre-built AuthConfig from the implicit defaults.
 /// Caller owns the returned config and must call deinit().
 pub fn implicitConfig(allocator: Allocator) !AuthConfig {
-    var result: AuthConfig = .{
-        .allocator = allocator,
-        .namespace_rules = &.{},
-        .store_rules = &.{},
-        .wildcard_store_index = null,
-    };
-    errdefer result.deinit();
-
-    // Build namespace rules
     const ns_rules = try allocator.alloc(NamespaceRule, 1);
-    errdefer allocator.free(ns_rules);
+    var ns_rules_len: usize = 0;
+    errdefer {
+        for (ns_rules[0..ns_rules_len]) |*rule| rule.deinit(allocator);
+        allocator.free(ns_rules);
+    }
 
     ns_rules[0] = try makePublicNamespaceRule(allocator);
-    errdefer ns_rules[0].deinit(allocator);
+    ns_rules_len = 1;
 
-    // Build store rules
     const st_rules = try allocator.alloc(StoreRule, 1);
-    errdefer allocator.free(st_rules);
+    var st_rules_len: usize = 0;
+    errdefer {
+        for (st_rules[0..st_rules_len]) |*rule| rule.deinit(allocator);
+        allocator.free(st_rules);
+    }
 
     st_rules[0] = try makeWildcardStoreRule(allocator);
-    errdefer st_rules[0].deinit(allocator);
+    st_rules_len = 1;
 
-    result.namespace_rules = ns_rules;
-    result.store_rules = st_rules;
-    result.wildcard_store_index = 0;
-
-    return result;
+    return .{
+        .allocator = allocator,
+        .namespace_rules = ns_rules,
+        .store_rules = st_rules,
+        .wildcard_store_index = 0,
+    };
 }
 
 fn makePublicNamespaceRule(allocator: Allocator) !NamespaceRule {

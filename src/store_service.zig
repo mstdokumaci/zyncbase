@@ -411,18 +411,8 @@ pub const StoreService = struct {
         }
         columns.deinit(self.allocator);
 
-        var auth_values: ?[]storage_mod.TypedValue = null;
-        if (auth_clause) |clause| {
-            const av = try self.allocator.alloc(storage_mod.TypedValue, clause.bind_values.len);
-            errdefer {
-                for (av) |v| v.deinit(self.allocator);
-                self.allocator.free(av);
-            }
-            for (clause.bind_values, 0..) |bv, i| {
-                av[i] = try bv.clone(self.allocator);
-            }
-            auth_values = av;
-        }
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer authorization.deinitBindValues(self.allocator, auth_values);
 
         const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
 
@@ -451,18 +441,8 @@ pub const StoreService = struct {
         const sql_string = try @import("storage_engine/sql.zig").buildDeleteDocumentSql(self.allocator, path.table, auth_clause);
         errdefer self.allocator.free(sql_string);
 
-        var auth_values: ?[]storage_mod.TypedValue = null;
-        if (auth_clause) |clause| {
-            const av = try self.allocator.alloc(storage_mod.TypedValue, clause.bind_values.len);
-            errdefer {
-                for (av) |v| v.deinit(self.allocator);
-                self.allocator.free(av);
-            }
-            for (clause.bind_values, 0..) |bv, i| {
-                av[i] = try bv.clone(self.allocator);
-            }
-            auth_values = av;
-        }
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer authorization.deinitBindValues(self.allocator, auth_values);
 
         const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
 

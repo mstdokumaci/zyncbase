@@ -19,6 +19,7 @@ const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
+const authorization = @import("authorization.zig");
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = storage_values.ColumnValue;
@@ -452,18 +453,8 @@ pub const StorageEngine = struct {
             initialized_count += 1;
         }
 
-        var auth_values: ?[]TypedValue = null;
-        if (auth_clause) |clause| {
-            const av = try self.allocator.alloc(TypedValue, clause.bind_values.len);
-            errdefer if (!queued) {
-                for (av) |v| v.deinit(self.allocator);
-                self.allocator.free(av);
-            };
-            for (clause.bind_values, 0..) |bv, i| {
-                av[i] = try bv.clone(self.allocator);
-            }
-            auth_values = av;
-        }
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
 
         const op = WriteOp{
             .upsert = .{
@@ -623,18 +614,8 @@ pub const StorageEngine = struct {
         const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata, auth_clause);
         errdefer if (!queued) self.allocator.free(sql_string);
 
-        var auth_values: ?[]TypedValue = null;
-        if (auth_clause) |clause| {
-            const av = try self.allocator.alloc(TypedValue, clause.bind_values.len);
-            errdefer if (!queued) {
-                for (av) |v| v.deinit(self.allocator);
-                self.allocator.free(av);
-            };
-            for (clause.bind_values, 0..) |bv, i| {
-                av[i] = try bv.clone(self.allocator);
-            }
-            auth_values = av;
-        }
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
 
         const op = WriteOp{
             .delete = .{

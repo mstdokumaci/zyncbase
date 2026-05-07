@@ -26,6 +26,12 @@ pub const Connection = struct {
     /// Resolved namespace ID for this connection's active store scope.
     namespace_id: i64,
 
+    /// Active store namespace string, promoted after scope resolution succeeds.
+    store_namespace: ?[]const u8,
+
+    /// Store namespace string awaiting async scope resolution.
+    pending_store_namespace: ?[]const u8,
+
     /// Resolved users.id for writes in the active store scope.
     user_doc_id: doc_id.DocId,
 
@@ -65,6 +71,8 @@ pub const Connection = struct {
         self.allocator = allocator;
         self.user_id = null;
         self.namespace_id = unset_namespace_id;
+        self.store_namespace = null;
+        self.pending_store_namespace = null;
         self.user_doc_id = doc_id.zero;
         self.store_ready = false;
         self.scope_seq = 0;
@@ -128,10 +136,19 @@ pub const Connection = struct {
     }
 
     pub fn resetStoreScopeLocked(self: *Connection) void {
+        if (self.store_namespace) |ns| self.allocator.free(ns);
+        if (self.pending_store_namespace) |ns| self.allocator.free(ns);
         self.namespace_id = unset_namespace_id;
+        self.store_namespace = null;
+        self.pending_store_namespace = null;
         self.user_doc_id = doc_id.zero;
         self.store_ready = false;
         self.scope_seq +%= 1;
+    }
+
+    pub fn beginStoreScopeResolutionLocked(self: *Connection, namespace: []const u8) void {
+        self.resetStoreScopeLocked();
+        self.pending_store_namespace = namespace;
     }
 
     pub fn resetStoreScope(self: *Connection) void {
@@ -151,14 +168,42 @@ pub const Connection = struct {
         self.store_ready = true;
     }
 
+    pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: doc_id.DocId) !void {
+        const namespace_owned = try self.allocator.dupe(u8, namespace);
+        errdefer self.allocator.free(namespace_owned);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.store_namespace) |ns| self.allocator.free(ns);
+        if (self.pending_store_namespace) |ns| self.allocator.free(ns);
+        self.store_namespace = namespace_owned;
+        self.pending_store_namespace = null;
+        self.namespace_id = namespace_id;
+        self.user_doc_id = user_doc_id;
+        self.store_ready = true;
+    }
+
     pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: doc_id.DocId) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (self.scope_seq != expected_scope_seq) return false;
+        if (self.store_namespace) |ns| self.allocator.free(ns);
+        self.store_namespace = self.pending_store_namespace;
+        self.pending_store_namespace = null;
         self.namespace_id = namespace_id;
         self.user_doc_id = user_doc_id;
         self.store_ready = true;
+        return true;
+    }
+
+    pub fn resetStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.scope_seq != expected_scope_seq) return false;
+        self.resetStoreScopeLocked();
         return true;
     }
 
@@ -167,6 +212,23 @@ pub const Connection = struct {
         defer self.mutex.unlock();
 
         return self.scope_seq == expected_scope_seq;
+    }
+
+    pub fn dupeStoreNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const namespace = self.store_namespace orelse return null;
+        return @as(?[]const u8, try allocator.dupe(u8, namespace));
+    }
+
+    pub fn dupePendingStoreNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64) !?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.scope_seq != expected_scope_seq) return null;
+        const namespace = self.pending_store_namespace orelse return null;
+        return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 
     pub fn getStoreSession(self: *Connection) StoreSession {

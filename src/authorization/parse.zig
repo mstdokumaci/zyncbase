@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
+const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
+const TypedValue = @import("../storage_engine/values.zig").TypedValue;
 
 /// Parse authorization.json text into an AuthConfig.
 pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConfig {
@@ -110,33 +112,42 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
         .bool => |b| return .{ .boolean = b },
         .object => |obj| {
             if (obj.get("hook")) |hook_val| {
+                if (obj.count() != 1) return error.InvalidCondition;
                 if (hook_val != .string) return error.InvalidHook;
                 const hook_name = try allocator.dupe(u8, hook_val.string);
                 return .{ .hook = hook_name };
             }
             if (obj.get("and")) |and_val| {
+                if (obj.count() != 1) return error.InvalidCondition;
                 if (and_val != .array) return error.InvalidCondition;
                 const arr = and_val.array.items;
+                if (arr.len == 0) return error.InvalidCondition;
                 const conds = try allocator.alloc(types.Condition, arr.len);
+                var initialized: usize = 0;
                 errdefer {
-                    for (conds) |*cond| cond.deinit(allocator);
+                    for (conds[0..initialized]) |*cond| cond.deinit(allocator);
                     allocator.free(conds);
                 }
                 for (arr, 0..) |item, i| {
                     conds[i] = try parseCondition(allocator, item);
+                    initialized += 1;
                 }
                 return .{ .logical_and = conds };
             }
             if (obj.get("or")) |or_val| {
+                if (obj.count() != 1) return error.InvalidCondition;
                 if (or_val != .array) return error.InvalidCondition;
                 const arr = or_val.array.items;
+                if (arr.len == 0) return error.InvalidCondition;
                 const conds = try allocator.alloc(types.Condition, arr.len);
+                var initialized: usize = 0;
                 errdefer {
-                    for (conds) |*cond| cond.deinit(allocator);
+                    for (conds[0..initialized]) |*cond| cond.deinit(allocator);
                     allocator.free(conds);
                 }
                 for (arr, 0..) |item, i| {
                     conds[i] = try parseCondition(allocator, item);
+                    initialized += 1;
                 }
                 return .{ .logical_or = conds };
             }
@@ -214,34 +225,47 @@ fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
                 const ctx_var = try parseContextVar(allocator, s);
                 return .{ .context_var = ctx_var };
             }
-            return .{ .string = try allocator.dupe(u8, s) };
+            return .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, s) } } };
         },
-        .integer => |i| return .{ .integer = i },
-        .float => |f| return .{ .real = f },
-        .bool => |b| return .{ .boolean = b },
+        .integer => |i| return .{ .literal = .{ .scalar = .{ .integer = i } } },
+        .float => |f| return .{ .literal = .{ .scalar = .{ .real = f } } },
+        .bool => |b| return .{ .literal = .{ .scalar = .{ .boolean = b } } },
         .array => |arr| {
             if (arr.items.len == 0) return error.InvalidValue;
             const first = arr.items[0];
             switch (first) {
                 .string => {
-                    const items = try allocator.alloc([]const u8, arr.items.len);
-                    errdefer {
-                        for (items) |s| allocator.free(s);
+                    const items = try allocator.alloc(ScalarValue, arr.items.len);
+                    var initialized: usize = 0;
+                    var items_owned = true;
+                    errdefer if (items_owned) {
+                        for (items[0..initialized]) |item| item.deinit(allocator);
                         allocator.free(items);
-                    }
+                    };
                     for (arr.items, 0..) |item, i| {
                         if (item != .string) return error.InvalidValue;
-                        items[i] = try allocator.dupe(u8, item.string);
+                        items[i] = .{ .text = try allocator.dupe(u8, item.string) };
+                        initialized += 1;
                     }
-                    return .{ .string_array = items };
+                    items_owned = false;
+                    var result = TypedValue{ .array = items };
+                    errdefer result.deinit(allocator);
+                    try result.sortedSet(allocator);
+                    return .{ .literal = result };
                 },
                 .integer => {
-                    const items = try allocator.alloc(i64, arr.items.len);
+                    const items = try allocator.alloc(ScalarValue, arr.items.len);
+                    var items_owned = true;
+                    errdefer if (items_owned) allocator.free(items);
                     for (arr.items, 0..) |item, i| {
                         if (item != .integer) return error.InvalidValue;
-                        items[i] = item.integer;
+                        items[i] = .{ .integer = item.integer };
                     }
-                    return .{ .integer_array = items };
+                    items_owned = false;
+                    var result = TypedValue{ .array = items };
+                    errdefer result.deinit(allocator);
+                    try result.sortedSet(allocator);
+                    return .{ .literal = result };
                 },
                 else => return error.InvalidValue,
             }

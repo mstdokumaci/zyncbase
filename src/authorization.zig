@@ -28,6 +28,9 @@ pub const EvalContext = evaluate_mod.EvalContext;
 pub const EvalResult = evaluate_mod.EvalResult;
 pub const evaluateCondition = evaluate_mod.evaluateCondition;
 pub const evaluateConditionStrict = evaluate_mod.evaluateConditionStrict;
+pub const authorizeStoreNamespace = evaluate_mod.authorizeStoreNamespace;
 
 pub const InjectedClause = inject_mod.InjectedClause;
 pub const injectDocCondition = inject_mod.injectDocCondition;
+pub const cloneBindValues = inject_mod.cloneBindValues;
+pub const deinitBindValues = inject_mod.deinitBindValues;

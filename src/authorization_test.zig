@@ -5,6 +5,7 @@ const AuthConfig = authorization.AuthConfig;
 const EvalContext = authorization.EvalContext;
 const doc_id = @import("doc_id.zig");
 const schema_system = @import("schema/system.zig");
+const ScalarValue = @import("storage_engine.zig").ScalarValue;
 
 // ─── Parser Tests ───────────────────────────────────────────────────────────
 
@@ -99,6 +100,23 @@ test "matchNamespace returns null on mismatch" {
     try testing.expect(match == null);
 }
 
+test "matchNamespace wildcard matches one segment" {
+    const allocator = testing.allocator;
+    const segments = try authorization.parsePattern(allocator, "*");
+    defer {
+        for (segments) |seg| seg.deinit(allocator);
+        allocator.free(segments);
+    }
+
+    const match = try authorization.matchNamespace(allocator, segments, "default");
+    try testing.expect(match != null);
+    var matched = match orelse return error.TestExpectedValue;
+    matched.deinit(allocator);
+
+    const nested = try authorization.matchNamespace(allocator, segments, "tenant:acme");
+    try testing.expect(nested == null);
+}
+
 // ─── RAM Evaluator Tests ────────────────────────────────────────────────────
 
 test "evaluateCondition boolean true allows" {
@@ -117,9 +135,9 @@ test "evaluateCondition boolean false denies" {
     try testing.expect(result == .deny);
 }
 
-test "evaluateCondition hook returns needs_injection in non-strict mode" {
+test "evaluateCondition hook denies until hooks are implemented" {
     const result = authorization.evaluateCondition(.{ .hook = "myHook" }, .{ .allocator = testing.allocator });
-    try testing.expect(result == .needs_injection);
+    try testing.expect(result == .deny);
 }
 
 test "evaluateConditionStrict hook denies" {
@@ -132,7 +150,7 @@ test "evaluateCondition $doc reference returns needs_injection" {
     const cond = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "owner_id") },
         .op = .eq,
-        .rhs = .{ .string = try allocator.dupe(u8, "test") },
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "test") } } },
     } };
     defer cond.deinit(allocator);
 
@@ -163,7 +181,7 @@ test "evaluateCondition $namespace capture lookup" {
     const cond = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try allocator.dupe(u8, "tenant_id") },
         .op = .eq,
-        .rhs = .{ .string = try allocator.dupe(u8, "acme") },
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "acme") } } },
     } };
     defer cond.deinit(allocator);
 
@@ -211,14 +229,14 @@ test "evaluateCondition in_set works with array" {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    const arr = try arena_allocator.alloc([]const u8, 2);
-    arr[0] = try arena_allocator.dupe(u8, "acme");
-    arr[1] = try arena_allocator.dupe(u8, "globex");
+    const arr = try arena_allocator.alloc(ScalarValue, 2);
+    arr[0] = .{ .text = try arena_allocator.dupe(u8, "acme") };
+    arr[1] = .{ .text = try arena_allocator.dupe(u8, "globex") };
 
     const cond = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .namespace, .field = try arena_allocator.dupe(u8, "tenant_id") },
         .op = .in_set,
-        .rhs = .{ .string_array = arr },
+        .rhs = .{ .literal = .{ .array = arr } },
     } };
     // No defer deinit — all memory is arena-owned
 
@@ -244,7 +262,7 @@ test "namespaceRuleFor finds matching rule with captures" {
     var config = try AuthConfig.init(allocator, json);
     defer config.deinit();
 
-    var match = try config.namespaceRuleFor("tenant:acme");
+    var match = try config.namespaceRuleFor(allocator, "tenant:acme");
     try testing.expect(match != null);
     try testing.expect(std.mem.eql(u8, match.?.rule.pattern, "tenant:{tenant_id}"));
     try testing.expect(std.mem.eql(u8, match.?.captures.get("tenant_id").?, "acme"));
@@ -256,8 +274,22 @@ test "namespaceRuleFor returns null when no match" {
     var config = try authorization.implicitConfig(allocator);
     defer config.deinit();
 
-    const match = try config.namespaceRuleFor("unknown:something");
+    const match = try config.namespaceRuleFor(allocator, "unknown:something");
     try testing.expect(match == null);
+}
+
+test "authorizeStoreNamespace enforces storeFilter" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$namespace.tenant_id":{"eq":"acme"}},"presenceRead":true,"presenceWrite":true}],"store":[]}
+    ;
+    var config = try AuthConfig.init(allocator, json);
+    defer config.deinit();
+
+    const user_id = doc_id.generateUuidV7();
+    try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1");
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1"));
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1"));
 }
 
 // ─── Injector Tests ─────────────────────────────────────────────────────────
@@ -309,6 +341,49 @@ test "injectDocCondition returns empty for RAM-only condition" {
 
     try testing.expect(clause.sql.len == 0);
     try testing.expect(clause.bind_values.len == 0);
+}
+
+test "injectDocCondition preserves logical_or SQL" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"or":[{"$doc.owner_id":{"eq":"$session.userId"}},{"$doc.visibility":{"eq":"public"}}]}}]}
+    ;
+    var config = try AuthConfig.init(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "owner_id", .field_type = .doc_id },
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const test_id = doc_id.generateUuidV7();
+    const eval_ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = test_id,
+    };
+
+    const clause = try authorization.injectDocCondition(allocator, config.store_rules[0].write, eval_ctx, &table);
+    defer clause.deinit(allocator);
+
+    try testing.expect(std.mem.indexOf(u8, clause.sql, " OR ") != null);
+    try testing.expect(clause.bind_values.len == 2);
+}
+
+test "injectDocCondition denies hook conditions" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"hook":"authorizeWrite"}}]}
+    ;
+    var config = try AuthConfig.init(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "owner_id", .field_type = .doc_id },
+    });
+    defer table.deinit(allocator);
+
+    try testing.expectError(error.AccessDenied, authorization.injectDocCondition(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table));
 }
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────

@@ -21,6 +21,15 @@ pub const EvalResult = enum {
     needs_injection,
 };
 
+pub const ResolvedValue = struct {
+    value: TypedValue,
+    owned: bool = false,
+
+    pub fn deinit(self: ResolvedValue, allocator: std.mem.Allocator) void {
+        if (self.owned) self.value.deinit(allocator);
+    }
+};
+
 /// Evaluate a condition in RAM.
 /// Returns .allow / .deny for fully resolvable conditions.
 /// Returns .needs_injection if the condition references $doc variables.
@@ -33,17 +42,37 @@ pub fn evaluateConditionStrict(condition: types.Condition, ctx: EvalContext) boo
     return evaluateConditionInternal(condition, ctx, true) == .allow;
 }
 
+pub fn authorizeStoreNamespace(
+    allocator: std.mem.Allocator,
+    config: *const types.AuthConfig,
+    namespace: []const u8,
+    session_user_id: doc_id.DocId,
+    session_external_id: []const u8,
+) !void {
+    var match = (try config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
+    defer match.deinit(allocator);
+
+    const ctx: EvalContext = .{
+        .allocator = allocator,
+        .session_user_id = session_user_id,
+        .session_external_id = session_external_id,
+        .namespace_captures = &match.captures.captures,
+    };
+    if (!evaluateConditionStrict(match.rule.store_filter, ctx)) return error.NamespaceUnauthorized;
+}
+
 fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, strict: bool) EvalResult {
     switch (condition) {
         .boolean => |b| return if (b) .allow else .deny,
-        .hook => return if (strict) .deny else .needs_injection,
+        .hook => return .deny,
         .logical_and => |conds| {
+            var has_injection = false;
             for (conds) |cond| {
                 const result = evaluateConditionInternal(cond, ctx, strict);
                 if (result == .deny) return .deny;
-                if (result == .needs_injection and !strict) return .needs_injection;
+                if (result == .needs_injection) has_injection = true;
             }
-            return .allow;
+            return if (has_injection and !strict) .needs_injection else .allow;
         },
         .logical_or => |conds| {
             var has_injection = false;
@@ -63,29 +92,37 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
         return if (strict) .deny else .needs_injection;
     }
 
-    const lhs_opt = resolveLhs(comp.lhs, ctx);
-    const rhs_opt = resolveRhs(comp.rhs, ctx);
+    var lhs = resolveLhs(comp.lhs, ctx) orelse return .deny;
+    defer lhs.deinit(ctx.allocator);
 
-    const lhs_val = lhs_opt orelse return .deny;
-    const rhs_val = rhs_opt orelse return .deny;
+    var rhs = resolveRhs(comp.rhs, ctx) orelse return .deny;
+    defer rhs.deinit(ctx.allocator);
 
-    return if (compareValues(lhs_val, comp.op, rhs_val)) .allow else .deny;
+    return if (compareValues(lhs.value, comp.op, rhs.value)) .allow else .deny;
 }
 
-fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?TypedValue {
+fn borrowed(value: TypedValue) ResolvedValue {
+    return .{ .value = value, .owned = false };
+}
+
+fn owned(value: TypedValue) ResolvedValue {
+    return .{ .value = value, .owned = true };
+}
+
+fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedValue {
     return switch (var_ctx.scope) {
         .session => if (std.mem.eql(u8, var_ctx.field, "userId"))
-            if (ctx.session_user_id) |id| TypedValue{ .scalar = .{ .doc_id = id } } else null
+            if (ctx.session_user_id) |id| borrowed(.{ .scalar = .{ .doc_id = id } }) else null
         else if (std.mem.eql(u8, var_ctx.field, "externalId"))
-            if (ctx.session_external_id) |id| TypedValue{ .scalar = .{ .text = id } } else null
+            if (ctx.session_external_id) |id| borrowed(.{ .scalar = .{ .text = id } }) else null
         else
             null,
         .namespace => if (ctx.namespace_captures) |captures| blk: {
             const val = captures.get(var_ctx.field) orelse break :blk null;
-            break :blk TypedValue{ .scalar = .{ .text = val } };
+            break :blk borrowed(.{ .scalar = .{ .text = val } });
         } else null,
         .path => if (std.mem.eql(u8, var_ctx.field, "table"))
-            if (ctx.path_table) |t| TypedValue{ .scalar = .{ .text = t } } else null
+            if (ctx.path_table) |t| borrowed(.{ .scalar = .{ .text = t } }) else null
         else
             null,
         .value => resolveValueField(var_ctx.field, ctx),
@@ -93,27 +130,14 @@ fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?TypedValue {
     };
 }
 
-pub fn resolveRhs(value: types.Value, ctx: EvalContext) ?TypedValue {
+pub fn resolveRhs(value: types.Value, ctx: EvalContext) ?ResolvedValue {
     return switch (value) {
-        .string => |s| TypedValue{ .scalar = .{ .text = s } },
-        .integer => |i| TypedValue{ .scalar = .{ .integer = i } },
-        .real => |r| TypedValue{ .scalar = .{ .real = r } },
-        .boolean => |b| TypedValue{ .scalar = .{ .boolean = b } },
+        .literal => |v| borrowed(v),
         .context_var => |cv| resolveLhs(cv, ctx),
-        .string_array => |arr| blk: {
-            const scalars = ctx.allocator.alloc(ScalarValue, arr.len) catch break :blk null;
-            for (arr, 0..) |s, i| scalars[i] = .{ .text = s };
-            break :blk TypedValue{ .array = scalars };
-        },
-        .integer_array => |arr| blk: {
-            const scalars = ctx.allocator.alloc(ScalarValue, arr.len) catch break :blk null;
-            for (arr, 0..) |n, i| scalars[i] = .{ .integer = n };
-            break :blk TypedValue{ .array = scalars };
-        },
     };
 }
 
-fn resolveValueField(field: []const u8, ctx: EvalContext) ?TypedValue {
+fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
     const payload = ctx.value_payload orelse return null;
     const table = ctx.value_table orelse return null;
 
@@ -133,7 +157,8 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?TypedValue {
             else => false,
         };
         if (matched) {
-            return @import("../storage_engine.zig").typedValueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch null; // zwanzig-disable-line: swallowed-error
+            const value = @import("../storage_engine.zig").typedValueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+            return owned(value);
         }
     }
 
@@ -155,15 +180,18 @@ fn compareValues(lhs: TypedValue, op: types.ComparisonOp, rhs: TypedValue) bool 
             break :blk ord == .lt or ord == .eq;
         },
         .in_set => blk: {
+            if (lhs != .scalar) break :blk false;
             if (rhs != .array) break :blk false;
             break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) != null;
         },
         .not_in_set => blk: {
-            if (rhs != .array) break :blk true;
+            if (lhs != .scalar) break :blk false;
+            if (rhs != .array) break :blk false;
             break :blk std.sort.binarySearch(ScalarValue, rhs.array, lhs.scalar, ScalarValue.order) == null;
         },
         .contains => blk: {
             if (lhs != .array) break :blk false;
+            if (rhs != .scalar) break :blk false;
             break :blk std.sort.binarySearch(ScalarValue, lhs.array, rhs.scalar, ScalarValue.order) != null;
         },
     };

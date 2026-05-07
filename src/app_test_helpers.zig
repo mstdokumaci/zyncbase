@@ -169,7 +169,7 @@ pub const AppTestContext = struct {
         try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
         errdefer self.connection_manager.deinit();
 
-        // 10. Initialize Sessoion Resolver
+        // 10. Initialize Session Resolver
         self.session_resolver.init(allocator, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
         errdefer self.session_resolver.deinit();
     }
@@ -358,8 +358,9 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
-        const scope = try self.resolveStoreScopeForTest("default", test_external_user_id);
-        conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
+        const namespace = "public";
+        const scope = try self.resolveStoreScopeForTest(namespace, test_external_user_id);
+        try conn.setStoreScopeForNamespace(namespace, scope.namespace_id, scope.user_doc_id);
         return ScopedConnection{
             .app = self,
             .ws = ws,
