@@ -79,7 +79,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res = try engine.selectQuery(allocator, items_md.index, ns, sql_filter);
+    var sql_res = try engine.selectQuery(allocator, items_md.index, ns, sql_filter, null);
     defer sql_res.result.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_res.result.rows, items_md);
@@ -100,7 +100,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res = try engine.selectQuery(allocator, items_md.index, ns, all_filter);
+    var all_res = try engine.selectQuery(allocator, items_md.index, ns, all_filter, null);
     defer all_res.result.deinit();
 
     var mem_ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
@@ -180,7 +180,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res2 = try engine.selectQuery(allocator, players_md.index, ns, sql_filter);
+    var sql_res2 = try engine.selectQuery(allocator, players_md.index, ns, sql_filter, null);
     defer sql_res2.result.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_res2.result.rows, players_md);
@@ -201,7 +201,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res2 = try engine.selectQuery(allocator, players_md.index, ns, all_filter);
+    var all_res2 = try engine.selectQuery(allocator, players_md.index, ns, all_filter, null);
     defer all_res2.result.deinit();
 
     var mem_ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);

@@ -435,7 +435,7 @@ test "StorageEngine: concurrent reads" {
     const items_table_index = ctx.tableIndex("items");
     const Thread = struct {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, table_index: usize, id: u128) !void {
-            var managed = try eng.selectDocument(alloc, table_index, id, 2);
+            var managed = try eng.selectDocument(alloc, table_index, id, 2, null);
             defer managed.deinit();
             try testing.expect(managed.rows.len > 0);
         }
