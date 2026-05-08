@@ -81,7 +81,7 @@ pub const TableFixture = struct {
         id: storage_engine.DocId,
         namespace_id: i64,
     ) !storage_engine.ManagedResult {
-        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace_id);
+        return self.engine.selectDocument(allocator, self.metadata.index, id, namespace_id, null);
     }
 
     pub fn selectQuery(
@@ -90,7 +90,7 @@ pub const TableFixture = struct {
         namespace_id: i64,
         filter: query_parser.QueryFilter,
     ) !storage_engine.ManagedResult {
-        const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter);
+        const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter, null);
         if (res.next_cursor_str) |s| allocator.free(s);
         return res.result;
     }
@@ -100,7 +100,7 @@ pub const TableFixture = struct {
         id: storage_engine.DocId,
         namespace_id: i64,
     ) !void {
-        return self.engine.deleteDocument(self.metadata.index, id, namespace_id);
+        return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null);
     }
 
     pub fn getOne(
@@ -434,7 +434,7 @@ fn insertNamedWithMetadata(
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace_id, doc_id.zero, &resolved);
+    try engine.insertOrReplace(table_metadata.index, id, namespace_id, doc_id.zero, &resolved, null);
 }
 
 // ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───

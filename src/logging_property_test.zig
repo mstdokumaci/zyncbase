@@ -16,6 +16,7 @@ const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const StoreService = @import("store_service.zig").StoreService;
+const authorization = @import("authorization.zig");
 
 // Custom log handler to capture log messages for testing
 const LogCapture = struct {
@@ -276,7 +277,7 @@ test "logging: error details" {
     {
         const tbl_md = app.schema_manager.getTable("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
-        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, 1);
+        var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -351,7 +352,10 @@ test "logging: level filtering" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var store_service = StoreService.init(allocator, &storage_engine, &sm2);
+        var auth_config = try authorization.implicitConfig(allocator);
+        defer auth_config.deinit();
+
+        var store_service = StoreService.init(allocator, &storage_engine, &sm2, &auth_config);
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
@@ -362,6 +366,8 @@ test "logging: level filtering" {
             &store_service,
             &subscription_engine,
             .{},
+            &auth_config,
+            &sm2,
         );
         defer handler.deinit();
 
@@ -434,7 +440,10 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var store_service = StoreService.init(allocator, &storage_engine, &sm3);
+        var auth_config2 = try authorization.implicitConfig(allocator);
+        defer auth_config2.deinit();
+
+        var store_service = StoreService.init(allocator, &storage_engine, &sm3, &auth_config2);
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
@@ -445,6 +454,8 @@ test "logging: message formatting" {
             &store_service,
             &subscription_engine,
             .{},
+            &auth_config2,
+            &sm3,
         );
         defer handler.deinit();
 
@@ -501,7 +512,10 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var store_service = StoreService.init(allocator, &storage_engine, &sm4);
+        var auth_config3 = try authorization.implicitConfig(allocator);
+        defer auth_config3.deinit();
+
+        var store_service = StoreService.init(allocator, &storage_engine, &sm4, &auth_config3);
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
@@ -512,6 +526,8 @@ test "logging: message formatting" {
             &store_service,
             &subscription_engine,
             .{},
+            &auth_config3,
+            &sm4,
         );
         defer handler.deinit();
 

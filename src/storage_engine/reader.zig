@@ -7,6 +7,7 @@ const doc_id = @import("../doc_id.zig");
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const storage_values = @import("values.zig");
+const authorization = @import("../authorization.zig");
 
 const StorageError = errors.StorageError;
 const DocId = storage_values.DocId;
@@ -31,6 +32,7 @@ pub fn buildSelectQuery(
     table_metadata: *const schema.Table,
     namespace_id: i64,
     filter: query_parser.QueryFilter,
+    auth_clause: ?authorization.InjectedClause,
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -99,14 +101,26 @@ pub fn buildSelectQuery(
             if (filter.order_by.field_index == schema.id_field_index) {
                 try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             } else {
-                const sv = try cursor.sort_value.clone(allocator);
-                errdefer sv.deinit(allocator);
-                try values.append(allocator, sv);
+                {
+                    const sv = try cursor.sort_value.clone(allocator);
+                    errdefer sv.deinit(allocator);
+                    try values.append(allocator, sv);
+                }
                 try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             }
         }
 
         try sql_buf.appendSlice(allocator, ")");
+    }
+
+    // Auth clause injection
+    if (auth_clause) |clause| {
+        try sql_buf.appendSlice(allocator, clause.sql);
+        for (clause.bind_values) |bv| {
+            const cloned = try bv.clone(allocator);
+            errdefer cloned.deinit(allocator);
+            try values.append(allocator, cloned);
+        }
     }
 
     // 3.. ORDER BY
@@ -282,10 +296,19 @@ pub fn execSelectDocumentTyped(
     id: DocId,
     namespace_id: i64,
     table_metadata: *const schema.Table,
+    auth_values: ?[]const TypedValue,
 ) !?TypedRow {
     const id_bytes = doc_id.toBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
+
+    var bind_idx: c_int = 3;
+    if (auth_values) |avals| {
+        for (avals) |val| {
+            try sql.bindTypedValue(val, db, stmt, bind_idx, allocator);
+            bind_idx += 1;
+        }
+    }
 
     const rc = sqlite.c.sqlite3_step(stmt);
     if (rc == sqlite.c.SQLITE_DONE) return null;

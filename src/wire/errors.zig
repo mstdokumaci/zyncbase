@@ -41,7 +41,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.MissingExternalIdentity => wireError("AUTH_FAILED", "Identity verification failed"),
         error.AuthFailed => wireError("AUTH_FAILED", "Identity verification failed"),
         error.TokenExpired => wireError("TOKEN_EXPIRED", "Session has expired"),
-        error.PermissionDenied => wireError("PERMISSION_DENIED", "Rule blocked operation"),
+        error.PermissionDenied, error.AccessDenied => wireError("PERMISSION_DENIED", "Rule blocked operation"),
         error.SessionNotReady => wireError("SESSION_NOT_READY", "Scoped session is not ready"),
         error.NamespaceUnauthorized => wireError("NAMESPACE_UNAUTHORIZED", "No access to namespace"),
         error.MaxDepthExceeded => wireError("MESSAGE_TOO_LARGE", "Payload too big"),

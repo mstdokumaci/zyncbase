@@ -1,0 +1,17 @@
+{
+	"namespaces": [
+		{
+			"pattern": "*",
+			"storeFilter": true,
+			"presenceRead": true,
+			"presenceWrite": true
+		}
+	],
+	"store": [
+		{
+			"collection": "*",
+			"read": true,
+			"write": true
+		}
+	]
+}

@@ -44,11 +44,16 @@ pub const BatchEntry = struct {
     owner_doc_id: values.DocId,
     sql: []const u8,
     values: ?[]values.TypedValue,
+    auth_values: ?[]values.TypedValue = null,
     timestamp: i64,
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
         allocator.free(self.sql);
         if (self.values) |vals| {
+            for (vals) |v| v.deinit(allocator);
+            allocator.free(vals);
+        }
+        if (self.auth_values) |vals| {
             for (vals) |v| v.deinit(allocator);
             allocator.free(vals);
         }
@@ -64,6 +69,7 @@ pub const WriteOp = union(enum) {
         owner_doc_id: values.DocId,
         sql: []const u8,
         values: []values.TypedValue,
+        auth_values: ?[]values.TypedValue = null,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
     },
@@ -72,6 +78,7 @@ pub const WriteOp = union(enum) {
         id: values.DocId,
         namespace_id: i64,
         sql: []const u8,
+        auth_values: ?[]values.TypedValue = null,
         completion_signal: ?*CompletionSignal = null,
     },
     resolve_session: struct {
@@ -137,9 +144,17 @@ pub const WriteOp = union(enum) {
                 allocator.free(op.sql);
                 for (op.values) |value| value.deinit(allocator);
                 allocator.free(op.values);
+                if (op.auth_values) |auth_vals| {
+                    for (auth_vals) |v| v.deinit(allocator);
+                    allocator.free(auth_vals);
+                }
             },
             .delete => |op| {
                 allocator.free(op.sql);
+                if (op.auth_values) |auth_vals| {
+                    for (auth_vals) |v| v.deinit(allocator);
+                    allocator.free(auth_vals);
+                }
             },
             .resolve_session => |op| {
                 allocator.free(op.namespace);

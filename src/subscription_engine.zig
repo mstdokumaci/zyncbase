@@ -446,16 +446,16 @@ fn evaluateConditionInternal(cond: Condition, row: TypedRow) !bool {
     const val = row.values[cond.field_index];
 
     return switch (cond.op) {
-        .eq => typedValuesEqualInternal(val, cond.value orelse return false),
-        .ne => !typedValuesEqualInternal(val, cond.value orelse return true),
-        .gt => compareTypedValuesInternal(val, cond.value orelse return false) == .gt,
+        .eq => val.eql(cond.value orelse return false),
+        .ne => !val.eql(cond.value orelse return true),
+        .gt => val.order(cond.value orelse return false) == .gt,
         .gte => blk: {
-            const res = compareTypedValuesInternal(val, cond.value orelse return false);
+            const res = val.order(cond.value orelse return false);
             break :blk res == .gt or res == .eq;
         },
-        .lt => compareTypedValuesInternal(val, cond.value orelse return false) == .lt,
+        .lt => val.order(cond.value orelse return false) == .lt,
         .lte => blk: {
-            const res = compareTypedValuesInternal(val, cond.value orelse return false);
+            const res = val.order(cond.value orelse return false);
             break :blk res == .lt or res == .eq;
         },
         .isNull => val == .nil,
@@ -492,29 +492,5 @@ fn evaluateConditionInternal(cond: Condition, row: TypedRow) !bool {
             if (cond.value == null or cond.value.? != .array) break :blk false;
             break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) == null;
         },
-    };
-}
-
-fn typedValuesEqualInternal(a: TypedValue, b: TypedValue) bool {
-    if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return false;
-    return switch (a) {
-        .nil => true,
-        .scalar => a.scalar.order(b.scalar) == .eq,
-        .array => |arr| blk: {
-            if (arr.len != b.array.len) break :blk false;
-            for (arr, 0..) |item, i| {
-                if (item.order(b.array[i]) != .eq) break :blk false;
-            }
-            break :blk true;
-        },
-    };
-}
-
-fn compareTypedValuesInternal(a: TypedValue, b: TypedValue) std.math.Order {
-    if (@as(std.meta.Tag(TypedValue), a) != @as(std.meta.Tag(TypedValue), b)) return .lt;
-
-    return switch (a) {
-        .scalar => |sa| sa.order(b.scalar),
-        else => .eq, // Unsortable
     };
 }

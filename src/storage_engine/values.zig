@@ -209,6 +209,29 @@ pub const TypedValue = union(enum) {
             .nil => {},
         }
     }
+
+    pub fn eql(self: TypedValue, other: TypedValue) bool {
+        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return false;
+        return switch (self) {
+            .nil => true,
+            .scalar => self.scalar.order(other.scalar) == .eq,
+            .array => |arr| blk: {
+                if (arr.len != other.array.len) break :blk false;
+                for (arr, 0..) |item, i| {
+                    if (item.order(other.array[i]) != .eq) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
+
+    pub fn order(self: TypedValue, other: TypedValue) std.math.Order {
+        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return .lt;
+        return switch (self) {
+            .scalar => |s| s.order(other.scalar),
+            else => .eq,
+        };
+    }
 };
 
 fn scalarValueLessThan(_: void, a: ScalarValue, b: ScalarValue) bool {

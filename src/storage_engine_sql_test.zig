@@ -17,13 +17,13 @@ test "storage SQL builders quote identifiers" {
         .{ .index = schema.first_user_field_index, .value = undefined },
     };
 
-    const insert_sql = try sql.buildInsertOrReplaceSql(allocator, table_metadata, &columns);
+    const insert_sql = try sql.buildInsertOrReplaceSql(allocator, table_metadata, &columns, null);
     defer allocator.free(insert_sql);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "INSERT INTO \"select\" (\"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"from\" = excluded.\"from\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"select\".\"namespace_id\" = excluded.\"namespace_id\"") != null);
 
-    const delete_sql = try sql.buildDeleteDocumentSql(allocator, table_metadata);
+    const delete_sql = try sql.buildDeleteDocumentSql(allocator, table_metadata, null);
     defer allocator.free(delete_sql);
     try std.testing.expect(std.mem.indexOf(u8, delete_sql, "DELETE FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=? RETURNING ") != null);
     try std.testing.expect(std.mem.indexOf(u8, delete_sql, "\"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\"") != null);
@@ -38,7 +38,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     defer sm.deinit();
     const table_metadata = sm.getTable("select") orelse return error.TestExpectedValue;
 
-    const select_document_sql = try sql.buildSelectDocumentSql(allocator, table_metadata);
+    const select_document_sql = try sql.buildSelectDocumentSql(allocator, table_metadata, null);
     defer allocator.free(select_document_sql);
     try std.testing.expectEqualStrings(
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"id\"=? AND \"namespace_id\"=?",

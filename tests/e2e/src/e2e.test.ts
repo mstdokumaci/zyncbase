@@ -40,6 +40,7 @@ describe("ZyncBase E2E", () => {
 						schemaPath: ctx.schemaPath("schema-sync.json"),
 						dataDir: ctx.dataPath("sync"),
 						configName: "zyncbase-config-sync.json",
+						authPath: ctx.schemaPath("auth-allow-all.json"),
 					},
 					async ({ port }) => {
 						await runSync(port);

@@ -100,7 +100,7 @@ test "storage: error handling concurrent access safety" {
     };
     const runRead = struct {
         fn run(t_ctx: ThreadContext, table_index: usize) void {
-            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, 1) catch return; // zwanzig-disable-line: swallowed-error
+            var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, 1, null) catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
             _ = managed.rows;
         }

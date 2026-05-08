@@ -11,6 +11,8 @@ const Connection = connection_mod.Connection;
 const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
+const authorization = @import("authorization.zig");
+const schema = @import("schema.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -21,6 +23,8 @@ pub const MessageHandler = struct {
     store_service: *StoreService,
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
+    auth_config: *const authorization.AuthConfig,
+    schema_manager: *const schema.Schema,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -31,6 +35,8 @@ pub const MessageHandler = struct {
         store_service: *StoreService,
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
+        auth_config: *const authorization.AuthConfig,
+        schema_manager: *const schema.Schema,
     ) void {
         self.* = .{
             .allocator = allocator,
@@ -39,6 +45,8 @@ pub const MessageHandler = struct {
             .store_service = store_service,
             .subscription_engine = subscription_engine,
             .security_config = security_config,
+            .auth_config = auth_config,
+            .schema_manager = schema_manager,
         };
     }
 
@@ -164,10 +172,15 @@ pub const MessageHandler = struct {
         self.unsubscribeDetached(conn, detached);
     }
 
-    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection) u64 {
+    fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
+        const namespace_owned = try conn.allocator.dupe(u8, namespace);
+        var transferred = false;
+        errdefer if (!transferred) conn.allocator.free(namespace_owned);
+
         conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
-        conn.resetStoreScopeLocked();
+        conn.beginStoreScopeResolutionLocked(namespace_owned);
+        transferred = true;
         const scope_seq = conn.scope_seq;
         conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
@@ -197,6 +210,58 @@ pub const MessageHandler = struct {
         return (try requireStoreSession(conn)).namespace_id;
     }
 
+    const StoreAuthScope = struct {
+        session: Connection.StoreSession,
+        namespace: []const u8,
+        external_user_id: []const u8,
+        namespace_match: authorization.AuthConfig.NamespaceRuleMatch,
+
+        fn deinit(self: *StoreAuthScope, allocator: std.mem.Allocator) void {
+            self.namespace_match.deinit(allocator);
+            allocator.free(self.external_user_id);
+            allocator.free(self.namespace);
+        }
+
+        fn evalContext(
+            self: *const StoreAuthScope,
+            allocator: std.mem.Allocator,
+            table: ?*const schema.Table,
+            value: ?*const msgpack.Payload,
+        ) authorization.EvalContext {
+            return .{
+                .allocator = allocator,
+                .session_user_id = self.session.user_doc_id,
+                .session_external_id = self.external_user_id,
+                .namespace_captures = &self.namespace_match.captures.captures,
+                .path_table = if (table) |t| t.name else null,
+                .value_payload = value,
+                .value_table = table,
+            };
+        }
+    };
+
+    fn makeStoreAuthScope(
+        self: *MessageHandler,
+        allocator: std.mem.Allocator,
+        conn: *Connection,
+        session: Connection.StoreSession,
+    ) !StoreAuthScope {
+        const namespace = (try conn.dupeStoreNamespace(allocator)) orelse return error.SessionNotReady;
+        errdefer allocator.free(namespace);
+
+        const external_user_id = try conn.dupeExternalUserId(allocator);
+        errdefer allocator.free(external_user_id);
+
+        const namespace_match = (try self.auth_config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
+
+        return .{
+            .session = session,
+            .namespace = namespace,
+            .external_user_id = external_user_id,
+            .namespace_match = namespace_match,
+        };
+    }
+
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
 
     fn handleStoreSetNamespace(
@@ -209,8 +274,10 @@ pub const MessageHandler = struct {
         const req = try wire.extractStoreSetNamespaceFast(message);
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
 
-        const scope_seq = self.resetStoreScopeAndClearSubscriptions(conn);
+        const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
+        errdefer _ = conn.resetStoreScopeIfSeq(scope_seq);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
+            try authorization.authorizeStoreNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id);
             if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }
@@ -253,7 +320,10 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor);
+        const table = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
+        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+
+        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor, read_auth);
         defer page.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{
@@ -267,6 +337,54 @@ pub const MessageHandler = struct {
 
     // ---- Group B: Payload-dependent handlers (keep Payload tree) ----
 
+    fn extractTableIndexFromPath(path: msgpack.Payload) !usize {
+        if (path != .arr or path.arr.len == 0) return error.InvalidMessageFormat;
+        return msgpack.extractPayloadUint(path.arr[0]) orelse return error.InvalidMessageFormat;
+    }
+
+    fn evaluateStoreWriteAuth(
+        self: *MessageHandler,
+        arena: std.mem.Allocator,
+        conn: *Connection,
+        table: *const schema.Table,
+        value: ?*const msgpack.Payload,
+    ) !?authorization.InjectedClause {
+        const session = try requireStoreSession(conn);
+        const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
+        defer auth_scope.deinit(arena);
+
+        const eval_ctx = auth_scope.evalContext(arena, table, value);
+        const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
+
+        return switch (eval_result) {
+            .allow => null,
+            .deny => error.AccessDenied,
+            .needs_injection => try authorization.injectDocCondition(arena, store_rule.write, eval_ctx, table),
+        };
+    }
+
+    fn evaluateStoreReadAuth(
+        self: *MessageHandler,
+        arena: std.mem.Allocator,
+        conn: *Connection,
+        table: *const schema.Table,
+    ) !?authorization.InjectedClause {
+        const session = try requireStoreSession(conn);
+        const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
+        defer auth_scope.deinit(arena);
+
+        const eval_ctx = auth_scope.evalContext(arena, table, null);
+        const eval_result = authorization.evaluateCondition(store_rule.read, eval_ctx);
+
+        return switch (eval_result) {
+            .allow => null,
+            .deny => error.AccessDenied,
+            .needs_injection => try authorization.injectDocCondition(arena, store_rule.read, eval_ctx, table),
+        };
+    }
+
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
@@ -278,10 +396,15 @@ pub const MessageHandler = struct {
         const value = payloads.value orelse return error.MissingRequiredFields;
         const session = try requireStoreSession(conn);
 
+        const table_index = try extractTableIndexFromPath(payloads.path);
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const auth_clause = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
+
         try self.store_service.setPath(
             .{
                 .namespace_id = session.namespace_id,
                 .owner_doc_id = session.user_doc_id,
+                .auth_clause = auth_clause,
             },
             payloads.path,
             value,
@@ -300,8 +423,12 @@ pub const MessageHandler = struct {
         const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
 
+        const table_index = try extractTableIndexFromPath(payloads.path);
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const auth_clause = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
+
         try self.store_service.removePath(
-            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_clause = auth_clause },
             payloads.path,
         );
 
@@ -317,10 +444,40 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const payloads = try wire.extractStoreBatchPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
+        var auth_scope = try self.makeStoreAuthScope(arena_allocator, conn, session);
+        defer auth_scope.deinit(arena_allocator);
+
+        var auth_clauses: ?[]?authorization.InjectedClause = null;
+        if (payloads.ops == .arr and payloads.ops.arr.len > 0) {
+            const clauses = try arena_allocator.alloc(?authorization.InjectedClause, payloads.ops.arr.len);
+            @memset(clauses, null);
+            auth_clauses = clauses;
+
+            for (payloads.ops.arr, 0..) |op_payload, i| {
+                if (op_payload != .arr or op_payload.arr.len < 2) continue;
+                const path = op_payload.arr[1];
+                const table_index = try extractTableIndexFromPath(path);
+                const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+
+                const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+                const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
+                const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
+                const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
+                switch (eval_result) {
+                    .allow => {},
+                    .deny => return error.AccessDenied,
+                    .needs_injection => {
+                        const clause = try authorization.injectDocCondition(arena_allocator, store_rule.write, eval_ctx, table);
+                        clauses[i] = clause;
+                    },
+                }
+            }
+        }
 
         try self.store_service.batchWrite(
             .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
             payloads.ops,
+            auth_clauses,
         );
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
@@ -344,7 +501,10 @@ pub const MessageHandler = struct {
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth);
         defer qr.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
@@ -376,7 +536,10 @@ pub const MessageHandler = struct {
 
         const namespace_id = try requireStoreNamespace(conn);
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed);
+        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth);
         defer qr.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{

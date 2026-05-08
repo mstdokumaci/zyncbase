@@ -46,11 +46,11 @@ test "storage: stability no crashes on concurrent errors" {
                 // Try to set a value
                 t_ctx.ctx.insertText("test", key, 1, "val", "value") catch continue; // zwanzig-disable-line: swallowed-error
                 // Try to get the value
-                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
+                var managed = t_ctx.ctx.engine.selectDocument(t_ctx.allocator, tbl_md.index, key, 1, null) catch continue; // zwanzig-disable-line: swallowed-error
                 defer managed.deinit();
                 _ = managed.rows;
                 // Try to delete the value
-                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1, null) catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;

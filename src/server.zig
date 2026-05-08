@@ -17,6 +17,7 @@ const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
+const authorization = @import("authorization.zig");
 const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
@@ -43,6 +44,7 @@ pub const ZyncBaseServer = struct {
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema_manager: Schema,
+    auth_config: authorization.AuthConfig,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
 
@@ -132,6 +134,28 @@ pub const ZyncBaseServer = struct {
             errdefer self.schema_manager.deinit();
         }
 
+        auth_init: {
+            if (config.authorization_file) |file| {
+                const auth_json = std.fs.cwd().readFileAlloc(
+                    self.memory_strategy.generalAllocator(),
+                    file,
+                    1 * 1024 * 1024,
+                ) catch |err| {
+                    if (err == error.FileNotFound) {
+                        std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
+                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator());
+                        break :auth_init;
+                    }
+                    return err;
+                };
+                self.auth_config = try authorization.AuthConfig.init(self.memory_strategy.generalAllocator(), auth_json);
+                self.memory_strategy.generalAllocator().free(auth_json);
+            } else {
+                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator());
+            }
+            errdefer self.auth_config.deinit();
+        }
+
         // Initialize storage engine, which now requires a schema and notification callbacks
         std.log.debug("Initializing storage engine with data_dir: {s}", .{config.data_dir});
         try self.storage_engine.init(
@@ -207,6 +231,7 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             &self.storage_engine,
             &self.schema_manager,
+            &self.auth_config,
         );
 
         self.message_handler.init(
@@ -216,6 +241,8 @@ pub const ZyncBaseServer = struct {
             &self.store_service,
             &self.subscription_engine,
             config.security,
+            &self.auth_config,
+            &self.schema_manager,
         );
         errdefer self.message_handler.deinit();
 
@@ -392,6 +419,9 @@ pub const ZyncBaseServer = struct {
         var config_ptr = &self.config;
         config_ptr.deinit();
         std.log.debug("config deinitialized", .{});
+
+        // Free auth config
+        self.auth_config.deinit();
 
         // Free schema manager
         self.schema_manager.deinit();

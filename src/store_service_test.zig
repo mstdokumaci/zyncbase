@@ -242,7 +242,7 @@ test "StoreService: remove" {
         try app.storage_engine.flushPendingWrites();
 
         const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
-        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1);
+        var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();
         try testing.expect(managed.rows.len == 0);
     }
@@ -434,7 +434,7 @@ test "StoreService: query - basic search" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try app.store_service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("people")), filter_map);
+    var qr = try app.store_service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("people")), filter_map, null);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -466,7 +466,7 @@ test "StoreService: query - orderBy and limit" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("tasks")), filter_map);
+    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("tasks")), filter_map, null);
     defer qr.deinit(allocator);
 
     if (qr.results.rows.len == 0) return error.TestExpectedValue;
@@ -488,7 +488,7 @@ test "StoreService: query - negative cases" {
         const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
-        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(999), filter_map);
+        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(999), filter_map, null);
         try testing.expectError(StorageError.UnknownTable, err);
     }
 
@@ -500,7 +500,7 @@ test "StoreService: query - negative cases" {
         });
         defer filter_map.free(allocator);
 
-        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map);
+        const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map, null);
         try testing.expectError(StorageError.UnknownField, err);
     }
 }
@@ -533,7 +533,7 @@ test "StoreService: queryMore - pagination" {
     });
     defer filter_map.free(allocator);
 
-    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map);
+    var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map, null);
     defer qr.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
@@ -543,7 +543,7 @@ test "StoreService: queryMore - pagination" {
     const encoded_cursor = qr.next_cursor_str orelse return error.TestExpectedValue;
 
     // 2. Query with cursor: fetch next 2
-    var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor);
+    var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor, null);
     defer next_page.deinit(allocator);
 
     if (next_page.results.rows.len == 0) return error.TestExpectedValue;
@@ -688,7 +688,7 @@ test "StoreService: batchWrite - multi-set inserts documents atomically" {
     ops_arr[1] = t2;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload);
+    try service.batchWrite(writeCtx(1), ops_payload, null);
     try app.storage_engine.flushPendingWrites();
 
     // Verify both documents exist
@@ -747,7 +747,7 @@ test "StoreService: batchWrite - mixed set and remove" {
     ops_arr[1] = set_op;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload);
+    try service.batchWrite(writeCtx(1), ops_payload, null);
     try app.storage_engine.flushPendingWrites();
 
     // Doc 1 should be gone
@@ -774,7 +774,7 @@ test "StoreService: batchWrite - empty ops is a no-op" {
     const ops_payload = msgpack.Payload{ .arr = empty_arr };
 
     // Should succeed silently
-    try app.store_service.batchWrite(writeCtx(1), ops_payload);
+    try app.store_service.batchWrite(writeCtx(1), ops_payload, null);
 }
 
 test "StoreService: batchWrite - rejects invalid kind" {
@@ -802,7 +802,7 @@ test "StoreService: batchWrite - rejects invalid kind" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
 }
 
 test "StoreService: batchWrite - rejects set with missing value" {
@@ -830,7 +830,7 @@ test "StoreService: batchWrite - rejects set with missing value" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload));
+    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
 }
 
 test "StoreService: batchWrite - rejects unknown table" {
@@ -854,7 +854,7 @@ test "StoreService: batchWrite - rejects unknown table" {
     ops_arr[0] = t;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload));
+    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
 }
 
 test "StoreService: batchWrite - rejects non-array payload" {
@@ -865,7 +865,7 @@ test "StoreService: batchWrite - rejects non-array payload" {
     });
     defer app.deinit();
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil, null));
 }
 
 test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
@@ -882,7 +882,7 @@ test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
     @memset(ops_arr, .nil);
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload));
+    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
 }
 
 test "StoreService: resolveStoreScope uses global users table by default" {
@@ -902,7 +902,7 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     try testing.expect(scope_a.user_doc_id != scope_c.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_a.user_doc_id, schema.global_namespace_id);
+    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_a.user_doc_id, schema.global_namespace_id, null);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 1), managed.rows.len);
 }
@@ -932,7 +932,7 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     try testing.expect(scope_a1.user_doc_id != scope_b.user_doc_id);
 
     const users = try app.tableMetadata("users");
-    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id);
+    var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id, null);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 1), managed.rows.len);
 }

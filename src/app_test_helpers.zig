@@ -22,6 +22,7 @@ const wire = @import("wire.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const storage_engine = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
+const authorization = @import("authorization.zig");
 
 /// Shared atomic counter for unique connection IDs in tests
 var next_mock_ws_id = std.atomic.Value(u64).init(1);
@@ -96,6 +97,7 @@ pub const AppTestContext = struct {
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema_manager: Schema,
+    auth_config: authorization.AuthConfig,
     test_context: schema_helpers.TestContext,
     test_resolution_mutex: std.Thread.Mutex,
 
@@ -152,17 +154,22 @@ pub const AppTestContext = struct {
         self.subscription_engine = SubscriptionEngine.init(allocator);
         errdefer self.subscription_engine.deinit();
 
-        // 6 Initialize Store Service
-        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager);
+        // 6. Initialize Auth Config
+        self.auth_config = try authorization.implicitConfig(allocator);
+        errdefer self.auth_config.deinit();
 
-        // 7. Initialize Handler and Manager
-        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{});
+        // 7. Initialize Store Service
+        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager, &self.auth_config);
+
+        // 8. Initialize Handler and Manager
+        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema_manager);
         errdefer self.handler.deinit();
 
-        // 8. Initialize Connection Manager
+        // 9. Initialize Connection Manager
         try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
         errdefer self.connection_manager.deinit();
 
+        // 10. Initialize Session Resolver
         self.session_resolver.init(allocator, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
         errdefer self.session_resolver.deinit();
     }
@@ -183,6 +190,7 @@ pub const AppTestContext = struct {
         self.store_service.deinit();
 
         // 5. Cleanup remaining infrastructure
+        self.auth_config.deinit();
         self.schema_manager.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
@@ -350,8 +358,9 @@ pub const AppTestContext = struct {
         ws.* = createMockWebSocket();
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
-        const scope = try self.resolveStoreScopeForTest("default", test_external_user_id);
-        conn.setStoreScope(scope.namespace_id, scope.user_doc_id);
+        const namespace = "public";
+        const scope = try self.resolveStoreScopeForTest(namespace, test_external_user_id);
+        try conn.setStoreScopeForNamespace(namespace, scope.namespace_id, scope.user_doc_id);
         return ScopedConnection{
             .app = self,
             .ws = ws,

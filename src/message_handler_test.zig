@@ -79,6 +79,56 @@ test "MessageHandler: store operations require ready scope" {
     try testing.expectEqualStrings("SESSION_NOT_READY", result.code.?);
 }
 
+test "MessageHandler: StoreSet document with auth injection persists and is readable" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "tasks": { "fields": { "title": { "type": "string" }, "must_be_complete": { "type": "object", "fields": { "before": { "type": "integer" }, "after": { "type": "integer" } } } } }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "mh-storeset-doc-auth", schema_json);
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
+    const table = try app.tableMetadata("tasks");
+
+    // Build a document map payload { title: "hello", must_be_complete__before: 100, must_be_complete__after: 200 }
+    const doc_value = try store_helpers.createDocumentMapPayload(allocator, table, .{
+        .{ "title", "hello" },
+        .{ "must_be_complete__before", @as(i64, 100) },
+        .{ "must_be_complete__after", @as(i64, 200) },
+    });
+    defer doc_value.free(allocator);
+
+    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, null, doc_value);
+    defer allocator.free(message);
+
+    const response = try routeWithArena(&app.handler, allocator, conn, message);
+    defer allocator.free(response);
+    const result = try parseResponse(allocator, response);
+    defer allocator.free(result.resp_type);
+    defer if (result.code) |code| allocator.free(code);
+
+    try testing.expectEqualStrings("ok", result.resp_type);
+
+    // Flush writes to ensure persistence
+    try app.storage_engine.flushPendingWrites();
+
+    // Read back via storage engine
+    var managed = try app.storage_engine.selectDocument(allocator, table.index, 1, conn.namespace_id, null);
+    defer managed.deinit();
+    try testing.expectEqual(@as(usize, 1), managed.rows.len);
+    try testing.expectEqualStrings("hello", managed.rows[0].values[table.fieldIndex("title").?].scalar.text);
+    try testing.expectEqual(@as(i64, 100), managed.rows[0].values[table.fieldIndex("must_be_complete__before").?].scalar.integer);
+    try testing.expectEqual(@as(i64, 200), managed.rows[0].values[table.fieldIndex("must_be_complete__after").?].scalar.integer);
+}
+
 test "MessageHandler: StoreSet routes and maps StoreService errors" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;

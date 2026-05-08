@@ -43,6 +43,7 @@ export type ServerOptions = {
 	schemaPath: string;
 	dataDir: string;
 	configName?: string;
+	authPath?: string;
 };
 
 export type ServerHandle = {
@@ -439,14 +440,17 @@ export async function withServer<T>(
 	const configPath = ctx.artifactPath(
 		options.configName ?? "zyncbase-config.json",
 	);
-	fs.writeFileSync(
-		configPath,
-		JSON.stringify({
-			server: { port: ctx.port },
-			dataDir: options.dataDir,
-			schema: options.schemaPath,
-		}),
-	);
+
+	const config: Record<string, unknown> = {
+		server: { port: ctx.port },
+		dataDir: options.dataDir,
+		schema: options.schemaPath,
+	};
+	if (options.authPath) {
+		config.authorization = options.authPath;
+	}
+
+	fs.writeFileSync(configPath, JSON.stringify(config));
 
 	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);
 	const server = await startServer(configPath, ctx.port);

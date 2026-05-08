@@ -89,7 +89,7 @@ test "storage: thread-safe engine access" {
             var i: usize = 0;
             while (i < ops_per_thread) : (i += 1) {
                 const key: u128 = (thread_id % (num_threads / 2)) * 1_000 + i + 1;
-                var managed = try eng.selectDocument(testing.allocator, table_index, key, 1);
+                var managed = try eng.selectDocument(testing.allocator, table_index, key, 1, null);
                 defer managed.deinit();
             }
         }
@@ -219,7 +219,7 @@ test "storage: insert/delete inverse consistency" {
         try testing.expect(managed1.rows.len > 0);
 
         // Delete
-        try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id);
+        try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id, null);
         try engine.flushPendingWrites();
         // Verify it's gone
         var managed2 = try test_table.selectDocument(allocator, tc.id, tc.namespace_id);
@@ -458,7 +458,7 @@ test "storage: random operations fuzzing" {
             },
             1 => {
                 // Delete
-                try engine.deleteDocument(0, id, ns);
+                try engine.deleteDocument(0, id, ns, null);
             },
             2 => {
                 // Query

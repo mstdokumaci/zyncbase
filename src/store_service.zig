@@ -5,6 +5,7 @@ const schema = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const doc_id_utils = @import("doc_id.zig");
+const authorization = @import("authorization.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
 const DocId = storage_mod.DocId;
@@ -67,12 +68,14 @@ pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
     schema_manager: *const schema.Schema,
+    auth_config: *const authorization.AuthConfig,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, sm: *const schema.Schema) StoreService {
+    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, sm: *const schema.Schema, auth_config: *const authorization.AuthConfig) StoreService {
         return .{
             .allocator = allocator,
             .storage_engine = storage_engine,
             .schema_manager = sm,
+            .auth_config = auth_config,
         };
     }
 
@@ -81,6 +84,7 @@ pub const StoreService = struct {
     pub const WriteContext = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
+        auth_clause: ?@import("authorization.zig").InjectedClause = null,
     };
 
     pub const ScopedSession = struct {
@@ -144,18 +148,22 @@ pub const StoreService = struct {
         path: msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path, .document_only);
-        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id);
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, ctx.auth_clause);
     }
 
     pub fn batchWrite(
         self: *StoreService,
         ctx: WriteContext,
         ops_payload: msgpack.Payload,
+        auth_clauses: ?[]const ?authorization.InjectedClause,
     ) !void {
         if (ops_payload != .arr) return error.InvalidMessageFormat;
         const ops = ops_payload.arr;
         if (ops.len == 0) return; // no-op, success
         if (ops.len > 500) return error.BatchTooLarge;
+        if (auth_clauses) |clauses| {
+            if (clauses.len != ops.len) return error.InvalidMessageFormat;
+        }
 
         var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
         var initialized: usize = 0;
@@ -167,17 +175,19 @@ pub const StoreService = struct {
 
         const timestamp = std.time.timestamp();
 
-        for (ops) |op_payload| {
+        for (ops, 0..) |op_payload, i| {
             if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
             const tuple = op_payload.arr;
             if (tuple[0] != .str) return error.InvalidMessageFormat;
             const kind_str = tuple[0].str.value();
 
+            const auth_clause = if (auth_clauses) |clauses| clauses[i] else null;
+
             if (std.mem.eql(u8, kind_str, "s")) {
                 if (tuple.len < 3) return error.MissingRequiredFields;
-                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp);
+                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, auth_clause);
             } else if (std.mem.eql(u8, kind_str, "r")) {
-                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp);
+                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, auth_clause);
             } else {
                 return error.InvalidMessageFormat;
             }
@@ -194,6 +204,7 @@ pub const StoreService = struct {
         namespace_id: i64,
         table_index_payload: msgpack.Payload,
         payload: msgpack.Payload,
+        auth_clause: ?authorization.InjectedClause,
     ) !QueryResult {
         const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
@@ -202,7 +213,7 @@ pub const StoreService = struct {
         errdefer filter.deinit(allocator);
 
         if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
-            var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id);
+            var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id, auth_clause);
             errdefer result.deinit();
             return .{
                 .table_index = table_index,
@@ -213,7 +224,7 @@ pub const StoreService = struct {
             };
         }
 
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter, auth_clause);
         errdefer {
             results.result.deinit();
             if (results.next_cursor_str) |s| allocator.free(s);
@@ -234,6 +245,7 @@ pub const StoreService = struct {
         namespace_id: i64,
         filter: *query_parser.QueryFilter,
         next_cursor: []const u8,
+        auth_clause: ?authorization.InjectedClause,
     ) !CursorResult {
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
         const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
@@ -241,7 +253,7 @@ pub const StoreService = struct {
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*, auth_clause);
         errdefer {
             results.result.deinit();
             if (results.next_cursor_str) |s| allocator.free(s);
@@ -322,7 +334,7 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, ctx.auth_clause);
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
@@ -333,7 +345,7 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed,
             }};
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_clause);
         } else {
             return StorageError.InvalidPath;
         }
@@ -345,6 +357,7 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
         timestamp: i64,
+        auth_clause: ?authorization.InjectedClause,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_or_field);
 
@@ -389,7 +402,7 @@ pub const StoreService = struct {
             return StorageError.InvalidPath;
         }
 
-        const sql_string = try @import("storage_engine/sql.zig").buildInsertOrReplaceSql(self.allocator, path.table, columns.items);
+        const sql_string = try @import("storage_engine/sql.zig").buildInsertOrReplaceSql(self.allocator, path.table, columns.items, auth_clause);
         errdefer self.allocator.free(sql_string);
 
         const values = try self.allocator.alloc(storage_mod.TypedValue, columns.items.len);
@@ -397,6 +410,9 @@ pub const StoreService = struct {
             values[i] = col.value;
         }
         columns.deinit(self.allocator);
+
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer authorization.deinitBindValues(self.allocator, auth_values);
 
         const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
 
@@ -408,6 +424,7 @@ pub const StoreService = struct {
             .owner_doc_id = ctx.owner_doc_id,
             .sql = sql_string,
             .values = values,
+            .auth_values = auth_values,
             .timestamp = timestamp,
         };
     }
@@ -417,11 +434,15 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         timestamp: i64,
+        auth_clause: ?authorization.InjectedClause,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_only);
 
-        const sql_string = try @import("storage_engine/sql.zig").buildDeleteDocumentSql(self.allocator, path.table);
+        const sql_string = try @import("storage_engine/sql.zig").buildDeleteDocumentSql(self.allocator, path.table, auth_clause);
         errdefer self.allocator.free(sql_string);
+
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer authorization.deinitBindValues(self.allocator, auth_values);
 
         const effective_namespace_id = if (path.table.namespaced) ctx.namespace_id else schema.global_namespace_id;
 
@@ -433,6 +454,7 @@ pub const StoreService = struct {
             .owner_doc_id = ctx.owner_doc_id,
             .sql = sql_string,
             .values = null,
+            .auth_values = auth_values,
             .timestamp = timestamp,
         };
     }

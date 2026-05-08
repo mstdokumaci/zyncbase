@@ -161,14 +161,14 @@ pub const Writer = struct {
     ) !?TypedRow {
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return null;
         const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
-            const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata);
+            const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata, null);
             errdefer self.allocator.free(s);
             try sql_cache.put(table_index, s);
             break :blk s;
         };
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
-        return reader.execSelectDocumentTyped(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata);
+        return reader.execSelectDocumentTyped(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null);
     }
 
     fn pushOwnedChange(
@@ -802,6 +802,13 @@ pub const Writer = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
+        if (op.auth_values) |auth_vals| {
+            for (auth_vals) |val| {
+                try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
+
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {
             return try reader.decodeTypedRow(self.allocator, stmt, table_metadata);
@@ -824,6 +831,14 @@ pub const Writer = struct {
         const id_bytes = doc_id.toBytes(op.id);
         if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+
+        var bind_idx: c_int = 3;
+        if (op.auth_values) |auth_vals| {
+            for (auth_vals) |val| {
+                try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
 
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {

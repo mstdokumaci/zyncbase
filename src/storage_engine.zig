@@ -19,6 +19,7 @@ const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
+const authorization = @import("authorization.zig");
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = storage_values.ColumnValue;
@@ -430,6 +431,7 @@ pub const StorageEngine = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
         columns: []const ColumnValue,
+        auth_clause: ?@import("authorization.zig").InjectedClause,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -437,7 +439,7 @@ pub const StorageEngine = struct {
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
         var queued = false;
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns);
+        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, auth_clause);
         errdefer if (!queued) self.allocator.free(sql_string);
 
         const values = try self.allocator.alloc(TypedValue, columns.len);
@@ -451,6 +453,9 @@ pub const StorageEngine = struct {
             initialized_count += 1;
         }
 
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
+
         const op = WriteOp{
             .upsert = .{
                 .table_index = table_index,
@@ -459,6 +464,7 @@ pub const StorageEngine = struct {
                 .owner_doc_id = owner_doc_id,
                 .sql = sql_string,
                 .values = values,
+                .auth_values = auth_values,
                 .timestamp = std.time.timestamp(),
                 .completion_signal = null,
             },
@@ -501,6 +507,7 @@ pub const StorageEngine = struct {
         table_index: usize,
         id: DocId,
         namespace_id: i64,
+        auth_clause: ?@import("authorization.zig").InjectedClause,
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
@@ -525,7 +532,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata);
+        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata, auth_clause);
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
@@ -534,7 +541,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata);
+        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (auth_clause) |c| c.bind_values else null);
         if (result) |row| {
             if (self.writer.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -556,6 +563,7 @@ pub const StorageEngine = struct {
         table_index: usize,
         namespace_id: i64,
         filter: query_parser.QueryFilter,
+        auth_clause: ?@import("authorization.zig").InjectedClause,
     ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
@@ -566,7 +574,7 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter);
+        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, auth_clause);
         defer query_res.deinit(allocator);
 
         const sort_field_index = filter.order_by.field_index;
@@ -595,6 +603,7 @@ pub const StorageEngine = struct {
         table_index: usize,
         id: DocId,
         namespace_id: i64,
+        auth_clause: ?@import("authorization.zig").InjectedClause,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -602,8 +611,11 @@ pub const StorageEngine = struct {
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
         var queued = false;
 
-        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata);
+        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata, auth_clause);
         errdefer if (!queued) self.allocator.free(sql_string);
+
+        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
+        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
 
         const op = WriteOp{
             .delete = .{
@@ -611,6 +623,7 @@ pub const StorageEngine = struct {
                 .id = id,
                 .namespace_id = effective_namespace_id,
                 .sql = sql_string,
+                .auth_values = auth_values,
                 .completion_signal = null,
             },
         };
