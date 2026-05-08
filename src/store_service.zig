@@ -4,6 +4,7 @@ const msgpack = @import("msgpack_utils.zig");
 const schema = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const doc_id_utils = @import("doc_id.zig");
 const authorization = @import("authorization.zig");
 const StorageEngine = storage_mod.StorageEngine;
@@ -11,7 +12,7 @@ const StorageError = storage_mod.StorageError;
 const DocId = storage_mod.DocId;
 
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
-fn isIdEqualsFilter(filter: query_parser.QueryFilter, id_index: usize) ?DocId {
+fn isIdEqualsFilter(filter: query_ast.QueryFilter, id_index: usize) ?DocId {
     // Must have: exactly 1 AND condition, no OR, no order, no cursor
     const conds = filter.conditions orelse return null;
     if (conds.len != 1) return null;
@@ -243,7 +244,7 @@ pub const StoreService = struct {
         allocator: Allocator,
         table_index: usize,
         namespace_id: i64,
-        filter: *query_parser.QueryFilter,
+        filter: *query_ast.QueryFilter,
         next_cursor: []const u8,
         auth_clause: ?authorization.InjectedClause,
     ) !CursorResult {
@@ -464,7 +465,7 @@ pub const QueryResult = struct {
     table_index: usize,
     table: *const schema.Table,
     results: storage_mod.ManagedResult,
-    filter: query_parser.QueryFilter,
+    filter: query_ast.QueryFilter,
     next_cursor_str: ?[]const u8 = null,
 
     pub fn deinit(self: *QueryResult, allocator: Allocator) void {

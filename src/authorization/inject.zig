@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const schema = @import("../schema.zig");
-const query_parser = @import("../query_parser.zig");
+const query_ast = @import("../query_ast.zig");
 const reader = @import("../storage_engine/reader.zig");
 const TypedValue = @import("../storage_engine/values.zig").TypedValue;
 const evaluate_mod = @import("evaluate.zig");
@@ -179,7 +179,7 @@ fn appendComparisonExpr(
 
     const query_op = mapToQueryOp(comp.op);
 
-    const query_cond = query_parser.Condition{
+    const query_cond = query_ast.Condition{
         .field_index = field_index,
         .op = query_op,
         .value = resolved_value.value,
@@ -189,7 +189,7 @@ fn appendComparisonExpr(
     try reader.appendConditionSql(allocator, sql_buf, values, table, query_cond);
 }
 
-fn mapToQueryOp(op: types.ComparisonOp) query_parser.Operator {
+fn mapToQueryOp(op: types.ComparisonOp) query_ast.Operator {
     return switch (op) {
         .eq => .eq,
         .ne => .ne,

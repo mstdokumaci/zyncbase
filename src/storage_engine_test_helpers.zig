@@ -16,7 +16,7 @@ pub const FieldType = schema.FieldType;
 pub const TableMetadata = schema.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
-pub const query_parser = @import("query_parser.zig");
+pub const query_ast = @import("query_ast.zig");
 pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
@@ -88,7 +88,7 @@ pub const TableFixture = struct {
         self: TableFixture,
         allocator: Allocator,
         namespace_id: i64,
-        filter: query_parser.QueryFilter,
+        filter: query_ast.QueryFilter,
     ) !storage_engine.ManagedResult {
         const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter, null);
         if (res.next_cursor_str) |s| allocator.free(s);

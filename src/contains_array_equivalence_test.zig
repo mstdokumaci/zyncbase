@@ -6,7 +6,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 
 fn collectResultSetIds(allocator: std.mem.Allocator, rows: []storage_engine.TypedRow, metadata: *const schema.Table) !std.AutoHashMap(storage_engine.DocId, void) {
     var ids = std.AutoHashMap(storage_engine.DocId, void).init(allocator);
@@ -68,7 +68,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try engine.flushPendingWrites();
 
     // --- SQL path: tags contains "urgent" ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{
             .field_index = items_md.fieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
@@ -86,7 +86,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{
             .field_index = items_md.fieldIndex("tags") orelse return error.UnknownField,
             .op = .contains,
@@ -169,7 +169,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try engine.flushPendingWrites();
 
     // --- SQL path: scores contains 20 ---
-    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var sql_filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{
             .field_index = players_md.fieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,
@@ -187,7 +187,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     defer sql_ids.deinit();
 
     // --- In-memory path ---
-    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    var mem_filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{
             .field_index = players_md.fieldIndex("scores") orelse return error.UnknownField,
             .op = .contains,

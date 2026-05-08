@@ -10,7 +10,7 @@ const Writer = storage_writer.Writer;
 const connection = @import("storage_engine/connection.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const storage_values = @import("storage_engine/values.zig");
 const value_codec = @import("storage_engine/value_codec.zig");
@@ -562,7 +562,7 @@ pub const StorageEngine = struct {
         allocator: Allocator,
         table_index: usize,
         namespace_id: i64,
-        filter: query_parser.QueryFilter,
+        filter: query_ast.QueryFilter,
         auth_clause: ?@import("authorization.zig").InjectedClause,
     ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
         try self.ensureRunning();

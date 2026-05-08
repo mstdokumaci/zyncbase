@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RowChange = @import("subscription_engine.zig").RowChange;
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
@@ -20,7 +20,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
 
     const run_subscribe = struct {
         fn run(engine_ptr: *SubscriptionEngine, start_id: u32, sub_count: u32, alloc: std.mem.Allocator) void {
-            const filter = qth.makeFilterWithConditions(alloc, &[_]query_parser.Condition{
+            const filter = qth.makeFilterWithConditions(alloc, &[_]query_ast.Condition{
                 .{ .field_index = 2, .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
             }) catch @panic("OOM");
             defer filter.deinit(alloc);
@@ -80,7 +80,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 2, .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
     });
     defer filter.deinit(allocator);

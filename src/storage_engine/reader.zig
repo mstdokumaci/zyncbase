@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
+const query_ast = @import("../query_ast.zig");
 const doc_id = @import("../doc_id.zig");
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
@@ -31,7 +32,7 @@ pub fn buildSelectQuery(
     allocator: Allocator,
     table_metadata: *const schema.Table,
     namespace_id: i64,
-    filter: query_parser.QueryFilter,
+    filter: query_ast.QueryFilter,
     auth_clause: ?authorization.InjectedClause,
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -52,8 +53,8 @@ pub fn buildSelectQuery(
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
     try values.append(allocator, TypedValue{ .scalar = .{ .integer = namespace_id } });
 
-    const conds = filter.conditions orelse @as([]const query_parser.Condition, &.{});
-    const or_conds = filter.or_conditions orelse @as([]const query_parser.Condition, &.{});
+    const conds = filter.conditions orelse @as([]const query_ast.Condition, &.{});
+    const or_conds = filter.or_conditions orelse @as([]const query_ast.Condition, &.{});
     const has_conditions = conds.len > 0 or or_conds.len > 0;
 
     if (has_conditions or filter.after != null) {
@@ -166,7 +167,7 @@ pub fn appendConditionSql(
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(TypedValue),
     table_metadata: *const schema.Table,
-    cond: query_parser.Condition,
+    cond: query_ast.Condition,
 ) !void {
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
     const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
