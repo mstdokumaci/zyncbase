@@ -28,7 +28,8 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConf
     }
 
     for (namespaces_val.array.items) |ns_val| {
-        const rule = try parseNamespaceRule(allocator, ns_val);
+        var rule = try parseNamespaceRule(allocator, ns_val);
+        errdefer rule.deinit(allocator);
         try namespace_rules.append(allocator, rule);
     }
 
@@ -40,7 +41,8 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConf
 
     var wildcard_index: ?usize = null;
     for (store_val.array.items) |st_val| {
-        const rule = try parseStoreRule(allocator, st_val);
+        var rule = try parseStoreRule(allocator, st_val);
+        errdefer rule.deinit(allocator);
         if (rule.is_wildcard) wildcard_index = store_rules.items.len;
         try store_rules.append(allocator, rule);
     }

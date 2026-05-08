@@ -36,9 +36,11 @@ pub fn parsePattern(allocator: Allocator, pattern: []const u8) ![]PatternSegment
         if (segment.len == 0) return error.InvalidPattern;
         if (segment[0] == '{' and segment[segment.len - 1] == '}') {
             const name = try allocator.dupe(u8, segment[1 .. segment.len - 1]);
+            errdefer allocator.free(name);
             try segments.append(allocator, .{ .capture = name });
         } else {
             const literal = try allocator.dupe(u8, segment);
+            errdefer allocator.free(literal);
             try segments.append(allocator, .{ .literal = literal });
         }
     }

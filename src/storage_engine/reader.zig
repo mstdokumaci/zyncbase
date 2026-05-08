@@ -101,9 +101,11 @@ pub fn buildSelectQuery(
             if (filter.order_by.field_index == schema.id_field_index) {
                 try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             } else {
-                const sv = try cursor.sort_value.clone(allocator);
-                errdefer sv.deinit(allocator);
-                try values.append(allocator, sv);
+                {
+                    const sv = try cursor.sort_value.clone(allocator);
+                    errdefer sv.deinit(allocator);
+                    try values.append(allocator, sv);
+                }
                 try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
             }
         }
@@ -115,7 +117,9 @@ pub fn buildSelectQuery(
     if (auth_clause) |clause| {
         try sql_buf.appendSlice(allocator, clause.sql);
         for (clause.bind_values) |bv| {
-            try values.append(allocator, try bv.clone(allocator));
+            const cloned = try bv.clone(allocator);
+            errdefer cloned.deinit(allocator);
+            try values.append(allocator, cloned);
         }
     }
 
