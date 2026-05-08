@@ -54,6 +54,39 @@ test "AuthConfig rejects invalid comparison operator" {
     try testing.expectError(error.InvalidComparisonOperator, AuthConfig.init(allocator, json));
 }
 
+test "AuthConfig parses empty boolean and float array literals" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":{"and":[{"$session.externalId":{"in":[]}},{"$session.externalId":{"in":[true,false]}},{"$session.externalId":{"in":[2.5,1.5]}}]},"write":true}]}
+    ;
+    var config = try AuthConfig.init(allocator, json);
+    defer config.deinit();
+
+    try testing.expect(config.store_rules[0].read == .logical_and);
+    const conds = config.store_rules[0].read.logical_and;
+    try testing.expectEqual(@as(usize, 3), conds.len);
+
+    try testing.expect(conds[0] == .comparison);
+    const empty = conds[0].comparison.rhs.literal.array;
+    try testing.expectEqual(@as(usize, 0), empty.len);
+
+    try testing.expect(conds[1] == .comparison);
+    const bools = conds[1].comparison.rhs.literal.array;
+    try testing.expectEqual(@as(usize, 2), bools.len);
+    try testing.expect(bools[0] == .boolean);
+    try testing.expect(!bools[0].boolean);
+    try testing.expect(bools[1] == .boolean);
+    try testing.expect(bools[1].boolean);
+
+    try testing.expect(conds[2] == .comparison);
+    const floats = conds[2].comparison.rhs.literal.array;
+    try testing.expectEqual(@as(usize, 2), floats.len);
+    try testing.expect(floats[0] == .real);
+    try testing.expectEqual(@as(f64, 1.5), floats[0].real);
+    try testing.expect(floats[1] == .real);
+    try testing.expectEqual(@as(f64, 2.5), floats[1].real);
+}
+
 // ─── Pattern Matcher Tests ──────────────────────────────────────────────────
 
 test "parsePattern splits literals and captures" {

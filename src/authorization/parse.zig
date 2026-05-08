@@ -232,48 +232,44 @@ fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
         .integer => |i| return .{ .literal = .{ .scalar = .{ .integer = i } } },
         .float => |f| return .{ .literal = .{ .scalar = .{ .real = f } } },
         .bool => |b| return .{ .literal = .{ .scalar = .{ .boolean = b } } },
-        .array => |arr| {
-            if (arr.items.len == 0) return error.InvalidValue;
-            const first = arr.items[0];
-            switch (first) {
-                .string => {
-                    const items = try allocator.alloc(ScalarValue, arr.items.len);
-                    var initialized: usize = 0;
-                    var items_owned = true;
-                    errdefer if (items_owned) {
-                        for (items[0..initialized]) |item| item.deinit(allocator);
-                        allocator.free(items);
-                    };
-                    for (arr.items, 0..) |item, i| {
-                        if (item != .string) return error.InvalidValue;
-                        items[i] = .{ .text = try allocator.dupe(u8, item.string) };
-                        initialized += 1;
-                    }
-                    items_owned = false;
-                    var result = TypedValue{ .array = items };
-                    errdefer result.deinit(allocator);
-                    try result.sortedSet(allocator);
-                    return .{ .literal = result };
-                },
-                .integer => {
-                    const items = try allocator.alloc(ScalarValue, arr.items.len);
-                    var items_owned = true;
-                    errdefer if (items_owned) allocator.free(items);
-                    for (arr.items, 0..) |item, i| {
-                        if (item != .integer) return error.InvalidValue;
-                        items[i] = .{ .integer = item.integer };
-                    }
-                    items_owned = false;
-                    var result = TypedValue{ .array = items };
-                    errdefer result.deinit(allocator);
-                    try result.sortedSet(allocator);
-                    return .{ .literal = result };
-                },
-                else => return error.InvalidValue,
-            }
-        },
+        .array => |arr| return parseArrayLiteral(allocator, arr.items),
         else => return error.InvalidValue,
     }
+}
+
+fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !types.Value {
+    const items = try allocator.alloc(ScalarValue, values.len);
+    var initialized: usize = 0;
+    var items_owned = true;
+    errdefer if (items_owned) {
+        for (items[0..initialized]) |item| item.deinit(allocator);
+        allocator.free(items);
+    };
+
+    if (values.len > 0) {
+        const expected_tag = std.meta.activeTag(values[0]);
+        for (values, 0..) |item, i| {
+            if (std.meta.activeTag(item) != expected_tag) return error.InvalidValue;
+            items[i] = try parseScalarArrayItem(allocator, item);
+            initialized += 1;
+        }
+    }
+
+    items_owned = false;
+    var result = TypedValue{ .array = items };
+    errdefer result.deinit(allocator);
+    try result.sortedSet(allocator);
+    return .{ .literal = result };
+}
+
+fn parseScalarArrayItem(allocator: Allocator, value: std.json.Value) !ScalarValue {
+    return switch (value) {
+        .string => |s| .{ .text = try allocator.dupe(u8, s) },
+        .integer => |i| .{ .integer = i },
+        .float => |f| .{ .real = f },
+        .bool => |b| .{ .boolean = b },
+        else => error.InvalidValue,
+    };
 }
 
 fn rejectUnknownRootKeys(root: std.json.Value) !void {
