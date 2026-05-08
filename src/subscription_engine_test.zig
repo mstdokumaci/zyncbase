@@ -6,7 +6,7 @@ const types = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 
 test "SubscriptionEngine: basic subscribe and match" {
     const allocator = testing.allocator;
@@ -20,7 +20,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     });
     defer sm.deinit();
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -53,7 +53,7 @@ test "SubscriptionEngine: group sharing" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .gt, .value = tth.valInt(18), .field_type = .integer, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -80,7 +80,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .isNotNull, .value = null, .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -101,7 +101,7 @@ test "SubscriptionEngine: unsubscribe clean up" {
 test "SubscriptionEngine: operator matching" {
     const allocator = testing.allocator;
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .startsWith, .value = tth.valText("Al"), .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -121,12 +121,12 @@ test "SubscriptionEngine: canonical filter key includes values" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valText("active"), .field_type = .text, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
-    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valText("inactive"), .field_type = .text, .items_type = null },
     });
     defer filter2.deinit(allocator);
@@ -159,12 +159,12 @@ test "SubscriptionEngine: canonical key distinguishes same-length array contents
     });
     defer in_val_2.deinit(allocator);
 
-    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .in, .value = in_val_1, .field_type = .text, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
-    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .in, .value = in_val_2, .field_type = .text, .items_type = null },
     });
     defer filter2.deinit(allocator);
@@ -185,12 +185,12 @@ test "SubscriptionEngine: canonical key keeps integer and real distinct" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter_int = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter_int = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valInt(1), .field_type = .integer, .items_type = null },
     });
     defer filter_int.deinit(allocator);
 
-    const filter_real = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter_real = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valReal(1.0), .field_type = .real, .items_type = null },
     });
     defer filter_real.deinit(allocator);
@@ -249,17 +249,17 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     const val = tth.valText("Al");
 
-    const filter_starts_with = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter_starts_with = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .startsWith, .value = val, .field_type = .text, .items_type = null },
     });
     defer filter_starts_with.deinit(allocator);
 
-    const filter_ends_with = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter_ends_with = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .endsWith, .value = val, .field_type = .text, .items_type = null },
     });
     defer filter_ends_with.deinit(allocator);
 
-    const filter_contains = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter_contains = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .contains, .value = val, .field_type = .text, .items_type = null },
     });
     defer filter_contains.deinit(allocator);
@@ -292,14 +292,14 @@ test "SubscriptionEngine: group sharing with different condition order" {
     defer engine.deinit();
 
     // Filter 1: status=A, type=B
-    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .eq, .value = tth.valText("A"), .field_type = .text, .items_type = null },
         .{ .field_index = 4, .op = .eq, .value = tth.valText("B"), .field_type = .text, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
     // Filter 2: type=B, status=A (different order)
-    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 4, .op = .eq, .value = tth.valText("B"), .field_type = .text, .items_type = null },
         .{ .field_index = 3, .op = .eq, .value = tth.valText("A"), .field_type = .text, .items_type = null },
     });
@@ -333,7 +333,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
     });
     defer in_val.deinit(allocator);
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .in, .value = in_val, .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -381,12 +381,12 @@ test "SubscriptionEngine: canonical key normalizes array element order" {
     });
     defer in_val_2.deinit(allocator);
 
-    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter1 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 0, .op = .in, .value = in_val_1, .field_type = .integer, .items_type = null },
     });
     defer filter1.deinit(allocator);
 
-    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter2 = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 0, .op = .in, .value = in_val_2, .field_type = .integer, .items_type = null },
     });
     defer filter2.deinit(allocator);
@@ -415,7 +415,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
     });
     defer not_in_val.deinit(allocator);
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .notIn, .value = not_in_val, .field_type = .text, .items_type = null },
     });
     defer filter.deinit(allocator);
@@ -458,7 +458,7 @@ test "SubscriptionEngine: filter removal notification when row leaves filter" {
     defer sm.deinit();
 
     // Filter: priority >= 5 (user fields start at index 3)
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 3, .op = .gte, .value = tth.valInt(5), .field_type = .integer, .items_type = null },
     });
     defer filter.deinit(allocator);

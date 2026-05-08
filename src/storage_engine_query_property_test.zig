@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const TypedValue = @import("storage_engine.zig").TypedValue;
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -63,7 +63,7 @@ fn seedEntities(allocator: std.mem.Allocator, ctx: *sth.EngineTestContext, count
     try ctx.engine.flushPendingWrites();
 }
 
-fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query_parser.QueryFilter {
+fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query_ast.QueryFilter {
     const fields = [_][]const u8{ "name", "age", "score", "id", "created_at" };
     const field_idx = random.intRangeAtMost(usize, 0, fields.len - 1);
     const field_name = fields[field_idx];
@@ -76,7 +76,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     else
         .integer;
 
-    var filter = query_parser.QueryFilter{
+    var filter = query_ast.QueryFilter{
         .order_by = .{
             .field_index = switch (field_idx) {
                 0 => 4, // name
@@ -95,7 +95,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     // Random conditions
     const num_conds = random.intRangeAtMost(usize, 0, 3);
     if (num_conds > 0) {
-        const conds = try allocator.alloc(query_parser.Condition, num_conds);
+        const conds = try allocator.alloc(query_ast.Condition, num_conds);
         for (conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
@@ -105,7 +105,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     // Random OR conditions
     const num_or = random.intRangeAtMost(usize, 0, 2);
     if (num_or > 0) {
-        const or_conds = try allocator.alloc(query_parser.Condition, num_or);
+        const or_conds = try allocator.alloc(query_ast.Condition, num_or);
         for (or_conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
@@ -122,13 +122,13 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
     return filter;
 }
 
-fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !query_parser.Condition {
+fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !query_ast.Condition {
     const fields = [_][]const u8{ "name", "age", "score" };
     const field = fields[random.intRangeAtMost(usize, 0, fields.len - 1)];
 
     // Choose an operator
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
-    const op: query_parser.Operator = @enumFromInt(op_int);
+    const op: query_ast.Operator = @enumFromInt(op_int);
 
     var value: ?TypedValue = null;
     if (op != .isNull and op != .isNotNull) {

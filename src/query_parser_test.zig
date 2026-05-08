@@ -1,5 +1,6 @@
 const std = @import("std");
 const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema = @import("schema.zig");
@@ -147,7 +148,7 @@ test "isNull condition (no value tuple)" {
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.conditions.?.len);
-    try testing.expectEqual(query_parser.Operator.isNull, filter.conditions.?[0].op);
+    try testing.expectEqual(query_ast.Operator.isNull, filter.conditions.?[0].op);
     try testing.expect(filter.conditions.?[0].value == null);
 }
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const storage_engine = @import("storage_engine.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
@@ -31,7 +31,7 @@ test "StorageEngine: selectQuery basic equality" {
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
-    var conds = try allocator.alloc(query_parser.Condition, 1);
+    var conds = try allocator.alloc(query_ast.Condition, 1);
     conds[0] = .{
         .field_index = name_index,
         .op = .eq,
@@ -72,7 +72,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     var filter = try qth.makeFilter(allocator, 3, true, .integer, null);
     defer filter.deinit(allocator);
 
-    var or_conds = try allocator.alloc(query_parser.Condition, 2);
+    var or_conds = try allocator.alloc(query_ast.Condition, 2);
     or_conds[0] = .{
         .field_index = age_index,
         .op = .lt,
@@ -189,7 +189,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
 
-    const conds = try allocator.alloc(query_parser.Condition, 1);
+    const conds = try allocator.alloc(query_ast.Condition, 1);
     conds[0] = .{
         .field_index = name_index,
         .op = .eq,
@@ -241,7 +241,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     {
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
         conds[0] = .{
             .field_index = data_index,
             .op = .contains,
@@ -261,7 +261,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     {
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
         conds[0] = .{
             .field_index = data_index,
             .op = .contains,
@@ -281,7 +281,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     {
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
         conds[0] = .{
             .field_index = data_index,
             .op = .startsWith,
@@ -301,7 +301,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     {
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
         conds[0] = .{
             .field_index = data_index,
             .op = .endsWith,
@@ -321,7 +321,7 @@ test "StorageEngine: LIKE wildcard escaping" {
     {
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
         conds[0] = .{
             .field_index = data_index,
             .op = .contains,
@@ -345,7 +345,7 @@ test "StorageEngine: LIKE wildcard escaping" {
 
         var filter = try qth.makeDefaultFilter(allocator);
         defer filter.deinit(allocator);
-        var conds = try allocator.alloc(query_parser.Condition, 1);
+        var conds = try allocator.alloc(query_ast.Condition, 1);
 
         // Malicious payload attempting to break out of the LIKE clause and OR-in a different namespace
         const malicious = "' OR namespace_id = 'other_ns' --";

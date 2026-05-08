@@ -8,7 +8,7 @@ const sub_eng = @import("subscription_engine.zig");
 const cb = @import("change_buffer.zig");
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
 const RowChange = sub_eng.RowChange;
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 
 test "Subscription Consistency: write-before-subscribe is captured and delivered" {
     const allocator = testing.allocator;
@@ -35,8 +35,8 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     //    Filter matches exactly the row above.
     const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
     const val_index = items_md.fieldIndex("val") orelse return error.UnknownField;
-    const conditions = try allocator.alloc(query_parser.Condition, 1);
-    conditions[0] = query_parser.Condition{
+    const conditions = try allocator.alloc(query_ast.Condition, 1);
+    conditions[0] = query_ast.Condition{
         .field_index = val_index,
         .op = .eq,
         .value = try tth.valTextOwned(allocator, "task 1"),

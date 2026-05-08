@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
 const RowChange = @import("subscription_engine.zig").RowChange;
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
@@ -20,7 +20,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         // Even groups match (field_0 == 0), odd groups reject (field_0 == 999)
         const match_val: i64 = if (i % 2 == 0) 0 else 999;
 
-        const filter = try qth.makeFilterWithConditions(allocator, &[_]query_parser.Condition{
+        const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
             // field_index 3 corresponds to the first user-defined field in rowFromTypedValues
             .{ .field_index = 3, .op = .eq, .value = tth.valInt(match_val), .field_type = .integer, .items_type = null },
         });

@@ -1,11 +1,11 @@
 const std = @import("std");
-const query_parser = @import("query_parser.zig");
+const query_ast = @import("query_ast.zig");
 const schema = @import("schema.zig");
 const doc_id = @import("doc_id.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
-const QueryFilter = query_parser.QueryFilter;
-const Condition = query_parser.Condition;
+const QueryFilter = query_ast.QueryFilter;
+const Condition = query_ast.Condition;
 const FieldType = schema.FieldType;
 const Payload = msgpack_utils.Payload;
 
