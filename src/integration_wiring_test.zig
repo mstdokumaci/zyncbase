@@ -61,7 +61,7 @@ test "Integration: Error propagation through layers" {
     // Verify storage engine interaction through wiring
     var managed = try server.storage_engine.selectDocument(allocator, test_tbl.index, 999, 1, null);
     defer managed.deinit();
-    const doc = managed.rows;
+    const doc = managed.records;
     try testing.expect(doc.len == 0);
 
     // Verify components have expected internal pointers

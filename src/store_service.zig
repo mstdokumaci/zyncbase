@@ -5,11 +5,11 @@ const schema = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
-const doc_id_utils = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const authorization = @import("authorization.zig");
 const StorageEngine = storage_mod.StorageEngine;
 const StorageError = storage_mod.StorageError;
-const DocId = storage_mod.DocId;
+const DocId = typed.DocId;
 
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
 fn isIdEqualsFilter(filter: query_ast.QueryFilter, id_index: usize) ?DocId {
@@ -47,12 +47,12 @@ pub fn validateFieldWrite(
     if (field.required and value == .nil) return StorageError.NullNotAllowed;
 
     if (value != .nil) {
-        try storage_mod.validateTypedValuePayload(field.storage_type, value);
+        try typed.validateValue(field.storage_type, value);
 
         if (field.storage_type == .array) {
             if (field.items_type) |items_type| {
                 for (value.arr) |item| {
-                    storage_mod.validateTypedValuePayload(items_type, item) catch {
+                    typed.validateValue(items_type, item) catch {
                         return StorageError.InvalidArrayElement;
                     };
                 }
@@ -283,7 +283,7 @@ pub const StoreService = struct {
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (path[1] != .bin) return error.InvalidMessageFormat;
-        const parsed_doc_id = try doc_id_utils.fromBytes(path[1].bin.value());
+        const parsed_doc_id = try typed.docIdFromBytes(path[1].bin.value());
 
         const field_index: ?usize = if (path.len == 3) blk: {
             const index = msgpack.extractPayloadUint(path[2]) orelse return error.InvalidMessageFormat;
@@ -327,11 +327,11 @@ pub const StoreService = struct {
                 };
 
                 const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+                const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .index = f_idx,
-                    .value = typed,
+                    .value = typed_value,
                 });
             }
 
@@ -339,12 +339,12 @@ pub const StoreService = struct {
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
-            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, value);
-            defer typed.deinit(self.allocator);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, value);
+            defer typed_value.deinit(self.allocator);
 
             const col = [_]storage_mod.ColumnValue{.{
                 .index = f_index,
-                .value = typed,
+                .value = typed_value,
             }};
             try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_predicate);
         } else {
@@ -383,21 +383,21 @@ pub const StoreService = struct {
                 };
 
                 const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+                const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
 
                 try columns.append(self.allocator, .{
                     .index = f_idx,
-                    .value = typed,
+                    .value = typed_value,
                 });
             }
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
-            const typed = try storage_mod.typedValueFromPayload(self.allocator, field.storage_type, field.items_type, value);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, value);
 
             try columns.append(self.allocator, .{
                 .index = f_index,
-                .value = typed,
+                .value = typed_value,
             });
         } else {
             return StorageError.InvalidPath;

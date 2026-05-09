@@ -1,13 +1,13 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const types = @import("types.zig");
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
-const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
-const doc_id = @import("../doc_id.zig");
+const typed = @import("../typed.zig");
+const TypedValue = typed.TypedValue;
+const ScalarValue = typed.ScalarValue;
 
 pub const EvalContext = struct {
     allocator: std.mem.Allocator,
-    session_user_id: ?doc_id.DocId = null,
+    session_user_id: ?typed.DocId = null,
     session_external_id: ?[]const u8 = null,
     namespace_captures: ?*const std.StringHashMap([]const u8) = null,
     path_table: ?[]const u8 = null,
@@ -46,7 +46,7 @@ pub fn authorizeStoreNamespace(
     allocator: std.mem.Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
-    session_user_id: doc_id.DocId,
+    session_user_id: typed.DocId,
     session_external_id: []const u8,
 ) !void {
     var match = (try config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
@@ -157,7 +157,7 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
             else => false,
         };
         if (matched) {
-            const value = @import("../storage_engine.zig").typedValueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+            const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
             return owned(value);
         }
     }

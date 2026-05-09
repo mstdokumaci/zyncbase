@@ -12,8 +12,8 @@ const schema = @import("schema.zig");
 const Schema = schema.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const storage_values = @import("storage_engine/values.zig");
-const value_codec = @import("storage_engine/value_codec.zig");
+const typed = @import("typed.zig");
+const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
@@ -23,14 +23,8 @@ const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
 
 pub const StorageError = storage_errors.StorageError;
-pub const ColumnValue = storage_values.ColumnValue;
-pub const DocId = storage_values.DocId;
-pub const ManagedResult = storage_values.ManagedResult;
-pub const ScalarValue = storage_values.ScalarValue;
-pub const TypedValue = storage_values.TypedValue;
-pub const TypedRow = storage_values.TypedRow;
+pub const ColumnValue = sql.ColumnValue;
 pub const TableMetadata = schema.Table;
-pub const TypedCursor = storage_values.TypedCursor;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
 pub const CheckpointStats = write_queue.CheckpointStats;
@@ -38,12 +32,30 @@ pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
-const typed_cache_type = storage_values.typed_cache_type;
-const namespace_cache_type = storage_values.namespace_cache_type;
-const identity_cache_type = storage_values.identity_cache_type;
-pub const typedValueFromPayload = value_codec.fromPayload;
-pub const validateTypedValuePayload = value_codec.validateValue;
-pub const writeTypedValueMsgPack = value_codec.writeMsgPack;
+const DocId = typed.DocId;
+const TypedValue = typed.TypedValue;
+const TypedRecord = typed.TypedRecord;
+const metadata_cache_type = storage_cache.metadata_cache_type;
+const namespace_cache_type = storage_cache.namespace_cache_type;
+const identity_cache_type = storage_cache.identity_cache_type;
+
+/// A managed result that might be backed by a cache handle.
+/// Every result is exposed as a slice of TypedRecords.
+/// Caller MUST call deinit() to release any potential cache handles and memory.
+pub const ManagedResult = struct {
+    records: []TypedRecord,
+    handle: ?metadata_cache_type.Handle = null,
+    allocator: ?Allocator = null,
+
+    pub fn deinit(self: *ManagedResult) void {
+        if (self.handle) |h| {
+            h.release();
+        } else if (self.allocator) |alloc| {
+            for (self.records) |r| r.deinit(alloc);
+            alloc.free(self.records);
+        }
+    }
+};
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
 
@@ -65,7 +77,7 @@ pub const StorageEngine = struct {
     reconnection_config: ReconnectionConfig,
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const Schema,
-    metadata_cache: typed_cache_type,
+    metadata_cache: metadata_cache_type,
     namespace_cache: namespace_cache_type,
     identity_cache: identity_cache_type,
     options: Options,
@@ -373,13 +385,13 @@ pub const StorageEngine = struct {
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
-        const handle = self.namespace_cache.get(storage_values.namespaceCacheKey(namespace)) catch return null;
+        const handle = self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace)) catch return null;
         defer handle.release();
         return handle.data().namespace_id;
     }
 
     pub fn cachedUserId(self: *StorageEngine, identity_namespace_id: i64, external_user_id: []const u8) ?DocId {
-        const key = storage_values.identityCacheKey(identity_namespace_id, external_user_id);
+        const key = storage_cache.identityCacheKey(identity_namespace_id, external_user_id);
         const handle = self.identity_cache.get(key) catch return null;
         defer handle.release();
         return handle.data().user_doc_id;
@@ -607,16 +619,16 @@ pub const StorageEngine = struct {
         const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
-            const typed_row_ptr = handle.data();
-            const slice = @as([*]TypedRow, @ptrCast(typed_row_ptr))[0..1];
+            const typed_record_ptr = handle.data();
+            const slice = @as([*]TypedRecord, @ptrCast(typed_record_ptr))[0..1];
             if (guard_predicate) |predicate| {
                 if (!try filter_eval.evaluatePredicate(predicate, slice[0])) {
                     handle.release();
-                    return ManagedResult{ .rows = &[_]TypedRow{}, .allocator = allocator };
+                    return ManagedResult{ .records = &[_]TypedRecord{}, .allocator = allocator };
                 }
             }
             return ManagedResult{
-                .rows = slice,
+                .records = slice,
                 .handle = handle,
             };
         } else |err| switch (err) {
@@ -642,18 +654,18 @@ pub const StorageEngine = struct {
         defer mstmt.release();
         const stmt = mstmt.stmt;
         const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
-        if (result) |row| {
+        if (result) |record| {
             if (self.writer.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
-                const cache_row = try row.clone(self.allocator);
-                errdefer cache_row.deinit(self.allocator);
-                try self.metadata_cache.update(cache_key, cache_row);
+                const cache_record = try record.clone(self.allocator);
+                errdefer cache_record.deinit(self.allocator);
+                try self.metadata_cache.update(cache_key, cache_record);
             }
-            const items = try allocator.alloc(TypedRow, 1);
-            items[0] = row;
-            return ManagedResult{ .rows = items, .allocator = allocator };
+            const items = try allocator.alloc(TypedRecord, 1);
+            items[0] = record;
+            return ManagedResult{ .records = items, .allocator = allocator };
         }
-        return ManagedResult{ .rows = &[_]TypedRow{}, .allocator = allocator };
+        return ManagedResult{ .records = &[_]TypedRecord{}, .allocator = allocator };
     }
 
     /// SELECT for a query filter.
@@ -692,7 +704,7 @@ pub const StorageEngine = struct {
         );
 
         return .{
-            .result = ManagedResult{ .rows = exec_res.rows, .allocator = allocator },
+            .result = ManagedResult{ .records = exec_res.records, .allocator = allocator },
             .next_cursor_str = exec_res.next_cursor_str,
         };
     }

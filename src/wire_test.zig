@@ -6,11 +6,12 @@ const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const Payload = msgpack.Payload;
 const schema_helpers = @import("schema_test_helpers.zig");
 const storage_types = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
 
-fn makeDeltaTestRow(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !storage_types.TypedRow {
-    const values = try allocator.alloc(storage_types.TypedValue, 6);
+fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.TypedRecord {
+    const values = try allocator.alloc(typed.TypedValue, 6);
     errdefer allocator.free(values);
 
     values[0] = try tth.valTextOwned(allocator, id);
@@ -271,18 +272,18 @@ test "encodeQuery: includes subscription pagination fields" {
     defer sm.deinit();
 
     const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
-    const rows = try allocator.alloc(storage_types.TypedRow, 1);
-    rows[0] = try makeDeltaTestRow(allocator, "user-123", "Ada");
+    const records = try allocator.alloc(typed.TypedRecord, 1);
+    records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
-        rows[0].deinit(allocator);
-        allocator.free(rows);
+        records[0].deinit(allocator);
+        allocator.free(records);
     }
 
     var result = storage_types.ManagedResult{
-        .rows = rows,
+        .records = records,
     };
 
-    const cursor = storage_types.TypedCursor{
+    const cursor = typed.TypedCursor{
         .sort_value = tth.valInt(10),
         .id = 1,
     };
@@ -332,10 +333,10 @@ test "encodeSetDeltaSuffix: set operation" {
     defer sm.deinit();
 
     const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
-    const row = try makeDeltaTestRow(allocator, "user-123", "Ada");
-    defer row.deinit(allocator);
+    const record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
+    defer record.deinit(allocator);
 
-    const suffix = try wire.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), row, table_metadata);
+    const suffix = try wire.encodeSetDeltaSuffix(allocator, table_metadata.index, tth.valText("user-123"), record, table_metadata);
     defer allocator.free(suffix);
 
     const full_msg = try std.mem.concat(allocator, u8, &.{ &[_]u8{0x81}, suffix });

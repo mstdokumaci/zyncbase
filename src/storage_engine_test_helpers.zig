@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const storage_engine = @import("storage_engine.zig");
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const tth = @import("typed_test_helpers.zig");
 const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
@@ -21,7 +21,7 @@ pub const TestContext = schema_helpers.TestContext;
 
 pub const NamedColumn = struct {
     field: []const u8,
-    value: storage_engine.TypedValue,
+    value: typed.TypedValue,
 };
 
 pub const TableFixture = struct {
@@ -34,7 +34,7 @@ pub const TableFixture = struct {
 
     pub fn insertNamed(
         self: TableFixture,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -43,17 +43,17 @@ pub const TableFixture = struct {
 
     pub fn insertField(
         self: TableFixture,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: storage_engine.TypedValue,
+        value: typed.TypedValue,
     ) !void {
         try insertNamedWithMetadata(self.engine, self.metadata, id, namespace_id, .{named(field, value)});
     }
 
     pub fn insertText(
         self: TableFixture,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -63,7 +63,7 @@ pub const TableFixture = struct {
 
     pub fn insertInt(
         self: TableFixture,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,
@@ -78,7 +78,7 @@ pub const TableFixture = struct {
     pub fn selectDocument(
         self: TableFixture,
         allocator: Allocator,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
     ) !storage_engine.ManagedResult {
         return self.engine.selectDocument(allocator, self.metadata.index, id, namespace_id, null);
@@ -97,7 +97,7 @@ pub const TableFixture = struct {
 
     pub fn deleteDocument(
         self: TableFixture,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
     ) !void {
         return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null);
@@ -106,11 +106,11 @@ pub const TableFixture = struct {
     pub fn getOne(
         self: TableFixture,
         allocator: Allocator,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
     ) !ManagedDocument {
         var managed = try self.selectDocument(allocator, id, namespace_id);
-        if (managed.rows.len == 0) {
+        if (managed.records.len == 0) {
             managed.deinit();
             return error.NotFound;
         }
@@ -127,51 +127,51 @@ pub const ManagedDocument = struct {
     }
 
     pub fn getFieldText(self: *const ManagedDocument, key: []const u8) ![]const u8 {
-        return Helpers.getFieldText(self.managed.rows[0], self.fixture.metadata, key);
+        return Helpers.getFieldText(self.managed.records[0], self.fixture.metadata, key);
     }
 
     pub fn getFieldTextOrNull(self: *const ManagedDocument, key: []const u8) ?[]const u8 {
-        return Helpers.getFieldTextOrNull(self.managed.rows[0], self.fixture.metadata, key);
+        return Helpers.getFieldTextOrNull(self.managed.records[0], self.fixture.metadata, key);
     }
 
-    pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?storage_engine.DocId {
-        return Helpers.getFieldDocIdOrNull(self.managed.rows[0], self.fixture.metadata, key);
+    pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed.DocId {
+        return Helpers.getFieldDocIdOrNull(self.managed.records[0], self.fixture.metadata, key);
     }
 
     pub fn getFieldInt(self: *const ManagedDocument, key: []const u8) !i64 {
-        return Helpers.getFieldInt(self.managed.rows[0], self.fixture.metadata, key);
+        return Helpers.getFieldInt(self.managed.records[0], self.fixture.metadata, key);
     }
 
     pub fn expectMissingField(self: *const ManagedDocument, key: []const u8) !void {
-        try Helpers.expectMissingField(self.managed.rows[0], self.fixture.metadata, key);
+        try Helpers.expectMissingField(self.managed.records[0], self.fixture.metadata, key);
     }
 
     pub fn expectFieldTextArray(self: *const ManagedDocument, key: []const u8, expected: []const []const u8) !void {
-        try Helpers.expectFieldTextArray(self.managed.rows[0], self.fixture.metadata, key, expected);
+        try Helpers.expectFieldTextArray(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
-    pub fn expectFieldString(self: *const ManagedDocument, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
-        return Helpers.expectFieldString(self.managed.rows[0], self.fixture.metadata, key, expected);
+    pub fn expectFieldString(self: *const ManagedDocument, key: []const u8, expected: []const u8) !typed.TypedValue {
+        return Helpers.expectFieldString(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
-    pub fn expectFieldDocId(self: *const ManagedDocument, key: []const u8, expected: storage_engine.DocId) !storage_engine.DocId {
-        return Helpers.expectFieldDocId(self.managed.rows[0], self.fixture.metadata, key, expected);
+    pub fn expectFieldDocId(self: *const ManagedDocument, key: []const u8, expected: typed.DocId) !typed.DocId {
+        return Helpers.expectFieldDocId(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldInt(self: *const ManagedDocument, key: []const u8, expected: i64) !i64 {
-        return Helpers.expectFieldInt(self.managed.rows[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldInt(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldReal(self: *const ManagedDocument, key: []const u8, expected: f64) !f64 {
-        return Helpers.expectFieldReal(self.managed.rows[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldReal(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
     pub fn expectFieldBool(self: *const ManagedDocument, key: []const u8, expected: bool) !bool {
-        return Helpers.expectFieldBool(self.managed.rows[0], self.fixture.metadata, key, expected);
+        return Helpers.expectFieldBool(self.managed.records[0], self.fixture.metadata, key, expected);
     }
 
-    pub fn expectFieldArray(self: *const ManagedDocument, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
-        return Helpers.expectFieldArray(self.managed.rows[0], self.fixture.metadata, key, expected_len);
+    pub fn expectFieldArray(self: *const ManagedDocument, key: []const u8, expected_len: usize) !typed.TypedValue {
+        return Helpers.expectFieldArray(self.managed.records[0], self.fixture.metadata, key, expected_len);
     }
 };
 
@@ -246,7 +246,7 @@ pub const EngineTestContext = struct {
     pub fn insertNamed(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -257,10 +257,10 @@ pub const EngineTestContext = struct {
     pub fn insertField(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: storage_engine.TypedValue,
+        value: typed.TypedValue,
     ) !void {
         try self.insertNamed(table_name, id, namespace_id, .{named(field, value)});
     }
@@ -268,7 +268,7 @@ pub const EngineTestContext = struct {
     pub fn insertText(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -279,7 +279,7 @@ pub const EngineTestContext = struct {
     pub fn insertInt(
         self: *EngineTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,
@@ -410,7 +410,7 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     errdefer ctx.engine.deinit();
 }
 
-pub fn named(field: []const u8, value: storage_engine.TypedValue) NamedColumn {
+pub fn named(field: []const u8, value: typed.TypedValue) NamedColumn {
     return .{ .field = field, .value = value };
 }
 
@@ -428,59 +428,59 @@ fn fillNamedColumns(
 fn insertNamedWithMetadata(
     engine: *StorageEngine,
     table_metadata: *const TableMetadata,
-    id: storage_engine.DocId,
+    id: typed.DocId,
     namespace_id: i64,
     columns: anytype,
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace_id, doc_id.zero, &resolved, null);
+    try engine.insertOrReplace(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null);
 }
 
-// ─── Row field accessors (module-level, for callers with raw TypedRow + metadata) ───
+// ─── Record field accessors (module-level, for callers with raw TypedRecord + metadata) ───
 
-fn getRowField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?storage_engine.TypedValue {
+fn getRecordField(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) ?typed.TypedValue {
     const idx = metadata.fieldIndex(key) orelse return null;
     if (idx >= doc.values.len) return null;
     return doc.values[idx];
 }
 
-pub fn getFieldTextOrNull(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?[]const u8 {
-    const val = getRowField(doc, metadata, key) orelse return null;
+pub fn getFieldTextOrNull(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) ?[]const u8 {
+    const val = getRecordField(doc, metadata, key) orelse return null;
     if (val != .scalar or val.scalar != .text) return null;
     return val.scalar.text;
 }
 
-pub fn getFieldDocIdOrNull(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ?storage_engine.DocId {
-    const val = getRowField(doc, metadata, key) orelse return null;
+pub fn getFieldDocIdOrNull(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) ?typed.DocId {
+    const val = getRecordField(doc, metadata, key) orelse return null;
     if (val != .scalar or val.scalar != .doc_id) return null;
     return val.scalar.doc_id;
 }
 
-pub fn getFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !i64 {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn getFieldInt(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) !i64 {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
     return error.TypeMismatch;
 }
 
-pub fn getFieldText(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) ![]const u8 {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn getFieldText(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) ![]const u8 {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .text) return error.TypeMismatch;
     return val.scalar.text;
 }
 
-pub fn getFieldDocId(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !storage_engine.DocId {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn getFieldDocId(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) !typed.DocId {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .doc_id) return error.TypeMismatch;
     return val.scalar.doc_id;
 }
 
-pub fn expectMissingField(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8) !void {
-    try testing.expect(getRowField(doc, metadata, key) == null);
+pub fn expectMissingField(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8) !void {
+    try testing.expect(getRecordField(doc, metadata, key) == null);
 }
 
-pub fn expectFieldTextArray(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: []const []const u8) !void {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn expectFieldTextArray(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: []const []const u8) !void {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .array) return error.TypeMismatch;
     try testing.expectEqual(expected.len, val.array.len);
     for (expected, val.array) |exp, got| {
@@ -489,42 +489,42 @@ pub fn expectFieldTextArray(doc: storage_engine.TypedRow, metadata: *const Table
     }
 }
 
-pub fn expectFieldString(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: []const u8) !storage_engine.TypedValue {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn expectFieldString(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: []const u8) !typed.TypedValue {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .text) return error.TypeMismatch;
     try testing.expectEqualStrings(expected, val.scalar.text);
     return val;
 }
 
-pub fn expectFieldDocId(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: storage_engine.DocId) !storage_engine.DocId {
+pub fn expectFieldDocId(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: typed.DocId) !typed.DocId {
     const actual = try getFieldDocId(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
 }
 
-pub fn expectFieldInt(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: i64) !i64 {
+pub fn expectFieldInt(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: i64) !i64 {
     const actual = try getFieldInt(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
 }
 
-pub fn expectFieldReal(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn expectFieldReal(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
     const actual = val.scalar.real;
     try testing.expectApproxEqAbs(expected, actual, 0.00001);
     return actual;
 }
 
-pub fn expectFieldBool(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn expectFieldBool(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .scalar and val.scalar == .boolean);
     try testing.expectEqual(expected, val.scalar.boolean);
     return val.scalar.boolean;
 }
 
-pub fn expectFieldArray(doc: storage_engine.TypedRow, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !storage_engine.TypedValue {
-    const val = getRowField(doc, metadata, key) orelse return error.FieldNotFound;
+pub fn expectFieldArray(doc: typed.TypedRecord, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !typed.TypedValue {
+    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     try testing.expect(val == .array);
     try testing.expectEqual(expected_len, val.array.len);
     return val;

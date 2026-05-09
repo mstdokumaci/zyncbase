@@ -1,81 +1,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc_id = @import("../doc_id.zig");
-const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
+const doc_id = @import("doc_id.zig");
 
 pub const DocId = doc_id.DocId;
 
-pub const MetadataCacheKey = struct {
-    namespace_id: i64,
-    table_index: usize,
-    id: DocId,
-};
-
-pub const typed_cache_type = lockFreeCache(TypedRow, MetadataCacheKey);
-
-pub const NamespaceCacheKey = u64;
-pub const IdentityCacheKey = u64;
-
-pub const NamespaceCacheValue = struct {
-    namespace_id: i64,
-
-    pub fn deinit(_: NamespaceCacheValue, _: Allocator) void {}
-};
-
-pub const IdentityCacheValue = struct {
-    user_doc_id: DocId,
-
-    pub fn deinit(_: IdentityCacheValue, _: Allocator) void {}
-};
-
-pub const namespace_cache_type = lockFreeCache(NamespaceCacheValue, NamespaceCacheKey);
-pub const identity_cache_type = lockFreeCache(IdentityCacheValue, IdentityCacheKey);
-
-pub fn namespaceCacheKey(namespace: []const u8) NamespaceCacheKey {
-    return std.hash.Wyhash.hash(0x9e3779b97f4a7c15, namespace);
-}
-
-pub fn identityCacheKey(identity_namespace_id: i64, external_user_id: []const u8) IdentityCacheKey {
-    var hasher = std.hash.Wyhash.init(0xd1b54a32d192ed03);
-    std.hash.autoHash(&hasher, identity_namespace_id);
-    hasher.update("\x00");
-    hasher.update(external_user_id);
-    return hasher.final();
-}
-
-/// A schema field index + typed value pair for storage inserts/updates.
-pub const ColumnValue = struct {
-    index: usize,
-    value: TypedValue,
-};
-
-/// A managed result that might be backed by a cache handle.
-/// Every result is exposed as a slice of TypedRows.
-/// Caller MUST call deinit() to release any potential cache handles and memory.
-pub const ManagedResult = struct {
-    rows: []TypedRow,
-    handle: ?typed_cache_type.Handle = null,
-    allocator: ?Allocator = null,
-
-    pub fn deinit(self: *ManagedResult) void {
-        if (self.handle) |h| {
-            h.release();
-        } else if (self.allocator) |alloc| {
-            for (self.rows) |r| r.deinit(alloc);
-            alloc.free(self.rows);
-        }
-    }
-};
-
-pub const TypedRow = struct {
+pub const TypedRecord = struct {
     values: []TypedValue,
 
-    pub fn deinit(self: TypedRow, allocator: Allocator) void {
+    pub fn deinit(self: TypedRecord, allocator: Allocator) void {
         for (self.values) |value| value.deinit(allocator);
         allocator.free(self.values);
     }
 
-    pub fn clone(self: TypedRow, allocator: Allocator) !TypedRow {
+    pub fn clone(self: TypedRecord, allocator: Allocator) !TypedRecord {
         const cloned = try allocator.alloc(TypedValue, self.values.len);
         var i: usize = 0;
         errdefer {
@@ -145,7 +82,7 @@ pub const ScalarValue = union(enum) {
     }
 };
 
-/// A typed value for asynchronous storage binding.
+/// A typed value for schema-indexed records and cursors.
 pub const TypedValue = union(enum) {
     scalar: ScalarValue,
     array: []ScalarValue, // Owned slice of ScalarValues (no nesting, no nil)

@@ -1,8 +1,8 @@
 const std = @import("std");
 const schema = @import("schema.zig");
-const storage_values = @import("storage_engine/values.zig");
-const TypedValue = storage_values.TypedValue;
-const TypedCursor = storage_values.TypedCursor;
+const typed = @import("typed.zig");
+const TypedValue = typed.TypedValue;
+const TypedCursor = typed.TypedCursor;
 
 pub const Operator = enum(u8) {
     eq = 0,

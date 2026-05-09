@@ -4,7 +4,7 @@ const query_ast = @import("query_ast.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema = @import("schema.zig");
-const storage_engine = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
 
@@ -82,7 +82,7 @@ test "query with orderBy and after" {
     defer sm.deinit();
 
     // cursor: Base64(MsgPack([42, doc_id(2)]))
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.TypedCursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -413,7 +413,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     }});
     defer sm.deinit();
 
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.TypedCursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -439,7 +439,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 test "cursor token rejects wrong sort type" {
     const allocator = testing.allocator;
 
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.TypedCursor = .{
         .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
         .id = 2,
     };

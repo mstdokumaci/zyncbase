@@ -4,18 +4,18 @@ const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
-const doc_id = @import("../doc_id.zig");
+const typed = @import("../typed.zig");
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
 const filter_sql = @import("filter_sql.zig");
-const storage_values = @import("values.zig");
+const storage_cache = @import("cache.zig");
 
 const StorageError = errors.StorageError;
-const DocId = storage_values.DocId;
-const MetadataCacheKey = storage_values.MetadataCacheKey;
-const TypedCursor = storage_values.TypedCursor;
-const TypedRow = storage_values.TypedRow;
-const TypedValue = storage_values.TypedValue;
+const DocId = typed.DocId;
+const MetadataCacheKey = storage_cache.MetadataCacheKey;
+const TypedCursor = typed.TypedCursor;
+const TypedRecord = typed.TypedRecord;
+const TypedValue = typed.TypedValue;
 
 pub const QueryResult = struct {
     sql: []const u8,
@@ -128,11 +128,11 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: D
     };
 }
 
-pub fn decodeTypedRow(
+pub fn decodeTypedRecord(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema.Table,
-) !TypedRow {
+) !TypedRecord {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
 
@@ -149,7 +149,7 @@ pub fn decodeTypedRow(
         errdefer val.deinit(allocator);
         values[i] = val;
     }
-    return TypedRow{
+    return TypedRecord{
         .values = values,
     };
 }
@@ -162,8 +162,8 @@ pub fn execSelectDocumentTyped(
     namespace_id: i64,
     table_metadata: *const schema.Table,
     guard_values: ?[]const TypedValue,
-) !?TypedRow {
-    const id_bytes = doc_id.toBytes(id);
+) !?TypedRecord {
+    const id_bytes = typed.docIdToBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 
@@ -179,7 +179,7 @@ pub fn execSelectDocumentTyped(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-    return try decodeTypedRow(allocator, stmt, table_metadata);
+    return try decodeTypedRecord(allocator, stmt, table_metadata);
 }
 
 pub fn execQueryTyped(
@@ -190,17 +190,17 @@ pub fn execQueryTyped(
     table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
-) !struct { rows: []TypedRow, next_cursor_str: ?[]const u8 } {
+) !struct { records: []TypedRecord, next_cursor_str: ?[]const u8 } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
         try sql.bindTypedValue(v, db, stmt, @intCast(i + 1), allocator);
     }
 
-    var rows_list: std.ArrayListUnmanaged(TypedRow) = .empty;
+    var records_list: std.ArrayListUnmanaged(TypedRecord) = .empty;
     errdefer {
-        for (rows_list.items) |r| r.deinit(allocator);
-        rows_list.deinit(allocator);
+        for (records_list.items) |r| r.deinit(allocator);
+        records_list.deinit(allocator);
     }
 
     while (true) {
@@ -208,37 +208,37 @@ pub fn execQueryTyped(
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-        try rows_list.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
+        try records_list.append(allocator, try decodeTypedRecord(allocator, stmt, table_metadata));
     }
 
     const has_more = if (requested_limit) |limit_u32| blk: {
         const limit: usize = @intCast(limit_u32);
-        break :blk rows_list.items.len > limit;
+        break :blk records_list.items.len > limit;
     } else false;
 
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
-        while (rows_list.items.len > limit) {
-            if (rows_list.pop()) |extra_row| {
-                var row = extra_row;
-                row.deinit(allocator);
+        while (records_list.items.len > limit) {
+            if (records_list.pop()) |extra_record| {
+                var record = extra_record;
+                record.deinit(allocator);
             } else unreachable;
         }
     }
 
-    const owned_rows = try rows_list.toOwnedSlice(allocator);
+    const owned_records = try records_list.toOwnedSlice(allocator);
     errdefer {
-        for (owned_rows) |r| r.deinit(allocator);
-        allocator.free(owned_rows);
+        for (owned_records) |r| r.deinit(allocator);
+        allocator.free(owned_records);
     }
 
     var next_cursor_str: ?[]const u8 = null;
     if (has_more) {
         const limit: usize = @intCast(requested_limit.?);
         if (limit > 0) {
-            const last_row = owned_rows[limit - 1];
-            const sort_val = last_row.values[sort_field_index];
-            const id_val = last_row.values[schema.id_field_index];
+            const last_record = owned_records[limit - 1];
+            const sort_val = last_record.values[sort_field_index];
+            const id_val = last_record.values[schema.id_field_index];
             if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
 
             const cursor = TypedCursor{
@@ -250,7 +250,7 @@ pub fn execQueryTyped(
     }
 
     return .{
-        .rows = owned_rows,
+        .records = owned_records,
         .next_cursor_str = next_cursor_str,
     };
 }

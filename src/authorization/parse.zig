@@ -4,8 +4,9 @@ const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const doc_predicate = @import("doc_predicate.zig");
 const schema = @import("../schema.zig");
-const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
+const typed = @import("../typed.zig");
+const ScalarValue = typed.ScalarValue;
+const TypedValue = typed.TypedValue;
 
 /// Parse authorization.json text into an AuthConfig.
 pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !types.AuthConfig {

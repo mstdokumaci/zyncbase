@@ -53,7 +53,7 @@ test "storage: error handling read-only filesystem" {
     {
         var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
+        try testing.expect(managed.records.len > 0);
     }
 }
 test "storage: error handling constraint violations" {
@@ -102,7 +102,7 @@ test "storage: error handling concurrent access safety" {
         fn run(t_ctx: ThreadContext, table_index: usize) void {
             var managed = t_ctx.storage.selectDocument(t_ctx.allocator, table_index, 1, 1, null) catch return; // zwanzig-disable-line: swallowed-error
             defer managed.deinit();
-            _ = managed.rows;
+            _ = managed.records;
         }
     }.run;
     var threads: [4]std.Thread = undefined;
@@ -126,7 +126,7 @@ test "storage: error handling empty paths" {
     {
         var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
+        try testing.expect(managed.records.len > 0);
     }
 }
 test "storage: error handling large values" {
@@ -148,7 +148,7 @@ test "storage: error handling large values" {
     {
         var managed = try tbl.selectDocument(allocator, 1, 1);
         defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
+        try testing.expect(managed.records.len > 0);
     }
 }
 test "storage: error handling delete non-existent key" {
@@ -165,6 +165,6 @@ test "storage: error handling delete non-existent key" {
     {
         var managed = try tbl.selectDocument(allocator, 999, 1);
         defer managed.deinit();
-        try testing.expect(managed.rows.len == 0);
+        try testing.expect(managed.records.len == 0);
     }
 }

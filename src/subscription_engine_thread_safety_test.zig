@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const RowChange = @import("subscription_engine.zig").RowChange;
+const RecordChange = @import("subscription_engine.zig").RecordChange;
 const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
-test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
+test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
@@ -47,22 +47,22 @@ test "SubscriptionEngine: concurrent subscribe and handleRowChange" {
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
     try testing.expectEqual(@as(u32, total_subs), engine.active_subs.count());
 
-    // Concurrent handleRowChange
+    // Concurrent handleRecordChange
     const run_handle = struct {
         fn run(engine_ptr: *SubscriptionEngine, alloc: std.mem.Allocator) void {
-            var r = tth.rowFromTypedValues(alloc, &.{tth.valBool(true)}) catch return;
+            var r = tth.recordFromTypedValues(alloc, &.{tth.valBool(true)}) catch return;
             defer r.deinit(alloc);
 
-            const change = RowChange{
+            const change = RecordChange{
                 .namespace_id = 1,
                 .table_index = 0,
                 .operation = .update,
-                .new_row = r,
-                .old_row = null,
+                .new_record = r,
+                .old_record = null,
             };
 
             for (0..100) |_| {
-                const matches = engine_ptr.handleRowChange(change, alloc) catch @panic("handleRowChange failed");
+                const matches = engine_ptr.handleRecordChange(change, alloc) catch @panic("handleRecordChange failed");
                 alloc.free(matches);
             }
         }

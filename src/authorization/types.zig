@@ -1,7 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
+const typed = @import("../typed.zig");
 const schema = @import("../schema.zig");
+const TypedValue = typed.TypedValue;
 
 pub const AuthConfig = struct {
     allocator: Allocator,

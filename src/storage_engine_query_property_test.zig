@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
-const TypedValue = @import("storage_engine.zig").TypedValue;
+const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
+const TypedValue = typed.TypedValue;
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
@@ -36,7 +37,7 @@ test "property: random query filters on StorageEngine" {
         // Execute query
         var managed = try (try ctx.table("entities")).selectQuery(allocator, 1, filter);
         defer managed.deinit();
-        try testing.expect(managed.rows.len >= 0);
+        try testing.expect(managed.records.len >= 0);
     }
 }
 

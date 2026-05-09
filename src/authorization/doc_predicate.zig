@@ -3,11 +3,11 @@ const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
-const storage_values = @import("../storage_engine/values.zig");
+const typed = @import("../typed.zig");
 const evaluate_mod = @import("evaluate.zig");
 
 const EvalContext = evaluate_mod.EvalContext;
-const TypedValue = storage_values.TypedValue;
+const TypedValue = typed.TypedValue;
 
 const LowerResult = union(enum) {
     allow,
@@ -316,13 +316,13 @@ fn validateContextVarValue(
     };
 }
 
-fn validateScalarType(field_type: schema.FieldType, value: storage_values.ScalarValue) !void {
+fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) !void {
     switch (field_type) {
-        .text => if (value != .text) return error.InvalidValue,
-        .integer => if (value != .integer) return error.InvalidValue,
-        .real => if (value != .real) return error.InvalidValue,
-        .boolean => if (value != .boolean) return error.InvalidValue,
-        .doc_id => if (value != .doc_id) return error.InvalidValue,
+        .text => if (scalar != .text) return error.InvalidValue,
+        .integer => if (scalar != .integer) return error.InvalidValue,
+        .real => if (scalar != .real) return error.InvalidValue,
+        .boolean => if (scalar != .boolean) return error.InvalidValue,
+        .doc_id => if (scalar != .doc_id) return error.InvalidValue,
         .array => return error.InvalidValue,
     }
 }

@@ -4,6 +4,7 @@ const MessageHandler = @import("message_handler.zig").MessageHandler;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
+const typed = @import("typed.zig");
 const session_resolution = @import("session_resolution_buffer.zig");
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const SessionResolver = @import("session_resolver.zig").SessionResolver;
@@ -20,7 +21,6 @@ const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
 const sth = @import("storage_engine_test_helpers.zig");
-const storage_engine = @import("storage_engine.zig");
 const tth = @import("typed_test_helpers.zig");
 const authorization = @import("authorization.zig");
 
@@ -221,7 +221,7 @@ pub const AppTestContext = struct {
     pub fn insertNamed(
         self: *AppTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         columns: anytype,
     ) !void {
@@ -232,10 +232,10 @@ pub const AppTestContext = struct {
     pub fn insertField(
         self: *AppTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: @import("storage_engine.zig").TypedValue,
+        value: typed.TypedValue,
     ) !void {
         const tbl = try self.table(table_name);
         try tbl.insertField(id, namespace_id, field, value);
@@ -244,7 +244,7 @@ pub const AppTestContext = struct {
     pub fn insertText(
         self: *AppTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: []const u8,
@@ -255,7 +255,7 @@ pub const AppTestContext = struct {
     pub fn insertInt(
         self: *AppTestContext,
         table_name: []const u8,
-        id: storage_engine.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
         value: i64,

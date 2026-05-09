@@ -7,7 +7,7 @@ const tth = @import("typed_test_helpers.zig");
 const sub_eng = @import("subscription_engine.zig");
 const cb = @import("change_buffer.zig");
 const SubscriptionEngine = sub_eng.SubscriptionEngine;
-const RowChange = sub_eng.RowChange;
+const RecordChange = sub_eng.RecordChange;
 const query_ast = @import("query_ast.zig");
 
 test "Subscription Consistency: write-before-subscribe is captured and delivered" {
@@ -54,7 +54,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     try engine.flushPendingWrites();
 
     // 5) Drain captured changes and verify the queued write was captured.
-    var drain_buf = std.ArrayListUnmanaged(cb.OwnedRowChange).empty;
+    var drain_buf = std.ArrayListUnmanaged(cb.OwnedRecordChange).empty;
     defer {
         for (drain_buf.items) |*c| c.deinit(allocator);
         drain_buf.deinit(allocator);
@@ -65,15 +65,15 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 6) Feed the captured change into subscription engine and verify delivery.
     const captured = drain_buf.items[0];
-    const row_change = RowChange{
+    const row_change = RecordChange{
         .namespace_id = captured.namespace_id,
         .table_index = captured.table_index,
         .operation = @enumFromInt(@intFromEnum(captured.operation)),
-        .new_row = captured.new_row,
-        .old_row = captured.old_row,
+        .new_record = captured.new_record,
+        .old_record = captured.old_record,
     };
 
-    const matches = try sub_engine.handleRowChange(row_change, allocator);
+    const matches = try sub_engine.handleRecordChange(row_change, allocator);
     defer allocator.free(matches);
 
     try testing.expectEqual(@as(usize, 1), matches.len);

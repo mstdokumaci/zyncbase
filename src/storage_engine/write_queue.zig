@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const MemoryStrategy = @import("../memory_strategy.zig").MemoryStrategy;
 const SessionResolutionBuffer = @import("../session_resolution_buffer.zig").SessionResolutionBuffer;
-const values = @import("values.zig");
+const typed = @import("../typed.zig");
 
 pub const CheckpointMode = enum {
     /// Passive mode: checkpoint without blocking readers/writers
@@ -39,12 +39,12 @@ pub const ReconnectionConfig = struct {
 pub const BatchEntry = struct {
     kind: enum { upsert, delete },
     table_index: usize,
-    id: values.DocId,
+    id: typed.DocId,
     namespace_id: i64,
-    owner_doc_id: values.DocId,
+    owner_doc_id: typed.DocId,
     sql: []const u8,
-    values: ?[]values.TypedValue,
-    guard_values: ?[]values.TypedValue = null,
+    values: ?[]typed.TypedValue,
+    guard_values: ?[]typed.TypedValue = null,
     timestamp: i64,
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
@@ -64,21 +64,21 @@ pub const WriteOp = union(enum) {
     checkpoint: struct { mode: CheckpointMode, completion_signal: *CompletionSignal },
     upsert: struct {
         table_index: usize,
-        id: values.DocId,
+        id: typed.DocId,
         namespace_id: i64,
-        owner_doc_id: values.DocId,
+        owner_doc_id: typed.DocId,
         sql: []const u8,
-        values: []values.TypedValue,
-        guard_values: ?[]values.TypedValue = null,
+        values: []typed.TypedValue,
+        guard_values: ?[]typed.TypedValue = null,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
     },
     delete: struct {
         table_index: usize,
-        id: values.DocId,
+        id: typed.DocId,
         namespace_id: i64,
         sql: []const u8,
-        guard_values: ?[]values.TypedValue = null,
+        guard_values: ?[]typed.TypedValue = null,
         completion_signal: ?*CompletionSignal = null,
     },
     resolve_session: struct {

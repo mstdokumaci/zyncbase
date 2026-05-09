@@ -1,23 +1,23 @@
 const std = @import("std");
 const query_ast = @import("query_ast.zig");
-const storage_values = @import("storage_engine/values.zig");
+const typed = @import("typed.zig");
 
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
-const TypedRow = storage_values.TypedRow;
-const ScalarValue = storage_values.ScalarValue;
+const TypedRecord = typed.TypedRecord;
+const ScalarValue = typed.ScalarValue;
 
-pub fn evaluatePredicate(predicate: FilterPredicate, row: TypedRow) !bool {
+pub fn evaluatePredicate(predicate: FilterPredicate, record: TypedRecord) !bool {
     if (predicate.conditions) |conds| {
         for (conds) |condition| {
-            if (!try evaluateCondition(condition, row)) return false;
+            if (!try evaluateCondition(condition, record)) return false;
         }
     }
 
     if (predicate.or_conditions) |or_conds| {
         if (or_conds.len == 0) return true;
         for (or_conds) |condition| {
-            if (try evaluateCondition(condition, row)) return true;
+            if (try evaluateCondition(condition, record)) return true;
         }
         return false;
     }
@@ -25,9 +25,9 @@ pub fn evaluatePredicate(predicate: FilterPredicate, row: TypedRow) !bool {
     return true;
 }
 
-pub fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
-    if (cond.field_index >= row.values.len) return cond.op == .isNull;
-    const val = row.values[cond.field_index];
+pub fn evaluateCondition(cond: Condition, record: TypedRecord) !bool {
+    if (cond.field_index >= record.values.len) return cond.op == .isNull;
+    const val = record.values[cond.field_index];
 
     return switch (cond.op) {
         .eq => val.eql(cond.value orelse return false),

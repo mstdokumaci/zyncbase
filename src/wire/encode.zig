@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const storage_mod = @import("../storage_engine.zig");
+const typed = @import("../typed.zig");
 const schema = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
@@ -176,9 +177,9 @@ pub fn encodeQuery(
     }
 
     try list.appendSlice(arena_allocator, Keys.value);
-    try msgpack.encodeArrayHeader(writer, response.results.rows.len);
-    for (response.results.rows) |row| {
-        try encodeTypedRow(writer, row, response.table);
+    try msgpack.encodeArrayHeader(writer, response.results.records.len);
+    for (response.results.records) |record| {
+        try encodeTypedRecord(writer, record, response.table);
     }
 
     if (response.sub_id != null) {
@@ -247,8 +248,8 @@ fn encodeDeltaOp(
     allocator: Allocator,
     comptime op: DeltaOp,
     table_index: usize,
-    id_val: storage_mod.TypedValue,
-    maybe_value: ?struct { row: storage_mod.TypedRow, meta: *const storage_mod.TableMetadata },
+    id_val: typed.TypedValue,
+    maybe_value: ?struct { record: typed.TypedRecord, meta: *const storage_mod.TableMetadata },
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -269,11 +270,11 @@ fn encodeDeltaOp(
     try list.appendSlice(allocator, Keys.path);
     try writer.writeByte(0x92); // fixarray(2)
     try msgpack.encode(msgpack.Payload.uintToPayload(table_index), writer);
-    try storage_mod.writeTypedValueMsgPack(id_val, writer);
+    try typed.writeMsgPack(id_val, writer);
 
     if (maybe_value) |v| {
         try list.appendSlice(allocator, Keys.value);
-        try encodeTypedRow(writer, v.row, v.meta);
+        try encodeTypedRecord(writer, v.record, v.meta);
     }
 
     return list.toOwnedSlice(allocator);
@@ -284,7 +285,7 @@ pub const DeltaOp = enum { remove, set };
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: storage_mod.TypedValue,
+    id_val: typed.TypedValue,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .remove, table_index, id_val, null);
 }
@@ -292,21 +293,21 @@ pub fn encodeDeleteDeltaSuffix(
 pub fn encodeSetDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: storage_mod.TypedValue,
-    new_row: storage_mod.TypedRow,
+    id_val: typed.TypedValue,
+    new_record: typed.TypedRecord,
     table_metadata: *const storage_mod.TableMetadata,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .set, table_index, id_val, .{
-        .row = new_row,
+        .record = new_record,
         .meta = table_metadata,
     });
 }
 
-pub inline fn encodeTypedRow(writer: anytype, row: storage_mod.TypedRow, table_metadata: *const storage_mod.TableMetadata) !void {
-    if (row.values.len != table_metadata.fields.len) return error.InternalError;
-    try msgpack.encodeMapHeader(writer, row.values.len);
-    for (row.values, 0..) |value, idx| {
+pub inline fn encodeTypedRecord(writer: anytype, record: typed.TypedRecord, table_metadata: *const storage_mod.TableMetadata) !void {
+    if (record.values.len != table_metadata.fields.len) return error.InternalError;
+    try msgpack.encodeMapHeader(writer, record.values.len);
+    for (record.values, 0..) |typed_value, idx| {
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
-        try storage_mod.writeTypedValueMsgPack(value, writer);
+        try typed.writeMsgPack(typed_value, writer);
     }
 }

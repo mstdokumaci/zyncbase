@@ -4,22 +4,22 @@ const sqlite = @import("sqlite");
 const reader = @import("reader.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
-const doc_id = @import("../doc_id.zig");
+const typed = @import("../typed.zig");
 const schema = @import("../schema.zig");
 const sql = @import("sql.zig");
-const storage_values = @import("values.zig");
+const storage_cache = @import("cache.zig");
 const write_queue = @import("write_queue.zig");
 const change_buffer = @import("../change_buffer.zig");
-const OwnedRowChange = change_buffer.OwnedRowChange;
+const OwnedRecordChange = change_buffer.OwnedRecordChange;
 const ChangeBuffer = change_buffer.ChangeBuffer;
 const session_resolution = @import("../session_resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 
-const DocId = storage_values.DocId;
-const MetadataCacheKey = storage_values.MetadataCacheKey;
-const TypedRow = storage_values.TypedRow;
+const DocId = typed.DocId;
+const MetadataCacheKey = storage_cache.MetadataCacheKey;
+const TypedRecord = typed.TypedRecord;
 const WriteOp = write_queue.WriteOp;
 const WriteQueue = write_queue.WriteQueue;
 const StatementCache = sql.StatementCache;
@@ -38,9 +38,9 @@ pub const Writer = struct {
     session_resolution_buffer: SessionResolutionBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
-    metadata_cache: *storage_values.typed_cache_type,
-    namespace_cache: *storage_values.namespace_cache_type,
-    identity_cache: *storage_values.identity_cache_type,
+    metadata_cache: *storage_cache.metadata_cache_type,
+    namespace_cache: *storage_cache.namespace_cache_type,
+    identity_cache: *storage_cache.identity_cache_type,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
@@ -158,7 +158,7 @@ pub const Writer = struct {
         namespace_id: i64,
         id: DocId,
         sql_cache: *std.AutoHashMap(usize, []const u8),
-    ) !?TypedRow {
+    ) !?TypedRecord {
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return null;
         const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
             const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata, null);
@@ -173,25 +173,25 @@ pub const Writer = struct {
 
     fn pushOwnedChange(
         allocator: Allocator,
-        pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+        pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         namespace_id: i64,
         table_index: usize,
-        op: OwnedRowChange.Operation,
-        old_row: ?TypedRow,
-        new_row: ?TypedRow,
+        op: OwnedRecordChange.Operation,
+        old_record: ?TypedRecord,
+        new_record: ?TypedRecord,
     ) !void {
         try pending_changes.append(allocator, .{
             .namespace_id = namespace_id,
             .table_index = table_index,
             .operation = op,
-            .old_row = old_row,
-            .new_row = new_row,
+            .old_record = old_record,
+            .new_record = new_record,
         });
     }
 
     fn flushPendingChanges(
         self: *Writer,
-        pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+        pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
     ) void {
         var dispatcher_woken = false;
         for (pending_changes.items) |raw_change| {
@@ -213,7 +213,7 @@ pub const Writer = struct {
     fn executeBatch(
         self: *Writer,
         ops: []const WriteOp,
-        pending_changes: *std.ArrayListUnmanaged(OwnedRowChange),
+        pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
     ) !void {
         execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
             const classified_err = errors.classifyError(err);
@@ -239,27 +239,27 @@ pub const Writer = struct {
                     const table_metadata = self.schema.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
                     const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
-                    var old_row: ?TypedRow = null;
+                    var old_record: ?TypedRecord = null;
                     const capture_res = getDocumentHelper(self, iop.table_index, namespace_id, iop.id, &sql_cache);
-                    if (capture_res) |orow| {
-                        old_row = orow;
+                    if (capture_res) |record| {
+                        old_record = record;
                     } else |err| {
                         std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ iop.table_index, err });
                     }
-                    const maybe_new_row = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
-                        if (old_row) |r| r.deinit(self.allocator);
+                    const maybe_new_record = executeUpsert(self, iop, namespace_id, owner_doc_id, table_metadata) catch |err| {
+                        if (old_record) |r| r.deinit(self.allocator);
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatch UPSERT", classified_err, table_metadata.name);
                         return classified_err;
                     };
 
-                    if (maybe_new_row) |new_row| {
-                        const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                        pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_row, new_row) catch |err| {
+                    if (maybe_new_record) |new_record| {
+                        const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_record, new_record) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
-                            if (old_row) |r| r.deinit(self.allocator);
-                            var r = new_row;
+                            if (old_record) |r| r.deinit(self.allocator);
+                            var r = new_record;
                             r.deinit(self.allocator);
                             return classified_err;
                         };
@@ -268,26 +268,26 @@ pub const Writer = struct {
                         // the id already exists in another namespace, which we surface as a
                         // dropped write rather than silently mutating hidden data.
                         var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, doc_id.hexSlice(iop.id, &id_hex_buf) });
-                        if (old_row) |r| r.deinit(self.allocator);
+                        std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, typed.docIdHexSlice(iop.id, &id_hex_buf) });
+                        if (old_record) |r| r.deinit(self.allocator);
                         continue;
                     }
                 },
                 .delete => |dop| {
                     const table_metadata = self.schema.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
-                    const maybe_old_row = executeDelete(self, dop, namespace_id, table_metadata) catch |err| {
+                    const maybe_old_record = executeDelete(self, dop, namespace_id, table_metadata) catch |err| {
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatch DELETE", classified_err, table_metadata.name);
                         return classified_err;
                     };
 
-                    // For DELETE, the RETURNING * result IS the old row.
-                    if (maybe_old_row) |old_row| {
-                        pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_row, null) catch |err| {
+                    // For DELETE, the RETURNING * result IS the old record.
+                    if (maybe_old_record) |old_record| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_record, null) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
-                            var r = old_row;
+                            var r = old_record;
                             r.deinit(self.allocator);
                             return classified_err;
                         };
@@ -295,7 +295,7 @@ pub const Writer = struct {
                         // If RETURNING * is empty, the row did not exist or was already deleted.
                         // This is a valid no-op state; we skip notifications for non-existent documents.
                         var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, doc_id.hexSlice(dop.id, &id_hex_buf) });
+                        std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, typed.docIdHexSlice(dop.id, &id_hex_buf) });
                     }
                 },
                 else => unreachable,
@@ -361,7 +361,7 @@ pub const Writer = struct {
             }
         }
 
-        var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
+        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
         defer {
             for (pending_changes.items) |*c| c.deinit(self.allocator);
             pending_changes.deinit(self.allocator);
@@ -550,7 +550,7 @@ pub const Writer = struct {
             eviction_keys.appendAssumeCapacity(key);
         }
         // 2. Execute all entries in a single transaction
-        var pending_changes = std.ArrayListUnmanaged(OwnedRowChange).empty;
+        var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
         defer {
             for (pending_changes.items) |*c| c.deinit(self.allocator);
             pending_changes.deinit(self.allocator);
@@ -582,34 +582,34 @@ pub const Writer = struct {
             switch (entry.kind) {
                 .upsert => {
                     const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
-                    var old_row: ?TypedRow = null;
-                    if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache)) |orow| {
-                        old_row = orow;
+                    var old_record: ?TypedRecord = null;
+                    if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache)) |record| {
+                        old_record = record;
                     } else |err| {
                         std.log.err("Failed to capture old state (pre-UPSERT) for table index {d}: {}", .{ entry.table_index, err });
                     }
 
-                    if (executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata)) |maybe_new_row| {
-                        if (maybe_new_row) |new_row| {
-                            const op_type: OwnedRowChange.Operation = if (old_row == null) .insert else .update;
-                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_row, new_row)) |_| {
+                    if (executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata)) |maybe_new_record| {
+                        if (maybe_new_record) |new_record| {
+                            const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_record, new_record)) |_| {
                                 // success
                             } else |err| {
                                 const classified_err = errors.classifyError(err);
                                 std.log.err("Failed to capture row change: {}", .{classified_err});
-                                if (old_row) |r| r.deinit(self.allocator);
-                                var r = new_row;
+                                if (old_record) |r| r.deinit(self.allocator);
+                                var r = new_record;
                                 r.deinit(self.allocator);
                                 final_err = classified_err;
                                 break;
                             }
                         } else {
                             var id_hex_buf: [32]u8 = undefined;
-                            std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ entry.table_index, doc_id.hexSlice(entry.id, &id_hex_buf) });
-                            if (old_row) |r| r.deinit(self.allocator);
+                            std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            if (old_record) |r| r.deinit(self.allocator);
                         }
                     } else |err| {
-                        if (old_row) |r| r.deinit(self.allocator);
+                        if (old_record) |r| r.deinit(self.allocator);
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
                         final_err = classified_err;
@@ -617,21 +617,21 @@ pub const Writer = struct {
                     }
                 },
                 .delete => {
-                    if (executeDelete(self, entry, namespace_id, table_metadata)) |maybe_old_row| {
-                        if (maybe_old_row) |old_row| {
-                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_row, null)) |_| {
+                    if (executeDelete(self, entry, namespace_id, table_metadata)) |maybe_old_record| {
+                        if (maybe_old_record) |old_record| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_record, null)) |_| {
                                 // success
                             } else |err| {
                                 const classified_err = errors.classifyError(err);
                                 std.log.err("Failed to capture row change: {}", .{classified_err});
-                                var r = old_row;
+                                var r = old_record;
                                 r.deinit(self.allocator);
                                 final_err = classified_err;
                                 break;
                             }
                         } else {
                             var id_hex_buf: [32]u8 = undefined;
-                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, doc_id.hexSlice(entry.id, &id_hex_buf) });
+                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
                         }
                     } else |err| {
                         const classified_err = errors.classifyError(err);
@@ -667,7 +667,7 @@ pub const Writer = struct {
             .msg_id = sop.msg_id,
             .scope_seq = sop.scope_seq,
             .namespace_id = 0,
-            .user_doc_id = doc_id.zero,
+            .user_doc_id = typed.zeroDocId,
             .err = null,
         };
 
@@ -675,7 +675,7 @@ pub const Writer = struct {
             result.namespace_id = namespace_id;
 
             self.namespace_cache.update(
-                storage_values.namespaceCacheKey(sop.namespace),
+                storage_cache.namespaceCacheKey(sop.namespace),
                 .{ .namespace_id = namespace_id },
             ) catch |err| {
                 std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
@@ -701,7 +701,7 @@ pub const Writer = struct {
             )) |user_doc_id| {
                 result.user_doc_id = user_doc_id;
                 self.identity_cache.update(
-                    storage_values.identityCacheKey(identity_namespace_id, sop.external_user_id),
+                    storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id),
                     .{ .user_doc_id = user_doc_id },
                 ) catch |err| {
                     std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
@@ -761,24 +761,24 @@ pub const Writer = struct {
         namespace_id: i64,
         owner_id: DocId,
         table_metadata: *const schema.Table,
-    ) !?TypedRow {
+    ) !?TypedRecord {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
         var bind_idx: c_int = 1;
-        const id_bytes = doc_id.toBytes(op.id);
+        const id_bytes = typed.docIdToBytes(op.id);
         if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
-        const owner_id_bytes = doc_id.toBytes(owner_id);
+        const owner_id_bytes = typed.docIdToBytes(owner_id);
         if (sql.bindBlobTransient(stmt, bind_idx, &owner_id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (table_metadata.is_users_table) {
             var external_id_buf: [32]u8 = undefined;
-            const external_id = doc_id.hexSlice(op.id, &external_id_buf);
+            const external_id = typed.docIdHexSlice(op.id, &external_id_buf);
             if (sql.bindTextTransient(stmt, bind_idx, external_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
             bind_idx += 1;
         }
@@ -811,7 +811,7 @@ pub const Writer = struct {
 
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeTypedRow(self.allocator, stmt, table_metadata);
+            return try reader.decodeTypedRecord(self.allocator, stmt, table_metadata);
         }
         if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
         return null;
@@ -822,13 +822,13 @@ pub const Writer = struct {
         op: anytype,
         namespace_id: i64,
         table_metadata: *const schema.Table,
-    ) !?TypedRow {
+    ) !?TypedRecord {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
-        const id_bytes = doc_id.toBytes(op.id);
+        const id_bytes = typed.docIdToBytes(op.id);
         if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
 
@@ -842,7 +842,7 @@ pub const Writer = struct {
 
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeTypedRow(self.allocator, stmt, table_metadata);
+            return try reader.decodeTypedRecord(self.allocator, stmt, table_metadata);
         }
         if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
         return null;

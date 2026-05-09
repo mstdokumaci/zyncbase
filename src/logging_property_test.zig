@@ -279,7 +279,7 @@ test "logging: error details" {
         // Try to get from non-existent namespace/path
         var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();
-        try testing.expect(managed.rows.len == 0);
+        try testing.expect(managed.records.len == 0);
     }
 
     // Test 4: Multiple error types are logged

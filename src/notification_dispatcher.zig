@@ -5,8 +5,8 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const MatchOp = SubscriptionEngine.MatchOp;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
-const OwnedRowChange = @import("change_buffer.zig").OwnedRowChange;
-const RowChange = @import("subscription_engine.zig").RowChange;
+const OwnedRecordChange = @import("change_buffer.zig").OwnedRecordChange;
+const RecordChange = @import("subscription_engine.zig").RecordChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const wire = @import("wire.zig");
@@ -18,7 +18,7 @@ pub const NotificationDispatcher = struct {
     memory_strategy: *MemoryStrategy,
     schema_manager: *const schema.Schema,
     allocator: Allocator,
-    drain_buf: std.ArrayListUnmanaged(OwnedRowChange) = .empty,
+    drain_buf: std.ArrayListUnmanaged(OwnedRecordChange) = .empty,
 
     pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema.Schema) !void {
         self.* = .{
@@ -50,28 +50,28 @@ pub const NotificationDispatcher = struct {
         }
     }
 
-    fn dispatchChange(self: *NotificationDispatcher, change: OwnedRowChange, cm: *ConnectionManager) void {
+    fn dispatchChange(self: *NotificationDispatcher, change: OwnedRecordChange, cm: *ConnectionManager) void {
         const table_metadata = self.schema_manager.getTableByIndex(change.table_index) orelse {
             std.log.err("NotificationDispatcher skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };
 
-        // === Phase 1: Extract row metadata ===
-        const row_change = RowChange{
+        // === Phase 1: Extract record metadata ===
+        const record_change = RecordChange{
             .namespace_id = change.namespace_id,
             .table_index = change.table_index,
             .operation = @enumFromInt(@intFromEnum(change.operation)),
-            .new_row = change.new_row,
-            .old_row = change.old_row,
+            .new_record = change.new_record,
+            .old_record = change.old_record,
         };
 
-        const id_val = if (change.new_row orelse change.old_row) |row|
-            if (row.values.len > schema.id_field_index) row.values[schema.id_field_index] else null
+        const id_val = if (change.new_record orelse change.old_record) |record|
+            if (record.values.len > schema.id_field_index) record.values[schema.id_field_index] else null
         else
             null;
 
         if (id_val == null) {
-            std.log.err("NotificationDispatcher skipping delta for namespace {d}, table {d} because row has no id", .{ change.namespace_id, change.table_index });
+            std.log.err("NotificationDispatcher skipping delta for namespace {d}, table {d} because record has no id", .{ change.namespace_id, change.table_index });
             return;
         }
 
@@ -85,8 +85,8 @@ pub const NotificationDispatcher = struct {
         defer self.memory_strategy.releaseArena(arena);
         const alloc = arena.allocator();
 
-        const matches = self.subscription_engine.handleRowChange(row_change, alloc) catch |err| {
-            std.log.err("NotificationDispatcher handleRowChange failed: {}", .{err});
+        const matches = self.subscription_engine.handleRecordChange(record_change, alloc) catch |err| {
+            std.log.err("NotificationDispatcher handleRecordChange failed: {}", .{err});
             return;
         };
 
@@ -94,7 +94,7 @@ pub const NotificationDispatcher = struct {
 
         // === Phase 3: Pre-encode suffix templates (once per change) ===
         // For updates, some subscribers may need "set" while others need "remove"
-        // (row left their filter). Pre-encode both and pick per-match.
+        // (record left their filter). Pre-encode both and pick per-match.
 
         var set_suffix: ?[]const u8 = null;
         var remove_suffix: ?[]const u8 = null;
@@ -102,15 +102,15 @@ pub const NotificationDispatcher = struct {
         // Pre-encode set and remove suffixes if any match needs them
         for (matches) |match| {
             if (set_suffix == null and match.op == MatchOp.set_op) {
-                const new_row = change.new_row orelse {
-                    std.log.err("NotificationDispatcher skipping set delta for namespace {d}, table {d} because new_row is missing", .{ change.namespace_id, change.table_index });
+                const new_record = change.new_record orelse {
+                    std.log.err("NotificationDispatcher skipping set delta for namespace {d}, table {d} because new_record is missing", .{ change.namespace_id, change.table_index });
                     return;
                 };
                 set_suffix = wire.encodeSetDeltaSuffix(
                     alloc,
                     table_metadata.index,
                     id_val_actual,
-                    new_row,
+                    new_record,
                     table_metadata,
                 ) catch |err| {
                     std.log.err("NotificationDispatcher failed to encode set suffix for namespace {d}, table {d}: {}", .{ change.namespace_id, change.table_index, err });

@@ -1,8 +1,8 @@
 const std = @import("std");
-const types = @import("storage_engine.zig");
-const TypedValue = types.TypedValue;
-const TypedRow = types.TypedRow;
-const ScalarValue = types.ScalarValue;
+const typed = @import("typed.zig");
+const TypedValue = typed.TypedValue;
+const TypedRecord = typed.TypedRecord;
+const ScalarValue = typed.ScalarValue;
 
 pub fn valText(t: []const u8) TypedValue {
     return .{ .scalar = .{ .text = t } };
@@ -41,13 +41,13 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
     return result;
 }
 
-/// Creates a TypedRow without schema metadata.
+/// Creates a TypedRecord without schema metadata.
 /// Initializes all slots to nil, sets canonical trailing system timestamps
 /// (`created_at`, `updated_at`) to 0 when present, then applies values starting at index 3.
-pub fn rowFromTypedValues(
+pub fn recordFromTypedValues(
     allocator: std.mem.Allocator,
     typed_values: []const TypedValue,
-) !TypedRow {
+) !TypedRecord {
     // Canonical minimum shape:
     // [id, namespace_id, owner_id, created_at, updated_at]
     const value_count: usize = @max(5, typed_values.len + 5);

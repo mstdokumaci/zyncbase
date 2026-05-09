@@ -229,7 +229,7 @@ test "StorageEngine: delete document" {
 
     var managed = try docs.selectDocument(allocator, 1, 1);
     defer managed.deinit();
-    try testing.expect(managed.rows.len == 0);
+    try testing.expect(managed.records.len == 0);
 }
 test "StorageEngine: insertOrReplace and selectDocument" {
     const allocator = testing.allocator;
@@ -260,7 +260,7 @@ test "StorageEngine: selectDocument non-existent key" {
 
     var managed = try items.selectDocument(allocator, 999, 2);
     defer managed.deinit();
-    try testing.expect(managed.rows.len == 0);
+    try testing.expect(managed.records.len == 0);
 }
 test "StorageEngine: update existing document" {
     const allocator = testing.allocator;
@@ -300,7 +300,7 @@ test "StorageEngine: query collection" {
     defer filter.deinit(allocator);
     var managed = try people.selectQuery(allocator, 2, filter);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 2), managed.rows.len);
+    try testing.expectEqual(@as(usize, 2), managed.records.len);
 }
 test "StorageEngine: duplicate ids across namespaces are rejected" {
     const allocator = testing.allocator;
@@ -326,7 +326,7 @@ test "StorageEngine: duplicate ids across namespaces are rejected" {
 
     var managed = try items.selectDocument(allocator, 1, 4);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 0), managed.rows.len);
+    try testing.expectEqual(@as(usize, 0), managed.records.len);
 }
 
 test "StorageEngine: batchWrites false flushes single write without timeout delay" {
@@ -352,7 +352,7 @@ test "StorageEngine: batchWrites false flushes single write without timeout dela
 
     var managed = try (try ctx.table("items")).selectDocument(allocator, 1, 5);
     defer managed.deinit();
-    try testing.expect(managed.rows.len > 0);
+    try testing.expect(managed.records.len > 0);
 }
 
 test "StorageEngine: low-level batch writer cleans up when begin fails" {
@@ -437,7 +437,7 @@ test "StorageEngine: concurrent reads" {
         fn readKey(eng: *sth.StorageEngine, alloc: std.mem.Allocator, table_index: usize, id: u128) !void {
             var managed = try eng.selectDocument(alloc, table_index, id, 2, null);
             defer managed.deinit();
-            try testing.expect(managed.rows.len > 0);
+            try testing.expect(managed.records.len > 0);
         }
     };
     var threads: [4]std.Thread = undefined;
@@ -492,7 +492,7 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         const id: u128 = i + 1;
         var managed = try (try verify_ctx.table("items")).selectDocument(allocator, id, 1);
         defer managed.deinit();
-        try testing.expect(managed.rows.len > 0);
+        try testing.expect(managed.records.len > 0);
     }
 }
 test "StorageEngine: client writes blocked during migration" {

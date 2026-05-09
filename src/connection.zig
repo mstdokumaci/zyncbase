@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 pub const unset_namespace_id: i64 = -1;
@@ -10,7 +10,7 @@ pub const unset_namespace_id: i64 = -1;
 pub const Connection = struct {
     pub const StoreSession = struct {
         namespace_id: i64,
-        user_doc_id: doc_id.DocId,
+        user_doc_id: typed.DocId,
         ready: bool,
     };
 
@@ -33,7 +33,7 @@ pub const Connection = struct {
     pending_store_namespace: ?[]const u8,
 
     /// Resolved users.id for writes in the active store scope.
-    user_doc_id: doc_id.DocId,
+    user_doc_id: typed.DocId,
 
     /// True only after namespace and scoped users.id resolution completed.
     store_ready: bool,
@@ -73,7 +73,7 @@ pub const Connection = struct {
         self.namespace_id = unset_namespace_id;
         self.store_namespace = null;
         self.pending_store_namespace = null;
-        self.user_doc_id = doc_id.zero;
+        self.user_doc_id = typed.zeroDocId;
         self.store_ready = false;
         self.scope_seq = 0;
         self.subscription_ids = .empty;
@@ -141,7 +141,7 @@ pub const Connection = struct {
         self.namespace_id = unset_namespace_id;
         self.store_namespace = null;
         self.pending_store_namespace = null;
-        self.user_doc_id = doc_id.zero;
+        self.user_doc_id = typed.zeroDocId;
         self.store_ready = false;
         self.scope_seq +%= 1;
     }
@@ -159,7 +159,7 @@ pub const Connection = struct {
     }
 
     /// Replace the active store scope after namespace and users.id resolution.
-    pub fn setStoreScope(self: *Connection, namespace_id: i64, user_doc_id: doc_id.DocId) void {
+    pub fn setStoreScope(self: *Connection, namespace_id: i64, user_doc_id: typed.DocId) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -168,7 +168,7 @@ pub const Connection = struct {
         self.store_ready = true;
     }
 
-    pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: doc_id.DocId) !void {
+    pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: typed.DocId) !void {
         const namespace_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(namespace_owned);
 
@@ -184,7 +184,7 @@ pub const Connection = struct {
         self.store_ready = true;
     }
 
-    pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: doc_id.DocId) bool {
+    pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 

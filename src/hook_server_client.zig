@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 
 /// Connection state for the Hook Server client
@@ -148,11 +148,11 @@ pub const WebSocketConnection = struct {
 
 /// Authorization request structure
 pub const AuthRequest = struct {
-    user_doc_id: doc_id.DocId,
+    user_doc_id: typed.DocId,
     namespace_id: i64,
     operation: Operation,
     table_index: usize,
-    target_doc_id: doc_id.DocId = doc_id.zero,
+    target_doc_id: typed.DocId = typed.zeroDocId,
     timestamp: i64,
 
     pub const Operation = enum {
@@ -271,7 +271,7 @@ pub const HookServerClient = struct {
     }
 
     pub fn authorize(self: *HookServerClient, req: AuthRequest) !AuthResponse {
-        if (req.user_doc_id == doc_id.zero) return error.InvalidUserId;
+        if (req.user_doc_id == typed.zeroDocId) return error.InvalidUserId;
         if (req.namespace_id < 0) return error.InvalidNamespace;
 
         if (self.auth_cache) |cache| {

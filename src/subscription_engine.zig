@@ -4,9 +4,9 @@ const query_ast = @import("query_ast.zig");
 const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const types = @import("storage_engine.zig");
-const TypedRow = types.TypedRow;
-const TypedValue = types.TypedValue;
+const typed = @import("typed.zig");
+const TypedRecord = typed.TypedRecord;
+const TypedValue = typed.TypedValue;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -31,20 +31,20 @@ pub const SubscriptionGroup = struct {
     }
 };
 
-/// Represents a change to a row, emitted by the storage engine or handler
-pub const RowChange = struct {
+/// Represents a change to a record, emitted by the storage engine or handler
+pub const RecordChange = struct {
     pub const Operation = enum { insert, update, delete };
     namespace_id: i64,
     table_index: usize,
     operation: Operation,
     /// The full record after the change. Null only for delete.
-    new_row: ?TypedRow,
+    new_record: ?TypedRecord,
     /// The full record before the change. Null only for insert.
-    old_row: ?TypedRow,
+    old_record: ?TypedRecord,
 
-    pub fn deinit(self: *const RowChange, allocator: Allocator) void {
-        if (self.new_row) |r| r.deinit(allocator);
-        if (self.old_row) |r| r.deinit(allocator);
+    pub fn deinit(self: *const RecordChange, allocator: Allocator) void {
+        if (self.new_record) |r| r.deinit(allocator);
+        if (self.old_record) |r| r.deinit(allocator);
     }
 };
 
@@ -116,7 +116,7 @@ pub const CanonicalFilterContext = struct {
         }
     }
 
-    fn hashScalarValue(hasher: *std.hash.Wyhash, s: types.ScalarValue) void {
+    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
         std.hash.autoHash(hasher, std.meta.activeTag(s));
         switch (s) {
             .text => |t| hasher.update(t),
@@ -144,7 +144,7 @@ fn eqlTypedValue(a: TypedValue, b: TypedValue) bool {
     };
 }
 
-fn eqlScalarValue(a: types.ScalarValue, b: types.ScalarValue) bool {
+fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
     const tag = std.meta.activeTag(a);
     if (tag != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -354,7 +354,7 @@ pub const SubscriptionEngine = struct {
         };
     }
 
-    /// Finds all subscribers matching a row change. Returns matches through a Result struct.
+    /// Finds all subscribers matching a record change. Returns matches through a Result struct.
     pub const MatchOp = enum { set_op, remove };
 
     pub const Match = struct {
@@ -363,7 +363,7 @@ pub const SubscriptionEngine = struct {
         op: MatchOp,
     };
 
-    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
+    pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
@@ -380,11 +380,11 @@ pub const SubscriptionEngine = struct {
         for (group_ids.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
 
-            const matched_before = if (change.old_row) |old| try SubscriptionEngine.evaluateFilter(group.filter, old) else false;
-            const matches_after = if (change.new_row) |new| try SubscriptionEngine.evaluateFilter(group.filter, new) else false;
+            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(group.filter, old) else false;
+            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(group.filter, new) else false;
 
             if (matched_before and !matches_after) {
-                // Row left the filter: send remove
+                // Record left the filter: send remove
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -394,9 +394,9 @@ pub const SubscriptionEngine = struct {
                     });
                 }
             } else if (matches_after) {
-                // Row now matches the filter: send set.
-                // Covers both "row entered the filter" (!matched_before)
-                // and "row changed within the filter" (matched_before).
+                // Record now matches the filter: send set.
+                // Covers both "record entered the filter" (!matched_before)
+                // and "record changed within the filter" (matched_before).
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -411,8 +411,8 @@ pub const SubscriptionEngine = struct {
         return try matches.toOwnedSlice(allocator);
     }
 
-    /// Evaluates a row against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
-        return filter_eval.evaluatePredicate(filter.predicate, row);
+    /// Evaluates a record against a filter AST.
+    pub fn evaluateFilter(filter: QueryFilter, record: TypedRecord) !bool {
+        return filter_eval.evaluatePredicate(filter.predicate, record);
     }
 };

@@ -2,9 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
-const storage_values = @import("values.zig");
+const typed = @import("../typed.zig");
 
-const TypedValue = storage_values.TypedValue;
+const TypedValue = typed.TypedValue;
 
 pub const RenderedPredicate = struct {
     sql: []const u8,

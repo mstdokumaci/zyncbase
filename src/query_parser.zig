@@ -2,12 +2,12 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
-const doc_id = @import("doc_id.zig");
-const typedValueFromPayload = @import("storage_engine.zig").typedValueFromPayload;
-const writeTypedValueMsgPack = @import("storage_engine.zig").writeTypedValueMsgPack;
-const ScalarValue = @import("storage_engine.zig").ScalarValue;
-const TypedValue = @import("storage_engine.zig").TypedValue;
-const TypedCursor = @import("storage_engine.zig").TypedCursor;
+const typed = @import("typed.zig");
+const typedValueFromPayload = typed.valueFromPayload;
+const writeTypedValueMsgPack = typed.writeMsgPack;
+const ScalarValue = typed.ScalarValue;
+const TypedValue = typed.TypedValue;
+const TypedCursor = typed.TypedCursor;
 
 const query_ast = @import("query_ast.zig");
 const Operator = query_ast.Operator;
@@ -63,7 +63,7 @@ pub fn decodeCursorToken(
 
     return TypedCursor{
         .sort_value = sort_value,
-        .id = doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
+        .id = typed.docIdFromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
     };
 }
 
@@ -75,7 +75,7 @@ pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: TypedCursor) ![]c
     const writer = buf.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
     try writeTypedValueMsgPack(cursor.sort_value, writer);
-    const id_bytes = doc_id.toBytes(cursor.id);
+    const id_bytes = typed.docIdToBytes(cursor.id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
     const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
     const encoded = try allocator.alloc(u8, encoded_len);
@@ -281,8 +281,8 @@ fn parseInOperand(
 
     for (payload.arr, 0..) |item, i| {
         if (item == .nil) return error.NullOperandUnsupported;
-        const typed = try parseScalarValue(allocator, field_type, item);
-        switch (typed) {
+        const parsed_value = try parseScalarValue(allocator, field_type, item);
+        switch (parsed_value) {
             .scalar => |scalar| {
                 items[i] = scalar;
                 count += 1;

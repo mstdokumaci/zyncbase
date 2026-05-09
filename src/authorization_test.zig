@@ -3,12 +3,12 @@ const testing = std.testing;
 const authorization = @import("authorization.zig");
 const AuthConfig = authorization.AuthConfig;
 const EvalContext = authorization.EvalContext;
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const query_ast = @import("query_ast.zig");
 const schema_mod = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema_system = @import("schema/system.zig");
-const ScalarValue = @import("storage_engine.zig").ScalarValue;
+const ScalarValue = typed.ScalarValue;
 
 // ─── Parser Tests ───────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ test "evaluateCondition $session.userId comparison" {
     } };
     defer cond.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -322,7 +322,7 @@ test "authorizeStoreNamespace enforces storeFilter" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = doc_id.generateUuidV7();
+    const user_id = typed.generateUuidV7();
     try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1");
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1"));
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1"));
@@ -343,7 +343,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     });
     defer table.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -360,7 +360,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
     try testing.expect(condition.value != null);
     try testing.expect(condition.value.? == .scalar);
     try testing.expect(condition.value.?.scalar == .doc_id);
-    try testing.expect(doc_id.eql(condition.value.?.scalar.doc_id, test_id));
+    try testing.expect(typed.docIdEql(condition.value.?.scalar.doc_id, test_id));
     try testing.expectEqual(schema_system.owner_id_field_index, condition.field_index);
 }
 
@@ -395,7 +395,7 @@ test "buildDocPredicate preserves logical_or predicate" {
     });
     defer table.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,

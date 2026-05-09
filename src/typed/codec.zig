@@ -1,14 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc_id = @import("../doc_id.zig");
+const doc_id = @import("doc_id.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const schema = @import("../schema.zig");
-const errors = @import("errors.zig");
-const values = @import("values.zig");
+const types = @import("types.zig");
 
-const StorageError = errors.StorageError;
-const ScalarValue = values.ScalarValue;
-const TypedValue = values.TypedValue;
+const ScalarValue = types.ScalarValue;
+const TypedValue = types.TypedValue;
 
 pub fn writeMsgPack(value: TypedValue, writer: anytype) !void {
     switch (value) {
@@ -80,7 +78,7 @@ pub fn validateValue(ft: schema.FieldType, value: msgpack.Payload) !void {
         .boolean => value == .bool,
         .array => value == .arr,
     };
-    if (!match) return StorageError.TypeMismatch;
+    if (!match) return error.TypeMismatch;
 }
 
 pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: msgpack.Payload) !TypedValue {
@@ -94,9 +92,9 @@ pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?sche
                 for (items[0..i]) |*item| item.deinit(allocator);
                 allocator.free(items);
             }
-            const it = items_type orelse return StorageError.TypeMismatch;
+            const it = items_type orelse return error.TypeMismatch;
             while (i < arr.len) : (i += 1) {
-                if (arr[i] == .nil) return StorageError.NullNotAllowed;
+                if (arr[i] == .nil) return error.NullNotAllowed;
                 items[i] = try scalarFromPayload(allocator, it, arr[i]);
             }
             var result = TypedValue{ .array = items };
@@ -111,7 +109,7 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
     if (value == .null) return .nil;
     return switch (ft) {
         .array => {
-            if (value != .array) return StorageError.TypeMismatch;
+            if (value != .array) return error.TypeMismatch;
             const arr = value.array;
             const items = try allocator.alloc(ScalarValue, arr.items.len);
             var i: usize = 0;
@@ -119,9 +117,9 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
                 for (items[0..i]) |*item| item.deinit(allocator);
                 allocator.free(items);
             }
-            const it = items_type orelse return StorageError.TypeMismatch;
+            const it = items_type orelse return error.TypeMismatch;
             while (i < arr.items.len) : (i += 1) {
-                if (arr.items[i] == .null) return StorageError.NullNotAllowed;
+                if (arr.items[i] == .null) return error.NullNotAllowed;
                 items[i] = try scalarFromJson(allocator, it, arr.items[i]);
             }
             return TypedValue{ .array = items };
@@ -134,33 +132,33 @@ fn scalarFromPayload(allocator: Allocator, ft: schema.FieldType, value: msgpack.
     return switch (ft) {
         .doc_id => switch (value) {
             .bin => |b| ScalarValue{ .doc_id = try doc_id.fromBytes(b.value()) },
-            else => StorageError.TypeMismatch,
+            else => error.TypeMismatch,
         },
         .text => switch (value) {
             .str => |s| ScalarValue{ .text = try allocator.dupe(u8, s.value()) },
-            else => StorageError.TypeMismatch,
+            else => error.TypeMismatch,
         },
         .integer => ScalarValue{ .integer = try payloadAsInt(value) },
         .real => ScalarValue{ .real = try payloadAsFloat(value) },
         .boolean => ScalarValue{ .boolean = try payloadAsBool(value) },
-        else => StorageError.InvalidArrayElement,
+        else => error.InvalidArrayElement,
     };
 }
 
 fn scalarFromJson(allocator: Allocator, ft: schema.FieldType, value: std.json.Value) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {
-            .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return StorageError.TypeMismatch },
-            else => StorageError.TypeMismatch,
+            .string => |s| ScalarValue{ .doc_id = doc_id.fromHex(s) catch return error.TypeMismatch },
+            else => error.TypeMismatch,
         },
         .text => switch (value) {
             .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
-            else => StorageError.TypeMismatch,
+            else => error.TypeMismatch,
         },
         .integer => ScalarValue{ .integer = try jsonAsInt(value) },
         .real => ScalarValue{ .real = try jsonAsFloat(value) },
         .boolean => ScalarValue{ .boolean = try jsonAsBool(value) },
-        else => StorageError.InvalidArrayElement,
+        else => error.InvalidArrayElement,
     };
 }
 
@@ -184,7 +182,7 @@ fn payloadAsInt(payload: msgpack.Payload) !i64 {
     return switch (payload) {
         .int => |v| v,
         .uint => |v| @intCast(v),
-        else => StorageError.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }
 
@@ -193,22 +191,22 @@ fn payloadAsFloat(payload: msgpack.Payload) !f64 {
         .float => |v| v,
         .int => |v| @floatFromInt(v),
         .uint => |v| @floatFromInt(v),
-        else => StorageError.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }
 
 fn payloadAsBool(payload: msgpack.Payload) !bool {
     return switch (payload) {
         .bool => |v| v,
-        else => StorageError.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }
 
 fn jsonAsInt(value: std.json.Value) !i64 {
     return switch (value) {
         .integer => |v| v,
-        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch StorageError.TypeMismatch,
-        else => StorageError.TypeMismatch,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch error.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }
 
@@ -216,14 +214,14 @@ fn jsonAsFloat(value: std.json.Value) !f64 {
     return switch (value) {
         .float => |v| v,
         .integer => |v| @floatFromInt(v),
-        .number_string => |s| std.fmt.parseFloat(f64, s) catch StorageError.TypeMismatch,
-        else => StorageError.TypeMismatch,
+        .number_string => |s| std.fmt.parseFloat(f64, s) catch error.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }
 
 fn jsonAsBool(value: std.json.Value) !bool {
     return switch (value) {
         .bool => |v| v,
-        else => StorageError.TypeMismatch,
+        else => error.TypeMismatch,
     };
 }

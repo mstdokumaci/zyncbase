@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const hook_server = @import("hook_server_client.zig");
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 
 const HookServerClient = hook_server.HookServerClient;
 const AuthRequest = hook_server.AuthRequest;
@@ -137,7 +137,7 @@ test "HookServerClient: authorize validates request" {
     // Test zero user_doc_id
     {
         const req = AuthRequest{
-            .user_doc_id = doc_id.zero,
+            .user_doc_id = typed.zeroDocId,
             .namespace_id = 1,
             .operation = .read,
             .table_index = 0,

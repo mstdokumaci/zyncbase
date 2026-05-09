@@ -1,24 +1,25 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const TypedRow = @import("storage_engine/values.zig").TypedRow;
+const typed = @import("typed.zig");
+const TypedRecord = typed.TypedRecord;
 
-pub const OwnedRowChange = struct {
+pub const OwnedRecordChange = struct {
     table_index: usize,
     namespace_id: i64,
     operation: Operation,
-    old_row: ?TypedRow,
-    new_row: ?TypedRow,
+    old_record: ?TypedRecord,
+    new_record: ?TypedRecord,
 
     pub const Operation = enum { insert, update, delete };
 
-    pub fn deinit(self: *OwnedRowChange, allocator: Allocator) void {
-        if (self.old_row) |r| r.deinit(allocator);
-        if (self.new_row) |r| r.deinit(allocator);
+    pub fn deinit(self: *OwnedRecordChange, allocator: Allocator) void {
+        if (self.old_record) |r| r.deinit(allocator);
+        if (self.new_record) |r| r.deinit(allocator);
     }
 };
 
 pub const ChangeBuffer = struct {
-    buffer: []OwnedRowChange,
+    buffer: []OwnedRecordChange,
     write_pos: std.atomic.Value(usize),
     read_pos: std.atomic.Value(usize),
     allocator: Allocator,
@@ -26,7 +27,7 @@ pub const ChangeBuffer = struct {
     const capacity = 8192; // Power of 2 makes modulo cheap
 
     pub fn init(allocator: Allocator) !ChangeBuffer {
-        const buffer = try allocator.alloc(OwnedRowChange, capacity);
+        const buffer = try allocator.alloc(OwnedRecordChange, capacity);
         return ChangeBuffer{
             .buffer = buffer,
             .write_pos = std.atomic.Value(usize).init(0),
@@ -36,7 +37,7 @@ pub const ChangeBuffer = struct {
     }
 
     /// Called by write thread only.
-    pub fn push(self: *ChangeBuffer, change: OwnedRowChange) !void {
+    pub fn push(self: *ChangeBuffer, change: OwnedRecordChange) !void {
         const wp = self.write_pos.load(.monotonic);
         const rp = self.read_pos.load(.acquire);
         if (wp -% rp >= capacity) return error.BufferFull;
@@ -45,7 +46,7 @@ pub const ChangeBuffer = struct {
     }
 
     /// Called by event loop only.
-    pub fn drainInto(self: *ChangeBuffer, out: *std.ArrayListUnmanaged(OwnedRowChange), alloc: Allocator) !void {
+    pub fn drainInto(self: *ChangeBuffer, out: *std.ArrayListUnmanaged(OwnedRecordChange), alloc: Allocator) !void {
         const wp = self.write_pos.load(.acquire);
         const rp_initial = self.read_pos.load(.monotonic);
         var rp = rp_initial;
