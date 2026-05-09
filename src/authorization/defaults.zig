@@ -38,7 +38,6 @@ pub fn implicitConfig(allocator: Allocator, schema_manager: *const schema.Schema
         .store_rules = st_rules,
         .wildcard_store_index = 0,
     };
-    errdefer config.deinit();
 
     try parse.validateConfig(&config, schema_manager);
     return config;
