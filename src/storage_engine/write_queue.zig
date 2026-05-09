@@ -43,8 +43,8 @@ pub const BatchEntry = struct {
     namespace_id: i64,
     owner_doc_id: typed.DocId,
     sql: []const u8,
-    values: ?[]typed.TypedValue,
-    guard_values: ?[]typed.TypedValue = null,
+    values: ?[]typed.Value,
+    guard_values: ?[]typed.Value = null,
     timestamp: i64,
 
     pub fn deinit(self: BatchEntry, allocator: Allocator) void {
@@ -68,8 +68,8 @@ pub const WriteOp = union(enum) {
         namespace_id: i64,
         owner_doc_id: typed.DocId,
         sql: []const u8,
-        values: []typed.TypedValue,
-        guard_values: ?[]typed.TypedValue = null,
+        values: []typed.Value,
+        guard_values: ?[]typed.Value = null,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
     },
@@ -78,7 +78,7 @@ pub const WriteOp = union(enum) {
         id: typed.DocId,
         namespace_id: i64,
         sql: []const u8,
-        guard_values: ?[]typed.TypedValue = null,
+        guard_values: ?[]typed.Value = null,
         completion_signal: ?*CompletionSignal = null,
     },
     resolve_session: struct {

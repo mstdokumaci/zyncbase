@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("../typed.zig");
 const schema = @import("../schema.zig");
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 
 pub const AuthConfig = struct {
     allocator: Allocator,
@@ -124,7 +124,7 @@ pub const Condition = union(enum) {
 pub const Comparison = struct {
     lhs: ContextVar,
     op: ComparisonOp,
-    rhs: Value,
+    rhs: Operand,
 
     pub fn deinit(self: *Comparison, allocator: Allocator) void {
         self.lhs.deinit(allocator);
@@ -161,11 +161,11 @@ pub const VarScope = enum {
     doc,
 };
 
-pub const Value = union(enum) {
-    literal: TypedValue,
+pub const Operand = union(enum) {
+    literal: Value,
     context_var: ContextVar,
 
-    pub fn deinit(self: Value, allocator: Allocator) void {
+    pub fn deinit(self: Operand, allocator: Allocator) void {
         switch (self) {
             .literal => |v| v.deinit(allocator),
             .context_var => |cv| cv.deinit(allocator),

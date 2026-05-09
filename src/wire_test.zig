@@ -10,8 +10,8 @@ const typed = @import("typed.zig");
 const query_parser = @import("query_parser.zig");
 const tth = @import("typed_test_helpers.zig");
 
-fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.TypedRecord {
-    const values = try allocator.alloc(typed.TypedValue, 6);
+fn makeDeltaTestRecord(allocator: std.mem.Allocator, id: []const u8, name: []const u8) !typed.Record {
+    const values = try allocator.alloc(typed.Value, 6);
     errdefer allocator.free(values);
 
     values[0] = try tth.valTextOwned(allocator, id);
@@ -272,7 +272,7 @@ test "encodeQuery: includes subscription pagination fields" {
     defer sm.deinit();
 
     const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
-    const records = try allocator.alloc(typed.TypedRecord, 1);
+    const records = try allocator.alloc(typed.Record, 1);
     records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
         records[0].deinit(allocator);
@@ -283,7 +283,7 @@ test "encodeQuery: includes subscription pagination fields" {
         .records = records,
     };
 
-    const cursor = typed.TypedCursor{
+    const cursor = typed.Cursor{
         .sort_value = tth.valInt(10),
         .id = 1,
     };

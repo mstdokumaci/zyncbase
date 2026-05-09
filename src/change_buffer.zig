@@ -1,14 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
-const TypedRecord = typed.TypedRecord;
+const Record = typed.Record;
 
 pub const OwnedRecordChange = struct {
     table_index: usize,
     namespace_id: i64,
     operation: Operation,
-    old_record: ?TypedRecord,
-    new_record: ?TypedRecord,
+    old_record: ?Record,
+    new_record: ?Record,
 
     pub const Operation = enum { insert, update, delete };
 

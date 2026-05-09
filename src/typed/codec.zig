@@ -6,9 +6,9 @@ const schema = @import("../schema.zig");
 const types = @import("types.zig");
 
 const ScalarValue = types.ScalarValue;
-const TypedValue = types.TypedValue;
+const Value = types.Value;
 
-pub fn writeMsgPack(value: TypedValue, writer: anytype) !void {
+pub fn writeMsgPack(value: Value, writer: anytype) !void {
     switch (value) {
         .nil => try msgpack.encode(.nil, writer),
         .scalar => |s| try writeScalarMsgPack(s, writer),
@@ -40,7 +40,7 @@ fn writeScalarMsgPack(value: ScalarValue, writer: anytype) !void {
     }
 }
 
-pub fn jsonAlloc(allocator: Allocator, value: TypedValue) ![]u8 {
+pub fn jsonAlloc(allocator: Allocator, value: Value) ![]u8 {
     return std.json.Stringify.valueAlloc(allocator, JsonValue{ .value = value }, .{});
 }
 
@@ -81,7 +81,7 @@ pub fn validateValue(ft: schema.FieldType, value: msgpack.Payload) !void {
     if (!match) return error.TypeMismatch;
 }
 
-pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: msgpack.Payload) !TypedValue {
+pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: msgpack.Payload) !Value {
     if (value == .nil) return .nil;
     return switch (ft) {
         .array => {
@@ -97,7 +97,7 @@ pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?sche
                 if (arr[i] == .nil) return error.NullNotAllowed;
                 items[i] = try scalarFromPayload(allocator, it, arr[i]);
             }
-            var result = TypedValue{ .array = items };
+            var result = Value{ .array = items };
             try result.sortedSet(allocator);
             return result;
         },
@@ -105,7 +105,7 @@ pub fn fromPayload(allocator: Allocator, ft: schema.FieldType, items_type: ?sche
     };
 }
 
-pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: std.json.Value) !TypedValue {
+pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, value: std.json.Value) !Value {
     if (value == .null) return .nil;
     return switch (ft) {
         .array => {
@@ -122,7 +122,7 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
                 if (arr.items[i] == .null) return error.NullNotAllowed;
                 items[i] = try scalarFromJson(allocator, it, arr.items[i]);
             }
-            return TypedValue{ .array = items };
+            return Value{ .array = items };
         },
         else => .{ .scalar = try scalarFromJson(allocator, ft, value) },
     };
@@ -163,7 +163,7 @@ fn scalarFromJson(allocator: Allocator, ft: schema.FieldType, value: std.json.Va
 }
 
 const JsonValue = struct {
-    value: TypedValue,
+    value: Value,
 
     pub fn jsonStringify(self: @This(), stream: anytype) !void {
         switch (self.value) {

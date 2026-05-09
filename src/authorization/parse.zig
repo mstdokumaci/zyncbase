@@ -6,7 +6,7 @@ const doc_predicate = @import("doc_predicate.zig");
 const schema = @import("../schema.zig");
 const typed = @import("../typed.zig");
 const ScalarValue = typed.ScalarValue;
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 
 /// Parse authorization.json text into an AuthConfig.
 pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !types.AuthConfig {
@@ -206,7 +206,7 @@ fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.
     const op_str = op_entry.key_ptr.*;
     const op = try parseComparisonOp(op_str);
 
-    const rhs = try parseValue(allocator, op_entry.value_ptr.*);
+    const rhs = try parseOperand(allocator, op_entry.value_ptr.*);
     errdefer rhs.deinit(allocator);
 
     return .{ .comparison = .{
@@ -245,7 +245,7 @@ fn parseComparisonOp(op_str: []const u8) !types.ComparisonOp {
     return map.get(op_str) orelse error.InvalidComparisonOperator;
 }
 
-fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
+fn parseOperand(allocator: Allocator, value: std.json.Value) !types.Operand {
     switch (value) {
         .string => |s| {
             if (s.len > 0 and s[0] == '$') {
@@ -262,7 +262,7 @@ fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
     }
 }
 
-fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !types.Value {
+fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !types.Operand {
     const items = try allocator.alloc(ScalarValue, values.len);
     var initialized: usize = 0;
     var items_owned = true;
@@ -281,7 +281,7 @@ fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !type
     }
 
     items_owned = false;
-    var result = TypedValue{ .array = items };
+    var result = Value{ .array = items };
     errdefer result.deinit(allocator);
     try result.sortedSet(allocator);
     return .{ .literal = result };

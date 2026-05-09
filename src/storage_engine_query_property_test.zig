@@ -5,7 +5,7 @@ const query_ast = @import("query_ast.zig");
 const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
@@ -131,7 +131,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
     const op: query_ast.Operator = @enumFromInt(op_int);
 
-    var value: ?TypedValue = null;
+    var value: ?Value = null;
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {

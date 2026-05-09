@@ -8,7 +8,7 @@ const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 const query_ast = @import("query_ast.zig");
 
-fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.TypedRecord, metadata: *const schema.Table) !std.AutoHashMap(typed.DocId, void) {
+fn collectResultSetIds(allocator: std.mem.Allocator, rows: []typed.Record, metadata: *const schema.Table) !std.AutoHashMap(typed.DocId, void) {
     var ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     errdefer ids.deinit();
     for (rows) |row| {

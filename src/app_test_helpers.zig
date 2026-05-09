@@ -235,7 +235,7 @@ pub const AppTestContext = struct {
         id: typed.DocId,
         namespace_id: i64,
         field: []const u8,
-        value: typed.TypedValue,
+        value: typed.Value,
     ) !void {
         const tbl = try self.table(table_name);
         try tbl.insertField(id, namespace_id, field, value);

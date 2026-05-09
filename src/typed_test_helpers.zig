@@ -1,34 +1,34 @@
 const std = @import("std");
 const typed = @import("typed.zig");
-const TypedValue = typed.TypedValue;
-const TypedRecord = typed.TypedRecord;
+const Value = typed.Value;
+const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
 
-pub fn valText(t: []const u8) TypedValue {
+pub fn valText(t: []const u8) Value {
     return .{ .scalar = .{ .text = t } };
 }
 
-pub fn valTextOwned(allocator: std.mem.Allocator, t: []const u8) !TypedValue {
+pub fn valTextOwned(allocator: std.mem.Allocator, t: []const u8) !Value {
     return .{ .scalar = .{ .text = try allocator.dupe(u8, t) } };
 }
 
-pub fn valInt(i: i64) TypedValue {
+pub fn valInt(i: i64) Value {
     return .{ .scalar = .{ .integer = i } };
 }
 
-pub fn valReal(r: f64) TypedValue {
+pub fn valReal(r: f64) Value {
     return .{ .scalar = .{ .real = r } };
 }
 
-pub fn valBool(b: bool) TypedValue {
+pub fn valBool(b: bool) Value {
     return .{ .scalar = .{ .boolean = b } };
 }
 
-pub fn valNil() TypedValue {
+pub fn valNil() Value {
     return .nil;
 }
 
-pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !TypedValue {
+pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Value {
     const cloned = try allocator.alloc(ScalarValue, scalars.len);
     for (scalars, 0..) |s, i| {
         cloned[i] = switch (s) {
@@ -36,23 +36,23 @@ pub fn valArray(allocator: std.mem.Allocator, scalars: []const ScalarValue) !Typ
             else => s,
         };
     }
-    var result: TypedValue = .{ .array = cloned };
+    var result: Value = .{ .array = cloned };
     try result.sortedSet(allocator);
     return result;
 }
 
-/// Creates a TypedRecord without schema metadata.
+/// Creates a Record without schema metadata.
 /// Initializes all slots to nil, sets canonical trailing system timestamps
 /// (`created_at`, `updated_at`) to 0 when present, then applies values starting at index 3.
-pub fn recordFromTypedValues(
+pub fn recordFromValues(
     allocator: std.mem.Allocator,
-    typed_values: []const TypedValue,
-) !TypedRecord {
+    typed_values: []const Value,
+) !Record {
     // Canonical minimum shape:
     // [id, namespace_id, owner_id, created_at, updated_at]
     const value_count: usize = @max(5, typed_values.len + 5);
 
-    const values = try allocator.alloc(TypedValue, value_count);
+    const values = try allocator.alloc(Value, value_count);
     errdefer allocator.free(values);
 
     for (values) |*value| value.* = valNil();

@@ -4,16 +4,16 @@ const doc_id = @import("doc_id.zig");
 
 pub const DocId = doc_id.DocId;
 
-pub const TypedRecord = struct {
-    values: []TypedValue,
+pub const Record = struct {
+    values: []Value,
 
-    pub fn deinit(self: TypedRecord, allocator: Allocator) void {
+    pub fn deinit(self: Record, allocator: Allocator) void {
         for (self.values) |value| value.deinit(allocator);
         allocator.free(self.values);
     }
 
-    pub fn clone(self: TypedRecord, allocator: Allocator) !TypedRecord {
-        const cloned = try allocator.alloc(TypedValue, self.values.len);
+    pub fn clone(self: Record, allocator: Allocator) !Record {
+        const cloned = try allocator.alloc(Value, self.values.len);
         var i: usize = 0;
         errdefer {
             for (cloned[0..i]) |value| value.deinit(allocator);
@@ -26,15 +26,15 @@ pub const TypedRecord = struct {
     }
 };
 
-pub const TypedCursor = struct {
-    sort_value: TypedValue,
+pub const Cursor = struct {
+    sort_value: Value,
     id: DocId,
 
-    pub fn deinit(self: *TypedCursor, allocator: Allocator) void {
+    pub fn deinit(self: *Cursor, allocator: Allocator) void {
         self.sort_value.deinit(allocator);
     }
 
-    pub fn clone(self: TypedCursor, allocator: Allocator) !TypedCursor {
+    pub fn clone(self: Cursor, allocator: Allocator) !Cursor {
         return .{
             .sort_value = try self.sort_value.clone(allocator),
             .id = self.id,
@@ -83,12 +83,12 @@ pub const ScalarValue = union(enum) {
 };
 
 /// A typed value for schema-indexed records and cursors.
-pub const TypedValue = union(enum) {
+pub const Value = union(enum) {
     scalar: ScalarValue,
     array: []ScalarValue, // Owned slice of ScalarValues (no nesting, no nil)
     nil: void,
 
-    pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
+    pub fn clone(self: Value, allocator: Allocator) !Value {
         return switch (self) {
             .scalar => |s| .{ .scalar = try s.clone(allocator) },
             .nil => .nil,
@@ -107,7 +107,7 @@ pub const TypedValue = union(enum) {
         };
     }
 
-    pub fn sortedSet(self: *TypedValue, allocator: Allocator) !void {
+    pub fn sortedSet(self: *Value, allocator: Allocator) !void {
         const arr = switch (self.*) {
             .array => |a| a,
             else => return,
@@ -136,7 +136,7 @@ pub const TypedValue = union(enum) {
         }
     }
 
-    pub fn deinit(self: TypedValue, allocator: Allocator) void {
+    pub fn deinit(self: Value, allocator: Allocator) void {
         switch (self) {
             .scalar => |s| s.deinit(allocator),
             .array => |items| {
@@ -147,8 +147,8 @@ pub const TypedValue = union(enum) {
         }
     }
 
-    pub fn eql(self: TypedValue, other: TypedValue) bool {
-        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return false;
+    pub fn eql(self: Value, other: Value) bool {
+        if (@as(std.meta.Tag(Value), self) != @as(std.meta.Tag(Value), other)) return false;
         return switch (self) {
             .nil => true,
             .scalar => self.scalar.order(other.scalar) == .eq,
@@ -162,8 +162,8 @@ pub const TypedValue = union(enum) {
         };
     }
 
-    pub fn order(self: TypedValue, other: TypedValue) std.math.Order {
-        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return .lt;
+    pub fn order(self: Value, other: Value) std.math.Order {
+        if (@as(std.meta.Tag(Value), self) != @as(std.meta.Tag(Value), other)) return .lt;
         return switch (self) {
             .scalar => |s| s.order(other.scalar),
             else => .eq,

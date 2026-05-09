@@ -195,7 +195,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter2 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.after = typed.TypedCursor{
+    filter2.after = typed.Cursor{
         .sort_value = tth.valInt(100),
         .id = 2,
     };

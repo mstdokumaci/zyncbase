@@ -29,7 +29,7 @@ test "SubscriptionEngine: basic subscribe and match" {
     _ = try engine.subscribe(1, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Create a matching record change
-    var new_record = try tth.recordFromTypedValues(allocator, &.{tth.valText("active")});
+    var new_record = try tth.recordFromValues(allocator, &.{tth.valText("active")});
     defer new_record.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
@@ -106,10 +106,10 @@ test "SubscriptionEngine: operator matching" {
     });
     defer filter.deinit(allocator);
 
-    var row1 = try tth.recordFromTypedValues(allocator, &.{tth.valText("Alice")});
+    var row1 = try tth.recordFromValues(allocator, &.{tth.valText("Alice")});
     defer row1.deinit(allocator);
 
-    var row2 = try tth.recordFromTypedValues(allocator, &.{tth.valText("Bob")});
+    var row2 = try tth.recordFromValues(allocator, &.{tth.valText("Bob")});
     defer row2.deinit(allocator);
 
     try testing.expect(try SubscriptionEngine.evaluateFilter(filter, row1));
@@ -225,7 +225,7 @@ test "SubscriptionEngine: handleRecordChange with long namespace/collection (hea
 
     _ = try engine.subscribe(999, (sm.getTable(long_coll) orelse return error.TestExpectedValue).index, filter, 1, 100);
 
-    var new_record = try tth.recordFromTypedValues(allocator, &.{});
+    var new_record = try tth.recordFromValues(allocator, &.{});
     defer new_record.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
@@ -266,21 +266,21 @@ test "SubscriptionEngine: case-insensitive string matching" {
 
     // Case-insensitive startsWith
     {
-        var r = try tth.recordFromTypedValues(allocator, &.{tth.valText("aLiCe")});
+        var r = try tth.recordFromValues(allocator, &.{tth.valText("aLiCe")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_starts_with, r));
     }
 
     // Case-insensitive endsWith
     {
-        var r = try tth.recordFromTypedValues(allocator, &.{tth.valText("reAL")});
+        var r = try tth.recordFromValues(allocator, &.{tth.valText("reAL")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_ends_with, r));
     }
 
     // Case-insensitive contains
     {
-        var r = try tth.recordFromTypedValues(allocator, &.{tth.valText("vALid")});
+        var r = try tth.recordFromValues(allocator, &.{tth.valText("vALid")});
         defer r.deinit(allocator);
         try testing.expect(try SubscriptionEngine.evaluateFilter(filter_contains, r));
     }
@@ -347,7 +347,7 @@ test "SubscriptionEngine: in operator subscribe and match" {
 
     _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
-    var r = try tth.recordFromTypedValues(allocator, &.{tth.valText("admin")});
+    var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
@@ -429,7 +429,7 @@ test "SubscriptionEngine: notIn operator subscribe and match" {
 
     _ = try engine.subscribe(1, (sm.getTable("users") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
-    var r = try tth.recordFromTypedValues(allocator, &.{tth.valText("member")});
+    var r = try tth.recordFromValues(allocator, &.{tth.valText("member")});
     defer r.deinit(allocator);
 
     const change = subscription_engine.RecordChange{
@@ -466,9 +466,9 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     _ = try engine.subscribe(2, (sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 1, 100);
 
     // Case 1: Record leaves filter (priority 8 -> 2)
-    var old_record = try tth.recordFromTypedValues(allocator, &.{tth.valInt(8)});
+    var old_record = try tth.recordFromValues(allocator, &.{tth.valInt(8)});
     defer old_record.deinit(allocator);
-    var new_record = try tth.recordFromTypedValues(allocator, &.{tth.valInt(2)});
+    var new_record = try tth.recordFromValues(allocator, &.{tth.valInt(2)});
     defer new_record.deinit(allocator);
 
     const change_leave = subscription_engine.RecordChange{
@@ -485,9 +485,9 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     try testing.expectEqual(SubscriptionEngine.MatchOp.remove, matches_leave[0].op);
 
     // Case 2: Record enters filter (priority 2 -> 8)
-    var old_record2 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(2)});
+    var old_record2 = try tth.recordFromValues(allocator, &.{tth.valInt(2)});
     defer old_record2.deinit(allocator);
-    var new_record2 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(8)});
+    var new_record2 = try tth.recordFromValues(allocator, &.{tth.valInt(8)});
     defer new_record2.deinit(allocator);
 
     const change_enter = subscription_engine.RecordChange{
@@ -504,9 +504,9 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_enter[0].op);
 
     // Case 3: Record changes within filter (priority 6 -> 9)
-    var old_record3 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(6)});
+    var old_record3 = try tth.recordFromValues(allocator, &.{tth.valInt(6)});
     defer old_record3.deinit(allocator);
-    var new_record3 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(9)});
+    var new_record3 = try tth.recordFromValues(allocator, &.{tth.valInt(9)});
     defer new_record3.deinit(allocator);
 
     const change_within = subscription_engine.RecordChange{
@@ -523,9 +523,9 @@ test "SubscriptionEngine: filter removal notification when record leaves filter"
     try testing.expectEqual(SubscriptionEngine.MatchOp.set_op, matches_within[0].op);
 
     // Case 4: Record stays outside filter (priority 1 -> 3)
-    var old_record4 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(1)});
+    var old_record4 = try tth.recordFromValues(allocator, &.{tth.valInt(1)});
     defer old_record4.deinit(allocator);
-    var new_record4 = try tth.recordFromTypedValues(allocator, &.{tth.valInt(3)});
+    var new_record4 = try tth.recordFromValues(allocator, &.{tth.valInt(3)});
     defer new_record4.deinit(allocator);
 
     const change_outside = subscription_engine.RecordChange{

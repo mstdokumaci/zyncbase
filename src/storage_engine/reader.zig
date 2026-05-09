@@ -13,13 +13,13 @@ const storage_cache = @import("cache.zig");
 const StorageError = errors.StorageError;
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
-const TypedCursor = typed.TypedCursor;
-const TypedRecord = typed.TypedRecord;
-const TypedValue = typed.TypedValue;
+const Cursor = typed.Cursor;
+const Record = typed.Record;
+const Value = typed.Value;
 
 pub const QueryResult = struct {
     sql: []const u8,
-    values: []TypedValue,
+    values: []Value,
 
     pub fn deinit(self: QueryResult, allocator: Allocator) void {
         for (self.values) |v| v.deinit(allocator);
@@ -37,7 +37,7 @@ pub fn buildSelectQuery(
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
-    var values: std.ArrayListUnmanaged(TypedValue) = .empty;
+    var values: std.ArrayListUnmanaged(Value) = .empty;
     errdefer {
         for (values.items) |v| v.deinit(allocator);
         values.deinit(allocator);
@@ -51,7 +51,7 @@ pub fn buildSelectQuery(
     // 2.. WHERE clause
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
-    try values.append(allocator, TypedValue{ .scalar = .{ .integer = namespace_id } });
+    try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
     const has_conditions = !filter.predicate.isEmpty();
 
@@ -80,14 +80,14 @@ pub fn buildSelectQuery(
             );
 
             if (filter.order_by.field_index == schema.id_field_index) {
-                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
+                try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
             } else {
                 {
                     const sv = try cursor.sort_value.clone(allocator);
                     errdefer sv.deinit(allocator);
                     try values.append(allocator, sv);
                 }
-                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
+                try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
             }
         }
 
@@ -128,15 +128,15 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: D
     };
 }
 
-pub fn decodeTypedRecord(
+pub fn decodeRecord(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema.Table,
-) !TypedRecord {
+) !Record {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
 
-    var values = try allocator.alloc(TypedValue, col_count);
+    var values = try allocator.alloc(Value, col_count);
     var i: usize = 0;
     errdefer {
         for (values[0..i]) |value| value.deinit(allocator);
@@ -149,7 +149,7 @@ pub fn decodeTypedRecord(
         errdefer val.deinit(allocator);
         values[i] = val;
     }
-    return TypedRecord{
+    return Record{
         .values = values,
     };
 }
@@ -161,8 +161,8 @@ pub fn execSelectDocumentTyped(
     id: DocId,
     namespace_id: i64,
     table_metadata: *const schema.Table,
-    guard_values: ?[]const TypedValue,
-) !?TypedRecord {
+    guard_values: ?[]const Value,
+) !?Record {
     const id_bytes = typed.docIdToBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
@@ -170,7 +170,7 @@ pub fn execSelectDocumentTyped(
     var bind_idx: c_int = 3;
     if (guard_values) |vals| {
         for (vals) |val| {
-            try sql.bindTypedValue(val, db, stmt, bind_idx, allocator);
+            try sql.bindValue(val, db, stmt, bind_idx, allocator);
             bind_idx += 1;
         }
     }
@@ -179,25 +179,25 @@ pub fn execSelectDocumentTyped(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-    return try decodeTypedRecord(allocator, stmt, table_metadata);
+    return try decodeRecord(allocator, stmt, table_metadata);
 }
 
 pub fn execQueryTyped(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
-    values: []const TypedValue,
+    values: []const Value,
     table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
-) !struct { records: []TypedRecord, next_cursor_str: ?[]const u8 } {
+) !struct { records: []Record, next_cursor_str: ?[]const u8 } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
-        try sql.bindTypedValue(v, db, stmt, @intCast(i + 1), allocator);
+        try sql.bindValue(v, db, stmt, @intCast(i + 1), allocator);
     }
 
-    var records_list: std.ArrayListUnmanaged(TypedRecord) = .empty;
+    var records_list: std.ArrayListUnmanaged(Record) = .empty;
     errdefer {
         for (records_list.items) |r| r.deinit(allocator);
         records_list.deinit(allocator);
@@ -208,7 +208,7 @@ pub fn execQueryTyped(
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-        try records_list.append(allocator, try decodeTypedRecord(allocator, stmt, table_metadata));
+        try records_list.append(allocator, try decodeRecord(allocator, stmt, table_metadata));
     }
 
     const has_more = if (requested_limit) |limit_u32| blk: {
@@ -241,7 +241,7 @@ pub fn execQueryTyped(
             const id_val = last_record.values[schema.id_field_index];
             if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
 
-            const cursor = TypedCursor{
+            const cursor = Cursor{
                 .sort_value = sort_val,
                 .id = id_val.scalar.doc_id,
             };

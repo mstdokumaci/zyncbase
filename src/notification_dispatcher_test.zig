@@ -58,7 +58,7 @@ test "NotificationDispatcher: poll processes items" {
     defer nd.deinit();
 
     const tbl_md = sm.getTable("coll") orelse return error.TestExpectedValue;
-    const values = try alloc.alloc(typed.TypedValue, tbl_md.fields.len);
+    const values = try alloc.alloc(typed.Value, tbl_md.fields.len);
     errdefer alloc.free(values);
     for (values, 0..) |*value, i| {
         const field = tbl_md.fields[i];
@@ -72,7 +72,7 @@ test "NotificationDispatcher: poll processes items" {
     const id_index = schema.id_field_index;
     values[id_index] = .{ .scalar = .{ .text = try alloc.dupe(u8, "1") } };
 
-    const new_record = typed.TypedRecord{
+    const new_record = typed.Record{
         .values = values,
     };
 

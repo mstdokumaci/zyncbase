@@ -7,7 +7,7 @@ const typed = @import("../typed.zig");
 const evaluate_mod = @import("evaluate.zig");
 
 const EvalContext = evaluate_mod.EvalContext;
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 
 const LowerResult = union(enum) {
     allow,
@@ -261,7 +261,7 @@ fn validateLiteralValue(
     op: types.ComparisonOp,
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
-    value: TypedValue,
+    value: Value,
 ) !void {
     if (op == .in_set or op == .not_in_set) {
         if (value != .array) return error.InvalidValue;

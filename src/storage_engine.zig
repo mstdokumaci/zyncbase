@@ -33,17 +33,17 @@ pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
 const DocId = typed.DocId;
-const TypedValue = typed.TypedValue;
-const TypedRecord = typed.TypedRecord;
+const Value = typed.Value;
+const Record = typed.Record;
 const metadata_cache_type = storage_cache.metadata_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
 
 /// A managed result that might be backed by a cache handle.
-/// Every result is exposed as a slice of TypedRecords.
+/// Every result is exposed as a slice of Records.
 /// Caller MUST call deinit() to release any potential cache handles and memory.
 pub const ManagedResult = struct {
-    records: []TypedRecord,
+    records: []Record,
     handle: ?metadata_cache_type.Handle = null,
     allocator: ?Allocator = null,
 
@@ -431,8 +431,8 @@ pub const StorageEngine = struct {
         self.writer.flushPendingWrites();
     }
 
-    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
+    /// Converts a msgpack.Payload to a Value based on the schema's FieldType.
+    /// Strings and blobs (JSON arrays) are duplicated and owned by the Value.
 
     // ─── Storage methods ──────────────────────────────────────────────────
 
@@ -589,8 +589,8 @@ pub const StorageEngine = struct {
         };
     }
 
-    fn cloneColumnValues(self: *StorageEngine, columns: []const ColumnValue) ![]TypedValue {
-        const values = try self.allocator.alloc(TypedValue, columns.len);
+    fn cloneColumnValues(self: *StorageEngine, columns: []const ColumnValue) ![]Value {
+        const values = try self.allocator.alloc(Value, columns.len);
         var initialized_count: usize = 0;
         errdefer {
             for (values[0..initialized_count]) |value| value.deinit(self.allocator);
@@ -620,11 +620,11 @@ pub const StorageEngine = struct {
 
         if (self.metadata_cache.get(cache_key)) |handle| {
             const typed_record_ptr = handle.data();
-            const slice = @as([*]TypedRecord, @ptrCast(typed_record_ptr))[0..1];
+            const slice = @as([*]Record, @ptrCast(typed_record_ptr))[0..1];
             if (guard_predicate) |predicate| {
                 if (!try filter_eval.evaluatePredicate(predicate, slice[0])) {
                     handle.release();
-                    return ManagedResult{ .records = &[_]TypedRecord{}, .allocator = allocator };
+                    return ManagedResult{ .records = &[_]Record{}, .allocator = allocator };
                 }
             }
             return ManagedResult{
@@ -661,11 +661,11 @@ pub const StorageEngine = struct {
                 errdefer cache_record.deinit(self.allocator);
                 try self.metadata_cache.update(cache_key, cache_record);
             }
-            const items = try allocator.alloc(TypedRecord, 1);
+            const items = try allocator.alloc(Record, 1);
             items[0] = record;
             return ManagedResult{ .records = items, .allocator = allocator };
         }
-        return ManagedResult{ .records = &[_]TypedRecord{}, .allocator = allocator };
+        return ManagedResult{ .records = &[_]Record{}, .allocator = allocator };
     }
 
     /// SELECT for a query filter.

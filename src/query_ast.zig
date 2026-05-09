@@ -1,8 +1,8 @@
 const std = @import("std");
 const schema = @import("schema.zig");
 const typed = @import("typed.zig");
-const TypedValue = typed.TypedValue;
-const TypedCursor = typed.TypedCursor;
+const Value = typed.Value;
+const Cursor = typed.Cursor;
 
 pub const Operator = enum(u8) {
     eq = 0,
@@ -23,7 +23,7 @@ pub const Operator = enum(u8) {
 pub const Condition = struct {
     field_index: usize,
     op: Operator,
-    value: ?TypedValue,
+    value: ?Value,
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
 
@@ -82,7 +82,7 @@ pub const QueryFilter = struct {
     predicate: FilterPredicate = .{},
     order_by: SortDescriptor,
     limit: ?u32 = null,
-    after: ?TypedCursor = null,
+    after: ?Cursor = null,
 
     pub fn deinit(self: QueryFilter, allocator: std.mem.Allocator) void {
         var mutable = self;

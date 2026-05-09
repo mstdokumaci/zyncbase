@@ -179,7 +179,7 @@ pub fn encodeQuery(
     try list.appendSlice(arena_allocator, Keys.value);
     try msgpack.encodeArrayHeader(writer, response.results.records.len);
     for (response.results.records) |record| {
-        try encodeTypedRecord(writer, record, response.table);
+        try encodeRecord(writer, record, response.table);
     }
 
     if (response.sub_id != null) {
@@ -248,8 +248,8 @@ fn encodeDeltaOp(
     allocator: Allocator,
     comptime op: DeltaOp,
     table_index: usize,
-    id_val: typed.TypedValue,
-    maybe_value: ?struct { record: typed.TypedRecord, meta: *const storage_mod.TableMetadata },
+    id_val: typed.Value,
+    maybe_value: ?struct { record: typed.Record, meta: *const storage_mod.TableMetadata },
 ) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
@@ -274,7 +274,7 @@ fn encodeDeltaOp(
 
     if (maybe_value) |v| {
         try list.appendSlice(allocator, Keys.value);
-        try encodeTypedRecord(writer, v.record, v.meta);
+        try encodeRecord(writer, v.record, v.meta);
     }
 
     return list.toOwnedSlice(allocator);
@@ -285,7 +285,7 @@ pub const DeltaOp = enum { remove, set };
 pub fn encodeDeleteDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: typed.TypedValue,
+    id_val: typed.Value,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .remove, table_index, id_val, null);
 }
@@ -293,8 +293,8 @@ pub fn encodeDeleteDeltaSuffix(
 pub fn encodeSetDeltaSuffix(
     allocator: Allocator,
     table_index: usize,
-    id_val: typed.TypedValue,
-    new_record: typed.TypedRecord,
+    id_val: typed.Value,
+    new_record: typed.Record,
     table_metadata: *const storage_mod.TableMetadata,
 ) ![]const u8 {
     return encodeDeltaOp(allocator, .set, table_index, id_val, .{
@@ -303,7 +303,7 @@ pub fn encodeSetDeltaSuffix(
     });
 }
 
-pub inline fn encodeTypedRecord(writer: anytype, record: typed.TypedRecord, table_metadata: *const storage_mod.TableMetadata) !void {
+pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata: *const storage_mod.TableMetadata) !void {
     if (record.values.len != table_metadata.fields.len) return error.InternalError;
     try msgpack.encodeMapHeader(writer, record.values.len);
     for (record.values, 0..) |typed_value, idx| {

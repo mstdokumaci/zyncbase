@@ -9,7 +9,7 @@ pub const MetadataCacheKey = struct {
     id: typed.DocId,
 };
 
-pub const metadata_cache_type = lockFreeCache(typed.TypedRecord, MetadataCacheKey);
+pub const metadata_cache_type = lockFreeCache(typed.Record, MetadataCacheKey);
 
 pub const NamespaceCacheKey = u64;
 pub const IdentityCacheKey = u64;

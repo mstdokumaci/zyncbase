@@ -2,7 +2,7 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 const types = @import("types.zig");
 const typed = @import("../typed.zig");
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 
 pub const EvalContext = struct {
@@ -22,7 +22,7 @@ pub const EvalResult = enum {
 };
 
 pub const ResolvedValue = struct {
-    value: TypedValue,
+    value: Value,
     owned: bool = false,
 
     pub fn deinit(self: ResolvedValue, allocator: std.mem.Allocator) void {
@@ -101,11 +101,11 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
     return if (compareValues(lhs.value, comp.op, rhs.value)) .allow else .deny;
 }
 
-fn borrowed(value: TypedValue) ResolvedValue {
+fn borrowed(value: Value) ResolvedValue {
     return .{ .value = value, .owned = false };
 }
 
-fn owned(value: TypedValue) ResolvedValue {
+fn owned(value: Value) ResolvedValue {
     return .{ .value = value, .owned = true };
 }
 
@@ -130,7 +130,7 @@ fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedValue {
     };
 }
 
-pub fn resolveRhs(value: types.Value, ctx: EvalContext) ?ResolvedValue {
+pub fn resolveRhs(value: types.Operand, ctx: EvalContext) ?ResolvedValue {
     return switch (value) {
         .literal => |v| borrowed(v),
         .context_var => |cv| resolveLhs(cv, ctx),
@@ -165,7 +165,7 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
     return null;
 }
 
-fn compareValues(lhs: TypedValue, op: types.ComparisonOp, rhs: TypedValue) bool {
+fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
     return switch (op) {
         .eq => lhs.eql(rhs),
         .ne => !lhs.eql(rhs),

@@ -4,10 +4,10 @@ const typed = @import("typed.zig");
 
 const Condition = query_ast.Condition;
 const FilterPredicate = query_ast.FilterPredicate;
-const TypedRecord = typed.TypedRecord;
+const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
 
-pub fn evaluatePredicate(predicate: FilterPredicate, record: TypedRecord) !bool {
+pub fn evaluatePredicate(predicate: FilterPredicate, record: Record) !bool {
     if (predicate.conditions) |conds| {
         for (conds) |condition| {
             if (!try evaluateCondition(condition, record)) return false;
@@ -25,7 +25,7 @@ pub fn evaluatePredicate(predicate: FilterPredicate, record: TypedRecord) !bool 
     return true;
 }
 
-pub fn evaluateCondition(cond: Condition, record: TypedRecord) !bool {
+pub fn evaluateCondition(cond: Condition, record: Record) !bool {
     if (cond.field_index >= record.values.len) return cond.op == .isNull;
     const val = record.values[cond.field_index];
 

@@ -82,7 +82,7 @@ test "query with orderBy and after" {
     defer sm.deinit();
 
     // cursor: Base64(MsgPack([42, doc_id(2)]))
-    const cursor: typed.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -413,7 +413,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     }});
     defer sm.deinit();
 
-    const cursor: typed.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -439,7 +439,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 test "cursor token rejects wrong sort type" {
     const allocator = testing.allocator;
 
-    const cursor: typed.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
         .id = 2,
     };

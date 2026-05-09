@@ -16,9 +16,9 @@ pub const generateUuidV7 = doc_id.generateUuidV7;
 pub const docIdFromStableString = doc_id.fromStableString;
 
 pub const ScalarValue = types.ScalarValue;
-pub const TypedValue = types.TypedValue;
-pub const TypedRecord = types.TypedRecord;
-pub const TypedCursor = types.TypedCursor;
+pub const Value = types.Value;
+pub const Record = types.Record;
+pub const Cursor = types.Cursor;
 
 pub const valueFromPayload = codec.fromPayload;
 pub const valueFromJson = codec.fromJson;

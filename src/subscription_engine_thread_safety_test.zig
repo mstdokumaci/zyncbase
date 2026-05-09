@@ -50,7 +50,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
     // Concurrent handleRecordChange
     const run_handle = struct {
         fn run(engine_ptr: *SubscriptionEngine, alloc: std.mem.Allocator) void {
-            var r = tth.recordFromTypedValues(alloc, &.{tth.valBool(true)}) catch return;
+            var r = tth.recordFromValues(alloc, &.{tth.valBool(true)}) catch return;
             defer r.deinit(alloc);
 
             const change = RecordChange{

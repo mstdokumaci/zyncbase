@@ -8,7 +8,7 @@ const typed = @import("../typed.zig");
 /// A schema field index + typed value pair for storage inserts/updates.
 pub const ColumnValue = struct {
     index: usize,
-    value: typed.TypedValue,
+    value: typed.Value,
 };
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
@@ -246,7 +246,7 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
 }
 
-pub fn bindTypedValue(typed_value: typed.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
+pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
     const rc = switch (typed_value) {
         .scalar => |s| switch (s) {
             .doc_id => |id| blk: {
@@ -268,7 +268,7 @@ pub fn bindTypedValue(typed_value: typed.TypedValue, db: *sqlite.Db, stmt: *sqli
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
-pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.TypedValue {
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     if (field.storage_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
         const ptr = sqlite.c.sqlite3_column_text(stmt, i);
@@ -285,21 +285,21 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
             const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-            break :blk typed.TypedValue{ .scalar = .{ .doc_id = try typed.docIdFromBytes(bytes) } };
+            break :blk typed.Value{ .scalar = .{ .doc_id = try typed.docIdFromBytes(bytes) } };
         },
         sqlite.c.SQLITE_INTEGER => {
             const val = sqlite.c.sqlite3_column_int64(stmt, i);
             if (field.storage_type == .boolean) {
-                return typed.TypedValue{ .scalar = .{ .boolean = val != 0 } };
+                return typed.Value{ .scalar = .{ .boolean = val != 0 } };
             }
-            return typed.TypedValue{ .scalar = .{ .integer = val } };
+            return typed.Value{ .scalar = .{ .integer = val } };
         },
-        sqlite.c.SQLITE_FLOAT => typed.TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+        sqlite.c.SQLITE_FLOAT => typed.Value{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
         sqlite.c.SQLITE_TEXT => blk: {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const s = if (ptr != null) ptr[0..len] else "";
-            break :blk typed.TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+            break :blk typed.Value{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
         },
         else => .nil,
     };

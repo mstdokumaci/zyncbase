@@ -19,7 +19,7 @@ const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConf
 
 const DocId = typed.DocId;
 const MetadataCacheKey = storage_cache.MetadataCacheKey;
-const TypedRecord = typed.TypedRecord;
+const Record = typed.Record;
 const WriteOp = write_queue.WriteOp;
 const WriteQueue = write_queue.WriteQueue;
 const StatementCache = sql.StatementCache;
@@ -158,7 +158,7 @@ pub const Writer = struct {
         namespace_id: i64,
         id: DocId,
         sql_cache: *std.AutoHashMap(usize, []const u8),
-    ) !?TypedRecord {
+    ) !?Record {
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return null;
         const sql_str = if (sql_cache.get(table_index)) |s| s else blk: {
             const s = try sql.buildSelectDocumentSql(self.allocator, table_metadata, null);
@@ -177,8 +177,8 @@ pub const Writer = struct {
         namespace_id: i64,
         table_index: usize,
         op: OwnedRecordChange.Operation,
-        old_record: ?TypedRecord,
-        new_record: ?TypedRecord,
+        old_record: ?Record,
+        new_record: ?Record,
     ) !void {
         try pending_changes.append(allocator, .{
             .namespace_id = namespace_id,
@@ -239,7 +239,7 @@ pub const Writer = struct {
                     const table_metadata = self.schema.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) iop.namespace_id else schema.global_namespace_id;
                     const owner_doc_id = if (table_metadata.is_users_table) iop.id else iop.owner_doc_id;
-                    var old_record: ?TypedRecord = null;
+                    var old_record: ?Record = null;
                     const capture_res = getDocumentHelper(self, iop.table_index, namespace_id, iop.id, &sql_cache);
                     if (capture_res) |record| {
                         old_record = record;
@@ -582,7 +582,7 @@ pub const Writer = struct {
             switch (entry.kind) {
                 .upsert => {
                     const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
-                    var old_record: ?TypedRecord = null;
+                    var old_record: ?Record = null;
                     if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache)) |record| {
                         old_record = record;
                     } else |err| {
@@ -761,7 +761,7 @@ pub const Writer = struct {
         namespace_id: i64,
         owner_id: DocId,
         table_metadata: *const schema.Table,
-    ) !?TypedRecord {
+    ) !?Record {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
@@ -786,13 +786,13 @@ pub const Writer = struct {
         if (@typeInfo(@TypeOf(op.values)) == .optional) {
             if (op.values) |vals| {
                 for (vals) |val| {
-                    try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                    try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
                     bind_idx += 1;
                 }
             }
         } else {
             for (op.values) |val| {
-                try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
                 bind_idx += 1;
             }
         }
@@ -804,14 +804,14 @@ pub const Writer = struct {
 
         if (op.guard_values) |guard_vals| {
             for (guard_vals) |val| {
-                try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
                 bind_idx += 1;
             }
         }
 
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeTypedRecord(self.allocator, stmt, table_metadata);
+            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
         }
         if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
         return null;
@@ -822,7 +822,7 @@ pub const Writer = struct {
         op: anytype,
         namespace_id: i64,
         table_metadata: *const schema.Table,
-    ) !?TypedRecord {
+    ) !?Record {
         const sql_str = op.sql;
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
@@ -835,14 +835,14 @@ pub const Writer = struct {
         var bind_idx: c_int = 3;
         if (op.guard_values) |guard_vals| {
             for (guard_vals) |val| {
-                try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
                 bind_idx += 1;
             }
         }
 
         const rc = sqlite.c.sqlite3_step(stmt);
         if (rc == sqlite.c.SQLITE_ROW) {
-            return try reader.decodeTypedRecord(self.allocator, stmt, table_metadata);
+            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
         }
         if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
         return null;

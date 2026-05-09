@@ -21,7 +21,7 @@ test "SubscriptionEngine: handleRecordChange performance" {
         const match_val: i64 = if (i % 2 == 0) 0 else 999;
 
         const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-            // field_index 3 corresponds to the first user-defined field in recordFromTypedValues
+            // field_index 3 corresponds to the first user-defined field in recordFromValues
             .{ .field_index = 3, .op = .eq, .value = tth.valInt(match_val), .field_type = .integer, .items_type = null },
         });
         defer filter.deinit(allocator);
@@ -33,7 +33,7 @@ test "SubscriptionEngine: handleRecordChange performance" {
     }
 
     // Test row matching user field 0 (internal index 3) == 0
-    var new_record = try tth.recordFromTypedValues(allocator, &.{tth.valInt(0)});
+    var new_record = try tth.recordFromValues(allocator, &.{tth.valInt(0)});
     defer new_record.deinit(allocator);
 
     const change = RecordChange{

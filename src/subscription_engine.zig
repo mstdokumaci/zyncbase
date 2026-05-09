@@ -5,8 +5,8 @@ const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const typed = @import("typed.zig");
-const TypedRecord = typed.TypedRecord;
-const TypedValue = typed.TypedValue;
+const Record = typed.Record;
+const Value = typed.Value;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -38,9 +38,9 @@ pub const RecordChange = struct {
     table_index: usize,
     operation: Operation,
     /// The full record after the change. Null only for delete.
-    new_record: ?TypedRecord,
+    new_record: ?Record,
     /// The full record before the change. Null only for insert.
-    old_record: ?TypedRecord,
+    old_record: ?Record,
 
     pub fn deinit(self: *const RecordChange, allocator: Allocator) void {
         if (self.new_record) |r| r.deinit(allocator);
@@ -79,7 +79,7 @@ pub const CanonicalFilterContext = struct {
         std.hash.autoHash(&hasher, f.order_by);
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hashTypedValue(&hasher, a.sort_value);
+            hashValue(&hasher, a.sort_value);
             std.hash.autoHash(&hasher, a.id);
         }
         return hasher.final();
@@ -94,18 +94,18 @@ pub const CanonicalFilterContext = struct {
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return eqlTypedValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
+        return eqlValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
     }
 
     fn hashCondition(hasher: *std.hash.Wyhash, c: Condition) void {
         std.hash.autoHash(hasher, c.field_index);
         std.hash.autoHash(hasher, c.op);
-        if (c.value) |v| hashTypedValue(hasher, v);
+        if (c.value) |v| hashValue(hasher, v);
         std.hash.autoHash(hasher, c.field_type);
         std.hash.autoHash(hasher, c.items_type);
     }
 
-    fn hashTypedValue(hasher: *std.hash.Wyhash, v: TypedValue) void {
+    fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
         std.hash.autoHash(hasher, std.meta.activeTag(v));
         switch (v) {
             .scalar => |s| hashScalarValue(hasher, s),
@@ -128,7 +128,7 @@ pub const CanonicalFilterContext = struct {
     }
 };
 
-fn eqlTypedValue(a: TypedValue, b: TypedValue) bool {
+fn eqlValue(a: Value, b: Value) bool {
     const tag = std.meta.activeTag(a);
     if (tag != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -184,7 +184,7 @@ fn eqlCondition(a: Condition, b: Condition) bool {
     if (a.items_type != b.items_type) return false;
     if (a.value == null and b.value == null) return true;
     if (a.value == null or b.value == null) return false;
-    return eqlTypedValue(a.value.?, b.value.?);
+    return eqlValue(a.value.?, b.value.?);
 }
 
 pub const SubscriptionEngine = struct {
@@ -412,7 +412,7 @@ pub const SubscriptionEngine = struct {
     }
 
     /// Evaluates a record against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, record: TypedRecord) !bool {
+    pub fn evaluateFilter(filter: QueryFilter, record: Record) !bool {
         return filter_eval.evaluatePredicate(filter.predicate, record);
     }
 };

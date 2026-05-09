@@ -4,11 +4,11 @@ const schema = @import("../schema.zig");
 const query_ast = @import("../query_ast.zig");
 const typed = @import("../typed.zig");
 
-const TypedValue = typed.TypedValue;
+const Value = typed.Value;
 
 pub const RenderedPredicate = struct {
     sql: []const u8,
-    values: []TypedValue,
+    values: []Value,
 
     pub fn deinit(self: RenderedPredicate, allocator: Allocator) void {
         for (self.values) |value| value.deinit(allocator);
@@ -36,7 +36,7 @@ pub fn renderAndClause(
 
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer sql_buf.deinit(allocator);
-    var values: std.ArrayListUnmanaged(TypedValue) = .empty;
+    var values: std.ArrayListUnmanaged(Value) = .empty;
     errdefer {
         for (values.items) |value| value.deinit(allocator);
         values.deinit(allocator);
@@ -55,7 +55,7 @@ pub fn renderAndClause(
 pub fn appendFilterPredicateSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
-    values: *std.ArrayListUnmanaged(TypedValue),
+    values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     predicate: query_ast.FilterPredicate,
 ) !void {
@@ -83,7 +83,7 @@ pub fn appendFilterPredicateSql(
 pub fn appendConditionSql(
     allocator: Allocator,
     sql_buf: *std.ArrayListUnmanaged(u8),
-    values: *std.ArrayListUnmanaged(TypedValue),
+    values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
     cond: query_ast.Condition,
 ) !void {
@@ -138,7 +138,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, val.scalar.text);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
+            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -146,7 +146,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, raw_str);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
+            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
         },
         .endsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -154,7 +154,7 @@ pub fn appendConditionSql(
             const escaped = try escapeLikePattern(allocator, raw_str);
             errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
+            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
         },
         .in, .notIn => {
             const is_not = cond.op == .notIn;
@@ -164,7 +164,7 @@ pub fn appendConditionSql(
                     for (val.array, 0..) |v, i| {
                         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                         try sql_buf.append(allocator, '?');
-                        try values.append(allocator, TypedValue{ .scalar = try v.clone(allocator) });
+                        try values.append(allocator, Value{ .scalar = try v.clone(allocator) });
                     }
                 } else {
                     try sql_buf.append(allocator, '?');
