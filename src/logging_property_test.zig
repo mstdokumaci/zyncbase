@@ -352,7 +352,7 @@ test "logging: level filtering" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm2, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config = try authorization.implicitConfig(allocator);
+        var auth_config = try authorization.implicitConfig(allocator, &sm2);
         defer auth_config.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm2, &auth_config);
@@ -440,7 +440,7 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm3, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config2 = try authorization.implicitConfig(allocator);
+        var auth_config2 = try authorization.implicitConfig(allocator, &sm3);
         defer auth_config2.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm3, &auth_config2);
@@ -512,7 +512,7 @@ test "logging: message formatting" {
         try storage_engine.init(allocator, &memory_strategy, test_dir, &sm4, .{}, .{ .in_memory = true }, null, null);
         defer storage_engine.deinit();
 
-        var auth_config3 = try authorization.implicitConfig(allocator);
+        var auth_config3 = try authorization.implicitConfig(allocator, &sm4);
         defer auth_config3.deinit();
 
         var store_service = StoreService.init(allocator, &storage_engine, &sm4, &auth_config3);

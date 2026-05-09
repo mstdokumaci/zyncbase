@@ -1,0 +1,79 @@
+const std = @import("std");
+const query_ast = @import("query_ast.zig");
+const storage_values = @import("storage_engine/values.zig");
+
+const Condition = query_ast.Condition;
+const FilterPredicate = query_ast.FilterPredicate;
+const TypedRow = storage_values.TypedRow;
+const ScalarValue = storage_values.ScalarValue;
+
+pub fn evaluatePredicate(predicate: FilterPredicate, row: TypedRow) !bool {
+    if (predicate.conditions) |conds| {
+        for (conds) |condition| {
+            if (!try evaluateCondition(condition, row)) return false;
+        }
+    }
+
+    if (predicate.or_conditions) |or_conds| {
+        if (or_conds.len == 0) return true;
+        for (or_conds) |condition| {
+            if (try evaluateCondition(condition, row)) return true;
+        }
+        return false;
+    }
+
+    return true;
+}
+
+pub fn evaluateCondition(cond: Condition, row: TypedRow) !bool {
+    if (cond.field_index >= row.values.len) return cond.op == .isNull;
+    const val = row.values[cond.field_index];
+
+    return switch (cond.op) {
+        .eq => val.eql(cond.value orelse return false),
+        .ne => !val.eql(cond.value orelse return true),
+        .gt => val.order(cond.value orelse return false) == .gt,
+        .gte => blk: {
+            const res = val.order(cond.value orelse return false);
+            break :blk res == .gt or res == .eq;
+        },
+        .lt => val.order(cond.value orelse return false) == .lt,
+        .lte => blk: {
+            const res = val.order(cond.value orelse return false);
+            break :blk res == .lt or res == .eq;
+        },
+        .isNull => val == .nil,
+        .isNotNull => val != .nil,
+        .startsWith => blk: {
+            if (val != .scalar or val.scalar != .text) break :blk false;
+            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+            break :blk std.ascii.startsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
+        },
+        .endsWith => blk: {
+            if (val != .scalar or val.scalar != .text) break :blk false;
+            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+            break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
+        },
+        .contains => blk: {
+            if (cond.field_type == .array) {
+                if (val != .array) break :blk false;
+                if (cond.value == null) break :blk false;
+                if (cond.value.? != .scalar) break :blk false;
+                break :blk std.sort.binarySearch(ScalarValue, val.array, cond.value.?.scalar, ScalarValue.order) != null;
+            }
+            if (val != .scalar or val.scalar != .text) break :blk false;
+            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
+            break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
+        },
+        .in => blk: {
+            if (val != .scalar) break :blk false;
+            if (cond.value == null or cond.value.? != .array) break :blk false;
+            break :blk std.sort.binarySearch(ScalarValue, cond.value.?.array, val.scalar, ScalarValue.order) != null;
+        },
+        .notIn => blk: {
+            if (val != .scalar) break :blk true;
+            if (cond.value == null or cond.value.? != .array) break :blk false;
+            break :blk std.sort.binarySearch(ScalarValue, cond.value.?.array, val.scalar, ScalarValue.order) == null;
+        },
+    };
+}

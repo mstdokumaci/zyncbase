@@ -39,7 +39,7 @@ test "StorageEngine: selectQuery basic equality" {
         .field_type = .text,
         .items_type = null,
     };
-    filter.conditions = conds;
+    filter.predicate.conditions = conds;
 
     var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
@@ -87,7 +87,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
         .field_type = .integer,
         .items_type = null,
     };
-    filter.or_conditions = or_conds;
+    filter.predicate.or_conditions = or_conds;
 
     var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
@@ -96,6 +96,67 @@ test "StorageEngine: selectQuery with OR and ordering" {
     try testing.expectEqual(@as(usize, 2), res.len);
     _ = try sth.expectFieldString(res[0], people.metadata, "name", "Charlie"); // 35
     _ = try sth.expectFieldString(res[1], people.metadata, "name", "Bob"); // 25
+}
+
+test "StorageEngine: selectQuery combines AND conditions with OR group" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("priority", .text, false),
+        sth.makeField("status", .text, false),
+    };
+    const table = sth.makeTable("tasks", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-and-or", table);
+    defer ctx.deinit();
+    const tasks = try ctx.table("tasks");
+
+    try tasks.insertNamed(1, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("active")) });
+    try tasks.insertNamed(2, 1, .{ sth.named("priority", tth.valText("low")), sth.named("status", tth.valText("active")) });
+    try tasks.insertNamed(3, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("pending")) });
+    try tasks.insertNamed(4, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("closed")) });
+    try tasks.flush();
+
+    const priority_index = try tasks.fieldIndex("priority");
+    const status_index = try tasks.fieldIndex("status");
+
+    var filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+
+    const conds = try allocator.alloc(query_ast.Condition, 1);
+    conds[0] = .{
+        .field_index = priority_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "high"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    filter.predicate.conditions = conds;
+
+    const or_conds = try allocator.alloc(query_ast.Condition, 2);
+    or_conds[0] = .{
+        .field_index = status_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "active"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    or_conds[1] = .{
+        .field_index = status_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "pending"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    filter.predicate.or_conditions = or_conds;
+
+    var managed = try tasks.selectQuery(allocator, 1, filter);
+    defer managed.deinit();
+    const res = managed.rows;
+
+    try testing.expectEqual(@as(usize, 2), res.len);
+    _ = try sth.expectFieldDocId(res[0], tasks.metadata, "id", 1);
+    _ = try sth.expectFieldDocId(res[1], tasks.metadata, "id", 3);
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -197,7 +258,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
         .field_type = .text,
         .items_type = null,
     };
-    filter.conditions = conds;
+    filter.predicate.conditions = conds;
 
     var managed = try items.selectQuery(allocator, 1, filter);
     defer managed.deinit();
@@ -249,7 +310,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
@@ -269,7 +330,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
@@ -289,7 +350,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
@@ -309,7 +370,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
@@ -329,7 +390,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
         const results = managed.rows;
@@ -357,7 +418,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
         var managed = try wildcards.selectQuery(allocator, 1, filter);

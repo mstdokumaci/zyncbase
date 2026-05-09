@@ -155,7 +155,7 @@ pub const AppTestContext = struct {
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization.implicitConfig(allocator);
+        self.auth_config = try authorization.implicitConfig(allocator, &self.schema_manager);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service

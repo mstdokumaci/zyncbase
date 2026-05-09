@@ -54,7 +54,7 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
         count += 1;
     }
 
-    filter.conditions = heap_conds;
+    filter.predicate.conditions = heap_conds;
     return filter;
 }
 

@@ -180,9 +180,13 @@ The resulting condition tuple field must literally be: `"address__city"`.
 The wire tuples map directly to the Zig AST. The parser validates wire integer indices against the schema field array bounds.
 
 ```zig
-pub const QueryFilter = struct {
-    conditions: []const Condition,
+pub const FilterPredicate = struct {
+    conditions: ?[]const Condition = null,
     or_conditions: ?[]const Condition = null,
+};
+
+pub const QueryFilter = struct {
+    predicate: FilterPredicate,
     order_by: SortDescriptor,
 };
 

@@ -110,8 +110,7 @@ pub fn parseQueryFilter(
     // Find the table metadata in schema for validation
     const table_metadata = sm.getTableByIndex(table_index) orelse return error.UnknownTable;
 
-    var conditions: ?[]Condition = null;
-    var or_conditions: ?[]Condition = null;
+    var predicate = query_ast.FilterPredicate{};
     const id_field = table_metadata.fields[schema.id_field_index];
     var order_by: SortDescriptor = .{
         .field_index = schema.id_field_index,
@@ -124,11 +123,11 @@ pub fn parseQueryFilter(
     var after_token: ?[]u8 = null;
 
     errdefer {
-        if (conditions) |conds| {
+        if (predicate.conditions) |conds| {
             for (conds) |c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (or_conditions) |or_conds| {
+        if (predicate.or_conditions) |or_conds| {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
@@ -144,18 +143,18 @@ pub fn parseQueryFilter(
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
             const new_conds = try parseConditions(allocator, table_metadata, value);
-            if (conditions) |old| {
+            if (predicate.conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            conditions = new_conds;
+            predicate.conditions = new_conds;
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
             const new_or = try parseConditions(allocator, table_metadata, value);
-            if (or_conditions) |old| {
+            if (predicate.or_conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            or_conditions = new_or;
+            predicate.or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
             order_by = try parseSortDescriptor(table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
@@ -179,8 +178,7 @@ pub fn parseQueryFilter(
     }
 
     return QueryFilter{
-        .conditions = conditions,
-        .or_conditions = or_conditions,
+        .predicate = predicate,
         .order_by = order_by,
         .limit = limit,
         .after = after,

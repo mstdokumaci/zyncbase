@@ -18,7 +18,7 @@ pub const EvalContext = struct {
 pub const EvalResult = enum {
     allow,
     deny,
-    needs_injection,
+    needs_doc_predicate,
 };
 
 pub const ResolvedValue = struct {
@@ -32,7 +32,7 @@ pub const ResolvedValue = struct {
 
 /// Evaluate a condition in RAM.
 /// Returns .allow / .deny for fully resolvable conditions.
-/// Returns .needs_injection if the condition references $doc variables.
+/// Returns .needs_doc_predicate if the condition references $doc variables.
 pub fn evaluateCondition(condition: types.Condition, ctx: EvalContext) EvalResult {
     return evaluateConditionInternal(condition, ctx, false);
 }
@@ -70,18 +70,18 @@ fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, stric
             for (conds) |cond| {
                 const result = evaluateConditionInternal(cond, ctx, strict);
                 if (result == .deny) return .deny;
-                if (result == .needs_injection) has_injection = true;
+                if (result == .needs_doc_predicate) has_injection = true;
             }
-            return if (has_injection and !strict) .needs_injection else .allow;
+            return if (has_injection and !strict) .needs_doc_predicate else .allow;
         },
         .logical_or => |conds| {
             var has_injection = false;
             for (conds) |cond| {
                 const result = evaluateConditionInternal(cond, ctx, strict);
                 if (result == .allow) return .allow;
-                if (result == .needs_injection) has_injection = true;
+                if (result == .needs_doc_predicate) has_injection = true;
             }
-            return if (has_injection and !strict) .needs_injection else .deny;
+            return if (has_injection and !strict) .needs_doc_predicate else .deny;
         },
         .comparison => |comp| return evaluateComparison(comp, ctx, strict),
     }
@@ -89,7 +89,7 @@ fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, stric
 
 fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) EvalResult {
     if (comp.lhs.scope == .doc) {
-        return if (strict) .deny else .needs_injection;
+        return if (strict) .deny else .needs_doc_predicate;
     }
 
     var lhs = resolveLhs(comp.lhs, ctx) orelse return .deny;

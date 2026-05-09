@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const TypedValue = @import("../storage_engine/values.zig").TypedValue;
+const schema = @import("../schema.zig");
 
 pub const AuthConfig = struct {
     allocator: Allocator,
@@ -8,8 +9,8 @@ pub const AuthConfig = struct {
     store_rules: []StoreRule,
     wildcard_store_index: ?usize,
 
-    pub fn init(allocator: Allocator, json_text: []const u8) !AuthConfig {
-        return @import("parse.zig").initFromJson(allocator, json_text);
+    pub fn init(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !AuthConfig {
+        return @import("parse.zig").initFromJson(allocator, json_text, schema_manager);
     }
 
     pub fn deinit(self: *AuthConfig) void {

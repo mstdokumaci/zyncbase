@@ -34,11 +34,11 @@ test "basic query filter parsing" {
     const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
     const status_index = users_md.fieldIndex("status") orelse return error.UnknownField;
 
-    try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
-    try testing.expectEqual(age_index, filter.conditions.?[0].field_index);
-    try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].value.?.scalar.integer);
-    try testing.expectEqual(status_index, filter.conditions.?[1].field_index);
-    try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.scalar.text);
+    try testing.expectEqual(@as(usize, 2), filter.predicate.conditions.?.len);
+    try testing.expectEqual(age_index, filter.predicate.conditions.?[0].field_index);
+    try testing.expectEqual(@as(i64, 18), filter.predicate.conditions.?[0].value.?.scalar.integer);
+    try testing.expectEqual(status_index, filter.predicate.conditions.?[1].field_index);
+    try testing.expectEqualStrings("active", filter.predicate.conditions.?[1].value.?.scalar.text);
     try testing.expectEqual(@as(u32, 50), filter.limit.?);
 }
 
@@ -65,10 +65,10 @@ test "query with orConditions" {
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
-    try testing.expect(filter.or_conditions != null);
-    try testing.expectEqual(@as(usize, 2), filter.or_conditions.?.len);
-    try testing.expectEqual(role_index, filter.or_conditions.?[0].field_index);
-    try testing.expectEqualStrings("admin", filter.or_conditions.?[0].value.?.scalar.text);
+    try testing.expect(filter.predicate.or_conditions != null);
+    try testing.expectEqual(@as(usize, 2), filter.predicate.or_conditions.?.len);
+    try testing.expectEqual(role_index, filter.predicate.or_conditions.?[0].field_index);
+    try testing.expectEqualStrings("admin", filter.predicate.or_conditions.?[0].value.?.scalar.text);
 }
 
 test "query with orderBy and after" {
@@ -147,9 +147,9 @@ test "isNull condition (no value tuple)" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 1), filter.conditions.?.len);
-    try testing.expectEqual(query_ast.Operator.isNull, filter.conditions.?[0].op);
-    try testing.expect(filter.conditions.?[0].value == null);
+    try testing.expectEqual(@as(usize, 1), filter.predicate.conditions.?.len);
+    try testing.expectEqual(query_ast.Operator.isNull, filter.predicate.conditions.?[0].op);
+    try testing.expect(filter.predicate.conditions.?[0].value == null);
 }
 
 test "unknown field name (including flattened paths)" {
@@ -218,7 +218,7 @@ test "in condition parses to typed array" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    const conds = filter.conditions orelse return error.TestExpectedValue;
+    const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
     const value = conds[0].value orelse return error.TestExpectedValue;
     try testing.expect(value == .array);
     try testing.expectEqual(@as(usize, 2), value.array.len);
@@ -292,8 +292,8 @@ test "contains on array field parses using element type" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(schema.FieldType.array, filter.conditions.?[0].field_type);
-    try testing.expectEqualStrings("urgent", filter.conditions.?[0].value.?.scalar.text);
+    try testing.expectEqual(schema.FieldType.array, filter.predicate.conditions.?[0].field_type);
+    try testing.expectEqualStrings("urgent", filter.predicate.conditions.?[0].value.?.scalar.text);
 }
 
 test "contains on text rejects non-string operand" {

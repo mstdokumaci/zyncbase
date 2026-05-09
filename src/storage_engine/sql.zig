@@ -6,7 +6,6 @@ const errors = @import("errors.zig");
 const value_codec = @import("value_codec.zig");
 const values = @import("values.zig");
 const doc_id = @import("../doc_id.zig");
-const authorization = @import("../authorization.zig");
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
@@ -217,7 +216,7 @@ pub fn appendOrderBySql(
 pub fn buildSelectDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    auth_clause: ?authorization.InjectedClause,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -228,8 +227,8 @@ pub fn buildSelectDocumentSql(
     try sql_buf.appendSlice(allocator, "=? AND ");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, "=?");
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     return sql_buf.toOwnedSlice(allocator);
 }
@@ -395,7 +394,7 @@ pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
     columns: []const values.ColumnValue,
-    auth_clause: ?authorization.InjectedClause,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     const table_quoted = table_metadata.name_quoted;
 
@@ -464,8 +463,8 @@ pub fn buildInsertOrReplaceSql(
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, " = excluded.");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
@@ -484,7 +483,7 @@ fn getColumnField(
 pub fn buildDeleteDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    auth_clause: ?authorization.InjectedClause,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -495,8 +494,8 @@ pub fn buildDeleteDocumentSql(
     try sql_buf.appendSlice(allocator, "=? AND ");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, "=?");
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);

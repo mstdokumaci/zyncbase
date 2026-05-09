@@ -51,15 +51,15 @@ To guarantee strict predictability and sub-microsecond performance, ZyncBase hea
 
 Variables are evaluated using two distinct execution paths:
 1. **RAM Evaluation**: Instant, stateless check performed in memory.
-2. **AST Injection**: Compiled directly into the SQLite `WHERE` clause (Zero N+1 database reads).
+2. **Predicate Lowering**: `$doc` comparisons are lowered into the same flat `FilterPredicate` shape used by `StoreQuery` and `StoreSubscribe`. The storage layer owns SQL rendering.
 
 | Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$doc` |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
 | `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
-| `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ AST Injection |
-| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ✅ AST Injection |
-| `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ AST Injection |
+| `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
+| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ✅ Predicate Lowering |
+| `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
 | `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ✅ RAM | ❌ |
 | `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
 
@@ -67,15 +67,19 @@ Variables are evaluated using two distinct execution paths:
 
 For `StoreSet`, `$doc` predicates are applied only to the existing-row update branch. A create has no existing `$doc`; the server injects `owner_id` from `$session.userId` and evaluates only the RAM-available variables (`$session`, `$namespace`, `$path`, `$value`).
 
-## AST Injection Strategy
+## Predicate Lowering Strategy
 
-The `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the Zig engine translates the condition into a SQL query filter.
+The `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the authorization layer lowers the condition into a storage-neutral `FilterPredicate`. The storage layer then renders that predicate into a SQL `WHERE` fragment with bound values.
+
+At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Unsupported hooks, unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
+
+The supported `$doc` shape is intentionally no more expressive than StoreQuery: zero or more AND conditions plus at most one OR group. Nested `$doc` groups that would require multiple OR groups or an AND group inside an OR branch are invalid.
 
 **Example**:
 ```json
 "write": { "$doc.owner_id": { "eq": "$session.userId" } }
 ```
-When updating a document (`StoreSet`), Zig evaluates `$session.userId` in RAM as the internal `BLOB(16)` user ID resolved through the `users` table. It recognizes `$doc.owner_id` as a column reference and injects it into the SQL operation using a bound binary parameter:
+When updating a document (`StoreSet`), Zig evaluates `$session.userId` in RAM as the internal `BLOB(16)` user ID resolved through the `users` table. It recognizes `$doc.owner_id` as a column reference, lowers it to a filter condition, and the storage layer renders it with a bound binary parameter:
 `UPDATE tasks SET ... WHERE id = ? AND owner_id = ?`
 
 If the user does not own the document, 0 rows are affected, and the operation fails naturally without an extra `SELECT` overhead.

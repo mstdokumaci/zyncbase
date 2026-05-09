@@ -79,7 +79,7 @@ test "MessageHandler: store operations require ready scope" {
     try testing.expectEqualStrings("SESSION_NOT_READY", result.code.?);
 }
 
-test "MessageHandler: StoreSet document with auth injection persists and is readable" {
+test "MessageHandler: StoreSet document with auth predicate persists and is readable" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     const schema_json =

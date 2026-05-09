@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_ast = @import("query_ast.zig");
+const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
 const types = @import("storage_engine.zig");
@@ -55,7 +56,7 @@ pub const CollectionKey = struct {
 pub const CanonicalFilterContext = struct {
     pub fn hash(_: CanonicalFilterContext, f: QueryFilter) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        if (f.conditions) |conds| {
+        if (f.predicate.conditions) |conds| {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
@@ -65,7 +66,7 @@ pub const CanonicalFilterContext = struct {
             std.hash.autoHash(&hasher, combined);
         }
         hasher.update("\x00"); // Separator
-        if (f.or_conditions) |conds| {
+        if (f.predicate.or_conditions) |conds| {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
@@ -85,8 +86,8 @@ pub const CanonicalFilterContext = struct {
     }
 
     pub fn eql(_: CanonicalFilterContext, a: QueryFilter, b: QueryFilter) bool {
-        if (!eqlConditionsAsSets(a.conditions, b.conditions)) return false;
-        if (!eqlConditionsAsSets(a.or_conditions, b.or_conditions)) return false;
+        if (!eqlConditionsAsSets(a.predicate.conditions, b.predicate.conditions)) return false;
+        if (!eqlConditionsAsSets(a.predicate.or_conditions, b.predicate.or_conditions)) return false;
         if (!std.meta.eql(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
         if (a.after == null and b.after == null) return true;
@@ -412,85 +413,6 @@ pub const SubscriptionEngine = struct {
 
     /// Evaluates a row against a filter AST.
     pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
-        return evaluateFilterInternal(filter, row);
+        return filter_eval.evaluatePredicate(filter.predicate, row);
     }
 };
-
-fn evaluateFilterInternal(filter: QueryFilter, row: TypedRow) !bool {
-    // 1. Evaluate AND conditions (all must match)
-    if (filter.conditions) |conds| {
-        for (conds) |cond| {
-            if (!try evaluateConditionInternal(cond, row)) return false;
-        }
-    }
-
-    // 2. Evaluate OR conditions (any must match)
-    if (filter.or_conditions) |or_conds| {
-        if (or_conds.len > 0) {
-            var matched_any = false;
-            for (or_conds) |cond| {
-                if (try evaluateConditionInternal(cond, row)) {
-                    matched_any = true;
-                    break;
-                }
-            }
-            if (!matched_any) return false;
-        }
-    }
-
-    return true;
-}
-
-fn evaluateConditionInternal(cond: Condition, row: TypedRow) !bool {
-    if (cond.field_index >= row.values.len) return cond.op == .isNull;
-    const val = row.values[cond.field_index];
-
-    return switch (cond.op) {
-        .eq => val.eql(cond.value orelse return false),
-        .ne => !val.eql(cond.value orelse return true),
-        .gt => val.order(cond.value orelse return false) == .gt,
-        .gte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .gt or res == .eq;
-        },
-        .lt => val.order(cond.value orelse return false) == .lt,
-        .lte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .lt or res == .eq;
-        },
-        .isNull => val == .nil,
-        .isNotNull => val != .nil,
-        .startsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.startsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
-        .endsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
-        .contains => blk: {
-            if (cond.field_type == .array) {
-                if (val != .array) break :blk false;
-                if (cond.value == null) break :blk false;
-                if (cond.value.? != .scalar) break :blk false;
-                break :blk std.sort.binarySearch(types.ScalarValue, val.array, cond.value.?.scalar, types.ScalarValue.order) != null;
-            } else {
-                if (val != .scalar or val.scalar != .text) break :blk false;
-                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
-            }
-        },
-        .in => blk: {
-            if (val != .scalar) break :blk false;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) != null;
-        },
-        .notIn => blk: {
-            if (val != .scalar) break :blk true;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) == null;
-        },
-    };
-}

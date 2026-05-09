@@ -45,7 +45,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     };
 
     var filter = try qth.makeDefaultFilter(allocator);
-    filter.conditions = conditions;
+    filter.predicate.conditions = conditions;
     defer filter.deinit(allocator);
 
     _ = try sub_engine.subscribe(1, (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);

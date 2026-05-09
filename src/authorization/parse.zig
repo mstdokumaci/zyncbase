@@ -2,11 +2,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
+const doc_predicate = @import("doc_predicate.zig");
+const schema = @import("../schema.zig");
 const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
 const TypedValue = @import("../storage_engine/values.zig").TypedValue;
 
 /// Parse authorization.json text into an AuthConfig.
-pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConfig {
+pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !types.AuthConfig {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
     defer parsed.deinit();
 
@@ -47,12 +49,34 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConf
         try store_rules.append(allocator, rule);
     }
 
-    return types.AuthConfig{
+    var config = types.AuthConfig{
         .allocator = allocator,
         .namespace_rules = try namespace_rules.toOwnedSlice(allocator),
         .store_rules = try store_rules.toOwnedSlice(allocator),
         .wildcard_store_index = wildcard_index,
     };
+    errdefer config.deinit();
+
+    try validateConfig(&config, schema_manager);
+    return config;
+}
+
+pub fn validateConfig(config: *const types.AuthConfig, schema_manager: *const schema.Schema) !void {
+    for (config.store_rules) |rule| {
+        if (rule.is_wildcard) {
+            for (schema_manager.tables) |*table| {
+                try validateStoreRule(rule, table);
+            }
+        } else {
+            const table = schema_manager.getTable(rule.collection) orelse return error.UnknownTable;
+            try validateStoreRule(rule, table);
+        }
+    }
+}
+
+fn validateStoreRule(rule: types.StoreRule, table: *const schema.Table) !void {
+    try doc_predicate.validateDocPredicate(rule.read, table);
+    try doc_predicate.validateDocPredicate(rule.write, table);
 }
 
 fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.NamespaceRule {

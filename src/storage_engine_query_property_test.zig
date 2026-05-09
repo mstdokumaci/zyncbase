@@ -99,7 +99,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
         for (conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
     }
 
     // Random OR conditions
@@ -109,7 +109,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
         for (or_conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
-        filter.or_conditions = or_conds;
+        filter.predicate.or_conditions = or_conds;
     }
 
     // Random Limit

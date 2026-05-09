@@ -14,12 +14,12 @@
 2. **Variables Context**: Rules are evaluated against a strictly limited context containing:
    - `$session`: The resolved session context (enriched from JWT and/or Hook Server).
    - `$namespace`: The current namespace string parts.
-   - `$doc`: Columns on the existing target row (compiled via AST Injection into SQL `WHERE` clauses).
+   - `$doc`: Columns on the existing target row (lowered to the same flat `FilterPredicate` used by `StoreQuery` / `StoreSubscribe`; the storage layer renders that predicate into SQL).
    - `$value`: The incoming mutation payload (evaluated in RAM).
    - `$path`: The table name.
    
    **Hard Limit**: `$doc` can only constrain the same row being selected, updated, or deleted. Any rule requiring relationship traversal, a relational join, or a lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server via a `"hook"` rule.
-3. **Query Language Syntax**: Conditions use the exact same JSON structure as the ZyncBase Query Language (implicit ANDs, explicit `or`, e.g., `{ "$session.role": { "eq": "admin" } }`), ensuring easy parsing and AST injection.
+3. **Query Predicate Parity**: Auth JSON keeps its rule syntax (`and` / `or` groups and comparison objects), but any residual `$doc` predicate must lower to the same flat query predicate used by StoreQuery: zero or more AND conditions plus at most one OR group. Auth never supports a more expressive `$doc` filter than the store query language.
 4. **Decoupled Configuration**: Namespaces handle horizontal isolation and presence, while store handles vertical collection-level access.
 
 ## 2. Rule Format Structure
@@ -110,11 +110,13 @@ Presence rules fully support Hook Server Delegation. If you need relational look
 
 ## 6. Composition Model (Conditions)
 
-Conditions mirror the `QUERY_LANGUAGE.md` operators to reuse the same evaluation engine in Zig.
+Conditions mirror the store query predicate model where they apply to `$doc`, and use RAM evaluation for `$session`, `$namespace`, `$path`, and `$value`.
 
 - **Boolean Values**: `true` (allow) or `false` (deny).
 - **Operators**: `eq`, `ne`, `in`, `notIn`, `contains`.
 - **Logic**: `and`, `or`.
+
+At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the schema. A rule that cannot be evaluated in RAM or lowered into a valid same-row `FilterPredicate` fails startup. This includes unsupported hooks and `$doc` expressions that would require nested groups beyond the flat store-query predicate shape.
 
 **Example:**
 ```json

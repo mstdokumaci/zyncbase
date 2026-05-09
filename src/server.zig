@@ -143,15 +143,15 @@ pub const ZyncBaseServer = struct {
                 ) catch |err| {
                     if (err == error.FileNotFound) {
                         std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
-                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator());
+                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema_manager);
                         break :auth_init;
                     }
                     return err;
                 };
-                self.auth_config = try authorization.AuthConfig.init(self.memory_strategy.generalAllocator(), auth_json);
+                self.auth_config = try authorization.AuthConfig.init(self.memory_strategy.generalAllocator(), auth_json, &self.schema_manager);
                 self.memory_strategy.generalAllocator().free(auth_json);
             } else {
-                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator());
+                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema_manager);
             }
             errdefer self.auth_config.deinit();
         }

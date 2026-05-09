@@ -802,8 +802,8 @@ pub const Writer = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
-        if (op.auth_values) |auth_vals| {
-            for (auth_vals) |val| {
+        if (op.guard_values) |guard_vals| {
+            for (guard_vals) |val| {
                 try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
                 bind_idx += 1;
             }
@@ -833,8 +833,8 @@ pub const Writer = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
 
         var bind_idx: c_int = 3;
-        if (op.auth_values) |auth_vals| {
-            for (auth_vals) |val| {
+        if (op.guard_values) |guard_vals| {
+            for (guard_vals) |val| {
                 try sql.bindTypedValue(val, &self.conn, stmt, bind_idx, self.allocator);
                 bind_idx += 1;
             }
