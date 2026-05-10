@@ -381,6 +381,44 @@ test "buildDocPredicate returns null for RAM-only allow" {
     try testing.expect(predicate == null);
 }
 
+test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"notIn":[]}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const predicate = try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    try testing.expect(predicate == null);
+}
+
+test "buildDocPredicate preserves $doc in empty set as match none guard" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"in":[]}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    try testing.expect(predicate.isAlwaysFalse());
+    try testing.expect(predicate.conditions == null);
+    try testing.expect(predicate.or_conditions == null);
+}
+
 test "buildDocPredicate preserves logical_or predicate" {
     const allocator = testing.allocator;
     const json =

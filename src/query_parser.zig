@@ -177,6 +177,8 @@ pub fn parseQueryFilter(
         after_token = null;
     }
 
+    _ = try predicate.normalize(allocator);
+
     return QueryFilter{
         .predicate = predicate,
         .order_by = order_by,

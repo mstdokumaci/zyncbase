@@ -56,6 +56,8 @@ pub const CollectionKey = struct {
 pub const CanonicalFilterContext = struct {
     pub fn hash(_: CanonicalFilterContext, f: QueryFilter) u64 {
         var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, f.predicate.state);
+        hasher.update("\x00"); // Separator
         if (f.predicate.conditions) |conds| {
             var combined: u64 = 0;
             for (conds) |c| {
@@ -86,6 +88,7 @@ pub const CanonicalFilterContext = struct {
     }
 
     pub fn eql(_: CanonicalFilterContext, a: QueryFilter, b: QueryFilter) bool {
+        if (a.predicate.state != b.predicate.state) return false;
         if (!eqlConditionsAsSets(a.predicate.conditions, b.predicate.conditions)) return false;
         if (!eqlConditionsAsSets(a.predicate.or_conditions, b.predicate.or_conditions)) return false;
         if (!std.meta.eql(a.order_by, b.order_by)) return false;

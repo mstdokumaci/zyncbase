@@ -180,9 +180,16 @@ The resulting condition tuple field must literally be: `"address__city"`.
 The wire tuples map directly to the Zig AST. The parser validates wire integer indices against the schema field array bounds.
 
 ```zig
+pub const PredicateState = enum(u8) {
+    conditional,
+    match_all,
+    match_none,
+};
+
 pub const FilterPredicate = struct {
-    conditions: ?[]const Condition = null,
-    or_conditions: ?[]const Condition = null,
+    state: PredicateState = .conditional,
+    conditions: ?[]Condition = null,
+    or_conditions: ?[]Condition = null,
 };
 
 pub const QueryFilter = struct {
@@ -222,6 +229,27 @@ Sort tuples map to `SortDescriptor`:
 |----------------|-----------|-------|
 | `[0]` | `SortDescriptor.field_index` | Integer index direct assignment |
 | `[1]` | `SortDescriptor.desc` | `1` → `true`, `0` → `false` |
+
+### Predicate Normalization
+
+After parsing and after authorization `$doc` predicate lowering, ZyncBase normalizes predicates once before execution. Normalization is semantic-preserving and uses explicit `PredicateState` values instead of fake SQL fragments or fake conditions.
+
+Rules:
+
+- `field IN []` is `match_none`.
+- `field NOT IN []` is `match_all`.
+- In the AND group, any `match_none` condition makes the whole predicate `match_none`; `match_all` conditions are removed.
+- In the OR group, any `match_all` condition removes the entire OR group while preserving the AND group; `match_none` OR terms are removed.
+- If an OR group existed and every OR term is removed as `match_none`, the whole predicate becomes `match_none`.
+- If no conditions remain, the predicate becomes `match_all`.
+
+`conditions` and `or_conditions` retain their existing meaning:
+
+```text
+conditions AND (or_conditions[0] OR or_conditions[1] ...)
+```
+
+`match_none` must remain distinguishable from an empty predicate. Empty predicates are `match_all`; impossible predicates are `match_none`.
 
 ---
 

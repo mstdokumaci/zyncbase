@@ -616,6 +616,10 @@ pub const StorageEngine = struct {
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+        }
+
         const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
@@ -681,6 +685,21 @@ pub const StorageEngine = struct {
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
+        if (filter.predicate.isAlwaysFalse()) {
+            return .{
+                .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
+                .next_cursor_str = null,
+            };
+        }
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) {
+                return .{
+                    .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
+                    .next_cursor_str = null,
+                };
+            }
+        }
+
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
@@ -720,6 +739,9 @@ pub const StorageEngine = struct {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) return;
+        }
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
         var queued = false;
 

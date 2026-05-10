@@ -32,7 +32,7 @@ pub fn renderAndClause(
     predicate: ?query_ast.FilterPredicate,
 ) !?RenderedPredicate {
     const pred = predicate orelse return null;
-    if (pred.isEmpty()) return null;
+    if (pred.isAlwaysTrue()) return null;
 
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer sql_buf.deinit(allocator);
@@ -59,6 +59,15 @@ pub fn appendFilterPredicateSql(
     table_metadata: *const schema.Table,
     predicate: query_ast.FilterPredicate,
 ) !void {
+    if (predicate.isAlwaysTrue()) {
+        try sql_buf.append(allocator, '1');
+        return;
+    }
+    if (predicate.isAlwaysFalse()) {
+        try sql_buf.append(allocator, '0');
+        return;
+    }
+
     var emitted = false;
 
     const conds = predicate.conditions orelse @as([]const query_ast.Condition, &.{});

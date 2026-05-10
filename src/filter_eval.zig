@@ -8,6 +8,12 @@ const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
 
 pub fn evaluatePredicate(predicate: FilterPredicate, record: Record) !bool {
+    switch (predicate.state) {
+        .match_all => return true,
+        .match_none => return false,
+        .conditional => {},
+    }
+
     if (predicate.conditions) |conds| {
         for (conds) |condition| {
             if (!try evaluateCondition(condition, record)) return false;

@@ -322,6 +322,68 @@ test "SubscriptionEngine: group sharing with different condition order" {
     try testing.expectEqual(@as(u32, 1), engine.groups.count());
 }
 
+test "SubscriptionEngine: canonical key includes predicate state" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var filter_all = try qth.makeDefaultFilter(allocator);
+    defer filter_all.deinit(allocator);
+    filter_all.predicate.state = .match_all;
+
+    var filter_none = try qth.makeDefaultFilter(allocator);
+    defer filter_none.deinit(allocator);
+    filter_none.predicate.state = .match_none;
+
+    var sm = try sth.createSchema(allocator, &.{
+        sth.makeTable("coll", &.{}),
+    });
+    defer sm.deinit();
+
+    const table_index = (sm.getTable("coll") orelse return error.TestExpectedValue).index;
+    const first = try engine.subscribe(2, table_index, filter_all, 1, 101);
+    const second = try engine.subscribe(2, table_index, filter_none, 2, 102);
+
+    try testing.expect(first);
+    try testing.expect(second);
+    try testing.expectEqual(@as(u32, 2), engine.groups.count());
+}
+
+test "SubscriptionEngine: match-none filter never matches changes" {
+    const allocator = testing.allocator;
+    var engine = SubscriptionEngine.init(allocator);
+    defer engine.deinit();
+
+    var filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+    filter.predicate.state = .match_none;
+
+    var sm = try sth.createSchema(allocator, &.{
+        sth.makeTable("users", &.{
+            sth.makeField("role", .text, false),
+        }),
+    });
+    defer sm.deinit();
+
+    const table_index = (sm.getTable("users") orelse return error.TestExpectedValue).index;
+    _ = try engine.subscribe(1, table_index, filter, 1, 100);
+
+    var r = try tth.recordFromValues(allocator, &.{tth.valText("admin")});
+    defer r.deinit(allocator);
+
+    const change = subscription_engine.RecordChange{
+        .namespace_id = 1,
+        .table_index = table_index,
+        .operation = .insert,
+        .new_record = r,
+        .old_record = null,
+    };
+
+    const matches = try engine.handleRecordChange(change, allocator);
+    defer allocator.free(matches);
+    try testing.expectEqual(@as(usize, 0), matches.len);
+}
+
 test "SubscriptionEngine: in operator subscribe and match" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);

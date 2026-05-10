@@ -45,12 +45,16 @@ pub fn buildDocPredicate(
     switch (result) {
         .allow => return null,
         .deny => return error.AccessDenied,
-        .filter => |filter| {
-            if (filter.isEmpty()) {
-                filter.deinit(allocator);
-                return null;
+        .filter => |filter_payload| {
+            var filter = filter_payload;
+            errdefer filter.deinit(allocator);
+            switch (try filter.normalize(allocator)) {
+                .match_all => {
+                    filter.deinit(allocator);
+                    return null;
+                },
+                .match_none, .conditional => return filter,
             }
-            return filter;
         },
     }
 }

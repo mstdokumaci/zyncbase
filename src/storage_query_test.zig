@@ -49,6 +49,70 @@ test "StorageEngine: selectQuery basic equality" {
     _ = try sth.expectFieldString(res[0], people.metadata, "name", "Bob");
 }
 
+test "StorageEngine: selectQuery match-none predicate returns empty result" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("name", .text, false),
+    };
+    const table = sth.makeTable("people", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-match-none", table);
+    defer ctx.deinit();
+    const people = try ctx.table("people");
+
+    try people.insertText(1, 1, "name", "Alice");
+    try people.flush();
+
+    var filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+    filter.predicate.state = .match_none;
+
+    var managed = try people.selectQuery(allocator, 1, filter);
+    defer managed.deinit();
+
+    try testing.expectEqual(@as(usize, 0), managed.records.len);
+}
+
+test "StorageEngine: match-none guard permits insert branch and blocks update branch" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("title", .text, false),
+    };
+    const table = sth.makeTable("tasks", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-match-none-upsert", table);
+    defer ctx.deinit();
+    const tasks = try ctx.table("tasks");
+    const title_index = try tasks.fieldIndex("title");
+    const guard = query_ast.FilterPredicate{ .state = .match_none };
+
+    var insert_columns = [_]sth.ColumnValue{.{
+        .index = title_index,
+        .value = tth.valText("first"),
+    }};
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, guard);
+    try tasks.flush();
+
+    {
+        var doc = try tasks.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("title", "first");
+    }
+
+    var update_columns = [_]sth.ColumnValue{.{
+        .index = title_index,
+        .value = tth.valText("second"),
+    }};
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, guard);
+    try tasks.flush();
+
+    var doc = try tasks.getOne(allocator, 1, 1);
+    defer doc.deinit();
+    _ = try doc.expectFieldString("title", "first");
+}
+
 test "StorageEngine: selectQuery with OR and ordering" {
     const allocator = testing.allocator;
 
