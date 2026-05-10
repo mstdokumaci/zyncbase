@@ -122,7 +122,9 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
                 if (arr.items[i] == .null) return error.NullNotAllowed;
                 items[i] = try scalarFromJson(allocator, it, arr.items[i]);
             }
-            return Value{ .array = items };
+            var result = Value{ .array = items };
+            try result.sortedSet(allocator);
+            return result;
         },
         else => .{ .scalar = try scalarFromJson(allocator, ft, value) },
     };

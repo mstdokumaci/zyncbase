@@ -624,7 +624,7 @@ pub const StorageEngine = struct {
             if (guard_predicate) |predicate| {
                 if (!try filter_eval.evaluatePredicate(predicate, slice[0])) {
                     handle.release();
-                    return ManagedResult{ .records = &[_]Record{}, .allocator = allocator };
+                    return ManagedResult{ .records = &[_]Record{}, .allocator = null };
                 }
             }
             return ManagedResult{
@@ -665,7 +665,7 @@ pub const StorageEngine = struct {
             items[0] = record;
             return ManagedResult{ .records = items, .allocator = allocator };
         }
-        return ManagedResult{ .records = &[_]Record{}, .allocator = allocator };
+        return ManagedResult{ .records = &[_]Record{}, .allocator = null };
     }
 
     /// SELECT for a query filter.

@@ -115,16 +115,15 @@ fn lowerOr(
 
     for (conds) |condition| {
         var result = try lowerCondition(allocator, condition, ctx, table);
+        defer result.deinit(allocator);
         switch (result) {
             .allow => {
-                result.deinit(allocator);
                 return .allow;
             },
-            .deny => result.deinit(allocator),
+            .deny => {},
             .filter => |filter| {
                 if (or_builder) |*builder| {
                     try builder.appendOrFilter(allocator, filter);
-                    result.deinit(allocator);
                 } else if (first_filter) |existing| {
                     var builder = PredicateBuilder{};
                     errdefer builder.deinit(allocator);
@@ -132,7 +131,6 @@ fn lowerOr(
                     existing.deinit(allocator);
                     first_filter = null;
                     try builder.appendOrFilter(allocator, filter);
-                    result.deinit(allocator);
                     or_builder = builder;
                 } else {
                     first_filter = filter;
