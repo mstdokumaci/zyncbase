@@ -419,6 +419,80 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
     try testing.expect(predicate.or_conditions == null);
 }
 
+test "validateDocPredicate rejects array literal items with wrong type" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const items = try allocator.alloc(ScalarValue, 1);
+    items[0] = .{ .integer = 42 };
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .array = items } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateDocPredicate rejects $value array item type mismatch" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+        .{ .name = "scores", .field_type = .array, .items_type = .integer },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .eq,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "scores") } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateDocPredicate validates context variable shape by operator" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+        .{ .name = "allowed_visibility", .field_type = .array, .items_type = .text },
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var valid_in_set = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
+        .op = .in_set,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } },
+    } };
+    defer valid_in_set.deinit(allocator);
+    try authorization.validateDocPredicate(valid_in_set, &table);
+
+    var scalar_in_set = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
+        .op = .in_set,
+        .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } },
+    } };
+    defer scalar_in_set.deinit(allocator);
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(scalar_in_set, &table));
+
+    var array_contains_array = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .contains,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "tags") } },
+    } };
+    defer array_contains_array.deinit(allocator);
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(array_contains_array, &table));
+}
+
 test "buildDocPredicate preserves logical_or predicate" {
     const allocator = testing.allocator;
     const json =
@@ -493,6 +567,7 @@ fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
 const TestFieldDef = struct {
     name: []const u8,
     field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType = null,
 };
 
 fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
@@ -515,6 +590,7 @@ fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const
             .name_quoted = field_name_quoted,
             .declared_type = field_def.field_type,
             .storage_type = field_def.field_type,
+            .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
             .kind = .user,
         };
         idx += 1;

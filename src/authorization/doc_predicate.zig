@@ -250,72 +250,139 @@ fn shapeAsOrTermCount(shape: Shape) !usize {
 fn validateDocComparison(comp: types.Comparison, table: *const schema.Table) !void {
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field = table.fields[field_index];
+    const lhs_type = ValueType.fromField(field);
 
-    if (!operatorAllowedForField(comp.op, field.storage_type)) return error.UnsupportedOperatorForFieldType;
+    if (!operatorAllowedForField(comp.op, lhs_type.storage_type)) return error.UnsupportedOperatorForFieldType;
 
     switch (comp.rhs) {
-        .literal => |value| try validateLiteralValue(comp.op, field.storage_type, field.items_type, value),
-        .context_var => |ctx_var| try validateContextVarValue(field.storage_type, field.items_type, ctx_var, table),
+        .literal => |value| try validateLiteralValue(comp.op, lhs_type, value),
+        .context_var => |ctx_var| try validateContextVarValue(comp.op, lhs_type, ctx_var, table),
     }
 }
 
+const ValueType = struct {
+    storage_type: schema.FieldType,
+    items_type: ?schema.FieldType = null,
+
+    fn scalar(storage_type: schema.FieldType) ValueType {
+        return .{ .storage_type = storage_type };
+    }
+
+    fn fromField(field: schema.Field) ValueType {
+        return .{
+            .storage_type = field.storage_type,
+            .items_type = field.items_type,
+        };
+    }
+
+    fn arrayItemsType(self: ValueType) !schema.FieldType {
+        if (self.storage_type != .array) return error.InvalidValue;
+        return self.items_type orelse error.InvalidValue;
+    }
+
+    fn membershipItemsType(self: ValueType) !schema.FieldType {
+        return if (self.storage_type == .array) try self.arrayItemsType() else self.storage_type;
+    }
+};
+
 fn validateLiteralValue(
     op: types.ComparisonOp,
-    field_type: schema.FieldType,
-    items_type: ?schema.FieldType,
+    lhs_type: ValueType,
     value: Value,
 ) !void {
     if (op == .in_set or op == .not_in_set) {
         if (value != .array) return error.InvalidValue;
-        for (value.array) |item| {
-            try validateScalarType(if (field_type == .array) items_type orelse return error.InvalidValue else field_type, item);
-        }
+        try validateScalarItems(try lhs_type.membershipItemsType(), value.array);
         return;
     }
 
-    if (op == .contains and field_type == .array) {
+    if (op == .contains and lhs_type.storage_type == .array) {
         if (value != .scalar) return error.InvalidValue;
-        try validateScalarType(items_type orelse return error.InvalidValue, value.scalar);
+        try validateScalarType(try lhs_type.arrayItemsType(), value.scalar);
         return;
     }
 
-    if (field_type == .array) {
+    if (lhs_type.storage_type == .array) {
         if (value != .array) return error.InvalidValue;
+        try validateScalarItems(try lhs_type.arrayItemsType(), value.array);
         return;
     }
 
     if (value != .scalar) return error.InvalidValue;
-    try validateScalarType(field_type, value.scalar);
+    try validateScalarType(lhs_type.storage_type, value.scalar);
 }
 
 fn validateContextVarValue(
-    field_type: schema.FieldType,
-    items_type: ?schema.FieldType,
+    op: types.ComparisonOp,
+    lhs_type: ValueType,
     ctx_var: types.ContextVar,
     table: *const schema.Table,
 ) !void {
-    _ = items_type;
+    const rhs_type = try resolveContextVarType(ctx_var, table);
+    try validateRhsType(op, lhs_type, rhs_type);
+}
+
+fn resolveContextVarType(ctx_var: types.ContextVar, table: *const schema.Table) !ValueType {
     return switch (ctx_var.scope) {
         .session => {
             if (std.mem.eql(u8, ctx_var.field, "userId")) {
-                if (field_type != .doc_id) return error.InvalidValue;
+                return ValueType.scalar(.doc_id);
             } else if (std.mem.eql(u8, ctx_var.field, "externalId")) {
-                if (field_type != .text) return error.InvalidValue;
+                return ValueType.scalar(.text);
             } else return error.InvalidContextVariable;
         },
-        .namespace => {
-            if (field_type != .text) return error.InvalidValue;
-        },
+        .namespace => ValueType.scalar(.text),
         .path => {
-            if (!std.mem.eql(u8, ctx_var.field, "table") or field_type != .text) return error.InvalidValue;
+            if (!std.mem.eql(u8, ctx_var.field, "table")) return error.InvalidValue;
+            return ValueType.scalar(.text);
         },
         .value => {
             const value_index = table.fieldIndex(ctx_var.field) orelse return error.InvalidFieldName;
             const value_field = table.fields[value_index];
-            if (value_field.storage_type != field_type) return error.InvalidValue;
+            return ValueType.fromField(value_field);
         },
         .doc => return error.InvalidContextVariable,
     };
+}
+
+fn validateRhsType(
+    op: types.ComparisonOp,
+    lhs_type: ValueType,
+    rhs_type: ValueType,
+) !void {
+    if (op == .in_set or op == .not_in_set) {
+        if (rhs_type.storage_type != .array) return error.InvalidValue;
+        try validateItemsType(try lhs_type.membershipItemsType(), rhs_type.items_type);
+        return;
+    }
+
+    if (op == .contains and lhs_type.storage_type == .array) {
+        const expected_items_type = try lhs_type.arrayItemsType();
+        if (rhs_type.storage_type != expected_items_type) return error.InvalidValue;
+        return;
+    }
+
+    try validateMatchingValueType(lhs_type, rhs_type);
+}
+
+fn validateMatchingValueType(lhs_type: ValueType, rhs_type: ValueType) !void {
+    if (lhs_type.storage_type == .array) {
+        if (rhs_type.storage_type != .array) return error.InvalidValue;
+        try validateItemsType(try lhs_type.arrayItemsType(), rhs_type.items_type);
+        return;
+    }
+
+    if (rhs_type.storage_type != lhs_type.storage_type) return error.InvalidValue;
+}
+
+fn validateItemsType(expected_items_type: schema.FieldType, actual_items_type: ?schema.FieldType) !void {
+    if (actual_items_type == null or actual_items_type.? != expected_items_type) return error.InvalidValue;
+}
+
+fn validateScalarItems(expected_items_type: schema.FieldType, items: []const typed.ScalarValue) !void {
+    for (items) |item| {
+        try validateScalarType(expected_items_type, item);
+    }
 }
 
 fn validateScalarType(field_type: schema.FieldType, scalar: typed.ScalarValue) !void {
