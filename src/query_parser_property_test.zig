@@ -52,7 +52,7 @@ test "property: random valid query filters" {
             order_arr[1] = msgpack.Payload.uintToPayload(if (random.boolean()) 1 else 0);
             try root.mapPut("orderBy", .{ .arr = order_arr });
         }
-        const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+        var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
         filter.deinit(allocator);
     }
 }

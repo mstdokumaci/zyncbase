@@ -32,8 +32,8 @@ pub fn buildSelectQuery(
     allocator: Allocator,
     table_metadata: *const schema.Table,
     namespace_id: i64,
-    filter: query_ast.QueryFilter,
-    guard_predicate: ?query_ast.FilterPredicate,
+    filter: *const query_ast.QueryFilter,
+    guard_predicate: ?*const query_ast.FilterPredicate,
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -61,7 +61,7 @@ pub fn buildSelectQuery(
         var added_where = false;
 
         if (has_conditions) {
-            try filter_sql.appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, filter.predicate);
+            try filter_sql.appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, &filter.predicate);
             added_where = true;
         }
 
@@ -113,9 +113,13 @@ pub fn buildSelectQuery(
         try std.fmt.format(sql_buf.writer(allocator), "{}", .{effective_limit});
     }
 
+    const sql_owned = try sql_buf.toOwnedSlice(allocator);
+    errdefer allocator.free(sql_owned);
+
+    const values_owned = try values.toOwnedSlice(allocator);
     return QueryResult{
-        .sql = try sql_buf.toOwnedSlice(allocator),
-        .values = try values.toOwnedSlice(allocator),
+        .sql = sql_owned,
+        .values = values_owned,
     };
 }
 

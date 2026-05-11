@@ -7,7 +7,7 @@ const FilterPredicate = query_ast.FilterPredicate;
 const Record = typed.Record;
 const ScalarValue = typed.ScalarValue;
 
-pub fn evaluatePredicate(predicate: FilterPredicate, record: Record) !bool {
+pub fn evaluatePredicate(predicate: *const FilterPredicate, record: *const Record) !bool {
     switch (predicate.state) {
         .match_all => return true,
         .match_none => return false,
@@ -16,14 +16,14 @@ pub fn evaluatePredicate(predicate: FilterPredicate, record: Record) !bool {
 
     if (predicate.conditions) |conds| {
         for (conds) |condition| {
-            if (!try evaluateCondition(condition, record)) return false;
+            if (!try evaluateCondition(&condition, record)) return false;
         }
     }
 
     if (predicate.or_conditions) |or_conds| {
         if (or_conds.len == 0) return true;
         for (or_conds) |condition| {
-            if (try evaluateCondition(condition, record)) return true;
+            if (try evaluateCondition(&condition, record)) return true;
         }
         return false;
     }
@@ -31,7 +31,7 @@ pub fn evaluatePredicate(predicate: FilterPredicate, record: Record) !bool {
     return true;
 }
 
-pub fn evaluateCondition(cond: Condition, record: Record) !bool {
+pub fn evaluateCondition(cond: *const Condition, record: *const Record) !bool {
     if (cond.field_index >= record.values.len) return cond.op == .isNull;
     const val = record.values[cond.field_index];
 

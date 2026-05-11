@@ -21,12 +21,27 @@ pub const EvalResult = enum {
     needs_doc_predicate,
 };
 
-pub const ResolvedValue = struct {
-    value: Value,
-    owned: bool = false,
+pub const ResolvedValue = union(enum) {
+    borrowed: Value,
+    owned: Value,
 
-    pub fn deinit(self: ResolvedValue, allocator: std.mem.Allocator) void {
-        if (self.owned) self.value.deinit(allocator);
+    pub fn asValue(self: ResolvedValue) Value {
+        return switch (self) {
+            .borrowed => |value| value,
+            .owned => |value| value,
+        };
+    }
+
+    pub fn cloneOwned(self: ResolvedValue, allocator: std.mem.Allocator) !Value {
+        return try self.asValue().clone(allocator);
+    }
+
+    pub fn deinit(self: *ResolvedValue, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .owned => |value| value.deinit(allocator),
+            .borrowed => {},
+        }
+        self.* = .{ .borrowed = .nil };
     }
 };
 
@@ -98,15 +113,15 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
     var rhs = resolveRhs(comp.rhs, ctx) orelse return .deny;
     defer rhs.deinit(ctx.allocator);
 
-    return if (compareValues(lhs.value, comp.op, rhs.value)) .allow else .deny;
+    return if (compareValues(lhs.asValue(), comp.op, rhs.asValue())) .allow else .deny;
 }
 
 fn borrowed(value: Value) ResolvedValue {
-    return .{ .value = value, .owned = false };
+    return .{ .borrowed = value };
 }
 
 fn owned(value: Value) ResolvedValue {
-    return .{ .value = value, .owned = true };
+    return .{ .owned = value };
 }
 
 fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedValue {

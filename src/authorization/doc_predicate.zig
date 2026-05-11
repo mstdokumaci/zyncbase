@@ -14,11 +14,22 @@ const LowerResult = union(enum) {
     deny,
     filter: query_ast.FilterPredicate,
 
-    fn deinit(self: LowerResult, allocator: Allocator) void {
-        switch (self) {
-            .filter => |filter| filter.deinit(allocator),
+    fn deinit(self: *LowerResult, allocator: Allocator) void {
+        switch (self.*) {
+            .filter => |*filter| filter.deinit(allocator),
             else => {},
         }
+        self.* = .allow;
+    }
+
+    fn takeFilter(self: *LowerResult) ?query_ast.FilterPredicate {
+        return switch (self.*) {
+            .filter => |filter| blk: {
+                self.* = .allow;
+                break :blk filter;
+            },
+            else => null,
+        };
     }
 };
 
@@ -41,12 +52,13 @@ pub fn buildDocPredicate(
     ctx: EvalContext,
     table: *const schema.Table,
 ) !?query_ast.FilterPredicate {
-    const result = try lowerCondition(allocator, condition, ctx, table);
+    var result = try lowerCondition(allocator, condition, ctx, table);
+    defer result.deinit(allocator);
     switch (result) {
         .allow => return null,
         .deny => return error.AccessDenied,
-        .filter => |filter_payload| {
-            var filter = filter_payload;
+        .filter => {
+            var filter = result.takeFilter() orelse unreachable;
             errdefer filter.deinit(allocator);
             switch (try filter.normalize(allocator)) {
                 .match_all => {
@@ -92,12 +104,16 @@ fn lowerAnd(
     errdefer builder.deinit(allocator);
 
     for (conds) |condition| {
-        const result = try lowerCondition(allocator, condition, ctx, table);
+        var result = try lowerCondition(allocator, condition, ctx, table);
         defer result.deinit(allocator);
         switch (result) {
             .allow => {},
             .deny => return .deny,
-            .filter => |filter| try builder.appendAndFilter(allocator, filter),
+            .filter => {
+                var filter = result.takeFilter() orelse unreachable;
+                defer filter.deinit(allocator);
+                try builder.appendAndFilterMove(allocator, &filter);
+            },
         }
     }
 
@@ -112,7 +128,7 @@ fn lowerOr(
     table: *const schema.Table,
 ) !LowerResult {
     var first_filter: ?query_ast.FilterPredicate = null;
-    errdefer if (first_filter) |filter| filter.deinit(allocator);
+    errdefer if (first_filter) |*filter| filter.deinit(allocator);
 
     var or_builder: ?PredicateBuilder = null;
     errdefer if (or_builder) |*builder| builder.deinit(allocator);
@@ -125,20 +141,24 @@ fn lowerOr(
                 return .allow;
             },
             .deny => {},
-            .filter => |filter| {
+            .filter => {
+                var filter = result.takeFilter() orelse unreachable;
+                defer filter.deinit(allocator);
                 if (or_builder) |*builder| {
-                    try builder.appendOrFilter(allocator, filter);
-                } else if (first_filter) |existing| {
+                    try builder.appendOrFilterMove(allocator, &filter);
+                } else if (first_filter != null) {
+                    var existing = first_filter.?;
+                    first_filter = null;
+                    defer existing.deinit(allocator);
+
                     var builder = PredicateBuilder{};
                     errdefer builder.deinit(allocator);
-                    try builder.appendOrFilter(allocator, existing);
-                    existing.deinit(allocator);
-                    first_filter = null;
-                    try builder.appendOrFilter(allocator, filter);
+                    try builder.appendOrFilterMove(allocator, &existing);
+                    try builder.appendOrFilterMove(allocator, &filter);
                     or_builder = builder;
                 } else {
                     first_filter = filter;
-                    result = .allow;
+                    filter = .{};
                 }
             },
         }
@@ -161,7 +181,7 @@ fn comparisonToFilter(
     ctx: EvalContext,
     table: *const schema.Table,
 ) !query_ast.FilterPredicate {
-    const condition = try comparisonToQueryCondition(allocator, comp, ctx, table);
+    var condition = try comparisonToQueryCondition(allocator, comp, ctx, table);
     errdefer condition.deinit(allocator);
 
     const conditions = try allocator.alloc(query_ast.Condition, 1);
@@ -178,13 +198,13 @@ fn comparisonToQueryCondition(
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field_meta = table.fields[field_index];
 
-    const resolved_value = evaluate_mod.resolveRhs(comp.rhs, ctx) orelse return error.InvalidValue;
+    var resolved_value = evaluate_mod.resolveRhs(comp.rhs, ctx) orelse return error.InvalidValue;
     defer resolved_value.deinit(allocator);
 
     return .{
         .field_index = field_index,
         .op = mapToQueryOp(comp.op),
-        .value = try resolved_value.value.clone(allocator),
+        .value = try resolved_value.cloneOwned(allocator),
         .field_type = field_meta.storage_type,
         .items_type = field_meta.items_type,
     };
@@ -428,54 +448,62 @@ const PredicateBuilder = struct {
     }
 
     fn deinit(self: *PredicateBuilder, allocator: Allocator) void {
-        for (self.conditions.items) |condition| condition.deinit(allocator);
+        for (self.conditions.items) |*condition| condition.deinit(allocator);
         self.conditions.deinit(allocator);
-        for (self.or_conditions.items) |condition| condition.deinit(allocator);
+        for (self.or_conditions.items) |*condition| condition.deinit(allocator);
         self.or_conditions.deinit(allocator);
+        self.* = .{};
     }
 
-    fn appendAndFilter(
+    fn appendAndFilterMove(
         self: *PredicateBuilder,
         allocator: Allocator,
-        filter: query_ast.FilterPredicate,
+        filter: *query_ast.FilterPredicate,
     ) !void {
         if (self.or_conditions.items.len > 0 and filter.or_conditions != null and filter.or_conditions.?.len > 0) {
             return error.UnsupportedAuthorizationPredicate;
         }
-        try self.appendClonedConditions(allocator, &self.conditions, filter.conditions);
-        try self.appendClonedConditions(allocator, &self.or_conditions, filter.or_conditions);
+        try self.appendMovedConditions(allocator, &self.conditions, filter.conditions);
+        try self.appendMovedConditions(allocator, &self.or_conditions, filter.or_conditions);
     }
 
-    fn appendOrFilter(
+    fn appendOrFilterMove(
         self: *PredicateBuilder,
         allocator: Allocator,
-        filter: query_ast.FilterPredicate,
+        filter: *query_ast.FilterPredicate,
     ) !void {
         const conds = filter.conditions orelse @as([]const query_ast.Condition, &.{});
         const or_conds = filter.or_conditions orelse @as([]const query_ast.Condition, &.{});
         if (conds.len == 0 and or_conds.len > 0) {
-            try self.appendClonedConditions(allocator, &self.or_conditions, or_conds);
+            try self.appendMovedConditions(allocator, &self.or_conditions, filter.or_conditions);
             return;
         }
         if (conds.len == 1 and or_conds.len == 0) {
-            try self.appendClonedConditions(allocator, &self.or_conditions, conds);
+            try self.appendMovedConditions(allocator, &self.or_conditions, filter.conditions);
             return;
         }
         if (conds.len == 0 and or_conds.len == 0) return;
         return error.UnsupportedAuthorizationPredicate;
     }
 
-    fn appendClonedConditions(
+    fn appendMovedConditions(
         _: *PredicateBuilder,
         allocator: Allocator,
         list: *std.ArrayListUnmanaged(query_ast.Condition),
-        conditions: ?[]const query_ast.Condition,
+        conditions: ?[]query_ast.Condition,
     ) !void {
         const conds = conditions orelse return;
-        for (conds) |condition| {
-            const cloned = try condition.clone(allocator);
-            errdefer cloned.deinit(allocator);
-            try list.append(allocator, cloned);
+        for (conds) |*condition| {
+            var moved = condition.*;
+            condition.* = .{
+                .field_index = 0,
+                .op = .eq,
+                .value = null,
+                .field_type = .text,
+                .items_type = null,
+            };
+            errdefer moved.deinit(allocator);
+            try list.append(allocator, moved);
         }
     }
 
@@ -485,7 +513,7 @@ const PredicateBuilder = struct {
         else
             null;
         errdefer if (conditions) |conds| {
-            for (conds) |condition| condition.deinit(allocator);
+            for (conds) |*condition| condition.deinit(allocator);
             allocator.free(conds);
         };
 

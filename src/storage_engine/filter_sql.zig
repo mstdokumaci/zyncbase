@@ -7,29 +7,64 @@ const typed = @import("../typed.zig");
 const Value = typed.Value;
 
 pub const RenderedPredicate = struct {
-    sql: []const u8,
-    values: []Value,
+    sql: ?[]const u8,
+    values: ?[]Value,
 
-    pub fn deinit(self: RenderedPredicate, allocator: Allocator) void {
-        for (self.values) |value| value.deinit(allocator);
-        allocator.free(self.values);
-        allocator.free(self.sql);
+    pub fn deinit(self: *RenderedPredicate, allocator: Allocator) void {
+        if (self.values) |values| {
+            deinitValueSlice(allocator, values);
+        }
+        if (self.sql) |sql| {
+            allocator.free(sql);
+        }
+        self.* = .{ .sql = null, .values = null };
     }
 
-    pub fn deinitSql(self: RenderedPredicate, allocator: Allocator) void {
-        allocator.free(self.sql);
+    pub fn sqlSlice(self: *const RenderedPredicate) ?[]const u8 {
+        return self.sql;
     }
 
-    pub fn deinitValues(self: RenderedPredicate, allocator: Allocator) void {
-        for (self.values) |value| value.deinit(allocator);
-        allocator.free(self.values);
+    pub fn takeSql(self: *RenderedPredicate) ?[]const u8 {
+        const sql = self.sql;
+        self.sql = null;
+        return sql;
+    }
+
+    pub fn takeValues(self: *RenderedPredicate) ?[]Value {
+        const values = self.values;
+        self.values = null;
+        return values;
     }
 };
+
+pub fn deinitValueSlice(allocator: Allocator, values: []Value) void {
+    for (values) |value| value.deinit(allocator);
+    allocator.free(values);
+}
+
+pub fn appendClonedValue(
+    allocator: Allocator,
+    values: *std.ArrayListUnmanaged(Value),
+    value: Value,
+) !void {
+    const cloned = try value.clone(allocator);
+    errdefer cloned.deinit(allocator);
+    try values.append(allocator, cloned);
+}
+
+pub fn appendOwnedValue(
+    allocator: Allocator,
+    values: *std.ArrayListUnmanaged(Value),
+    value: Value,
+) !void {
+    errdefer value.deinit(allocator);
+    try values.append(allocator, value);
+}
 
 pub fn renderAndClause(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    predicate: ?query_ast.FilterPredicate,
+    predicate: ?*const query_ast.FilterPredicate,
 ) !?RenderedPredicate {
     const pred = predicate orelse return null;
     if (pred.isAlwaysTrue()) return null;
@@ -46,9 +81,13 @@ pub fn renderAndClause(
     try appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, pred);
     try sql_buf.append(allocator, ')');
 
+    const sql_owned = try sql_buf.toOwnedSlice(allocator);
+    errdefer allocator.free(sql_owned);
+
+    const values_owned = try values.toOwnedSlice(allocator);
     return .{
-        .sql = try sql_buf.toOwnedSlice(allocator),
-        .values = try values.toOwnedSlice(allocator),
+        .sql = sql_owned,
+        .values = values_owned,
     };
 }
 
@@ -57,7 +96,7 @@ pub fn appendFilterPredicateSql(
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
-    predicate: query_ast.FilterPredicate,
+    predicate: *const query_ast.FilterPredicate,
 ) !void {
     if (predicate.isAlwaysTrue()) {
         try sql_buf.append(allocator, '1');
@@ -73,7 +112,7 @@ pub fn appendFilterPredicateSql(
     const conds = predicate.conditions orelse @as([]const query_ast.Condition, &.{});
     for (conds, 0..) |cond, i| {
         if (emitted or i > 0) try sql_buf.appendSlice(allocator, " AND ");
-        try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
+        try appendConditionSql(allocator, sql_buf, values, table_metadata, &cond);
         emitted = true;
     }
 
@@ -83,7 +122,7 @@ pub fn appendFilterPredicateSql(
         try sql_buf.append(allocator, '(');
         for (or_conds, 0..) |cond, i| {
             if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-            try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
+            try appendConditionSql(allocator, sql_buf, values, table_metadata, &cond);
         }
         try sql_buf.append(allocator, ')');
     }
@@ -94,7 +133,7 @@ pub fn appendConditionSql(
     sql_buf: *std.ArrayListUnmanaged(u8),
     values: *std.ArrayListUnmanaged(Value),
     table_metadata: *const schema.Table,
-    cond: query_ast.Condition,
+    cond: *const query_ast.Condition,
 ) !void {
     if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
     const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
@@ -104,32 +143,32 @@ pub fn appendConditionSql(
         .eq => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " = ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .ne => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " != ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .gt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " > ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .lt => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " < ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .gte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " >= ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .lte => {
             const val = cond.value orelse return error.MissingConditionValue;
             try sql_buf.appendSlice(allocator, " <= ?");
-            try values.append(allocator, try val.clone(allocator));
+            try appendClonedValue(allocator, values, val);
         },
         .contains => {
             const val = cond.value orelse return error.MissingConditionValue;
@@ -137,7 +176,7 @@ pub fn appendConditionSql(
                 try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
                 try sql_buf.appendSlice(allocator, sql_field_quoted);
                 try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
-                try values.append(allocator, try val.clone(allocator));
+                try appendClonedValue(allocator, values, val);
                 return;
             }
 
@@ -145,25 +184,22 @@ pub fn appendConditionSql(
                 return error.InvalidConditionValue;
             }
             const escaped = try escapeLikePattern(allocator, val.scalar.text);
-            errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
+            try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
             const raw_str = val.scalar.text;
             const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
-            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
+            try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .endsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
             const raw_str = val.scalar.text;
             const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
-            try values.append(allocator, Value{ .scalar = .{ .text = escaped } });
+            try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .in, .notIn => {
             const is_not = cond.op == .notIn;
@@ -173,11 +209,11 @@ pub fn appendConditionSql(
                     for (val.array, 0..) |v, i| {
                         if (i > 0) try sql_buf.appendSlice(allocator, ", ");
                         try sql_buf.append(allocator, '?');
-                        try values.append(allocator, Value{ .scalar = try v.clone(allocator) });
+                        try appendOwnedValue(allocator, values, Value{ .scalar = try v.clone(allocator) });
                     }
                 } else {
                     try sql_buf.append(allocator, '?');
-                    try values.append(allocator, try val.clone(allocator));
+                    try appendClonedValue(allocator, values, val);
                 }
             }
             try sql_buf.append(allocator, ')');
