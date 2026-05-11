@@ -110,9 +110,9 @@ pub fn appendFilterPredicateSql(
     var emitted = false;
 
     const conds = predicate.conditions orelse @as([]const query_ast.Condition, &.{});
-    for (conds, 0..) |cond, i| {
+    for (conds, 0..) |*cond, i| {
         if (emitted or i > 0) try sql_buf.appendSlice(allocator, " AND ");
-        try appendConditionSql(allocator, sql_buf, values, table_metadata, &cond);
+        try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
         emitted = true;
     }
 
@@ -120,9 +120,9 @@ pub fn appendFilterPredicateSql(
     if (or_conds.len > 0) {
         if (emitted) try sql_buf.appendSlice(allocator, " AND ");
         try sql_buf.append(allocator, '(');
-        for (or_conds, 0..) |cond, i| {
+        for (or_conds, 0..) |*cond, i| {
             if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-            try appendConditionSql(allocator, sql_buf, values, table_metadata, &cond);
+            try appendConditionSql(allocator, sql_buf, values, table_metadata, cond);
         }
         try sql_buf.append(allocator, ')');
     }
