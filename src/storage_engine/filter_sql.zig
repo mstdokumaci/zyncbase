@@ -183,22 +183,26 @@ pub fn appendConditionSql(
             if (val != .scalar or val.scalar != .text) {
                 return error.InvalidConditionValue;
             }
-            const escaped = try escapeLikePattern(allocator, val.scalar.text);
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
+            const escaped = try escapeLikePattern(allocator, val.scalar.text);
             try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .startsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
-            const raw_str = val.scalar.text;
-            const escaped = try escapeLikePattern(allocator, raw_str);
+            if (val != .scalar or val.scalar != .text) {
+                return error.InvalidConditionValue;
+            }
             try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
+            const escaped = try escapeLikePattern(allocator, val.scalar.text);
             try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .endsWith => {
             const val = cond.value orelse return error.MissingConditionValue;
-            const raw_str = val.scalar.text;
-            const escaped = try escapeLikePattern(allocator, raw_str);
+            if (val != .scalar or val.scalar != .text) {
+                return error.InvalidConditionValue;
+            }
             try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
+            const escaped = try escapeLikePattern(allocator, val.scalar.text);
             try appendOwnedValue(allocator, values, Value{ .scalar = .{ .text = escaped } });
         },
         .in, .notIn => {
