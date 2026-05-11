@@ -2,12 +2,12 @@ const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
 const schema = @import("schema.zig");
 const Schema = schema.Schema;
-const doc_id = @import("doc_id.zig");
-const typedValueFromPayload = @import("storage_engine.zig").typedValueFromPayload;
-const writeTypedValueMsgPack = @import("storage_engine.zig").writeTypedValueMsgPack;
-const ScalarValue = @import("storage_engine.zig").ScalarValue;
-const TypedValue = @import("storage_engine.zig").TypedValue;
-const TypedCursor = @import("storage_engine.zig").TypedCursor;
+const typed = @import("typed.zig");
+const typedValueFromPayload = typed.valueFromPayload;
+const writeValueMsgPack = typed.writeMsgPack;
+const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
+const Cursor = typed.Cursor;
 
 const query_ast = @import("query_ast.zig");
 const Operator = query_ast.Operator;
@@ -36,14 +36,14 @@ pub const ParserError = error{
     OutOfMemory,
 };
 
-/// Decodes a Base64-encoded MessagePack cursor tuple token into a TypedCursor.
+/// Decodes a Base64-encoded MessagePack cursor tuple token into a Cursor.
 /// Expected decoded MessagePack shape: [sort_value, id_bin]
 pub fn decodeCursorToken(
     allocator: std.mem.Allocator,
     token: []const u8,
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
-) ParserError!TypedCursor {
+) ParserError!Cursor {
     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(token) catch
         return error.InvalidMessageFormat;
     const decoded = try allocator.alloc(u8, decoded_len);
@@ -61,21 +61,21 @@ pub fn decodeCursorToken(
     const sort_value = try decodeCursorSortValue(allocator, field_type, items_type, cursor_payload.arr[0]);
     errdefer sort_value.deinit(allocator);
 
-    return TypedCursor{
+    return Cursor{
         .sort_value = sort_value,
-        .id = doc_id.fromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
+        .id = typed.docIdFromBytes(cursor_payload.arr[1].bin.value()) catch return error.InvalidMessageFormat,
     };
 }
 
-/// Encodes a TypedCursor to a Base64-encoded MessagePack cursor tuple token.
+/// Encodes a Cursor to a Base64-encoded MessagePack cursor tuple token.
 /// Encoded shape: [sort_value, id_bin]
-pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: TypedCursor) ![]const u8 {
+pub fn encodeCursorToken(allocator: std.mem.Allocator, cursor: Cursor) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(allocator);
     const writer = buf.writer(allocator);
     try msgpack.encodeArrayHeader(writer, 2);
-    try writeTypedValueMsgPack(cursor.sort_value, writer);
-    const id_bytes = doc_id.toBytes(cursor.id);
+    try writeValueMsgPack(cursor.sort_value, writer);
+    const id_bytes = typed.docIdToBytes(cursor.id);
     try msgpack.writeMsgPackBin(writer, &id_bytes);
     const encoded_len = std.base64.standard.Encoder.calcSize(buf.items.len);
     const encoded = try allocator.alloc(u8, encoded_len);
@@ -88,7 +88,7 @@ fn decodeCursorSortValue(
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
     payload: msgpack.Payload,
-) ParserError!TypedValue {
+) ParserError!Value {
     if (payload == .nil) return error.InvalidCursorSortValue;
     return typedValueFromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -110,8 +110,7 @@ pub fn parseQueryFilter(
     // Find the table metadata in schema for validation
     const table_metadata = sm.getTableByIndex(table_index) orelse return error.UnknownTable;
 
-    var conditions: ?[]Condition = null;
-    var or_conditions: ?[]Condition = null;
+    var predicate = query_ast.FilterPredicate{};
     const id_field = table_metadata.fields[schema.id_field_index];
     var order_by: SortDescriptor = .{
         .field_index = schema.id_field_index,
@@ -120,15 +119,15 @@ pub fn parseQueryFilter(
         .items_type = id_field.items_type,
     };
     var limit: ?u32 = null;
-    var after: ?TypedCursor = null;
+    var after: ?Cursor = null;
     var after_token: ?[]u8 = null;
 
     errdefer {
-        if (conditions) |conds| {
+        if (predicate.conditions) |conds| {
             for (conds) |c| c.deinit(allocator);
             allocator.free(conds);
         }
-        if (or_conditions) |or_conds| {
+        if (predicate.or_conditions) |or_conds| {
             for (or_conds) |c| c.deinit(allocator);
             allocator.free(or_conds);
         }
@@ -144,18 +143,18 @@ pub fn parseQueryFilter(
 
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
             const new_conds = try parseConditions(allocator, table_metadata, value);
-            if (conditions) |old| {
+            if (predicate.conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            conditions = new_conds;
+            predicate.conditions = new_conds;
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
             const new_or = try parseConditions(allocator, table_metadata, value);
-            if (or_conditions) |old| {
+            if (predicate.or_conditions) |old| {
                 for (old) |c| c.deinit(allocator);
                 allocator.free(old);
             }
-            or_conditions = new_or;
+            predicate.or_conditions = new_or;
         } else if (std.mem.eql(u8, key, "orderBy")) {
             order_by = try parseSortDescriptor(table_metadata, value);
         } else if (std.mem.eql(u8, key, "limit")) {
@@ -178,9 +177,10 @@ pub fn parseQueryFilter(
         after_token = null;
     }
 
+    _ = try predicate.normalize(allocator);
+
     return QueryFilter{
-        .conditions = conditions,
-        .or_conditions = or_conditions,
+        .predicate = predicate,
         .order_by = order_by,
         .limit = limit,
         .after = after,
@@ -234,7 +234,7 @@ fn parseScalarValue(
     allocator: std.mem.Allocator,
     field_type: schema.FieldType,
     payload: msgpack.Payload,
-) ParserError!TypedValue {
+) ParserError!Value {
     if (payload == .nil) return error.NullOperandUnsupported;
     if (field_type == .array) return error.UnsupportedOperatorForFieldType;
     return typedValueFromPayload(allocator, field_type, null, payload) catch |err| switch (err) {
@@ -248,7 +248,7 @@ fn parseFieldValue(
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
     payload: msgpack.Payload,
-) ParserError!TypedValue {
+) ParserError!Value {
     if (payload == .nil) return error.NullOperandUnsupported;
     return typedValueFromPayload(allocator, field_type, items_type, payload) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -260,7 +260,7 @@ fn parseArrayElementValue(
     allocator: std.mem.Allocator,
     items_type: ?schema.FieldType,
     payload: msgpack.Payload,
-) ParserError!TypedValue {
+) ParserError!Value {
     const item_type = items_type orelse return error.TypeMismatch;
     return parseScalarValue(allocator, item_type, payload);
 }
@@ -269,7 +269,7 @@ fn parseInOperand(
     allocator: std.mem.Allocator,
     field_type: schema.FieldType,
     payload: msgpack.Payload,
-) ParserError!TypedValue {
+) ParserError!Value {
     if (payload == .nil) return error.NullOperandUnsupported;
     if (payload != .arr) return error.InvalidInOperand;
     if (field_type == .array) return error.UnsupportedOperatorForFieldType;
@@ -283,8 +283,8 @@ fn parseInOperand(
 
     for (payload.arr, 0..) |item, i| {
         if (item == .nil) return error.NullOperandUnsupported;
-        const typed = try parseScalarValue(allocator, field_type, item);
-        switch (typed) {
+        const parsed_value = try parseScalarValue(allocator, field_type, item);
+        switch (parsed_value) {
             .scalar => |scalar| {
                 items[i] = scalar;
                 count += 1;
@@ -293,7 +293,7 @@ fn parseInOperand(
         }
     }
 
-    var result: TypedValue = .{ .array = items };
+    var result: Value = .{ .array = items };
     try result.sortedSet(allocator);
     return result;
 }
@@ -304,7 +304,7 @@ fn parseConditionValueForOperator(
     field_type: schema.FieldType,
     items_type: ?schema.FieldType,
     payload: ?msgpack.Payload,
-) ParserError!?TypedValue {
+) ParserError!?Value {
     switch (op) {
         .isNull, .isNotNull => {
             if (payload != null) return error.UnexpectedOperand;

@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine;
-const RowChange = @import("subscription_engine.zig").RowChange;
+const RecordChange = @import("subscription_engine.zig").RecordChange;
 const query_ast = @import("query_ast.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
 
-test "SubscriptionEngine: handleRowChange performance" {
+test "SubscriptionEngine: handleRecordChange performance" {
     const allocator = testing.allocator;
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
@@ -21,7 +21,7 @@ test "SubscriptionEngine: handleRowChange performance" {
         const match_val: i64 = if (i % 2 == 0) 0 else 999;
 
         const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
-            // field_index 3 corresponds to the first user-defined field in rowFromTypedValues
+            // field_index 3 corresponds to the first user-defined field in recordFromValues
             .{ .field_index = 3, .op = .eq, .value = tth.valInt(match_val), .field_type = .integer, .items_type = null },
         });
         defer filter.deinit(allocator);
@@ -33,20 +33,20 @@ test "SubscriptionEngine: handleRowChange performance" {
     }
 
     // Test row matching user field 0 (internal index 3) == 0
-    var new_row = try tth.rowFromTypedValues(allocator, &.{tth.valInt(0)});
-    defer new_row.deinit(allocator);
+    var new_record = try tth.recordFromValues(allocator, &.{tth.valInt(0)});
+    defer new_record.deinit(allocator);
 
-    const change = RowChange{
+    const change = RecordChange{
         .namespace_id = 1,
         .table_index = 0,
         .operation = .insert,
-        .new_row = new_row,
-        .old_row = null,
+        .new_record = new_record,
+        .old_record = null,
     };
 
     // Warm up
     for (0..5) |_| {
-        const m = try engine.handleRowChange(change, allocator);
+        const m = try engine.handleRecordChange(change, allocator);
         allocator.free(m);
     }
 
@@ -54,7 +54,7 @@ test "SubscriptionEngine: handleRowChange performance" {
     const iterations = 500; // Enough to get a stable average without slowing down tests
 
     for (0..iterations) |_| {
-        const matches = try engine.handleRowChange(change, allocator);
+        const matches = try engine.handleRecordChange(change, allocator);
         // Verify we got the expected 5,000 matches (50% of 10k)
         if (matches.len != (group_count / 2) * subs_per_group) {
             return error.UnexpectedMatchCount;

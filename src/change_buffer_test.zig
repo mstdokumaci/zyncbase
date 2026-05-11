@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const change_buffer = @import("change_buffer.zig");
 const ChangeBuffer = change_buffer.ChangeBuffer;
-const OwnedRowChange = change_buffer.OwnedRowChange;
+const OwnedRecordChange = change_buffer.OwnedRecordChange;
 const Allocator = std.mem.Allocator;
 
 test "ChangeBuffer: basic push and drain" {
@@ -15,11 +15,11 @@ test "ChangeBuffer: basic push and drain" {
         .namespace_id = 1,
         .table_index = 1,
         .operation = .insert,
-        .old_row = null,
-        .new_row = null,
+        .old_record = null,
+        .new_record = null,
     });
 
-    var out = std.ArrayListUnmanaged(OwnedRowChange).empty;
+    var out = std.ArrayListUnmanaged(OwnedRecordChange).empty;
     defer {
         for (out.items) |*item| item.deinit(alloc);
         out.deinit(alloc);
@@ -29,10 +29,10 @@ test "ChangeBuffer: basic push and drain" {
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expectEqual(@as(i64, 1), out.items[0].namespace_id);
     try testing.expectEqual(@as(usize, 1), out.items[0].table_index);
-    try testing.expectEqual(OwnedRowChange.Operation.insert, out.items[0].operation);
+    try testing.expectEqual(OwnedRecordChange.Operation.insert, out.items[0].operation);
 
     // Drain again should be empty
-    var out2 = std.ArrayListUnmanaged(OwnedRowChange).empty;
+    var out2 = std.ArrayListUnmanaged(OwnedRecordChange).empty;
     defer out2.deinit(alloc);
     try cb.drainInto(&out2, alloc);
     try testing.expectEqual(@as(usize, 0), out2.items.len);
@@ -56,8 +56,8 @@ test "ChangeBuffer: concurrent push and drain stress" {
                     .namespace_id = @intCast(i),
                     .table_index = i,
                     .operation = .update,
-                    .old_row = null,
-                    .new_row = null,
+                    .old_record = null,
+                    .new_record = null,
                 });
             }
         }
@@ -71,7 +71,7 @@ test "ChangeBuffer: concurrent push and drain stress" {
 
     const thread = try std.Thread.spawn(.{}, producer, .{&ctx});
 
-    var out = std.ArrayListUnmanaged(OwnedRowChange).empty;
+    var out = std.ArrayListUnmanaged(OwnedRecordChange).empty;
     defer {
         for (out.items) |*item| item.deinit(alloc);
         out.deinit(alloc);

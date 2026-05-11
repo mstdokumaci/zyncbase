@@ -1,6 +1,6 @@
 const types = @import("schema/types.zig");
 const system = @import("schema/system.zig");
-const normalize = @import("schema/normalize.zig");
+const parse = @import("schema/parse.zig");
 const index_mod = @import("schema/index.zig");
 const errors = @import("schema/errors.zig");
 
@@ -37,8 +37,8 @@ pub const getSystemColumn = system.getSystemColumn;
 pub const isSystemColumn = system.isSystemColumn;
 pub const effectiveNamespaceLabel = system.effectiveNamespaceLabel;
 
-pub const mapType = normalize.mapType;
-pub const mapPrimitiveType = normalize.mapPrimitiveType;
-pub const parseOnDelete = normalize.parseOnDelete;
-pub const buildRuntimeTable = normalize.buildRuntimeTable;
+pub const mapType = parse.mapType;
+pub const mapPrimitiveType = parse.mapPrimitiveType;
+pub const parseOnDelete = parse.parseOnDelete;
+pub const buildRuntimeTable = parse.buildRuntimeTable;
 pub const buildTableIndex = index_mod.buildTableIndex;

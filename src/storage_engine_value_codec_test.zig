@@ -2,38 +2,37 @@ const std = @import("std");
 const testing = std.testing;
 const sqlite = @import("sqlite");
 const sql = @import("storage_engine/sql.zig");
-const TypedValue = @import("storage_engine.zig").TypedValue;
-const value_codec = @import("storage_engine/value_codec.zig");
+const typed = @import("typed.zig");
+const Value = typed.Value;
 const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
 const mh = @import("msgpack_test_helpers.zig");
-const doc_id = @import("doc_id.zig");
 
-test "TypedValue: real JSON preserves decimal marker for whole numbers" {
+test "Value: real JSON preserves decimal marker for whole numbers" {
     const allocator = testing.allocator;
 
-    const json = try value_codec.jsonAlloc(allocator, .{ .scalar = .{ .real = 1.0 } });
+    const json = try typed.jsonAlloc(allocator, .{ .scalar = .{ .real = 1.0 } });
     defer allocator.free(json);
 
     try testing.expectEqualStrings("1.0", json);
 }
 
-test "TypedValue: payload -> json array -> payload roundtrip" {
+test "Value: payload -> json array -> payload roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Helper: TypedValue -> JSON string -> TypedValue -> msgpack -> Payload
+    // Helper: Value -> JSON string -> Value -> msgpack -> Payload
     const roundtripJsonValue = struct {
-        fn do(alloc: std.mem.Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, tv: TypedValue) !msgpack.Payload {
-            const json_str = try value_codec.jsonAlloc(alloc, tv);
+        fn do(alloc: std.mem.Allocator, ft: schema.FieldType, items_type: ?schema.FieldType, tv: Value) !msgpack.Payload {
+            const json_str = try typed.jsonAlloc(alloc, tv);
             const parsed = try std.json.parseFromSlice(std.json.Value, alloc, json_str, .{});
             defer parsed.deinit();
-            const roundtripped = try value_codec.fromJson(alloc, ft, items_type, parsed.value);
+            const roundtripped = try typed.valueFromJson(alloc, ft, items_type, parsed.value);
             var out_list = std.ArrayListUnmanaged(u8).empty;
             defer out_list.deinit(alloc);
-            try value_codec.writeMsgPack(roundtripped, out_list.writer(alloc));
+            try typed.writeMsgPack(roundtripped, out_list.writer(alloc));
             var reader: std.Io.Reader = .fixed(out_list.items);
             return try msgpack.decode(alloc, &reader);
         }
@@ -42,7 +41,7 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
     // 1. Integer array — sorted/deduped by fromPayload
     {
         var arr = [_]msgpack.Payload{ .{ .int = 3 }, .{ .int = 1 }, .{ .int = 2 } };
-        const tv = try value_codec.fromPayload(allocator, .array, .integer, .{ .arr = arr[0..] });
+        const tv = try typed.valueFromPayload(allocator, .array, .integer, .{ .arr = arr[0..] });
         const result = try roundtripJsonValue(allocator, .array, .integer, tv);
 
         try testing.expect(result == .arr);
@@ -55,7 +54,7 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
     // 2. Real array
     {
         var arr = [_]msgpack.Payload{ .{ .float = 2.5 }, .{ .float = 1.1 } };
-        const tv = try value_codec.fromPayload(allocator, .array, .real, .{ .arr = arr[0..] });
+        const tv = try typed.valueFromPayload(allocator, .array, .real, .{ .arr = arr[0..] });
         const result = try roundtripJsonValue(allocator, .array, .real, tv);
 
         try testing.expect(result == .arr);
@@ -69,7 +68,7 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
         const s1 = try mh.anyToPayload(allocator, "banana");
         const s2 = try mh.anyToPayload(allocator, "apple");
         var arr = [_]msgpack.Payload{ s1, s2 };
-        const tv = try value_codec.fromPayload(allocator, .array, .text, .{ .arr = arr[0..] });
+        const tv = try typed.valueFromPayload(allocator, .array, .text, .{ .arr = arr[0..] });
         const result = try roundtripJsonValue(allocator, .array, .text, tv);
 
         try testing.expect(result == .arr);
@@ -81,7 +80,7 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
     // 4. Boolean array
     {
         var arr = [_]msgpack.Payload{ .{ .bool = true }, .{ .bool = false } };
-        const tv = try value_codec.fromPayload(allocator, .array, .boolean, .{ .arr = arr[0..] });
+        const tv = try typed.valueFromPayload(allocator, .array, .boolean, .{ .arr = arr[0..] });
         const result = try roundtripJsonValue(allocator, .array, .boolean, tv);
 
         try testing.expect(result == .arr);
@@ -94,26 +93,26 @@ test "TypedValue: payload -> json array -> payload roundtrip" {
     // 5. doc_id scalar — stringified as hex and parsed back
     {
         const original_id: u128 = 0x0123456789abcdef0123456789abcdef;
-        const tv = TypedValue{ .scalar = .{ .doc_id = original_id } };
+        const tv = Value{ .scalar = .{ .doc_id = original_id } };
         const result = try roundtripJsonValue(allocator, .doc_id, null, tv);
 
         try testing.expect(result == .bin);
-        const expected_bytes = doc_id.toBytes(original_id);
+        const expected_bytes = typed.docIdToBytes(original_id);
         try testing.expectEqualSlices(u8, &expected_bytes, result.bin.value());
     }
 }
 
-test "TypedValue: payload -> sqlite column -> payload roundtrip" {
+test "Value: payload -> sqlite column -> payload roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     // Helper to evaluate to payload via msgpack
     const roundtripToPayload = struct {
-        fn do(alloc: std.mem.Allocator, tv: TypedValue) !msgpack.Payload {
+        fn do(alloc: std.mem.Allocator, tv: Value) !msgpack.Payload {
             var out_list = std.ArrayListUnmanaged(u8).empty;
             defer out_list.deinit(alloc);
-            try value_codec.writeMsgPack(tv, out_list.writer(alloc));
+            try typed.writeMsgPack(tv, out_list.writer(alloc));
             var reader: std.Io.Reader = .fixed(out_list.items);
             const decoded = try msgpack.decode(alloc, &reader);
             return decoded;
@@ -143,21 +142,21 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
     const arr_payload = msgpack.Payload{ .arr = array_payload_items[0..] };
     const doc_id_value: u128 = 0x00112233445566778899aabbccddeeff;
 
-    // Convert to TypedValues
-    const tv_int = try value_codec.fromPayload(allocator, .integer, null, int_payload);
-    const tv_real = try value_codec.fromPayload(allocator, .real, null, real_payload);
-    const tv_text = try value_codec.fromPayload(allocator, .text, null, text_payload);
-    const tv_bool = try value_codec.fromPayload(allocator, .boolean, null, bool_payload);
-    const tv_arr = try value_codec.fromPayload(allocator, .array, .integer, arr_payload);
-    const tv_doc_id = TypedValue{ .scalar = .{ .doc_id = doc_id_value } };
+    // Convert to Values
+    const tv_int = try typed.valueFromPayload(allocator, .integer, null, int_payload);
+    const tv_real = try typed.valueFromPayload(allocator, .real, null, real_payload);
+    const tv_text = try typed.valueFromPayload(allocator, .text, null, text_payload);
+    const tv_bool = try typed.valueFromPayload(allocator, .boolean, null, bool_payload);
+    const tv_arr = try typed.valueFromPayload(allocator, .array, .integer, arr_payload);
+    const tv_doc_id = Value{ .scalar = .{ .doc_id = doc_id_value } };
 
     // Bind values
-    try sql.bindTypedValue(tv_doc_id, &db, insert_stmt, 1, allocator);
-    try sql.bindTypedValue(tv_int, &db, insert_stmt, 2, allocator);
-    try sql.bindTypedValue(tv_real, &db, insert_stmt, 3, allocator);
-    try sql.bindTypedValue(tv_text, &db, insert_stmt, 4, allocator);
-    try sql.bindTypedValue(tv_bool, &db, insert_stmt, 5, allocator);
-    try sql.bindTypedValue(tv_arr, &db, insert_stmt, 6, allocator);
+    try sql.bindValue(tv_doc_id, &db, insert_stmt, 1, allocator);
+    try sql.bindValue(tv_int, &db, insert_stmt, 2, allocator);
+    try sql.bindValue(tv_real, &db, insert_stmt, 3, allocator);
+    try sql.bindValue(tv_text, &db, insert_stmt, 4, allocator);
+    try sql.bindValue(tv_bool, &db, insert_stmt, 5, allocator);
+    try sql.bindValue(tv_arr, &db, insert_stmt, 6, allocator);
 
     try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_DONE), sqlite.c.sqlite3_step(insert_stmt));
 
@@ -170,7 +169,7 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
 
     try testing.expectEqual(@as(c_int, sqlite.c.SQLITE_ROW), sqlite.c.sqlite3_step(select_stmt));
 
-    // Reconstruct TypedValues from columns
+    // Reconstruct Values from columns
     const doc_id_f = schema_helpers.makeField("id", .doc_id);
     const read_tv_doc_id = try sql.typedValueFromColumn(allocator, select_stmt, 0, doc_id_f);
     const int_f = schema_helpers.makeField("int_val", .integer);
@@ -205,6 +204,6 @@ test "TypedValue: payload -> sqlite column -> payload roundtrip" {
     try testing.expectEqual(@as(u64, 20), final_arr_payload.arr[1].uint);
 
     try testing.expect(final_doc_id_payload == .bin);
-    const expected_doc_id_bytes = doc_id.toBytes(doc_id_value);
+    const expected_doc_id_bytes = typed.docIdToBytes(doc_id_value);
     try testing.expectEqualSlices(u8, &expected_doc_id_bytes, final_doc_id_payload.bin.value());
 }

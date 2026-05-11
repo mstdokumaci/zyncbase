@@ -6,7 +6,7 @@ const AppTestContext = helpers.AppTestContext;
 const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
-const storage_engine = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },
@@ -162,7 +162,7 @@ test "message: repeated routed requests release per-message allocations" {
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         const msg_id: u64 = @intCast(i + 1);
-        const doc_id: storage_engine.DocId = @intCast(i + 1);
+        const doc_id: typed.DocId = @intCast(i + 1);
         const message = try store_helpers.createStoreSetFieldMessage(allocator, msg_id, 1, table.index, doc_id, field_index, "value-c");
         defer allocator.free(message);
 
@@ -207,7 +207,7 @@ test "message: concurrent routed requests release response allocations" {
             while (i < ctx.iterations) : (i += 1) {
                 const raw_id = ctx.thread_index * 1000 + i + 1;
                 const msg_id: u64 = @intCast(raw_id);
-                const doc_id: storage_engine.DocId = @intCast(raw_id);
+                const doc_id: typed.DocId = @intCast(raw_id);
 
                 const message = try store_helpers.createStoreSetFieldMessage(
                     thread_allocator,

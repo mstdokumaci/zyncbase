@@ -177,11 +177,11 @@ pub const Schema = struct {
     metadata: ?Metadata = null,
 
     pub fn init(allocator: Allocator, json_text: []const u8) !Schema {
-        return @import("normalize.zig").initFromJson(allocator, json_text);
+        return @import("parse.zig").initFromJson(allocator, json_text);
     }
 
     pub fn initFromTables(allocator: Allocator, version: []const u8, tables: []const Table) !Schema {
-        return @import("normalize.zig").initFromTables(allocator, version, null, tables);
+        return @import("parse.zig").initFromTables(allocator, version, null, tables);
     }
 
     pub fn deinit(self: *Schema) void {

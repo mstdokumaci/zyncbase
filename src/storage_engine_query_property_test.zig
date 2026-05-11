@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
-const TypedValue = @import("storage_engine.zig").TypedValue;
+const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
+const Value = typed.Value;
 
 test "property: random query filters on StorageEngine" {
     const allocator = testing.allocator;
@@ -36,7 +37,7 @@ test "property: random query filters on StorageEngine" {
         // Execute query
         var managed = try (try ctx.table("entities")).selectQuery(allocator, 1, filter);
         defer managed.deinit();
-        try testing.expect(managed.rows.len >= 0);
+        try testing.expect(managed.records.len >= 0);
     }
 }
 
@@ -99,7 +100,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
         for (conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
     }
 
     // Random OR conditions
@@ -109,7 +110,7 @@ fn generateRandomFilter(allocator: std.mem.Allocator, random: std.Random) !query
         for (or_conds) |*c| {
             c.* = try generateRandomCondition(allocator, random);
         }
-        filter.or_conditions = or_conds;
+        filter.predicate.or_conditions = or_conds;
     }
 
     // Random Limit
@@ -130,7 +131,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random) !qu
     const op_int = random.intRangeAtMost(u8, 0, 10); // Exclude IN/NOT IN/LIKE etc for simplicity if needed, but let's try some.
     const op: query_ast.Operator = @enumFromInt(op_int);
 
-    var value: ?TypedValue = null;
+    var value: ?Value = null;
     if (op != .isNull and op != .isNotNull) {
         // String operators MUST have string values
         if (op == .startsWith or op == .endsWith or op == .contains) {

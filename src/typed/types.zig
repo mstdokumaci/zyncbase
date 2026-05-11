@@ -1,82 +1,19 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc_id = @import("../doc_id.zig");
-const lockFreeCache = @import("../lock_free_cache.zig").lockFreeCache;
+const doc_id = @import("doc_id.zig");
 
 pub const DocId = doc_id.DocId;
 
-pub const MetadataCacheKey = struct {
-    namespace_id: i64,
-    table_index: usize,
-    id: DocId,
-};
+pub const Record = struct {
+    values: []Value,
 
-pub const typed_cache_type = lockFreeCache(TypedRow, MetadataCacheKey);
-
-pub const NamespaceCacheKey = u64;
-pub const IdentityCacheKey = u64;
-
-pub const NamespaceCacheValue = struct {
-    namespace_id: i64,
-
-    pub fn deinit(_: NamespaceCacheValue, _: Allocator) void {}
-};
-
-pub const IdentityCacheValue = struct {
-    user_doc_id: DocId,
-
-    pub fn deinit(_: IdentityCacheValue, _: Allocator) void {}
-};
-
-pub const namespace_cache_type = lockFreeCache(NamespaceCacheValue, NamespaceCacheKey);
-pub const identity_cache_type = lockFreeCache(IdentityCacheValue, IdentityCacheKey);
-
-pub fn namespaceCacheKey(namespace: []const u8) NamespaceCacheKey {
-    return std.hash.Wyhash.hash(0x9e3779b97f4a7c15, namespace);
-}
-
-pub fn identityCacheKey(identity_namespace_id: i64, external_user_id: []const u8) IdentityCacheKey {
-    var hasher = std.hash.Wyhash.init(0xd1b54a32d192ed03);
-    std.hash.autoHash(&hasher, identity_namespace_id);
-    hasher.update("\x00");
-    hasher.update(external_user_id);
-    return hasher.final();
-}
-
-/// A schema field index + typed value pair for storage inserts/updates.
-pub const ColumnValue = struct {
-    index: usize,
-    value: TypedValue,
-};
-
-/// A managed result that might be backed by a cache handle.
-/// Every result is exposed as a slice of TypedRows.
-/// Caller MUST call deinit() to release any potential cache handles and memory.
-pub const ManagedResult = struct {
-    rows: []TypedRow,
-    handle: ?typed_cache_type.Handle = null,
-    allocator: ?Allocator = null,
-
-    pub fn deinit(self: *ManagedResult) void {
-        if (self.handle) |h| {
-            h.release();
-        } else if (self.allocator) |alloc| {
-            for (self.rows) |r| r.deinit(alloc);
-            alloc.free(self.rows);
-        }
-    }
-};
-
-pub const TypedRow = struct {
-    values: []TypedValue,
-
-    pub fn deinit(self: TypedRow, allocator: Allocator) void {
+    pub fn deinit(self: Record, allocator: Allocator) void {
         for (self.values) |value| value.deinit(allocator);
         allocator.free(self.values);
     }
 
-    pub fn clone(self: TypedRow, allocator: Allocator) !TypedRow {
-        const cloned = try allocator.alloc(TypedValue, self.values.len);
+    pub fn clone(self: Record, allocator: Allocator) !Record {
+        const cloned = try allocator.alloc(Value, self.values.len);
         var i: usize = 0;
         errdefer {
             for (cloned[0..i]) |value| value.deinit(allocator);
@@ -89,15 +26,15 @@ pub const TypedRow = struct {
     }
 };
 
-pub const TypedCursor = struct {
-    sort_value: TypedValue,
+pub const Cursor = struct {
+    sort_value: Value,
     id: DocId,
 
-    pub fn deinit(self: *TypedCursor, allocator: Allocator) void {
+    pub fn deinit(self: *Cursor, allocator: Allocator) void {
         self.sort_value.deinit(allocator);
     }
 
-    pub fn clone(self: TypedCursor, allocator: Allocator) !TypedCursor {
+    pub fn clone(self: Cursor, allocator: Allocator) !Cursor {
         return .{
             .sort_value = try self.sort_value.clone(allocator),
             .id = self.id,
@@ -145,13 +82,13 @@ pub const ScalarValue = union(enum) {
     }
 };
 
-/// A typed value for asynchronous storage binding.
-pub const TypedValue = union(enum) {
+/// A typed value for schema-indexed records and cursors.
+pub const Value = union(enum) {
     scalar: ScalarValue,
     array: []ScalarValue, // Owned slice of ScalarValues (no nesting, no nil)
     nil: void,
 
-    pub fn clone(self: TypedValue, allocator: Allocator) !TypedValue {
+    pub fn clone(self: Value, allocator: Allocator) !Value {
         return switch (self) {
             .scalar => |s| .{ .scalar = try s.clone(allocator) },
             .nil => .nil,
@@ -170,7 +107,7 @@ pub const TypedValue = union(enum) {
         };
     }
 
-    pub fn sortedSet(self: *TypedValue, allocator: Allocator) !void {
+    pub fn sortedSet(self: *Value, allocator: Allocator) !void {
         const arr = switch (self.*) {
             .array => |a| a,
             else => return,
@@ -199,7 +136,7 @@ pub const TypedValue = union(enum) {
         }
     }
 
-    pub fn deinit(self: TypedValue, allocator: Allocator) void {
+    pub fn deinit(self: Value, allocator: Allocator) void {
         switch (self) {
             .scalar => |s| s.deinit(allocator),
             .array => |items| {
@@ -210,8 +147,8 @@ pub const TypedValue = union(enum) {
         }
     }
 
-    pub fn eql(self: TypedValue, other: TypedValue) bool {
-        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return false;
+    pub fn eql(self: Value, other: Value) bool {
+        if (@as(std.meta.Tag(Value), self) != @as(std.meta.Tag(Value), other)) return false;
         return switch (self) {
             .nil => true,
             .scalar => self.scalar.order(other.scalar) == .eq,
@@ -225,8 +162,8 @@ pub const TypedValue = union(enum) {
         };
     }
 
-    pub fn order(self: TypedValue, other: TypedValue) std.math.Order {
-        if (@as(std.meta.Tag(TypedValue), self) != @as(std.meta.Tag(TypedValue), other)) return .lt;
+    pub fn order(self: Value, other: Value) std.math.Order {
+        if (@as(std.meta.Tag(Value), self) != @as(std.meta.Tag(Value), other)) return .lt;
         return switch (self) {
             .scalar => |s| s.order(other.scalar),
             else => .eq,

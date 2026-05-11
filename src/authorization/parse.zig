@@ -2,11 +2,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
-const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
+const doc_predicate = @import("doc_predicate.zig");
+const schema = @import("../schema.zig");
+const typed = @import("../typed.zig");
+const ScalarValue = typed.ScalarValue;
+const Value = typed.Value;
 
 /// Parse authorization.json text into an AuthConfig.
-pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConfig {
+pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !types.AuthConfig {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
     defer parsed.deinit();
 
@@ -47,12 +50,34 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.AuthConf
         try store_rules.append(allocator, rule);
     }
 
-    return types.AuthConfig{
+    var config = types.AuthConfig{
         .allocator = allocator,
         .namespace_rules = try namespace_rules.toOwnedSlice(allocator),
         .store_rules = try store_rules.toOwnedSlice(allocator),
         .wildcard_store_index = wildcard_index,
     };
+    errdefer config.deinit();
+
+    try validateConfig(&config, schema_manager);
+    return config;
+}
+
+pub fn validateConfig(config: *const types.AuthConfig, schema_manager: *const schema.Schema) !void {
+    for (config.store_rules) |rule| {
+        if (rule.is_wildcard) {
+            for (schema_manager.tables) |*table| {
+                try validateStoreRule(rule, table);
+            }
+        } else {
+            const table = schema_manager.getTable(rule.collection) orelse return error.UnknownTable;
+            try validateStoreRule(rule, table);
+        }
+    }
+}
+
+fn validateStoreRule(rule: types.StoreRule, table: *const schema.Table) !void {
+    try doc_predicate.validateDocPredicate(rule.read, table);
+    try doc_predicate.validateDocPredicate(rule.write, table);
 }
 
 fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.NamespaceRule {
@@ -181,7 +206,7 @@ fn parseComparison(allocator: Allocator, lhs_str: []const u8, rhs_val: std.json.
     const op_str = op_entry.key_ptr.*;
     const op = try parseComparisonOp(op_str);
 
-    const rhs = try parseValue(allocator, op_entry.value_ptr.*);
+    const rhs = try parseOperand(allocator, op_entry.value_ptr.*);
     errdefer rhs.deinit(allocator);
 
     return .{ .comparison = .{
@@ -220,7 +245,7 @@ fn parseComparisonOp(op_str: []const u8) !types.ComparisonOp {
     return map.get(op_str) orelse error.InvalidComparisonOperator;
 }
 
-fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
+fn parseOperand(allocator: Allocator, value: std.json.Value) !types.Operand {
     switch (value) {
         .string => |s| {
             if (s.len > 0 and s[0] == '$') {
@@ -237,7 +262,7 @@ fn parseValue(allocator: Allocator, value: std.json.Value) !types.Value {
     }
 }
 
-fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !types.Value {
+fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !types.Operand {
     const items = try allocator.alloc(ScalarValue, values.len);
     var initialized: usize = 0;
     var items_owned = true;
@@ -256,7 +281,7 @@ fn parseArrayLiteral(allocator: Allocator, values: []const std.json.Value) !type
     }
 
     items_owned = false;
-    var result = TypedValue{ .array = items };
+    var result = Value{ .array = items };
     errdefer result.deinit(allocator);
     try result.sortedSet(allocator);
     return .{ .literal = result };

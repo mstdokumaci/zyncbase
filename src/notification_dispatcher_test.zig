@@ -6,7 +6,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const schema = @import("schema.zig");
-const storage_types = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
 test "NotificationDispatcher: empty poll" {
@@ -58,7 +58,7 @@ test "NotificationDispatcher: poll processes items" {
     defer nd.deinit();
 
     const tbl_md = sm.getTable("coll") orelse return error.TestExpectedValue;
-    const values = try alloc.alloc(storage_types.TypedValue, tbl_md.fields.len);
+    const values = try alloc.alloc(typed.Value, tbl_md.fields.len);
     errdefer alloc.free(values);
     for (values, 0..) |*value, i| {
         const field = tbl_md.fields[i];
@@ -72,7 +72,7 @@ test "NotificationDispatcher: poll processes items" {
     const id_index = schema.id_field_index;
     values[id_index] = .{ .scalar = .{ .text = try alloc.dupe(u8, "1") } };
 
-    const new_row = storage_types.TypedRow{
+    const new_record = typed.Record{
         .values = values,
     };
 
@@ -80,8 +80,8 @@ test "NotificationDispatcher: poll processes items" {
         .namespace_id = 1,
         .table_index = tbl_md.index,
         .operation = .insert,
-        .old_row = null,
-        .new_row = new_row,
+        .old_record = null,
+        .new_record = new_record,
     });
 
     var cm: ConnectionManager = undefined;

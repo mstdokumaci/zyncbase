@@ -3,10 +3,13 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const errors = @import("errors.zig");
-const value_codec = @import("value_codec.zig");
-const values = @import("values.zig");
-const doc_id = @import("../doc_id.zig");
-const authorization = @import("../authorization.zig");
+const typed = @import("../typed.zig");
+
+/// A schema field index + typed value pair for storage inserts/updates.
+pub const ColumnValue = struct {
+    index: usize,
+    value: typed.Value,
+};
 
 /// Specialized cache for sqlite3_stmt objects to avoid parsing overhead.
 /// Implements a fixed-size LRU eviction policy using intrusive DoublyLinkedList (Zig 0.15+).
@@ -217,7 +220,7 @@ pub fn appendOrderBySql(
 pub fn buildSelectDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    auth_clause: ?authorization.InjectedClause,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -228,8 +231,8 @@ pub fn buildSelectDocumentSql(
     try sql_buf.appendSlice(allocator, "=? AND ");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, "=?");
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     return sql_buf.toOwnedSlice(allocator);
 }
@@ -243,11 +246,11 @@ pub fn bindBlobTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []c
     return sqlite.c.sqlite3_bind_blob(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());
 }
 
-pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
-    const rc = switch (value) {
+pub fn bindValue(typed_value: typed.Value, db: *sqlite.Db, stmt: *sqlite.c.sqlite3_stmt, index: c_int, allocator: Allocator) !void {
+    const rc = switch (typed_value) {
         .scalar => |s| switch (s) {
             .doc_id => |id| blk: {
-                const bytes = doc_id.toBytes(id);
+                const bytes = typed.docIdToBytes(id);
                 break :blk bindBlobTransient(stmt, index, &bytes);
             },
             .integer => |v| sqlite.c.sqlite3_bind_int64(stmt, index, v),
@@ -257,7 +260,7 @@ pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.
         },
         .nil => sqlite.c.sqlite3_bind_null(stmt, index),
         .array => |items| blk: {
-            const json = try value_codec.jsonAlloc(allocator, .{ .array = items });
+            const json = try typed.jsonAlloc(allocator, .{ .array = items });
             defer allocator.free(json);
             break :blk bindTextTransient(stmt, index, json);
         },
@@ -265,7 +268,7 @@ pub fn bindTypedValue(value: values.TypedValue, db: *sqlite.Db, stmt: *sqlite.c.
     if (rc != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 }
 
-pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !values.TypedValue {
+pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, i: c_int, field: schema.Field) !typed.Value {
     const col_type = sqlite.c.sqlite3_column_type(stmt, i);
     if (field.storage_type == .array and col_type == sqlite.c.SQLITE_TEXT) {
         const ptr = sqlite.c.sqlite3_column_text(stmt, i);
@@ -273,7 +276,7 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
         const s = if (ptr != null) ptr[0..len] else "[]";
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, s, .{});
         defer parsed.deinit();
-        return value_codec.fromJson(allocator, field.storage_type, field.items_type, parsed.value);
+        return typed.valueFromJson(allocator, field.storage_type, field.items_type, parsed.value);
     }
 
     return switch (col_type) {
@@ -282,21 +285,21 @@ pub fn typedValueFromColumn(allocator: Allocator, stmt: *sqlite.c.sqlite3_stmt, 
             const ptr = sqlite.c.sqlite3_column_blob(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-            break :blk values.TypedValue{ .scalar = .{ .doc_id = try doc_id.fromBytes(bytes) } };
+            break :blk typed.Value{ .scalar = .{ .doc_id = try typed.docIdFromBytes(bytes) } };
         },
         sqlite.c.SQLITE_INTEGER => {
             const val = sqlite.c.sqlite3_column_int64(stmt, i);
             if (field.storage_type == .boolean) {
-                return values.TypedValue{ .scalar = .{ .boolean = val != 0 } };
+                return typed.Value{ .scalar = .{ .boolean = val != 0 } };
             }
-            return values.TypedValue{ .scalar = .{ .integer = val } };
+            return typed.Value{ .scalar = .{ .integer = val } };
         },
-        sqlite.c.SQLITE_FLOAT => values.TypedValue{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
+        sqlite.c.SQLITE_FLOAT => typed.Value{ .scalar = .{ .real = sqlite.c.sqlite3_column_double(stmt, i) } },
         sqlite.c.SQLITE_TEXT => blk: {
             const ptr = sqlite.c.sqlite3_column_text(stmt, i);
             const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(stmt, i));
             const s = if (ptr != null) ptr[0..len] else "";
-            break :blk values.TypedValue{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
+            break :blk typed.Value{ .scalar = .{ .text = try allocator.dupe(u8, s) } };
         },
         else => .nil,
     };
@@ -361,9 +364,9 @@ pub fn resolveUserId(
     namespace_id: i64,
     external_id: []const u8,
     timestamp: i64,
-) !doc_id.DocId {
-    const new_user_id = doc_id.generateUuidV7();
-    const id_bytes = doc_id.toBytes(new_user_id);
+) !typed.DocId {
+    const new_user_id = typed.generateUuidV7();
+    const id_bytes = typed.docIdToBytes(new_user_id);
     const sql_text =
         \\INSERT INTO "users" ("id", "namespace_id", "owner_id", "external_id", "created_at", "updated_at")
         \\VALUES (?, ?, ?, ?, ?, ?)
@@ -385,7 +388,7 @@ pub fn resolveUserId(
         const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
         const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
         const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-        return doc_id.fromBytes(bytes) catch return errors.StorageError.TypeMismatch;
+        return typed.docIdFromBytes(bytes) catch return errors.StorageError.TypeMismatch;
     }
     if (rc != sqlite.c.SQLITE_DONE) return errors.classifyStepError(db);
     return errors.StorageError.InvalidOperation;
@@ -394,8 +397,8 @@ pub fn resolveUserId(
 pub fn buildInsertOrReplaceSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    columns: []const values.ColumnValue,
-    auth_clause: ?authorization.InjectedClause,
+    columns: []const ColumnValue,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     const table_quoted = table_metadata.name_quoted;
 
@@ -464,8 +467,8 @@ pub fn buildInsertOrReplaceSql(
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, " = excluded.");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
@@ -475,7 +478,7 @@ pub fn buildInsertOrReplaceSql(
 
 fn getColumnField(
     table_metadata: *const schema.Table,
-    col: values.ColumnValue,
+    col: ColumnValue,
 ) !schema.Field {
     if (col.index >= table_metadata.fields.len) return errors.StorageError.UnknownField;
     return table_metadata.fields[col.index];
@@ -484,7 +487,7 @@ fn getColumnField(
 pub fn buildDeleteDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
-    auth_clause: ?authorization.InjectedClause,
+    guard_sql: ?[]const u8,
 ) ![]const u8 {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
@@ -495,8 +498,8 @@ pub fn buildDeleteDocumentSql(
     try sql_buf.appendSlice(allocator, "=? AND ");
     try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
     try sql_buf.appendSlice(allocator, "=?");
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
     }
     try sql_buf.appendSlice(allocator, " RETURNING ");
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);

@@ -2,7 +2,8 @@ const types = @import("authorization/types.zig");
 const defaults = @import("authorization/defaults.zig");
 const pattern_mod = @import("authorization/pattern.zig");
 const evaluate_mod = @import("authorization/evaluate.zig");
-const inject_mod = @import("authorization/inject.zig");
+const doc_predicate_mod = @import("authorization/doc_predicate.zig");
+const parse_mod = @import("authorization/parse.zig");
 const errors = @import("authorization/errors.zig");
 
 pub const AuthConfig = types.AuthConfig;
@@ -30,7 +31,6 @@ pub const evaluateCondition = evaluate_mod.evaluateCondition;
 pub const evaluateConditionStrict = evaluate_mod.evaluateConditionStrict;
 pub const authorizeStoreNamespace = evaluate_mod.authorizeStoreNamespace;
 
-pub const InjectedClause = inject_mod.InjectedClause;
-pub const injectDocCondition = inject_mod.injectDocCondition;
-pub const cloneBindValues = inject_mod.cloneBindValues;
-pub const deinitBindValues = inject_mod.deinitBindValues;
+pub const buildDocPredicate = doc_predicate_mod.buildDocPredicate;
+pub const validateDocPredicate = doc_predicate_mod.validateDocPredicate;
+pub const validateAuthConfig = parse_mod.validateConfig;

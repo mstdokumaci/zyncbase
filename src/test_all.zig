@@ -25,6 +25,7 @@ test {
     _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("query_parser_test.zig");
+    _ = @import("filter_eval_test.zig");
     _ = @import("storage_query_test.zig");
     _ = @import("change_buffer_test.zig");
     _ = @import("session_resolution_buffer_test.zig");

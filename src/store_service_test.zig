@@ -9,22 +9,22 @@ const schema = @import("schema.zig");
 const store_service = @import("store_service.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const StorageError = storage_mod.StorageError;
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .namespace_id = namespace_id,
-        .owner_doc_id = doc_id.zero,
+        .owner_doc_id = typed.zeroDocId,
     };
 }
 
-fn storePath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: ?usize) !msgpack.Payload {
+fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId, field_index: ?usize) !msgpack.Payload {
     const segments_len: usize = if (field_index != null) 3 else 2;
     const arr = try allocator.alloc(msgpack.Payload, segments_len);
     errdefer allocator.free(arr);
 
     arr[0] = msgpack.Payload.uintToPayload(table_index);
-    const id_bytes = doc_id.toBytes(id);
+    const id_bytes = typed.docIdToBytes(id);
     arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
     if (field_index) |index| {
         arr[2] = msgpack.Payload.uintToPayload(index);
@@ -33,11 +33,11 @@ fn storePath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId,
     return .{ .arr = arr };
 }
 
-fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId) !msgpack.Payload {
+fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId) !msgpack.Payload {
     return storePath(allocator, table_index, id, null);
 }
 
-fn fieldPath(allocator: std.mem.Allocator, table_index: usize, id: doc_id.DocId, field_index: usize) !msgpack.Payload {
+fn fieldPath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId, field_index: usize) !msgpack.Payload {
     return storePath(allocator, table_index, id, field_index);
 }
 
@@ -244,7 +244,7 @@ test "StoreService: remove" {
         const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
         var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();
-        try testing.expect(managed.rows.len == 0);
+        try testing.expect(managed.records.len == 0);
     }
 
     // 3. Negative: Unknown table
@@ -393,7 +393,7 @@ test "StoreService: persistence and namespace isolation" {
         // Verify ns-b did not get a second row with the same id.
         var managed_b = try test_table.selectDocument(allocator, 1, 4);
         defer managed_b.deinit();
-        try testing.expectEqual(@as(usize, 0), managed_b.rows.len);
+        try testing.expectEqual(@as(usize, 0), managed_b.records.len);
     }
 
     // 3. Updates
@@ -437,9 +437,9 @@ test "StoreService: query - basic search" {
     var qr = try app.store_service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("people")), filter_map, null);
     defer qr.deinit(allocator);
 
-    if (qr.results.rows.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 1), qr.results.rows.len);
-    const doc = qr.results.rows[0];
+    if (qr.results.records.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), qr.results.records.len);
+    const doc = qr.results.records[0];
     _ = try sth.expectFieldString(doc, people.metadata, "name", "Alice");
 }
 
@@ -469,8 +469,8 @@ test "StoreService: query - orderBy and limit" {
     var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("tasks")), filter_map, null);
     defer qr.deinit(allocator);
 
-    if (qr.results.rows.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
+    if (qr.results.records.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), qr.results.records.len);
     try testing.expect(qr.next_cursor_str != null);
 }
 
@@ -536,7 +536,7 @@ test "StoreService: queryMore - pagination" {
     var qr = try service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(app.tableIndex("data")), filter_map, null);
     defer qr.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 2), qr.results.rows.len);
+    try testing.expectEqual(@as(usize, 2), qr.results.records.len);
     try testing.expect(qr.next_cursor_str != null);
 
     // Use the pre-encoded cursor token from QueryResult
@@ -546,15 +546,15 @@ test "StoreService: queryMore - pagination" {
     var next_page = try service.queryMore(allocator, app.tableIndex("data"), 1, &qr.filter, encoded_cursor, null);
     defer next_page.deinit(allocator);
 
-    if (next_page.results.rows.len == 0) return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 2), next_page.results.rows.len);
+    if (next_page.results.records.len == 0) return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), next_page.results.records.len);
 
     // Verify results are different (pagination worked)
-    if (qr.results.rows.len == 0) return error.TestExpectedValue;
-    const first_doc = qr.results.rows[0];
+    if (qr.results.records.len == 0) return error.TestExpectedValue;
+    const first_doc = qr.results.records[0];
     const first_page_id = try sth.getFieldDocId(first_doc, data_table.metadata, "id");
 
-    const second_doc = next_page.results.rows[0];
+    const second_doc = next_page.results.records[0];
     const second_page_id = try sth.getFieldDocId(second_doc, data_table.metadata, "id");
 
     try testing.expect(first_page_id != second_page_id);
@@ -613,7 +613,7 @@ test "StoreService: validateFieldWrite tests" {
 fn batchSetTuple(
     allocator: std.mem.Allocator,
     table_index: usize,
-    id: doc_id.DocId,
+    id: typed.DocId,
     value: msgpack.Payload,
 ) !msgpack.Payload {
     const path = try documentPath(allocator, table_index, id);
@@ -636,7 +636,7 @@ fn batchSetTuple(
 fn batchRemoveTuple(
     allocator: std.mem.Allocator,
     table_index: usize,
-    id: doc_id.DocId,
+    id: typed.DocId,
 ) !msgpack.Payload {
     const path = try documentPath(allocator, table_index, id);
     errdefer path.free(allocator);
@@ -753,7 +753,7 @@ test "StoreService: batchWrite - mixed set and remove" {
     // Doc 1 should be gone
     var managed = try items.selectDocument(allocator, 1, 1);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 0), managed.rows.len);
+    try testing.expectEqual(@as(usize, 0), managed.records.len);
 
     // Doc 2 should exist
     var doc2 = try items.getOne(allocator, 2, 1);
@@ -904,7 +904,7 @@ test "StoreService: resolveStoreScope uses global users table by default" {
     const users = try app.tableMetadata("users");
     var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_a.user_doc_id, schema.global_namespace_id, null);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.rows.len);
+    try testing.expectEqual(@as(usize, 1), managed.records.len);
 }
 
 test "StoreService: resolveStoreScope isolates user ids when users is namespaced" {
@@ -934,5 +934,5 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     const users = try app.tableMetadata("users");
     var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id, null);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.rows.len);
+    try testing.expectEqual(@as(usize, 1), managed.records.len);
 }

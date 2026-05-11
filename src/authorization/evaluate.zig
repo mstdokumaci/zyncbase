@@ -1,13 +1,13 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const types = @import("types.zig");
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
-const ScalarValue = @import("../storage_engine/values.zig").ScalarValue;
-const doc_id = @import("../doc_id.zig");
+const typed = @import("../typed.zig");
+const Value = typed.Value;
+const ScalarValue = typed.ScalarValue;
 
 pub const EvalContext = struct {
     allocator: std.mem.Allocator,
-    session_user_id: ?doc_id.DocId = null,
+    session_user_id: ?typed.DocId = null,
     session_external_id: ?[]const u8 = null,
     namespace_captures: ?*const std.StringHashMap([]const u8) = null,
     path_table: ?[]const u8 = null,
@@ -18,11 +18,11 @@ pub const EvalContext = struct {
 pub const EvalResult = enum {
     allow,
     deny,
-    needs_injection,
+    needs_doc_predicate,
 };
 
 pub const ResolvedValue = struct {
-    value: TypedValue,
+    value: Value,
     owned: bool = false,
 
     pub fn deinit(self: ResolvedValue, allocator: std.mem.Allocator) void {
@@ -32,7 +32,7 @@ pub const ResolvedValue = struct {
 
 /// Evaluate a condition in RAM.
 /// Returns .allow / .deny for fully resolvable conditions.
-/// Returns .needs_injection if the condition references $doc variables.
+/// Returns .needs_doc_predicate if the condition references $doc variables.
 pub fn evaluateCondition(condition: types.Condition, ctx: EvalContext) EvalResult {
     return evaluateConditionInternal(condition, ctx, false);
 }
@@ -46,7 +46,7 @@ pub fn authorizeStoreNamespace(
     allocator: std.mem.Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
-    session_user_id: doc_id.DocId,
+    session_user_id: typed.DocId,
     session_external_id: []const u8,
 ) !void {
     var match = (try config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
@@ -70,18 +70,18 @@ fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, stric
             for (conds) |cond| {
                 const result = evaluateConditionInternal(cond, ctx, strict);
                 if (result == .deny) return .deny;
-                if (result == .needs_injection) has_injection = true;
+                if (result == .needs_doc_predicate) has_injection = true;
             }
-            return if (has_injection and !strict) .needs_injection else .allow;
+            return if (has_injection and !strict) .needs_doc_predicate else .allow;
         },
         .logical_or => |conds| {
             var has_injection = false;
             for (conds) |cond| {
                 const result = evaluateConditionInternal(cond, ctx, strict);
                 if (result == .allow) return .allow;
-                if (result == .needs_injection) has_injection = true;
+                if (result == .needs_doc_predicate) has_injection = true;
             }
-            return if (has_injection and !strict) .needs_injection else .deny;
+            return if (has_injection and !strict) .needs_doc_predicate else .deny;
         },
         .comparison => |comp| return evaluateComparison(comp, ctx, strict),
     }
@@ -89,7 +89,7 @@ fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, stric
 
 fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) EvalResult {
     if (comp.lhs.scope == .doc) {
-        return if (strict) .deny else .needs_injection;
+        return if (strict) .deny else .needs_doc_predicate;
     }
 
     var lhs = resolveLhs(comp.lhs, ctx) orelse return .deny;
@@ -101,11 +101,11 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
     return if (compareValues(lhs.value, comp.op, rhs.value)) .allow else .deny;
 }
 
-fn borrowed(value: TypedValue) ResolvedValue {
+fn borrowed(value: Value) ResolvedValue {
     return .{ .value = value, .owned = false };
 }
 
-fn owned(value: TypedValue) ResolvedValue {
+fn owned(value: Value) ResolvedValue {
     return .{ .value = value, .owned = true };
 }
 
@@ -130,7 +130,7 @@ fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedValue {
     };
 }
 
-pub fn resolveRhs(value: types.Value, ctx: EvalContext) ?ResolvedValue {
+pub fn resolveRhs(value: types.Operand, ctx: EvalContext) ?ResolvedValue {
     return switch (value) {
         .literal => |v| borrowed(v),
         .context_var => |cv| resolveLhs(cv, ctx),
@@ -157,7 +157,7 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
             else => false,
         };
         if (matched) {
-            const value = @import("../storage_engine.zig").typedValueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+            const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
             return owned(value);
         }
     }
@@ -165,7 +165,7 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
     return null;
 }
 
-fn compareValues(lhs: TypedValue, op: types.ComparisonOp, rhs: TypedValue) bool {
+fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {
     return switch (op) {
         .eq => lhs.eql(rhs),
         .ne => !lhs.eql(rhs),

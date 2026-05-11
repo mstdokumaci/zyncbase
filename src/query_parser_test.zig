@@ -4,7 +4,7 @@ const query_ast = @import("query_ast.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const schema = @import("schema.zig");
-const storage_engine = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
 
@@ -34,11 +34,11 @@ test "basic query filter parsing" {
     const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
     const status_index = users_md.fieldIndex("status") orelse return error.UnknownField;
 
-    try testing.expectEqual(@as(usize, 2), filter.conditions.?.len);
-    try testing.expectEqual(age_index, filter.conditions.?[0].field_index);
-    try testing.expectEqual(@as(i64, 18), filter.conditions.?[0].value.?.scalar.integer);
-    try testing.expectEqual(status_index, filter.conditions.?[1].field_index);
-    try testing.expectEqualStrings("active", filter.conditions.?[1].value.?.scalar.text);
+    try testing.expectEqual(@as(usize, 2), filter.predicate.conditions.?.len);
+    try testing.expectEqual(age_index, filter.predicate.conditions.?[0].field_index);
+    try testing.expectEqual(@as(i64, 18), filter.predicate.conditions.?[0].value.?.scalar.integer);
+    try testing.expectEqual(status_index, filter.predicate.conditions.?[1].field_index);
+    try testing.expectEqualStrings("active", filter.predicate.conditions.?[1].value.?.scalar.text);
     try testing.expectEqual(@as(u32, 50), filter.limit.?);
 }
 
@@ -65,10 +65,10 @@ test "query with orConditions" {
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
-    try testing.expect(filter.or_conditions != null);
-    try testing.expectEqual(@as(usize, 2), filter.or_conditions.?.len);
-    try testing.expectEqual(role_index, filter.or_conditions.?[0].field_index);
-    try testing.expectEqualStrings("admin", filter.or_conditions.?[0].value.?.scalar.text);
+    try testing.expect(filter.predicate.or_conditions != null);
+    try testing.expectEqual(@as(usize, 2), filter.predicate.or_conditions.?.len);
+    try testing.expectEqual(role_index, filter.predicate.or_conditions.?[0].field_index);
+    try testing.expectEqualStrings("admin", filter.predicate.or_conditions.?[0].value.?.scalar.text);
 }
 
 test "query with orderBy and after" {
@@ -82,7 +82,7 @@ test "query with orderBy and after" {
     defer sm.deinit();
 
     // cursor: Base64(MsgPack([42, doc_id(2)]))
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -147,9 +147,9 @@ test "isNull condition (no value tuple)" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 1), filter.conditions.?.len);
-    try testing.expectEqual(query_ast.Operator.isNull, filter.conditions.?[0].op);
-    try testing.expect(filter.conditions.?[0].value == null);
+    try testing.expectEqual(@as(usize, 1), filter.predicate.conditions.?.len);
+    try testing.expectEqual(query_ast.Operator.isNull, filter.predicate.conditions.?[0].op);
+    try testing.expect(filter.predicate.conditions.?[0].value == null);
 }
 
 test "unknown field name (including flattened paths)" {
@@ -218,11 +218,134 @@ test "in condition parses to typed array" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    const conds = filter.conditions orelse return error.TestExpectedValue;
+    const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
     const value = conds[0].value orelse return error.TestExpectedValue;
     try testing.expect(value == .array);
     try testing.expectEqual(@as(usize, 2), value.array.len);
     try testing.expectEqualStrings("admin", value.array[0].text);
+}
+
+test "query normalization drops AND notIn empty set" {
+    const allocator = testing.allocator;
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{ "role", "age" },
+        .types = &[_]schema.FieldType{ .text, .integer },
+    }});
+    defer sm.deinit();
+
+    const empty_values = try emptyArrayPayload(allocator);
+    defer empty_values.free(allocator);
+
+    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{
+            .{ "role", 10, empty_values },
+            .{ "age", 0, 18 },
+        },
+    });
+    defer root.free(allocator);
+
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
+    const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), conds.len);
+    try testing.expectEqual(query_ast.Operator.eq, conds[0].op);
+    try testing.expectEqual(tbl.fieldIndex("age").?, conds[0].field_index);
+    try testing.expect(filter.predicate.or_conditions == null);
+}
+
+test "query normalization marks AND in empty set as match none" {
+    const allocator = testing.allocator;
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{"role"},
+        .types = &[_]schema.FieldType{.text},
+    }});
+    defer sm.deinit();
+
+    const empty_values = try emptyArrayPayload(allocator);
+    defer empty_values.free(allocator);
+
+    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{
+            .{ "role", 9, empty_values },
+        },
+    });
+    defer root.free(allocator);
+
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expect(filter.predicate.isAlwaysFalse());
+    try testing.expect(filter.predicate.conditions == null);
+    try testing.expect(filter.predicate.or_conditions == null);
+}
+
+test "query normalization drops OR tautology but keeps AND conditions" {
+    const allocator = testing.allocator;
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{ "role", "age" },
+        .types = &[_]schema.FieldType{ .text, .integer },
+    }});
+    defer sm.deinit();
+
+    const empty_values = try emptyArrayPayload(allocator);
+    defer empty_values.free(allocator);
+
+    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{
+            .{ "age", 0, 18 },
+        },
+        .or_conditions = .{
+            .{ "role", 10, empty_values },
+        },
+    });
+    defer root.free(allocator);
+
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
+    try testing.expect(filter.predicate.conditions != null);
+    try testing.expect(filter.predicate.or_conditions == null);
+}
+
+test "query normalization marks OR group with only false terms as match none" {
+    const allocator = testing.allocator;
+
+    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "users",
+        .fields = &[_][]const u8{"role"},
+        .types = &[_]schema.FieldType{.text},
+    }});
+    defer sm.deinit();
+
+    const empty_values = try emptyArrayPayload(allocator);
+    defer empty_values.free(allocator);
+
+    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .or_conditions = .{
+            .{ "role", 9, empty_values },
+        },
+    });
+    defer root.free(allocator);
+
+    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    defer filter.deinit(allocator);
+
+    try testing.expect(filter.predicate.isAlwaysFalse());
+    try testing.expect(filter.predicate.conditions == null);
+    try testing.expect(filter.predicate.or_conditions == null);
 }
 
 test "in condition rejects non-array operand" {
@@ -292,8 +415,8 @@ test "contains on array field parses using element type" {
     const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(schema.FieldType.array, filter.conditions.?[0].field_type);
-    try testing.expectEqualStrings("urgent", filter.conditions.?[0].value.?.scalar.text);
+    try testing.expectEqual(schema.FieldType.array, filter.predicate.conditions.?[0].field_type);
+    try testing.expectEqualStrings("urgent", filter.predicate.conditions.?[0].value.?.scalar.text);
 }
 
 test "contains on text rejects non-string operand" {
@@ -413,7 +536,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     }});
     defer sm.deinit();
 
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
         .id = 2,
     };
@@ -439,7 +562,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
 test "cursor token rejects wrong sort type" {
     const allocator = testing.allocator;
 
-    const cursor: storage_engine.TypedCursor = .{
+    const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .text = "not-an-int" } },
         .id = 2,
     };
@@ -447,4 +570,8 @@ test "cursor token rejects wrong sort type" {
     defer allocator.free(token);
 
     try testing.expectError(error.InvalidCursorSortValue, query_parser.decodeCursorToken(allocator, token, .integer, null));
+}
+
+fn emptyArrayPayload(allocator: std.mem.Allocator) !msgpack.Payload {
+    return .{ .arr = try allocator.alloc(msgpack.Payload, 0) };
 }

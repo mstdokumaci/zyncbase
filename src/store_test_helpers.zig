@@ -2,15 +2,14 @@ const std = @import("std");
 const msgpack_utils = @import("msgpack_utils.zig");
 const msgpack_test_helpers = @import("msgpack_test_helpers.zig");
 const schema = @import("schema.zig");
-const storage_engine = @import("storage_engine.zig");
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 
 pub fn createStoreSetMessage(
     allocator: std.mem.Allocator,
     id: u64,
     namespace_id: i64,
     table_index: usize,
-    doc_id_value: storage_engine.DocId,
+    doc_id_value: typed.DocId,
     value: []const u8,
 ) ![]u8 {
     // Compatibility helper for single-field test tables:
@@ -24,7 +23,7 @@ pub fn createStoreSetFieldMessage(
     id: u64,
     namespace_id: i64,
     table_index: usize,
-    doc_id_value: storage_engine.DocId,
+    doc_id_value: typed.DocId,
     field_index: usize,
     value: []const u8,
 ) ![]u8 {
@@ -38,7 +37,7 @@ pub fn createStoreSetMessageWithPayload(
     id: u64,
     _namespace_id: i64,
     table_index: usize,
-    doc_id_value: storage_engine.DocId,
+    doc_id_value: typed.DocId,
     field_index: ?usize,
     value: msgpack_utils.Payload,
 ) ![]u8 {
@@ -64,7 +63,7 @@ pub fn createStoreSetMessageWithPayload(
     try writer.writeInt(u64, table_index, .big);
 
     // 2. Doc ID
-    const doc_id_bytes = doc_id.toBytes(doc_id_value);
+    const doc_id_bytes = typed.docIdToBytes(doc_id_value);
     try msgpack_utils.writeMsgPackBin(writer, &doc_id_bytes);
 
     // 3. Optional Field Index

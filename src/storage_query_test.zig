@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const schema = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
-const storage_engine = @import("storage_engine.zig");
+const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -39,14 +39,78 @@ test "StorageEngine: selectQuery basic equality" {
         .field_type = .text,
         .items_type = null,
     };
-    filter.conditions = conds;
+    filter.predicate.conditions = conds;
 
     var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
-    const res = managed.rows;
+    const res = managed.records;
 
     try testing.expectEqual(@as(usize, 1), res.len);
     _ = try sth.expectFieldString(res[0], people.metadata, "name", "Bob");
+}
+
+test "StorageEngine: selectQuery match-none predicate returns empty result" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("name", .text, false),
+    };
+    const table = sth.makeTable("people", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-match-none", table);
+    defer ctx.deinit();
+    const people = try ctx.table("people");
+
+    try people.insertText(1, 1, "name", "Alice");
+    try people.flush();
+
+    var filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+    filter.predicate.state = .match_none;
+
+    var managed = try people.selectQuery(allocator, 1, filter);
+    defer managed.deinit();
+
+    try testing.expectEqual(@as(usize, 0), managed.records.len);
+}
+
+test "StorageEngine: match-none guard permits insert branch and blocks update branch" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("title", .text, false),
+    };
+    const table = sth.makeTable("tasks", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-match-none-upsert", table);
+    defer ctx.deinit();
+    const tasks = try ctx.table("tasks");
+    const title_index = try tasks.fieldIndex("title");
+    const guard = query_ast.FilterPredicate{ .state = .match_none };
+
+    var insert_columns = [_]sth.ColumnValue{.{
+        .index = title_index,
+        .value = tth.valText("first"),
+    }};
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, guard);
+    try tasks.flush();
+
+    {
+        var doc = try tasks.getOne(allocator, 1, 1);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("title", "first");
+    }
+
+    var update_columns = [_]sth.ColumnValue{.{
+        .index = title_index,
+        .value = tth.valText("second"),
+    }};
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, guard);
+    try tasks.flush();
+
+    var doc = try tasks.getOne(allocator, 1, 1);
+    defer doc.deinit();
+    _ = try doc.expectFieldString("title", "first");
 }
 
 test "StorageEngine: selectQuery with OR and ordering" {
@@ -87,15 +151,76 @@ test "StorageEngine: selectQuery with OR and ordering" {
         .field_type = .integer,
         .items_type = null,
     };
-    filter.or_conditions = or_conds;
+    filter.predicate.or_conditions = or_conds;
 
     var managed = try people.selectQuery(allocator, 1, filter);
     defer managed.deinit();
-    const res = managed.rows;
+    const res = managed.records;
 
     try testing.expectEqual(@as(usize, 2), res.len);
     _ = try sth.expectFieldString(res[0], people.metadata, "name", "Charlie"); // 35
     _ = try sth.expectFieldString(res[1], people.metadata, "name", "Bob"); // 25
+}
+
+test "StorageEngine: selectQuery combines AND conditions with OR group" {
+    const allocator = testing.allocator;
+
+    var fields_arr = [_]schema.Field{
+        sth.makeField("priority", .text, false),
+        sth.makeField("status", .text, false),
+    };
+    const table = sth.makeTable("tasks", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "query-and-or", table);
+    defer ctx.deinit();
+    const tasks = try ctx.table("tasks");
+
+    try tasks.insertNamed(1, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("active")) });
+    try tasks.insertNamed(2, 1, .{ sth.named("priority", tth.valText("low")), sth.named("status", tth.valText("active")) });
+    try tasks.insertNamed(3, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("pending")) });
+    try tasks.insertNamed(4, 1, .{ sth.named("priority", tth.valText("high")), sth.named("status", tth.valText("closed")) });
+    try tasks.flush();
+
+    const priority_index = try tasks.fieldIndex("priority");
+    const status_index = try tasks.fieldIndex("status");
+
+    var filter = try qth.makeDefaultFilter(allocator);
+    defer filter.deinit(allocator);
+
+    const conds = try allocator.alloc(query_ast.Condition, 1);
+    conds[0] = .{
+        .field_index = priority_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "high"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    filter.predicate.conditions = conds;
+
+    const or_conds = try allocator.alloc(query_ast.Condition, 2);
+    or_conds[0] = .{
+        .field_index = status_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "active"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    or_conds[1] = .{
+        .field_index = status_index,
+        .op = .eq,
+        .value = try tth.valTextOwned(allocator, "pending"),
+        .field_type = .text,
+        .items_type = null,
+    };
+    filter.predicate.or_conditions = or_conds;
+
+    var managed = try tasks.selectQuery(allocator, 1, filter);
+    defer managed.deinit();
+    const res = managed.records;
+
+    try testing.expectEqual(@as(usize, 2), res.len);
+    _ = try sth.expectFieldDocId(res[0], tasks.metadata, "id", 1);
+    _ = try sth.expectFieldDocId(res[1], tasks.metadata, "id", 3);
 }
 
 test "StorageEngine: selectQuery pagination (after)" {
@@ -125,7 +250,7 @@ test "StorageEngine: selectQuery pagination (after)" {
 
     var managed1 = try scores.selectQuery(allocator, 1, filter1);
     defer managed1.deinit();
-    const res1 = managed1.rows;
+    const res1 = managed1.records;
     try testing.expectEqual(@as(usize, 2), res1.len);
     _ = try sth.expectFieldDocId(res1[0], scores.metadata, "id", 1);
     _ = try sth.expectFieldDocId(res1[1], scores.metadata, "id", 2);
@@ -134,14 +259,14 @@ test "StorageEngine: selectQuery pagination (after)" {
     var filter2 = try qth.makeFilter(allocator, score_index, false, .integer, null);
     defer filter2.deinit(allocator);
     filter2.limit = 2;
-    filter2.after = storage_engine.TypedCursor{
+    filter2.after = typed.Cursor{
         .sort_value = tth.valInt(100),
         .id = 2,
     };
 
     var managed2 = try scores.selectQuery(allocator, 1, filter2);
     defer managed2.deinit();
-    const res2 = managed2.rows;
+    const res2 = managed2.records;
     try testing.expectEqual(@as(usize, 2), res2.len);
     _ = try sth.expectFieldDocId(res2[0], scores.metadata, "id", 3); // 200
     _ = try sth.expectFieldDocId(res2[1], scores.metadata, "id", 4); // 300
@@ -197,12 +322,12 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
         .field_type = .text,
         .items_type = null,
     };
-    filter.conditions = conds;
+    filter.predicate.conditions = conds;
 
     var managed = try items.selectQuery(allocator, 1, filter);
     defer managed.deinit();
 
-    const res = managed.rows;
+    const res = managed.records;
     try testing.expectEqual(@as(usize, 1), res.len);
 
     const row = res[0];
@@ -249,10 +374,10 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
         _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 2);
     }
@@ -269,10 +394,10 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
         _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 3);
     }
@@ -289,10 +414,10 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
         _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 3);
     }
@@ -309,10 +434,10 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
         _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 2);
     }
@@ -329,10 +454,10 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
         var managed = try wildcards.selectQuery(allocator, ns, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
         _ = try sth.expectFieldDocId(results[0], wildcards.metadata, "id", 4);
     }
@@ -357,12 +482,12 @@ test "StorageEngine: LIKE wildcard escaping" {
             .field_type = .text,
             .items_type = null,
         };
-        filter.conditions = conds;
+        filter.predicate.conditions = conds;
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
         var managed = try wildcards.selectQuery(allocator, 1, filter);
         defer managed.deinit();
-        const results = managed.rows;
+        const results = managed.records;
         try testing.expectEqual(@as(usize, 0), results.len);
     }
 }

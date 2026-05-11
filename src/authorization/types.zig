@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const TypedValue = @import("../storage_engine/values.zig").TypedValue;
+const typed = @import("../typed.zig");
+const schema = @import("../schema.zig");
+const Value = typed.Value;
 
 pub const AuthConfig = struct {
     allocator: Allocator,
@@ -8,8 +10,8 @@ pub const AuthConfig = struct {
     store_rules: []StoreRule,
     wildcard_store_index: ?usize,
 
-    pub fn init(allocator: Allocator, json_text: []const u8) !AuthConfig {
-        return @import("parse.zig").initFromJson(allocator, json_text);
+    pub fn init(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !AuthConfig {
+        return @import("parse.zig").initFromJson(allocator, json_text, schema_manager);
     }
 
     pub fn deinit(self: *AuthConfig) void {
@@ -122,7 +124,7 @@ pub const Condition = union(enum) {
 pub const Comparison = struct {
     lhs: ContextVar,
     op: ComparisonOp,
-    rhs: Value,
+    rhs: Operand,
 
     pub fn deinit(self: *Comparison, allocator: Allocator) void {
         self.lhs.deinit(allocator);
@@ -159,11 +161,11 @@ pub const VarScope = enum {
     doc,
 };
 
-pub const Value = union(enum) {
-    literal: TypedValue,
+pub const Operand = union(enum) {
+    literal: Value,
     context_var: ContextVar,
 
-    pub fn deinit(self: Value, allocator: Allocator) void {
+    pub fn deinit(self: Operand, allocator: Allocator) void {
         switch (self) {
             .literal => |v| v.deinit(allocator),
             .context_var => |cv| cv.deinit(allocator),

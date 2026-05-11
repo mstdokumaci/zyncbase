@@ -1,7 +1,7 @@
 const std = @import("std");
 const query_ast = @import("query_ast.zig");
 const schema = @import("schema.zig");
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const mth = @import("msgpack_test_helpers.zig");
 const QueryFilter = query_ast.QueryFilter;
@@ -54,7 +54,7 @@ pub fn makeFilterWithConditions(allocator: std.mem.Allocator, conds: []const Con
         count += 1;
     }
 
-    filter.conditions = heap_conds;
+    filter.predicate.conditions = heap_conds;
     return filter;
 }
 
@@ -137,7 +137,7 @@ fn anyToFieldPayload(allocator: std.mem.Allocator, field_type: FieldType, value:
     if (field_type == .doc_id) {
         switch (@typeInfo(@TypeOf(value))) {
             .int, .comptime_int => {
-                const bytes = doc_id.toBytes(@intCast(value));
+                const bytes = typed.docIdToBytes(@intCast(value));
                 return Payload.binToPayload(&bytes, allocator);
             },
             else => {},

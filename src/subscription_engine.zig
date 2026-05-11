@@ -1,11 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const query_ast = @import("query_ast.zig");
+const filter_eval = @import("filter_eval.zig");
 const QueryFilter = query_ast.QueryFilter;
 const Condition = query_ast.Condition;
-const types = @import("storage_engine.zig");
-const TypedRow = types.TypedRow;
-const TypedValue = types.TypedValue;
+const typed = @import("typed.zig");
+const Record = typed.Record;
+const Value = typed.Value;
 
 /// Unique identifier for a subscription as seen by the client
 pub const SubscriptionId = u64;
@@ -30,20 +31,20 @@ pub const SubscriptionGroup = struct {
     }
 };
 
-/// Represents a change to a row, emitted by the storage engine or handler
-pub const RowChange = struct {
+/// Represents a change to a record, emitted by the storage engine or handler
+pub const RecordChange = struct {
     pub const Operation = enum { insert, update, delete };
     namespace_id: i64,
     table_index: usize,
     operation: Operation,
     /// The full record after the change. Null only for delete.
-    new_row: ?TypedRow,
+    new_record: ?Record,
     /// The full record before the change. Null only for insert.
-    old_row: ?TypedRow,
+    old_record: ?Record,
 
-    pub fn deinit(self: *const RowChange, allocator: Allocator) void {
-        if (self.new_row) |r| r.deinit(allocator);
-        if (self.old_row) |r| r.deinit(allocator);
+    pub fn deinit(self: *const RecordChange, allocator: Allocator) void {
+        if (self.new_record) |r| r.deinit(allocator);
+        if (self.old_record) |r| r.deinit(allocator);
     }
 };
 
@@ -55,7 +56,9 @@ pub const CollectionKey = struct {
 pub const CanonicalFilterContext = struct {
     pub fn hash(_: CanonicalFilterContext, f: QueryFilter) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        if (f.conditions) |conds| {
+        std.hash.autoHash(&hasher, f.predicate.state);
+        hasher.update("\x00"); // Separator
+        if (f.predicate.conditions) |conds| {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
@@ -65,7 +68,7 @@ pub const CanonicalFilterContext = struct {
             std.hash.autoHash(&hasher, combined);
         }
         hasher.update("\x00"); // Separator
-        if (f.or_conditions) |conds| {
+        if (f.predicate.or_conditions) |conds| {
             var combined: u64 = 0;
             for (conds) |c| {
                 var ch = std.hash.Wyhash.init(0);
@@ -78,33 +81,34 @@ pub const CanonicalFilterContext = struct {
         std.hash.autoHash(&hasher, f.order_by);
         std.hash.autoHash(&hasher, f.limit);
         if (f.after) |a| {
-            hashTypedValue(&hasher, a.sort_value);
+            hashValue(&hasher, a.sort_value);
             std.hash.autoHash(&hasher, a.id);
         }
         return hasher.final();
     }
 
     pub fn eql(_: CanonicalFilterContext, a: QueryFilter, b: QueryFilter) bool {
-        if (!eqlConditionsAsSets(a.conditions, b.conditions)) return false;
-        if (!eqlConditionsAsSets(a.or_conditions, b.or_conditions)) return false;
+        if (a.predicate.state != b.predicate.state) return false;
+        if (!eqlConditionsAsSets(a.predicate.conditions, b.predicate.conditions)) return false;
+        if (!eqlConditionsAsSets(a.predicate.or_conditions, b.predicate.or_conditions)) return false;
         if (!std.meta.eql(a.order_by, b.order_by)) return false;
         if (a.limit != b.limit) return false;
         if (a.after == null and b.after == null) return true;
         if (a.after == null or b.after == null) return false;
         const aa = a.after.?;
         const bb = b.after.?;
-        return eqlTypedValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
+        return eqlValue(aa.sort_value, bb.sort_value) and std.meta.eql(aa.id, bb.id);
     }
 
     fn hashCondition(hasher: *std.hash.Wyhash, c: Condition) void {
         std.hash.autoHash(hasher, c.field_index);
         std.hash.autoHash(hasher, c.op);
-        if (c.value) |v| hashTypedValue(hasher, v);
+        if (c.value) |v| hashValue(hasher, v);
         std.hash.autoHash(hasher, c.field_type);
         std.hash.autoHash(hasher, c.items_type);
     }
 
-    fn hashTypedValue(hasher: *std.hash.Wyhash, v: TypedValue) void {
+    fn hashValue(hasher: *std.hash.Wyhash, v: Value) void {
         std.hash.autoHash(hasher, std.meta.activeTag(v));
         switch (v) {
             .scalar => |s| hashScalarValue(hasher, s),
@@ -115,7 +119,7 @@ pub const CanonicalFilterContext = struct {
         }
     }
 
-    fn hashScalarValue(hasher: *std.hash.Wyhash, s: types.ScalarValue) void {
+    fn hashScalarValue(hasher: *std.hash.Wyhash, s: typed.ScalarValue) void {
         std.hash.autoHash(hasher, std.meta.activeTag(s));
         switch (s) {
             .text => |t| hasher.update(t),
@@ -127,7 +131,7 @@ pub const CanonicalFilterContext = struct {
     }
 };
 
-fn eqlTypedValue(a: TypedValue, b: TypedValue) bool {
+fn eqlValue(a: Value, b: Value) bool {
     const tag = std.meta.activeTag(a);
     if (tag != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -143,7 +147,7 @@ fn eqlTypedValue(a: TypedValue, b: TypedValue) bool {
     };
 }
 
-fn eqlScalarValue(a: types.ScalarValue, b: types.ScalarValue) bool {
+fn eqlScalarValue(a: typed.ScalarValue, b: typed.ScalarValue) bool {
     const tag = std.meta.activeTag(a);
     if (tag != std.meta.activeTag(b)) return false;
     return switch (a) {
@@ -183,7 +187,7 @@ fn eqlCondition(a: Condition, b: Condition) bool {
     if (a.items_type != b.items_type) return false;
     if (a.value == null and b.value == null) return true;
     if (a.value == null or b.value == null) return false;
-    return eqlTypedValue(a.value.?, b.value.?);
+    return eqlValue(a.value.?, b.value.?);
 }
 
 pub const SubscriptionEngine = struct {
@@ -353,7 +357,7 @@ pub const SubscriptionEngine = struct {
         };
     }
 
-    /// Finds all subscribers matching a row change. Returns matches through a Result struct.
+    /// Finds all subscribers matching a record change. Returns matches through a Result struct.
     pub const MatchOp = enum { set_op, remove };
 
     pub const Match = struct {
@@ -362,7 +366,7 @@ pub const SubscriptionEngine = struct {
         op: MatchOp,
     };
 
-    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
+    pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
@@ -379,11 +383,11 @@ pub const SubscriptionEngine = struct {
         for (group_ids.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
 
-            const matched_before = if (change.old_row) |old| try SubscriptionEngine.evaluateFilter(group.filter, old) else false;
-            const matches_after = if (change.new_row) |new| try SubscriptionEngine.evaluateFilter(group.filter, new) else false;
+            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(group.filter, old) else false;
+            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(group.filter, new) else false;
 
             if (matched_before and !matches_after) {
-                // Row left the filter: send remove
+                // Record left the filter: send remove
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -393,9 +397,9 @@ pub const SubscriptionEngine = struct {
                     });
                 }
             } else if (matches_after) {
-                // Row now matches the filter: send set.
-                // Covers both "row entered the filter" (!matched_before)
-                // and "row changed within the filter" (matched_before).
+                // Record now matches the filter: send set.
+                // Covers both "record entered the filter" (!matched_before)
+                // and "record changed within the filter" (matched_before).
                 var sub_it = group.subscribers.keyIterator();
                 while (sub_it.next()) |sub| {
                     try matches.append(allocator, .{
@@ -410,87 +414,8 @@ pub const SubscriptionEngine = struct {
         return try matches.toOwnedSlice(allocator);
     }
 
-    /// Evaluates a row against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, row: TypedRow) !bool {
-        return evaluateFilterInternal(filter, row);
+    /// Evaluates a record against a filter AST.
+    pub fn evaluateFilter(filter: QueryFilter, record: Record) !bool {
+        return filter_eval.evaluatePredicate(filter.predicate, record);
     }
 };
-
-fn evaluateFilterInternal(filter: QueryFilter, row: TypedRow) !bool {
-    // 1. Evaluate AND conditions (all must match)
-    if (filter.conditions) |conds| {
-        for (conds) |cond| {
-            if (!try evaluateConditionInternal(cond, row)) return false;
-        }
-    }
-
-    // 2. Evaluate OR conditions (any must match)
-    if (filter.or_conditions) |or_conds| {
-        if (or_conds.len > 0) {
-            var matched_any = false;
-            for (or_conds) |cond| {
-                if (try evaluateConditionInternal(cond, row)) {
-                    matched_any = true;
-                    break;
-                }
-            }
-            if (!matched_any) return false;
-        }
-    }
-
-    return true;
-}
-
-fn evaluateConditionInternal(cond: Condition, row: TypedRow) !bool {
-    if (cond.field_index >= row.values.len) return cond.op == .isNull;
-    const val = row.values[cond.field_index];
-
-    return switch (cond.op) {
-        .eq => val.eql(cond.value orelse return false),
-        .ne => !val.eql(cond.value orelse return true),
-        .gt => val.order(cond.value orelse return false) == .gt,
-        .gte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .gt or res == .eq;
-        },
-        .lt => val.order(cond.value orelse return false) == .lt,
-        .lte => blk: {
-            const res = val.order(cond.value orelse return false);
-            break :blk res == .lt or res == .eq;
-        },
-        .isNull => val == .nil,
-        .isNotNull => val != .nil,
-        .startsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.startsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
-        .endsWith => blk: {
-            if (val != .scalar or val.scalar != .text) break :blk false;
-            if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-            break :blk std.ascii.endsWithIgnoreCase(val.scalar.text, cond.value.?.scalar.text);
-        },
-        .contains => blk: {
-            if (cond.field_type == .array) {
-                if (val != .array) break :blk false;
-                if (cond.value == null) break :blk false;
-                if (cond.value.? != .scalar) break :blk false;
-                break :blk std.sort.binarySearch(types.ScalarValue, val.array, cond.value.?.scalar, types.ScalarValue.order) != null;
-            } else {
-                if (val != .scalar or val.scalar != .text) break :blk false;
-                if (cond.value == null or cond.value.? != .scalar or cond.value.?.scalar != .text) break :blk false;
-                break :blk std.ascii.indexOfIgnoreCase(val.scalar.text, cond.value.?.scalar.text) != null;
-            }
-        },
-        .in => blk: {
-            if (val != .scalar) break :blk false;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) != null;
-        },
-        .notIn => blk: {
-            if (val != .scalar) break :blk true;
-            if (cond.value == null or cond.value.? != .array) break :blk false;
-            break :blk std.sort.binarySearch(types.ScalarValue, cond.value.?.array, val.scalar, types.ScalarValue.order) == null;
-        },
-    };
-}

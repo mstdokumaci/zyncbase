@@ -79,7 +79,7 @@ test "MessageHandler: store operations require ready scope" {
     try testing.expectEqualStrings("SESSION_NOT_READY", result.code.?);
 }
 
-test "MessageHandler: StoreSet document with auth injection persists and is readable" {
+test "MessageHandler: StoreSet document with auth predicate persists and is readable" {
     const allocator = testing.allocator;
     var app: AppTestContext = undefined;
     const schema_json =
@@ -123,10 +123,10 @@ test "MessageHandler: StoreSet document with auth injection persists and is read
     // Read back via storage engine
     var managed = try app.storage_engine.selectDocument(allocator, table.index, 1, conn.namespace_id, null);
     defer managed.deinit();
-    try testing.expectEqual(@as(usize, 1), managed.rows.len);
-    try testing.expectEqualStrings("hello", managed.rows[0].values[table.fieldIndex("title").?].scalar.text);
-    try testing.expectEqual(@as(i64, 100), managed.rows[0].values[table.fieldIndex("must_be_complete__before").?].scalar.integer);
-    try testing.expectEqual(@as(i64, 200), managed.rows[0].values[table.fieldIndex("must_be_complete__after").?].scalar.integer);
+    try testing.expectEqual(@as(usize, 1), managed.records.len);
+    try testing.expectEqualStrings("hello", managed.records[0].values[table.fieldIndex("title").?].scalar.text);
+    try testing.expectEqual(@as(i64, 100), managed.records[0].values[table.fieldIndex("must_be_complete__before").?].scalar.integer);
+    try testing.expectEqual(@as(i64, 200), managed.records[0].values[table.fieldIndex("must_be_complete__after").?].scalar.integer);
 }
 
 test "MessageHandler: StoreSet routes and maps StoreService errors" {

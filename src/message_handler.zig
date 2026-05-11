@@ -13,6 +13,7 @@ const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema = @import("schema.zig");
+const query_ast = @import("query_ast.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -348,20 +349,14 @@ pub const MessageHandler = struct {
         conn: *Connection,
         table: *const schema.Table,
         value: ?*const msgpack.Payload,
-    ) !?authorization.InjectedClause {
+    ) !?query_ast.FilterPredicate {
         const session = try requireStoreSession(conn);
         const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
         var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, value);
-        const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
-
-        return switch (eval_result) {
-            .allow => null,
-            .deny => error.AccessDenied,
-            .needs_injection => try authorization.injectDocCondition(arena, store_rule.write, eval_ctx, table),
-        };
+        return try authorization.buildDocPredicate(arena, store_rule.write, eval_ctx, table);
     }
 
     fn evaluateStoreReadAuth(
@@ -369,20 +364,14 @@ pub const MessageHandler = struct {
         arena: std.mem.Allocator,
         conn: *Connection,
         table: *const schema.Table,
-    ) !?authorization.InjectedClause {
+    ) !?query_ast.FilterPredicate {
         const session = try requireStoreSession(conn);
         const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
         var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, null);
-        const eval_result = authorization.evaluateCondition(store_rule.read, eval_ctx);
-
-        return switch (eval_result) {
-            .allow => null,
-            .deny => error.AccessDenied,
-            .needs_injection => try authorization.injectDocCondition(arena, store_rule.read, eval_ctx, table),
-        };
+        return try authorization.buildDocPredicate(arena, store_rule.read, eval_ctx, table);
     }
 
     fn handleStoreSet(
@@ -398,13 +387,13 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const auth_clause = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
+        const auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
 
         try self.store_service.setPath(
             .{
                 .namespace_id = session.namespace_id,
                 .owner_doc_id = session.user_doc_id,
-                .auth_clause = auth_clause,
+                .auth_predicate = auth_predicate,
             },
             payloads.path,
             value,
@@ -425,10 +414,10 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const auth_clause = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
+        const auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
 
         try self.store_service.removePath(
-            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_clause = auth_clause },
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_predicate = auth_predicate },
             payloads.path,
         );
 
@@ -447,11 +436,11 @@ pub const MessageHandler = struct {
         var auth_scope = try self.makeStoreAuthScope(arena_allocator, conn, session);
         defer auth_scope.deinit(arena_allocator);
 
-        var auth_clauses: ?[]?authorization.InjectedClause = null;
+        var auth_predicates: ?[]?query_ast.FilterPredicate = null;
         if (payloads.ops == .arr and payloads.ops.arr.len > 0) {
-            const clauses = try arena_allocator.alloc(?authorization.InjectedClause, payloads.ops.arr.len);
-            @memset(clauses, null);
-            auth_clauses = clauses;
+            const predicates = try arena_allocator.alloc(?query_ast.FilterPredicate, payloads.ops.arr.len);
+            @memset(predicates, null);
+            auth_predicates = predicates;
 
             for (payloads.ops.arr, 0..) |op_payload, i| {
                 if (op_payload != .arr or op_payload.arr.len < 2) continue;
@@ -462,22 +451,14 @@ pub const MessageHandler = struct {
                 const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
                 const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
-                const eval_result = authorization.evaluateCondition(store_rule.write, eval_ctx);
-                switch (eval_result) {
-                    .allow => {},
-                    .deny => return error.AccessDenied,
-                    .needs_injection => {
-                        const clause = try authorization.injectDocCondition(arena_allocator, store_rule.write, eval_ctx, table);
-                        clauses[i] = clause;
-                    },
-                }
+                predicates[i] = try authorization.buildDocPredicate(arena_allocator, store_rule.write, eval_ctx, table);
             }
         }
 
         try self.store_service.batchWrite(
             .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
             payloads.ops,
-            auth_clauses,
+            auth_predicates,
         );
 
         return try wire.encodeSuccess(arena_allocator, msg_id);

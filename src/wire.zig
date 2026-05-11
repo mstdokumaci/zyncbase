@@ -25,4 +25,4 @@ pub const encodeQuery = encode.encodeQuery;
 pub const encodeSchemaSync = encode.encodeSchemaSync;
 pub const encodeDeleteDeltaSuffix = encode.encodeDeleteDeltaSuffix;
 pub const encodeSetDeltaSuffix = encode.encodeSetDeltaSuffix;
-pub const encodeTypedRow = encode.encodeTypedRow;
+pub const encodeRecord = encode.encodeRecord;

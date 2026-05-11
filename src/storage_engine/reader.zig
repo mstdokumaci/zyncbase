@@ -4,22 +4,22 @@ const sqlite = @import("sqlite");
 const schema = @import("../schema.zig");
 const query_parser = @import("../query_parser.zig");
 const query_ast = @import("../query_ast.zig");
-const doc_id = @import("../doc_id.zig");
+const typed = @import("../typed.zig");
 const errors = @import("errors.zig");
 const sql = @import("sql.zig");
-const storage_values = @import("values.zig");
-const authorization = @import("../authorization.zig");
+const filter_sql = @import("filter_sql.zig");
+const storage_cache = @import("cache.zig");
 
 const StorageError = errors.StorageError;
-const DocId = storage_values.DocId;
-const MetadataCacheKey = storage_values.MetadataCacheKey;
-const TypedCursor = storage_values.TypedCursor;
-const TypedRow = storage_values.TypedRow;
-const TypedValue = storage_values.TypedValue;
+const DocId = typed.DocId;
+const MetadataCacheKey = storage_cache.MetadataCacheKey;
+const Cursor = typed.Cursor;
+const Record = typed.Record;
+const Value = typed.Value;
 
 pub const QueryResult = struct {
     sql: []const u8,
-    values: []TypedValue,
+    values: []Value,
 
     pub fn deinit(self: QueryResult, allocator: Allocator) void {
         for (self.values) |v| v.deinit(allocator);
@@ -33,11 +33,11 @@ pub fn buildSelectQuery(
     table_metadata: *const schema.Table,
     namespace_id: i64,
     filter: query_ast.QueryFilter,
-    auth_clause: ?authorization.InjectedClause,
+    guard_predicate: ?query_ast.FilterPredicate,
 ) !QueryResult {
     var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer sql_buf.deinit(allocator);
-    var values: std.ArrayListUnmanaged(TypedValue) = .empty;
+    var values: std.ArrayListUnmanaged(Value) = .empty;
     errdefer {
         for (values.items) |v| v.deinit(allocator);
         values.deinit(allocator);
@@ -51,37 +51,17 @@ pub fn buildSelectQuery(
     // 2.. WHERE clause
     try sql_buf.appendSlice(allocator, " WHERE ");
     try sql.appendNamespaceFilterSql(allocator, &sql_buf);
-    try values.append(allocator, TypedValue{ .scalar = .{ .integer = namespace_id } });
+    try values.append(allocator, Value{ .scalar = .{ .integer = namespace_id } });
 
-    const conds = filter.conditions orelse @as([]const query_ast.Condition, &.{});
-    const or_conds = filter.or_conditions orelse @as([]const query_ast.Condition, &.{});
-    const has_conditions = conds.len > 0 or or_conds.len > 0;
+    const has_conditions = !filter.predicate.isEmpty();
 
     if (has_conditions or filter.after != null) {
         try sql_buf.appendSlice(allocator, " AND (");
 
         var added_where = false;
 
-        // AND conditions
-        if (conds.len > 0) {
-            try sql_buf.appendSlice(allocator, "(");
-            for (conds, 0..) |cond, i| {
-                if (i > 0) try sql_buf.appendSlice(allocator, " AND ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
-            }
-            try sql_buf.appendSlice(allocator, ")");
-            added_where = true;
-        }
-
-        // OR conditions
-        if (or_conds.len > 0) {
-            if (added_where) try sql_buf.appendSlice(allocator, " OR ");
-            try sql_buf.appendSlice(allocator, "(");
-            for (or_conds, 0..) |cond, i| {
-                if (i > 0) try sql_buf.appendSlice(allocator, " OR ");
-                try appendConditionSql(allocator, &sql_buf, &values, table_metadata, cond);
-            }
-            try sql_buf.appendSlice(allocator, ")");
+        if (has_conditions) {
+            try filter_sql.appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, filter.predicate);
             added_where = true;
         }
 
@@ -100,27 +80,25 @@ pub fn buildSelectQuery(
             );
 
             if (filter.order_by.field_index == schema.id_field_index) {
-                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
+                try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
             } else {
                 {
                     const sv = try cursor.sort_value.clone(allocator);
                     errdefer sv.deinit(allocator);
                     try values.append(allocator, sv);
                 }
-                try values.append(allocator, TypedValue{ .scalar = .{ .doc_id = cursor.id } });
+                try values.append(allocator, Value{ .scalar = .{ .doc_id = cursor.id } });
             }
         }
 
         try sql_buf.appendSlice(allocator, ")");
     }
 
-    // Auth clause injection
-    if (auth_clause) |clause| {
-        try sql_buf.appendSlice(allocator, clause.sql);
-        for (clause.bind_values) |bv| {
-            const cloned = try bv.clone(allocator);
-            errdefer cloned.deinit(allocator);
-            try values.append(allocator, cloned);
+    if (guard_predicate) |predicate| {
+        if (!predicate.isEmpty()) {
+            try sql_buf.appendSlice(allocator, " AND (");
+            try filter_sql.appendFilterPredicateSql(allocator, &sql_buf, &values, table_metadata, predicate);
+            try sql_buf.append(allocator, ')');
         }
     }
 
@@ -150,129 +128,15 @@ pub fn getCacheKey(table_metadata: *const schema.Table, namespace_id: i64, id: D
     };
 }
 
-pub fn escapeLikePattern(allocator: Allocator, input: []const u8) ![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer out.deinit(allocator);
-    for (input) |c| {
-        if (c == '%' or c == '_' or c == '\\') {
-            try out.append(allocator, '\\');
-        }
-        try out.append(allocator, c);
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-pub fn appendConditionSql(
-    allocator: Allocator,
-    sql_buf: *std.ArrayListUnmanaged(u8),
-    values: *std.ArrayListUnmanaged(TypedValue),
-    table_metadata: *const schema.Table,
-    cond: query_ast.Condition,
-) !void {
-    if (cond.field_index >= table_metadata.fields.len) return error.InvalidConditionFormat;
-    const sql_field_quoted = table_metadata.fields[cond.field_index].name_quoted;
-    try sql_buf.appendSlice(allocator, sql_field_quoted);
-
-    switch (cond.op) {
-        .eq => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " = ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .ne => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " != ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .gt => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " > ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .lt => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " < ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .gte => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " >= ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .lte => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            try sql_buf.appendSlice(allocator, " <= ?");
-            try values.append(allocator, try val.clone(allocator));
-        },
-        .contains => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            if (cond.field_type == .array) {
-                try sql_buf.appendSlice(allocator, " IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(");
-                try sql_buf.appendSlice(allocator, sql_field_quoted);
-                try sql_buf.appendSlice(allocator, ") WHERE json_each.value = ?)");
-                try values.append(allocator, try val.clone(allocator));
-                return;
-            } else {
-                if (val != .scalar or val.scalar != .text) {
-                    return error.InvalidConditionValue;
-                }
-                const escaped = try escapeLikePattern(allocator, val.scalar.text);
-                errdefer allocator.free(escaped);
-                try sql_buf.appendSlice(allocator, " LIKE '%' || ? || '%' ESCAPE '\\'");
-                try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
-            }
-        },
-        .startsWith => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            const raw_str = val.scalar.text;
-            const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
-            try sql_buf.appendSlice(allocator, " LIKE ? || '%' ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
-        },
-        .endsWith => {
-            const val = cond.value orelse return error.MissingConditionValue;
-            const raw_str = val.scalar.text;
-            const escaped = try escapeLikePattern(allocator, raw_str);
-            errdefer allocator.free(escaped);
-            try sql_buf.appendSlice(allocator, " LIKE '%' || ? ESCAPE '\\'");
-            try values.append(allocator, TypedValue{ .scalar = .{ .text = escaped } });
-        },
-        .in, .notIn => {
-            const is_not = cond.op == .notIn;
-            try sql_buf.appendSlice(allocator, if (is_not) " NOT IN (" else " IN (");
-            if (cond.value) |val| {
-                if (val == .array) {
-                    for (val.array, 0..) |v, i| {
-                        if (i > 0) try sql_buf.appendSlice(allocator, ", ");
-                        try sql_buf.appendSlice(allocator, "?");
-                        try values.append(allocator, TypedValue{ .scalar = try v.clone(allocator) });
-                    }
-                } else {
-                    try sql_buf.appendSlice(allocator, "?");
-                    try values.append(allocator, try val.clone(allocator));
-                }
-            }
-            try sql_buf.appendSlice(allocator, ")");
-        },
-        .isNull => {
-            try sql_buf.appendSlice(allocator, " IS NULL");
-        },
-        .isNotNull => {
-            try sql_buf.appendSlice(allocator, " IS NOT NULL");
-        },
-    }
-}
-
-pub fn decodeTypedRow(
+pub fn decodeRecord(
     allocator: Allocator,
     stmt: *sqlite.c.sqlite3_stmt,
     table_metadata: *const schema.Table,
-) !TypedRow {
+) !Record {
     const col_count: usize = @intCast(sqlite.c.sqlite3_column_count(stmt));
     if (col_count != table_metadata.fields.len) return StorageError.ColumnCountMismatch;
 
-    var values = try allocator.alloc(TypedValue, col_count);
+    var values = try allocator.alloc(Value, col_count);
     var i: usize = 0;
     errdefer {
         for (values[0..i]) |value| value.deinit(allocator);
@@ -285,7 +149,7 @@ pub fn decodeTypedRow(
         errdefer val.deinit(allocator);
         values[i] = val;
     }
-    return TypedRow{
+    return Record{
         .values = values,
     };
 }
@@ -297,16 +161,16 @@ pub fn execSelectDocumentTyped(
     id: DocId,
     namespace_id: i64,
     table_metadata: *const schema.Table,
-    auth_values: ?[]const TypedValue,
-) !?TypedRow {
-    const id_bytes = doc_id.toBytes(id);
+    guard_values: ?[]const Value,
+) !?Record {
+    const id_bytes = typed.docIdToBytes(id);
     if (sql.bindBlobTransient(stmt, 1, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
     if (sqlite.c.sqlite3_bind_int64(stmt, 2, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(db);
 
     var bind_idx: c_int = 3;
-    if (auth_values) |avals| {
-        for (avals) |val| {
-            try sql.bindTypedValue(val, db, stmt, bind_idx, allocator);
+    if (guard_values) |vals| {
+        for (vals) |val| {
+            try sql.bindValue(val, db, stmt, bind_idx, allocator);
             bind_idx += 1;
         }
     }
@@ -315,28 +179,28 @@ pub fn execSelectDocumentTyped(
     if (rc == sqlite.c.SQLITE_DONE) return null;
     if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-    return try decodeTypedRow(allocator, stmt, table_metadata);
+    return try decodeRecord(allocator, stmt, table_metadata);
 }
 
 pub fn execQueryTyped(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
-    values: []const TypedValue,
+    values: []const Value,
     table_metadata: *const schema.Table,
     requested_limit: ?u32,
     sort_field_index: usize,
-) !struct { rows: []TypedRow, next_cursor_str: ?[]const u8 } {
+) !struct { records: []Record, next_cursor_str: ?[]const u8 } {
     if (sort_field_index >= table_metadata.fields.len) return error.InvalidMessageFormat;
 
     for (values, 0..) |v, i| {
-        try sql.bindTypedValue(v, db, stmt, @intCast(i + 1), allocator);
+        try sql.bindValue(v, db, stmt, @intCast(i + 1), allocator);
     }
 
-    var rows_list: std.ArrayListUnmanaged(TypedRow) = .empty;
+    var records_list: std.ArrayListUnmanaged(Record) = .empty;
     errdefer {
-        for (rows_list.items) |r| r.deinit(allocator);
-        rows_list.deinit(allocator);
+        for (records_list.items) |r| r.deinit(allocator);
+        records_list.deinit(allocator);
     }
 
     while (true) {
@@ -344,40 +208,40 @@ pub fn execQueryTyped(
         if (rc == sqlite.c.SQLITE_DONE) break;
         if (rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(db);
 
-        try rows_list.append(allocator, try decodeTypedRow(allocator, stmt, table_metadata));
+        try records_list.append(allocator, try decodeRecord(allocator, stmt, table_metadata));
     }
 
     const has_more = if (requested_limit) |limit_u32| blk: {
         const limit: usize = @intCast(limit_u32);
-        break :blk rows_list.items.len > limit;
+        break :blk records_list.items.len > limit;
     } else false;
 
     if (requested_limit) |limit_u32| {
         const limit: usize = @intCast(limit_u32);
-        while (rows_list.items.len > limit) {
-            if (rows_list.pop()) |extra_row| {
-                var row = extra_row;
-                row.deinit(allocator);
+        while (records_list.items.len > limit) {
+            if (records_list.pop()) |extra_record| {
+                var record = extra_record;
+                record.deinit(allocator);
             } else unreachable;
         }
     }
 
-    const owned_rows = try rows_list.toOwnedSlice(allocator);
+    const owned_records = try records_list.toOwnedSlice(allocator);
     errdefer {
-        for (owned_rows) |r| r.deinit(allocator);
-        allocator.free(owned_rows);
+        for (owned_records) |r| r.deinit(allocator);
+        allocator.free(owned_records);
     }
 
     var next_cursor_str: ?[]const u8 = null;
     if (has_more) {
         const limit: usize = @intCast(requested_limit.?);
         if (limit > 0) {
-            const last_row = owned_rows[limit - 1];
-            const sort_val = last_row.values[sort_field_index];
-            const id_val = last_row.values[schema.id_field_index];
+            const last_record = owned_records[limit - 1];
+            const sort_val = last_record.values[sort_field_index];
+            const id_val = last_record.values[schema.id_field_index];
             if (id_val != .scalar or id_val.scalar != .doc_id) return error.InvalidMessageFormat;
 
-            const cursor = TypedCursor{
+            const cursor = Cursor{
                 .sort_value = sort_val,
                 .id = id_val.scalar.doc_id,
             };
@@ -386,7 +250,7 @@ pub fn execQueryTyped(
     }
 
     return .{
-        .rows = owned_rows,
+        .records = owned_records,
         .next_cursor_str = next_cursor_str,
     };
 }

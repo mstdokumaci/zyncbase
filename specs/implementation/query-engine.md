@@ -180,7 +180,7 @@ const SubscriptionEngine = struct {
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64),
     
-    pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange) ![]Match {
+    pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange) ![]Match {
         // Implementation logic...
     }
 };
@@ -191,7 +191,7 @@ const SubscriptionEngine = struct {
 ZyncBase uses a **Fine-Grained Observation** strategy to ensure sub-100ms real-time sync without overloading the SQLite reader pool.
 
 **Strategy: Fine-Grained Observation (ADR-018)**
-- The Writer thread or Message Handler emits a `RowChange` event.
+- The Writer thread or Message Handler emits a `RecordChange` event.
 - The `SubscriptionEngine` evaluates the change against active `SubscriptionGroups` in memory.
 - **No SQLite queries are re-run** for standard filter matching.
 - Only clients subscribed to groups that match the before or after state of the record are notified.
@@ -201,7 +201,7 @@ ZyncBase uses a **Fine-Grained Observation** strategy to ensure sub-100ms real-t
 The notification pipeline operates entirely in RAM:
 
 ```zig
-pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: Allocator) ![]Match {
+pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, allocator: Allocator) ![]Match {
     const key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ change.namespace, change.collection });
     const group_ids = self.groups_by_collection.get(key) orelse return &.{};
 
@@ -209,8 +209,8 @@ pub fn handleRowChange(self: *SubscriptionEngine, change: RowChange, allocator: 
     for (group_ids.items) |gid| {
         const group = self.groups.get(gid) orelse continue;
 
-        const matched_before = if (change.old_row) |old| try evaluateFilter(group.filter, old) else false;
-        const matches_after = if (change.new_row) |new| try evaluateFilter(group.filter, new) else false;
+        const matched_before = if (change.old_record) |old| try evaluateFilter(group.filter, old) else false;
+        const matches_after = if (change.new_record) |new| try evaluateFilter(group.filter, new) else false;
 
         if (matched_before or matches_after) {
             // Group-level match means all subscribers in group receive notification

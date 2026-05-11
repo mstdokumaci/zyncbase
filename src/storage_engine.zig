@@ -12,24 +12,19 @@ const schema = @import("schema.zig");
 const Schema = schema.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
-const storage_values = @import("storage_engine/values.zig");
-const value_codec = @import("storage_engine/value_codec.zig");
+const typed = @import("typed.zig");
+const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
+const filter_sql = @import("storage_engine/filter_sql.zig");
+const filter_eval = @import("filter_eval.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
-const authorization = @import("authorization.zig");
 
 pub const StorageError = storage_errors.StorageError;
-pub const ColumnValue = storage_values.ColumnValue;
-pub const DocId = storage_values.DocId;
-pub const ManagedResult = storage_values.ManagedResult;
-pub const ScalarValue = storage_values.ScalarValue;
-pub const TypedValue = storage_values.TypedValue;
-pub const TypedRow = storage_values.TypedRow;
+pub const ColumnValue = sql.ColumnValue;
 pub const TableMetadata = schema.Table;
-pub const TypedCursor = storage_values.TypedCursor;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
 pub const CheckpointStats = write_queue.CheckpointStats;
@@ -37,12 +32,30 @@ pub const ReconnectionConfig = write_queue.ReconnectionConfig;
 pub const WriteOp = write_queue.WriteOp;
 pub const BatchEntry = write_queue.BatchEntry;
 pub const WriteQueue = write_queue.WriteQueue;
-const typed_cache_type = storage_values.typed_cache_type;
-const namespace_cache_type = storage_values.namespace_cache_type;
-const identity_cache_type = storage_values.identity_cache_type;
-pub const typedValueFromPayload = value_codec.fromPayload;
-pub const validateTypedValuePayload = value_codec.validateValue;
-pub const writeTypedValueMsgPack = value_codec.writeMsgPack;
+const DocId = typed.DocId;
+const Value = typed.Value;
+const Record = typed.Record;
+const metadata_cache_type = storage_cache.metadata_cache_type;
+const namespace_cache_type = storage_cache.namespace_cache_type;
+const identity_cache_type = storage_cache.identity_cache_type;
+
+/// A managed result that might be backed by a cache handle.
+/// Every result is exposed as a slice of Records.
+/// Caller MUST call deinit() to release any potential cache handles and memory.
+pub const ManagedResult = struct {
+    records: []Record,
+    handle: ?metadata_cache_type.Handle = null,
+    allocator: ?Allocator = null,
+
+    pub fn deinit(self: *ManagedResult) void {
+        if (self.handle) |h| {
+            h.release();
+        } else if (self.allocator) |alloc| {
+            for (self.records) |r| r.deinit(alloc);
+            alloc.free(self.records);
+        }
+    }
+};
 
 var unique_id_counter = std.atomic.Value(usize).init(0);
 
@@ -64,7 +77,7 @@ pub const StorageEngine = struct {
     reconnection_config: ReconnectionConfig,
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
     schema_manager: *const Schema,
-    metadata_cache: typed_cache_type,
+    metadata_cache: metadata_cache_type,
     namespace_cache: namespace_cache_type,
     identity_cache: identity_cache_type,
     options: Options,
@@ -372,13 +385,13 @@ pub const StorageEngine = struct {
     }
 
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
-        const handle = self.namespace_cache.get(storage_values.namespaceCacheKey(namespace)) catch return null;
+        const handle = self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace)) catch return null;
         defer handle.release();
         return handle.data().namespace_id;
     }
 
     pub fn cachedUserId(self: *StorageEngine, identity_namespace_id: i64, external_user_id: []const u8) ?DocId {
-        const key = storage_values.identityCacheKey(identity_namespace_id, external_user_id);
+        const key = storage_cache.identityCacheKey(identity_namespace_id, external_user_id);
         const handle = self.identity_cache.get(key) catch return null;
         defer handle.release();
         return handle.data().user_doc_id;
@@ -418,8 +431,8 @@ pub const StorageEngine = struct {
         self.writer.flushPendingWrites();
     }
 
-    /// Converts a msgpack.Payload to a TypedValue based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the TypedValue.
+    /// Converts a msgpack.Payload to a Value based on the schema's FieldType.
+    /// Strings and blobs (JSON arrays) are duplicated and owned by the Value.
 
     // ─── Storage methods ──────────────────────────────────────────────────
 
@@ -431,7 +444,7 @@ pub const StorageEngine = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
         columns: []const ColumnValue,
-        auth_clause: ?@import("authorization.zig").InjectedClause,
+        guard_predicate: ?query_ast.FilterPredicate,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -439,22 +452,20 @@ pub const StorageEngine = struct {
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
         var queued = false;
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, auth_clause);
+        const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |rendered| rendered.deinitSql(self.allocator);
+        errdefer if (!queued) {
+            if (rendered_guard) |rendered| rendered.deinitValues(self.allocator);
+        };
+
+        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |rendered| rendered.sql else null);
         errdefer if (!queued) self.allocator.free(sql_string);
 
-        const values = try self.allocator.alloc(TypedValue, columns.len);
-        var initialized_count: usize = 0;
+        const values = try self.cloneColumnValues(columns);
         errdefer if (!queued) {
-            for (values[0..initialized_count]) |v| v.deinit(self.allocator);
+            for (values) |v| v.deinit(self.allocator);
             self.allocator.free(values);
         };
-        for (columns, 0..) |col, i| {
-            values[i] = try col.value.clone(self.allocator);
-            initialized_count += 1;
-        }
-
-        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
-        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
 
         const op = WriteOp{
             .upsert = .{
@@ -464,7 +475,7 @@ pub const StorageEngine = struct {
                 .owner_doc_id = owner_doc_id,
                 .sql = sql_string,
                 .values = values,
-                .auth_values = auth_values,
+                .guard_values = if (rendered_guard) |rendered| rendered.values else null,
                 .timestamp = std.time.timestamp(),
                 .completion_signal = null,
             },
@@ -480,14 +491,11 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         entries: []BatchEntry,
     ) !void {
-        const op = WriteOp{
-            .batch = .{
-                .entries = entries,
-                .completion_signal = null,
-            },
+        var entries_owned = true;
+        errdefer if (entries_owned) {
+            for (entries) |entry| entry.deinit(self.allocator);
+            self.allocator.free(entries);
         };
-        var queued = false;
-        errdefer if (!queued) op.deinit(self.allocator);
 
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -496,8 +504,103 @@ pub const StorageEngine = struct {
             _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
         }
 
+        const op = WriteOp{
+            .batch = .{
+                .entries = entries,
+                .completion_signal = null,
+            },
+        };
+        var queued = false;
+        errdefer if (!queued) op.deinit(self.allocator);
+        entries_owned = false;
+
         try self.writer.enqueueOp(op);
         queued = true;
+    }
+
+    pub fn prepareBatchUpsert(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        owner_doc_id: DocId,
+        columns: []const ColumnValue,
+        guard_predicate: ?query_ast.FilterPredicate,
+        timestamp: i64,
+    ) !BatchEntry {
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+
+        const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |rendered| rendered.deinitSql(self.allocator);
+        errdefer if (rendered_guard) |rendered| rendered.deinitValues(self.allocator);
+
+        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |rendered| rendered.sql else null);
+        errdefer self.allocator.free(sql_string);
+
+        const values = try self.cloneColumnValues(columns);
+        errdefer {
+            for (values) |value| value.deinit(self.allocator);
+            self.allocator.free(values);
+        }
+
+        return .{
+            .kind = .upsert,
+            .table_index = table_index,
+            .id = id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = owner_doc_id,
+            .sql = sql_string,
+            .values = values,
+            .guard_values = if (rendered_guard) |rendered| rendered.values else null,
+            .timestamp = timestamp,
+        };
+    }
+
+    pub fn prepareBatchDelete(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        owner_doc_id: DocId,
+        guard_predicate: ?query_ast.FilterPredicate,
+        timestamp: i64,
+    ) !BatchEntry {
+        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+
+        const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |rendered| rendered.deinitSql(self.allocator);
+        errdefer if (rendered_guard) |rendered| rendered.deinitValues(self.allocator);
+
+        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata, if (rendered_guard) |rendered| rendered.sql else null);
+        errdefer self.allocator.free(sql_string);
+
+        return .{
+            .kind = .delete,
+            .table_index = table_index,
+            .id = id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = owner_doc_id,
+            .sql = sql_string,
+            .values = null,
+            .guard_values = if (rendered_guard) |rendered| rendered.values else null,
+            .timestamp = timestamp,
+        };
+    }
+
+    fn cloneColumnValues(self: *StorageEngine, columns: []const ColumnValue) ![]Value {
+        const values = try self.allocator.alloc(Value, columns.len);
+        var initialized_count: usize = 0;
+        errdefer {
+            for (values[0..initialized_count]) |value| value.deinit(self.allocator);
+            self.allocator.free(values);
+        }
+        for (columns, 0..) |col, i| {
+            values[i] = try col.value.clone(self.allocator);
+            initialized_count += 1;
+        }
+        return values;
     }
 
     /// Select a single document by ID.
@@ -507,19 +610,29 @@ pub const StorageEngine = struct {
         table_index: usize,
         id: DocId,
         namespace_id: i64,
-        auth_clause: ?@import("authorization.zig").InjectedClause,
+        guard_predicate: ?query_ast.FilterPredicate,
     ) !ManagedResult {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
 
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+        }
+
         const cache_key = reader.getCacheKey(table_metadata, namespace_id, id);
 
         if (self.metadata_cache.get(cache_key)) |handle| {
-            const typed_row_ptr = handle.data();
-            const slice = @as([*]TypedRow, @ptrCast(typed_row_ptr))[0..1];
+            const typed_record_ptr = handle.data();
+            const slice = @as([*]Record, @ptrCast(typed_record_ptr))[0..1];
+            if (guard_predicate) |predicate| {
+                if (!try filter_eval.evaluatePredicate(predicate, slice[0])) {
+                    handle.release();
+                    return ManagedResult{ .records = &[_]Record{}, .allocator = null };
+                }
+            }
             return ManagedResult{
-                .rows = slice,
+                .records = slice,
                 .handle = handle,
             };
         } else |err| switch (err) {
@@ -532,7 +645,10 @@ pub const StorageEngine = struct {
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata, auth_clause);
+        const rendered_guard = try filter_sql.renderAndClause(allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |rendered| rendered.deinit(allocator);
+
+        const sql_query = try sql.buildSelectDocumentSql(allocator, table_metadata, if (rendered_guard) |rendered| rendered.sql else null);
         defer allocator.free(sql_query);
 
         // Snapshot write_seq before the DB read.
@@ -541,19 +657,19 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (auth_clause) |c| c.bind_values else null);
-        if (result) |row| {
+        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
+        if (result) |record| {
             if (self.writer.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
-                const cache_row = try row.clone(self.allocator);
-                errdefer cache_row.deinit(self.allocator);
-                try self.metadata_cache.update(cache_key, cache_row);
+                const cache_record = try record.clone(self.allocator);
+                errdefer cache_record.deinit(self.allocator);
+                try self.metadata_cache.update(cache_key, cache_record);
             }
-            const items = try allocator.alloc(TypedRow, 1);
-            items[0] = row;
-            return ManagedResult{ .rows = items, .allocator = allocator };
+            const items = try allocator.alloc(Record, 1);
+            items[0] = record;
+            return ManagedResult{ .records = items, .allocator = allocator };
         }
-        return ManagedResult{ .rows = &[_]TypedRow{}, .allocator = allocator };
+        return ManagedResult{ .records = &[_]Record{}, .allocator = null };
     }
 
     /// SELECT for a query filter.
@@ -563,18 +679,33 @@ pub const StorageEngine = struct {
         table_index: usize,
         namespace_id: i64,
         filter: query_ast.QueryFilter,
-        auth_clause: ?@import("authorization.zig").InjectedClause,
+        guard_predicate: ?query_ast.FilterPredicate,
     ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
         try self.ensureRunning();
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+
+        if (filter.predicate.isAlwaysFalse()) {
+            return .{
+                .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
+                .next_cursor_str = null,
+            };
+        }
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) {
+                return .{
+                    .result = ManagedResult{ .records = &[_]Record{}, .allocator = null },
+                    .next_cursor_str = null,
+                };
+            }
+        }
 
         const reader_idx = self.next_reader_idx.fetchAdd(1, .monotonic) % self.reader_pool.len;
         const node = &self.reader_pool[reader_idx];
         node.mutex.lock();
         defer node.mutex.unlock();
 
-        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, auth_clause);
+        const query_res = try reader.buildSelectQuery(allocator, table_metadata, effective_namespace_id, filter, guard_predicate);
         defer query_res.deinit(allocator);
 
         const sort_field_index = filter.order_by.field_index;
@@ -592,7 +723,7 @@ pub const StorageEngine = struct {
         );
 
         return .{
-            .result = ManagedResult{ .rows = exec_res.rows, .allocator = allocator },
+            .result = ManagedResult{ .records = exec_res.records, .allocator = allocator },
             .next_cursor_str = exec_res.next_cursor_str,
         };
     }
@@ -603,19 +734,25 @@ pub const StorageEngine = struct {
         table_index: usize,
         id: DocId,
         namespace_id: i64,
-        auth_clause: ?@import("authorization.zig").InjectedClause,
+        guard_predicate: ?query_ast.FilterPredicate,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        if (guard_predicate) |predicate| {
+            if (predicate.isAlwaysFalse()) return;
+        }
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
         var queued = false;
 
-        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata, auth_clause);
-        errdefer if (!queued) self.allocator.free(sql_string);
+        const rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |rendered| rendered.deinitSql(self.allocator);
+        errdefer if (!queued) {
+            if (rendered_guard) |rendered| rendered.deinitValues(self.allocator);
+        };
 
-        const auth_values = try authorization.cloneBindValues(self.allocator, auth_clause);
-        errdefer if (!queued) authorization.deinitBindValues(self.allocator, auth_values);
+        const sql_string = try sql.buildDeleteDocumentSql(self.allocator, table_metadata, if (rendered_guard) |rendered| rendered.sql else null);
+        errdefer if (!queued) self.allocator.free(sql_string);
 
         const op = WriteOp{
             .delete = .{
@@ -623,7 +760,7 @@ pub const StorageEngine = struct {
                 .id = id,
                 .namespace_id = effective_namespace_id,
                 .sql = sql_string,
-                .auth_values = auth_values,
+                .guard_values = if (rendered_guard) |rendered| rendered.values else null,
                 .completion_signal = null,
             },
         };

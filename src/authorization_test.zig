@@ -3,15 +3,18 @@ const testing = std.testing;
 const authorization = @import("authorization.zig");
 const AuthConfig = authorization.AuthConfig;
 const EvalContext = authorization.EvalContext;
-const doc_id = @import("doc_id.zig");
+const typed = @import("typed.zig");
+const query_ast = @import("query_ast.zig");
+const schema_mod = @import("schema.zig");
+const schema_helpers = @import("schema_test_helpers.zig");
 const schema_system = @import("schema/system.zig");
-const ScalarValue = @import("storage_engine.zig").ScalarValue;
+const ScalarValue = typed.ScalarValue;
 
 // ─── Parser Tests ───────────────────────────────────────────────────────────
 
 test "AuthConfig implicit defaults" {
     const allocator = testing.allocator;
-    var config = try authorization.implicitConfig(allocator);
+    var config = try implicitTestConfig(allocator);
     defer config.deinit();
 
     try testing.expect(config.namespace_rules.len >= 1);
@@ -27,7 +30,7 @@ test "AuthConfig parses custom namespace and store rules" {
     const json =
         \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$session.userId":{"eq":"$session.userId"}},"presenceRead":true,"presenceWrite":false}],"store":[{"collection":"posts","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     try testing.expect(config.namespace_rules.len == 1);
@@ -43,7 +46,7 @@ test "AuthConfig rejects unknown root keys" {
     const json =
         \\{"namespaces":[],"store":[],"unknownKey":true}
     ;
-    try testing.expectError(error.UnknownAuthKey, AuthConfig.init(allocator, json));
+    try testing.expectError(error.UnknownAuthKey, initTestConfig(allocator, json));
 }
 
 test "AuthConfig rejects invalid comparison operator" {
@@ -51,7 +54,7 @@ test "AuthConfig rejects invalid comparison operator" {
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$doc.owner_id":{"invalidOp":"value"}}}]}
     ;
-    try testing.expectError(error.InvalidComparisonOperator, AuthConfig.init(allocator, json));
+    try testing.expectError(error.InvalidComparisonOperator, initTestConfig(allocator, json));
 }
 
 test "AuthConfig parses empty boolean and float array literals" {
@@ -59,7 +62,7 @@ test "AuthConfig parses empty boolean and float array literals" {
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":{"and":[{"$session.externalId":{"in":[]}},{"$session.externalId":{"in":[true,false]}},{"$session.externalId":{"in":[2.5,1.5]}}]},"write":true}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     try testing.expect(config.store_rules[0].read == .logical_and);
@@ -153,7 +156,7 @@ test "matchNamespace wildcard matches one segment" {
 // ─── RAM Evaluator Tests ────────────────────────────────────────────────────
 
 test "evaluateCondition boolean true allows" {
-    var config = try authorization.implicitConfig(testing.allocator);
+    var config = try implicitTestConfig(testing.allocator);
     defer config.deinit();
 
     const result = authorization.evaluateCondition(.{ .boolean = true }, .{ .allocator = testing.allocator });
@@ -161,7 +164,7 @@ test "evaluateCondition boolean true allows" {
 }
 
 test "evaluateCondition boolean false denies" {
-    var config = try authorization.implicitConfig(testing.allocator);
+    var config = try implicitTestConfig(testing.allocator);
     defer config.deinit();
 
     const result = authorization.evaluateCondition(.{ .boolean = false }, .{ .allocator = testing.allocator });
@@ -178,7 +181,7 @@ test "evaluateConditionStrict hook denies" {
     try testing.expect(!result);
 }
 
-test "evaluateCondition $doc reference returns needs_injection" {
+test "evaluateCondition $doc reference returns needs_doc_predicate" {
     const allocator = testing.allocator;
     const cond = authorization.Condition{ .comparison = .{
         .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "owner_id") },
@@ -188,7 +191,7 @@ test "evaluateCondition $doc reference returns needs_injection" {
     defer cond.deinit(allocator);
 
     const result = authorization.evaluateCondition(cond, .{ .allocator = allocator });
-    try testing.expect(result == .needs_injection);
+    try testing.expect(result == .needs_doc_predicate);
 }
 
 test "evaluateCondition $session.userId comparison" {
@@ -200,7 +203,7 @@ test "evaluateCondition $session.userId comparison" {
     } };
     defer cond.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
@@ -292,7 +295,7 @@ test "namespaceRuleFor finds matching rule with captures" {
     const json =
         \\{"namespaces":[{"pattern":"public","storeFilter":true,"presenceRead":true,"presenceWrite":true},{"pattern":"tenant:{tenant_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     var match = try config.namespaceRuleFor(allocator, "tenant:acme");
@@ -304,7 +307,7 @@ test "namespaceRuleFor finds matching rule with captures" {
 
 test "namespaceRuleFor returns null when no match" {
     const allocator = testing.allocator;
-    var config = try authorization.implicitConfig(allocator);
+    var config = try implicitTestConfig(allocator);
     defer config.deinit();
 
     const match = try config.namespaceRuleFor(allocator, "unknown:something");
@@ -316,23 +319,23 @@ test "authorizeStoreNamespace enforces storeFilter" {
     const json =
         \\{"namespaces":[{"pattern":"tenant:{tenant_id}","storeFilter":{"$namespace.tenant_id":{"eq":"acme"}},"presenceRead":true,"presenceWrite":true}],"store":[]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    const user_id = doc_id.generateUuidV7();
+    const user_id = typed.generateUuidV7();
     try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1");
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1"));
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1"));
 }
 
-// ─── Injector Tests ─────────────────────────────────────────────────────────
+// ─── Doc Predicate Tests ────────────────────────────────────────────────────
 
-test "injectDocCondition produces SQL for $doc comparison" {
+test "buildDocPredicate produces filter predicate for $doc comparison" {
     const allocator = testing.allocator;
     const json =
-        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -340,28 +343,33 @@ test "injectDocCondition produces SQL for $doc comparison" {
     });
     defer table.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
     };
 
-    const clause = try authorization.injectDocCondition(allocator, config.store_rules[0].write, eval_ctx, &table);
-    defer clause.deinit(allocator);
+    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
 
-    try testing.expect(clause.bind_values.len == 1);
-    try testing.expect(clause.bind_values[0] == .scalar);
-    try testing.expect(clause.bind_values[0].scalar == .doc_id);
-    try testing.expect(doc_id.eql(clause.bind_values[0].scalar.doc_id, test_id));
-    try testing.expect(std.mem.indexOf(u8, clause.sql, "\"owner_id\"") != null);
+    try testing.expect(predicate.conditions != null);
+    try testing.expectEqual(@as(usize, 1), predicate.conditions.?.len);
+    try testing.expect(predicate.or_conditions == null);
+    const condition = predicate.conditions.?[0];
+    try testing.expectEqual(query_ast.Operator.eq, condition.op);
+    try testing.expect(condition.value != null);
+    try testing.expect(condition.value.? == .scalar);
+    try testing.expect(condition.value.?.scalar == .doc_id);
+    try testing.expect(typed.docIdEql(condition.value.?.scalar.doc_id, test_id));
+    try testing.expectEqual(schema_system.owner_id_field_index, condition.field_index);
 }
 
-test "injectDocCondition returns empty for RAM-only condition" {
+test "buildDocPredicate returns null for RAM-only allow" {
     const allocator = testing.allocator;
     const json =
         \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":true}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -369,19 +377,128 @@ test "injectDocCondition returns empty for RAM-only condition" {
     });
     defer table.deinit(allocator);
 
-    const clause = try authorization.injectDocCondition(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
-    defer clause.deinit(allocator);
-
-    try testing.expect(clause.sql.len == 0);
-    try testing.expect(clause.bind_values.len == 0);
+    const predicate = try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    try testing.expect(predicate == null);
 }
 
-test "injectDocCondition preserves logical_or SQL" {
+test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     const allocator = testing.allocator;
     const json =
-        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"or":[{"$doc.owner_id":{"eq":"$session.userId"}},{"$doc.visibility":{"eq":"public"}}]}}]}
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"notIn":[]}}}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const predicate = try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    try testing.expect(predicate == null);
+}
+
+test "buildDocPredicate preserves $doc in empty set as match none guard" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"in":[]}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    try testing.expect(predicate.isAlwaysFalse());
+    try testing.expect(predicate.conditions == null);
+    try testing.expect(predicate.or_conditions == null);
+}
+
+test "validateDocPredicate rejects array literal items with wrong type" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const items = try allocator.alloc(ScalarValue, 1);
+    items[0] = .{ .integer = 42 };
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .array = items } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateDocPredicate rejects $value array item type mismatch" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+        .{ .name = "scores", .field_type = .array, .items_type = .integer },
+    });
+    defer table.deinit(allocator);
+
+    var condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .eq,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "scores") } },
+    } };
+    defer condition.deinit(allocator);
+
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(condition, &table));
+}
+
+test "validateDocPredicate validates context variable shape by operator" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+        .{ .name = "allowed_visibility", .field_type = .array, .items_type = .text },
+        .{ .name = "tags", .field_type = .array, .items_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var valid_in_set = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
+        .op = .in_set,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "allowed_visibility") } },
+    } };
+    defer valid_in_set.deinit(allocator);
+    try authorization.validateDocPredicate(valid_in_set, &table);
+
+    var scalar_in_set = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "visibility") },
+        .op = .in_set,
+        .rhs = .{ .context_var = .{ .scope = .session, .field = try allocator.dupe(u8, "externalId") } },
+    } };
+    defer scalar_in_set.deinit(allocator);
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(scalar_in_set, &table));
+
+    var array_contains_array = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "tags") },
+        .op = .contains,
+        .rhs = .{ .context_var = .{ .scope = .value, .field = try allocator.dupe(u8, "tags") } },
+    } };
+    defer array_contains_array.deinit(allocator);
+    try testing.expectError(error.InvalidValue, authorization.validateDocPredicate(array_contains_array, &table));
+}
+
+test "buildDocPredicate preserves logical_or predicate" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.owner_id":{"eq":"$session.userId"}},{"$doc.visibility":{"eq":"public"}}]}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
     var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
@@ -390,44 +507,70 @@ test "injectDocCondition preserves logical_or SQL" {
     });
     defer table.deinit(allocator);
 
-    const test_id = doc_id.generateUuidV7();
+    const test_id = typed.generateUuidV7();
     const eval_ctx = EvalContext{
         .allocator = allocator,
         .session_user_id = test_id,
     };
 
-    const clause = try authorization.injectDocCondition(allocator, config.store_rules[0].write, eval_ctx, &table);
-    defer clause.deinit(allocator);
+    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
 
-    try testing.expect(std.mem.indexOf(u8, clause.sql, " OR ") != null);
-    try testing.expect(clause.bind_values.len == 2);
+    try testing.expect(predicate.conditions == null);
+    try testing.expect(predicate.or_conditions != null);
+    try testing.expectEqual(@as(usize, 2), predicate.or_conditions.?.len);
+    try testing.expectEqual(schema_system.owner_id_field_index, predicate.or_conditions.?[0].field_index);
+    try testing.expectEqual(query_ast.Operator.eq, predicate.or_conditions.?[0].op);
+    try testing.expectEqual(query_ast.Operator.eq, predicate.or_conditions.?[1].op);
+    try testing.expect(predicate.or_conditions.?[1].value.?.scalar == .text);
+    try testing.expectEqualStrings("public", predicate.or_conditions.?[1].value.?.scalar.text);
 }
 
-test "injectDocCondition denies hook conditions" {
+test "AuthConfig rejects unsupported store hook predicates at boot" {
     const allocator = testing.allocator;
     const json =
-        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"hook":"authorizeWrite"}}]}
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"hook":"authorizeWrite"}}]}
     ;
-    var config = try AuthConfig.init(allocator, json);
-    defer config.deinit();
-
-    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
-        .{ .name = "owner_id", .field_type = .doc_id },
-    });
-    defer table.deinit(allocator);
-
-    try testing.expectError(error.AccessDenied, authorization.injectDocCondition(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table));
+    try testing.expectError(error.UnsupportedAuthorizationPredicate, initTestConfig(allocator, json));
 }
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
+fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
+    var sm = try makeAuthTestSchema(allocator);
+    defer sm.deinit();
+    return AuthConfig.init(allocator, json, &sm);
+}
+
+fn implicitTestConfig(allocator: std.mem.Allocator) !AuthConfig {
+    var sm = try makeAuthTestSchema(allocator);
+    defer sm.deinit();
+    return authorization.implicitConfig(allocator, &sm);
+}
+
+fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
+    const text_types = [_]schema_mod.FieldType{.text};
+    return schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{
+        .{
+            .name = "posts",
+            .fields = &[_][]const u8{"visibility"},
+            .types = &text_types,
+        },
+        .{
+            .name = "test",
+            .fields = &[_][]const u8{"visibility"},
+            .types = &text_types,
+        },
+    });
+}
+
 const TestFieldDef = struct {
     name: []const u8,
-    field_type: @import("schema.zig").FieldType,
+    field_type: schema_mod.FieldType,
+    items_type: ?schema_mod.FieldType = null,
 };
 
-fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) @import("schema.zig").Table {
-    const schema_mod = @import("schema.zig");
+fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const TestFieldDef) schema_mod.Table {
     const name_owned = allocator.dupe(u8, name) catch @panic("oom");
     const name_quoted = std.fmt.allocPrint(allocator, "\"{s}\"", .{name}) catch @panic("oom");
 
@@ -447,6 +590,7 @@ fn makeTestTable(allocator: std.mem.Allocator, name: []const u8, fields: []const
             .name_quoted = field_name_quoted,
             .declared_type = field_def.field_type,
             .storage_type = field_def.field_type,
+            .items_type = if (field_def.field_type == .array) field_def.items_type orelse .text else null,
             .kind = .user,
         };
         idx += 1;
