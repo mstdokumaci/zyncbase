@@ -35,7 +35,7 @@ test "property: random query filters on StorageEngine" {
         defer filter.deinit(allocator);
 
         // Execute query
-        var managed = try (try ctx.table("entities")).selectQuery(allocator, 1, filter);
+        var managed = try (try ctx.table("entities")).selectQuery(allocator, 1, &filter);
         defer managed.deinit();
         try testing.expect(managed.records.len >= 0);
     }

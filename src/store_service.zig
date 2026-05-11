@@ -12,7 +12,7 @@ const StorageError = storage_mod.StorageError;
 const DocId = typed.DocId;
 
 /// Returns the id value if the filter is a simple `id = ?` point lookup.
-fn isIdEqualsFilter(filter: query_ast.QueryFilter, id_index: usize) ?DocId {
+fn isIdEqualsFilter(filter: *const query_ast.QueryFilter, id_index: usize) ?DocId {
     // Must have: exactly 1 AND condition, no OR, no order, no cursor
     const conds = filter.predicate.conditions orelse return null;
     if (conds.len != 1) return null;
@@ -85,7 +85,7 @@ pub const StoreService = struct {
     pub const WriteContext = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
-        auth_predicate: ?query_ast.FilterPredicate = null,
+        auth_predicate: ?*const query_ast.FilterPredicate = null,
     };
 
     pub const ScopedSession = struct {
@@ -182,7 +182,10 @@ pub const StoreService = struct {
             if (tuple[0] != .str) return error.InvalidMessageFormat;
             const kind_str = tuple[0].str.value();
 
-            const auth_predicate = if (auth_predicates) |predicates| predicates[i] else null;
+            const auth_predicate = if (auth_predicates) |predicates|
+                if (predicates[i]) |*predicate| predicate else null
+            else
+                null;
 
             if (std.mem.eql(u8, kind_str, "s")) {
                 if (tuple.len < 3) return error.MissingRequiredFields;
@@ -205,15 +208,15 @@ pub const StoreService = struct {
         namespace_id: i64,
         table_index_payload: msgpack.Payload,
         payload: msgpack.Payload,
-        auth_predicate: ?query_ast.FilterPredicate,
+        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !QueryResult {
         const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
-        const filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
+        var filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
         errdefer filter.deinit(allocator);
 
-        if (isIdEqualsFilter(filter, schema.id_field_index)) |id| {
+        if (isIdEqualsFilter(&filter, schema.id_field_index)) |id| {
             var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id, auth_predicate);
             errdefer result.deinit();
             return .{
@@ -225,7 +228,7 @@ pub const StoreService = struct {
             };
         }
 
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter, auth_predicate);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, &filter, auth_predicate);
         errdefer {
             results.result.deinit();
             if (results.next_cursor_str) |s| allocator.free(s);
@@ -246,7 +249,7 @@ pub const StoreService = struct {
         namespace_id: i64,
         filter: *query_ast.QueryFilter,
         next_cursor: []const u8,
-        auth_predicate: ?query_ast.FilterPredicate,
+        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !CursorResult {
         const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
         const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
@@ -254,7 +257,7 @@ pub const StoreService = struct {
         if (filter.after) |*old| old.deinit(allocator);
         filter.after = cursor;
 
-        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter.*, auth_predicate);
+        var results = try self.storage_engine.selectQuery(allocator, table_index, namespace_id, filter, auth_predicate);
         errdefer {
             results.result.deinit();
             if (results.next_cursor_str) |s| allocator.free(s);
@@ -358,7 +361,7 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?query_ast.FilterPredicate,
+        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_or_field);
 
@@ -419,7 +422,7 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?query_ast.FilterPredicate,
+        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_only);
 

@@ -41,7 +41,7 @@ test "StorageEngine: selectQuery basic equality" {
     };
     filter.predicate.conditions = conds;
 
-    var managed = try people.selectQuery(allocator, 1, filter);
+    var managed = try people.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
     const res = managed.records;
 
@@ -68,7 +68,7 @@ test "StorageEngine: selectQuery match-none predicate returns empty result" {
     defer filter.deinit(allocator);
     filter.predicate.state = .match_none;
 
-    var managed = try people.selectQuery(allocator, 1, filter);
+    var managed = try people.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
 
     try testing.expectEqual(@as(usize, 0), managed.records.len);
@@ -92,7 +92,7 @@ test "StorageEngine: match-none guard permits insert branch and blocks update br
         .index = title_index,
         .value = tth.valText("first"),
     }};
-    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, guard);
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, &guard);
     try tasks.flush();
 
     {
@@ -105,7 +105,7 @@ test "StorageEngine: match-none guard permits insert branch and blocks update br
         .index = title_index,
         .value = tth.valText("second"),
     }};
-    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, guard);
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, &guard);
     try tasks.flush();
 
     var doc = try tasks.getOne(allocator, 1, 1);
@@ -153,7 +153,7 @@ test "StorageEngine: selectQuery with OR and ordering" {
     };
     filter.predicate.or_conditions = or_conds;
 
-    var managed = try people.selectQuery(allocator, 1, filter);
+    var managed = try people.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
     const res = managed.records;
 
@@ -214,7 +214,7 @@ test "StorageEngine: selectQuery combines AND conditions with OR group" {
     };
     filter.predicate.or_conditions = or_conds;
 
-    var managed = try tasks.selectQuery(allocator, 1, filter);
+    var managed = try tasks.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
     const res = managed.records;
 
@@ -248,7 +248,7 @@ test "StorageEngine: selectQuery pagination (after)" {
     defer filter1.deinit(allocator);
     filter1.limit = 2;
 
-    var managed1 = try scores.selectQuery(allocator, 1, filter1);
+    var managed1 = try scores.selectQuery(allocator, 1, &filter1);
     defer managed1.deinit();
     const res1 = managed1.records;
     try testing.expectEqual(@as(usize, 2), res1.len);
@@ -264,7 +264,7 @@ test "StorageEngine: selectQuery pagination (after)" {
         .id = 2,
     };
 
-    var managed2 = try scores.selectQuery(allocator, 1, filter2);
+    var managed2 = try scores.selectQuery(allocator, 1, &filter2);
     defer managed2.deinit();
     const res2 = managed2.records;
     try testing.expectEqual(@as(usize, 2), res2.len);
@@ -324,7 +324,7 @@ test "StorageEngine: selectQuery array projection uses schema field names for ar
     };
     filter.predicate.conditions = conds;
 
-    var managed = try items.selectQuery(allocator, 1, filter);
+    var managed = try items.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
 
     const res = managed.records;
@@ -375,7 +375,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.predicate.conditions = conds;
-        var managed = try wildcards.selectQuery(allocator, ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -395,7 +395,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.predicate.conditions = conds;
-        var managed = try wildcards.selectQuery(allocator, ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -415,7 +415,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.predicate.conditions = conds;
-        var managed = try wildcards.selectQuery(allocator, ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -435,7 +435,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.predicate.conditions = conds;
-        var managed = try wildcards.selectQuery(allocator, ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -455,7 +455,7 @@ test "StorageEngine: LIKE wildcard escaping" {
             .items_type = null,
         };
         filter.predicate.conditions = conds;
-        var managed = try wildcards.selectQuery(allocator, ns, filter);
+        var managed = try wildcards.selectQuery(allocator, ns, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 1), results.len);
@@ -485,7 +485,7 @@ test "StorageEngine: LIKE wildcard escaping" {
         filter.predicate.conditions = conds;
 
         // Querying "ns" - should return 0 results because no document in "ns" has that literal string
-        var managed = try wildcards.selectQuery(allocator, 1, filter);
+        var managed = try wildcards.selectQuery(allocator, 1, &filter);
         defer managed.deinit();
         const results = managed.records;
         try testing.expectEqual(@as(usize, 0), results.len);

@@ -79,7 +79,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res = try engine.selectQuery(allocator, items_md.index, ns, sql_filter, null);
+    var sql_res = try engine.selectQuery(allocator, items_md.index, ns, &sql_filter, null);
     defer sql_res.result.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_res.result.records, items_md);
@@ -100,14 +100,14 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res = try engine.selectQuery(allocator, items_md.index, ns, all_filter, null);
+    var all_res = try engine.selectQuery(allocator, items_md.index, ns, &all_filter, null);
     defer all_res.result.deinit();
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_res.result.records) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
+        if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
             const id = sth.getFieldDocIdOrNull(row, items_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }
@@ -180,7 +180,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     });
     defer sql_filter.deinit(allocator);
 
-    var sql_res2 = try engine.selectQuery(allocator, players_md.index, ns, sql_filter, null);
+    var sql_res2 = try engine.selectQuery(allocator, players_md.index, ns, &sql_filter, null);
     defer sql_res2.result.deinit();
 
     var sql_ids = try collectResultSetIds(allocator, sql_res2.result.records, players_md);
@@ -201,14 +201,14 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     var all_filter = try qth.makeDefaultFilter(allocator);
     defer all_filter.deinit(allocator);
 
-    var all_res2 = try engine.selectQuery(allocator, players_md.index, ns, all_filter, null);
+    var all_res2 = try engine.selectQuery(allocator, players_md.index, ns, &all_filter, null);
     defer all_res2.result.deinit();
 
     var mem_ids = std.AutoHashMap(typed.DocId, void).init(allocator);
     defer mem_ids.deinit();
 
     for (all_res2.result.records) |row| {
-        if (try SubscriptionEngine.evaluateFilter(mem_filter, row)) {
+        if (try SubscriptionEngine.evaluateFilter(&mem_filter, &row)) {
             const id = sth.getFieldDocIdOrNull(row, players_md, "id") orelse continue;
             try mem_ids.put(id, {});
         }

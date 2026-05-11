@@ -20,7 +20,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
 
     const run_subscribe = struct {
         fn run(engine_ptr: *SubscriptionEngine, start_id: u32, sub_count: u32, alloc: std.mem.Allocator) void {
-            const filter = qth.makeFilterWithConditions(alloc, &[_]query_ast.Condition{
+            var filter = qth.makeFilterWithConditions(alloc, &[_]query_ast.Condition{
                 .{ .field_index = 2, .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
             }) catch @panic("OOM");
             defer filter.deinit(alloc);
@@ -80,7 +80,7 @@ test "SubscriptionEngine: concurrent unsubscribe" {
     var engine = SubscriptionEngine.init(allocator);
     defer engine.deinit();
 
-    const filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
+    var filter = try qth.makeFilterWithConditions(allocator, &[_]query_ast.Condition{
         .{ .field_index = 2, .op = .eq, .value = tth.valBool(true), .field_type = .boolean, .items_type = null },
     });
     defer filter.deinit(allocator);

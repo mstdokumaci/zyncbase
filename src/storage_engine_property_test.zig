@@ -340,7 +340,7 @@ test "storage: repeated flush consistency" {
     const test_table = try ctx.table("test");
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try test_table.selectQuery(allocator, 1, filter);
+    var managed = try test_table.selectQuery(allocator, 1, &filter);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 50), managed.records.len);
 }

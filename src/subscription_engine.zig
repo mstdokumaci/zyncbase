@@ -254,8 +254,9 @@ pub const SubscriptionEngine = struct {
             self.next_group_id += 1;
             first_sub = true;
 
-            const cloned_filter = try filter.clone(self.allocator);
-            errdefer cloned_filter.deinit(self.allocator);
+            var cloned_filter = try filter.clone(self.allocator);
+            var cloned_filter_owned = true;
+            errdefer if (cloned_filter_owned) cloned_filter.deinit(self.allocator);
 
             var group = SubscriptionGroup{
                 .id = group_id,
@@ -263,25 +264,63 @@ pub const SubscriptionEngine = struct {
                 .table_index = table_index,
                 .filter = cloned_filter,
             };
+            cloned_filter_owned = false;
+            var group_owned = true;
+            errdefer if (group_owned) group.deinit(self.allocator);
+
             try group.subscribers.put(self.allocator, sub_key, {});
             try self.groups.put(self.allocator, group_id, group);
+            group_owned = false;
+            errdefer {
+                if (self.groups.getPtr(group_id)) |inserted_group| inserted_group.deinit(self.allocator);
+                _ = self.groups.remove(group_id);
+            }
+
             try self.groups_by_filter.put(self.allocator, cloned_filter, group_id);
+            errdefer {
+                _ = self.groups_by_filter.remove(cloned_filter);
+            }
 
             // Index by collection
             const gop = try self.groups_by_collection.getOrPut(self.allocator, coll_key);
+            var collection_created = false;
             if (!gop.found_existing) {
                 gop.value_ptr.* = std.ArrayListUnmanaged(u64).empty;
+                collection_created = true;
             }
+            errdefer if (collection_created) {
+                if (self.groups_by_collection.getPtr(coll_key)) |list| list.deinit(self.allocator);
+                _ = self.groups_by_collection.remove(coll_key);
+            };
             try gop.value_ptr.append(self.allocator, group_id);
+            errdefer {
+                self.removeGroupFromCollectionIndex(coll_key, group_id);
+            }
         }
 
         if (!first_sub) {
             var group = self.groups.getPtr(group_id) orelse unreachable;
             try group.subscribers.put(self.allocator, sub_key, {});
+            errdefer _ = group.subscribers.remove(sub_key);
         }
 
         try self.active_subs.put(self.allocator, sub_key, group_id);
         return first_sub;
+    }
+
+    fn removeGroupFromCollectionIndex(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64) void {
+        if (self.groups_by_collection.getPtr(coll_key)) |list| {
+            for (list.items, 0..) |gid, i| {
+                if (gid == group_id) {
+                    _ = list.swapRemove(i);
+                    break;
+                }
+            }
+            if (list.items.len == 0) {
+                list.deinit(self.allocator);
+                _ = self.groups_by_collection.remove(coll_key);
+            }
+        }
     }
 
     pub fn unsubscribe(self: *SubscriptionEngine, conn_id: u64, sub_id: u64) void {
@@ -307,18 +346,7 @@ pub const SubscriptionEngine = struct {
         if (group.subscribers.count() == 0) {
             _ = self.groups_by_filter.remove(group.filter);
             const coll_key = CollectionKey{ .namespace_id = group.namespace_id, .table_index = group.table_index };
-            if (self.groups_by_collection.getPtr(coll_key)) |list| {
-                for (list.items, 0..) |gid, i| {
-                    if (gid == group_id.value) {
-                        _ = list.swapRemove(i);
-                        break;
-                    }
-                }
-                if (list.items.len == 0) {
-                    list.deinit(self.allocator);
-                    _ = self.groups_by_collection.remove(coll_key);
-                }
-            }
+            self.removeGroupFromCollectionIndex(coll_key, group_id.value);
             group.deinit(self.allocator);
             _ = self.groups.remove(group_id.value);
         }
@@ -383,8 +411,8 @@ pub const SubscriptionEngine = struct {
         for (group_ids.items) |gid| {
             const group = self.groups.get(gid) orelse continue;
 
-            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(group.filter, old) else false;
-            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(group.filter, new) else false;
+            const matched_before = if (change.old_record) |old| try SubscriptionEngine.evaluateFilter(&group.filter, &old) else false;
+            const matches_after = if (change.new_record) |new| try SubscriptionEngine.evaluateFilter(&group.filter, &new) else false;
 
             if (matched_before and !matches_after) {
                 // Record left the filter: send remove
@@ -415,7 +443,7 @@ pub const SubscriptionEngine = struct {
     }
 
     /// Evaluates a record against a filter AST.
-    pub fn evaluateFilter(filter: QueryFilter, record: Record) !bool {
-        return filter_eval.evaluatePredicate(filter.predicate, record);
+    pub fn evaluateFilter(filter: *const QueryFilter, record: *const Record) !bool {
+        return filter_eval.evaluatePredicate(&filter.predicate, record);
     }
 };

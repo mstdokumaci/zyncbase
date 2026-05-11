@@ -88,7 +88,7 @@ pub const TableFixture = struct {
         self: TableFixture,
         allocator: Allocator,
         namespace_id: i64,
-        filter: query_ast.QueryFilter,
+        filter: *const query_ast.QueryFilter,
     ) !storage_engine.ManagedResult {
         const res = try self.engine.selectQuery(allocator, self.metadata.index, namespace_id, filter, null);
         if (res.next_cursor_str) |s| allocator.free(s);

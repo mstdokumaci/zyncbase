@@ -28,7 +28,7 @@ test "basic query filter parsing" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
     const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
@@ -60,7 +60,7 @@ test "query with orConditions" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
     const users_md = sm.getTable("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
@@ -96,7 +96,7 @@ test "query with orderBy and after" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     const items_md = sm.getTable("items") orelse return error.UnknownTable;
@@ -144,7 +144,7 @@ test "isNull condition (no value tuple)" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.predicate.conditions.?.len);
@@ -215,7 +215,7 @@ test "in condition parses to typed array" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
@@ -247,7 +247,7 @@ test "query normalization drops AND notIn empty set" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
@@ -279,7 +279,7 @@ test "query normalization marks AND in empty set as match none" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.predicate.isAlwaysFalse());
@@ -311,7 +311,7 @@ test "query normalization drops OR tautology but keeps AND conditions" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
@@ -340,7 +340,7 @@ test "query normalization marks OR group with only false terms as match none" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.predicate.isAlwaysFalse());
@@ -412,7 +412,7 @@ test "contains on array field parses using element type" {
     });
     defer root.free(allocator);
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(schema.FieldType.array, filter.predicate.conditions.?[0].field_type);
@@ -553,7 +553,7 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     order_arr[1] = msgpack.Payload.uintToPayload(1);
     try root.mapPut("orderBy", .{ .arr = order_arr });
 
-    const filter = try query_parser.parseQueryFilter(allocator, &sm, tbl_items.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl_items.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(i64, 42), filter.after.?.sort_value.scalar.integer);

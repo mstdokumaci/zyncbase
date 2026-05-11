@@ -124,11 +124,11 @@ pub fn parseQueryFilter(
 
     errdefer {
         if (predicate.conditions) |conds| {
-            for (conds) |c| c.deinit(allocator);
+            for (conds) |*c| c.deinit(allocator);
             allocator.free(conds);
         }
         if (predicate.or_conditions) |or_conds| {
-            for (or_conds) |c| c.deinit(allocator);
+            for (or_conds) |*c| c.deinit(allocator);
             allocator.free(or_conds);
         }
         if (after) |*a| a.deinit(allocator);
@@ -144,14 +144,14 @@ pub fn parseQueryFilter(
         if (std.mem.eql(u8, key, "conditions") and value == .arr) {
             const new_conds = try parseConditions(allocator, table_metadata, value);
             if (predicate.conditions) |old| {
-                for (old) |c| c.deinit(allocator);
+                for (old) |*c| c.deinit(allocator);
                 allocator.free(old);
             }
             predicate.conditions = new_conds;
         } else if (std.mem.eql(u8, key, "orConditions") and value == .arr) {
             const new_or = try parseConditions(allocator, table_metadata, value);
             if (predicate.or_conditions) |old| {
-                for (old) |c| c.deinit(allocator);
+                for (old) |*c| c.deinit(allocator);
                 allocator.free(old);
             }
             predicate.or_conditions = new_or;
@@ -349,7 +349,7 @@ fn parseConditions(
     const result = try allocator.alloc(Condition, arr.len);
     var count: usize = 0;
     errdefer {
-        for (result[0..count]) |c| c.deinit(allocator);
+        for (result[0..count]) |*c| c.deinit(allocator);
         allocator.free(result);
     }
 

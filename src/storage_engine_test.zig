@@ -296,9 +296,9 @@ test "StorageEngine: query collection" {
     try people.insertText(2, 2, "name", "Bob");
     try people.flush();
     // Query for collection using empty filter
-    const filter = try qth.makeDefaultFilter(allocator);
+    var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    var managed = try people.selectQuery(allocator, 2, filter);
+    var managed = try people.selectQuery(allocator, 2, &filter);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 2), managed.records.len);
 }

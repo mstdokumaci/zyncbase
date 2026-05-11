@@ -322,9 +322,10 @@ pub const MessageHandler = struct {
         defer sub_query.deinit(arena_allocator);
 
         const table = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
-        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor, read_auth);
+        var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor, read_auth_ptr);
         defer page.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{
@@ -356,7 +357,7 @@ pub const MessageHandler = struct {
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, value);
-        return try authorization.buildDocPredicate(arena, store_rule.write, eval_ctx, table);
+        return try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
     }
 
     fn evaluateStoreReadAuth(
@@ -371,7 +372,7 @@ pub const MessageHandler = struct {
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, null);
-        return try authorization.buildDocPredicate(arena, store_rule.read, eval_ctx, table);
+        return try authorization.buildDocPredicate(store_rule.read, eval_ctx, table);
     }
 
     fn handleStoreSet(
@@ -387,13 +388,14 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
+        var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
+        const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
         try self.store_service.setPath(
             .{
                 .namespace_id = session.namespace_id,
                 .owner_doc_id = session.user_doc_id,
-                .auth_predicate = auth_predicate,
+                .auth_predicate = auth_predicate_ptr,
             },
             payloads.path,
             value,
@@ -414,10 +416,11 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
+        var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
+        const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
         try self.store_service.removePath(
-            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_predicate = auth_predicate },
+            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_predicate = auth_predicate_ptr },
             payloads.path,
         );
 
@@ -451,7 +454,7 @@ pub const MessageHandler = struct {
                 const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
                 const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
-                predicates[i] = try authorization.buildDocPredicate(arena_allocator, store_rule.write, eval_ctx, table);
+                predicates[i] = try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
             }
         }
 
@@ -483,9 +486,10 @@ pub const MessageHandler = struct {
         const namespace_id = try requireStoreNamespace(conn);
 
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);
         defer qr.deinit(arena_allocator);
 
         _ = try self.subscription_engine.subscribe(namespace_id, qr.table_index, qr.filter, conn.id, sub_id);
@@ -518,9 +522,10 @@ pub const MessageHandler = struct {
         const namespace_id = try requireStoreNamespace(conn);
 
         const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
-        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth);
+        var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);
         defer qr.deinit(arena_allocator);
 
         return try wire.encodeQuery(arena_allocator, .{

@@ -9,8 +9,10 @@ test "evaluatePredicate respects explicit predicate states" {
     var record = try tth.recordFromValues(allocator, &.{});
     defer record.deinit(allocator);
 
-    try std.testing.expect(try filter_eval.evaluatePredicate(.{ .state = .match_all }, record));
-    try std.testing.expect(!try filter_eval.evaluatePredicate(.{ .state = .match_none }, record));
+    var match_all = query_ast.FilterPredicate{ .state = .match_all };
+    var match_none = query_ast.FilterPredicate{ .state = .match_none };
+    try std.testing.expect(try filter_eval.evaluatePredicate(&match_all, &record));
+    try std.testing.expect(!try filter_eval.evaluatePredicate(&match_none, &record));
 }
 
 test "evaluatePredicate keeps conditional AND plus OR semantics" {
@@ -34,7 +36,7 @@ test "evaluatePredicate keeps conditional AND plus OR semantics" {
         .items_type = null,
     };
 
-    const predicate = query_ast.FilterPredicate{
+    var predicate = query_ast.FilterPredicate{
         .conditions = conds,
         .or_conditions = or_conds,
     };
@@ -42,9 +44,9 @@ test "evaluatePredicate keeps conditional AND plus OR semantics" {
 
     var matching = try tth.recordFromValues(allocator, &.{ tth.valText("high"), tth.valText("active") });
     defer matching.deinit(allocator);
-    try std.testing.expect(try filter_eval.evaluatePredicate(predicate, matching));
+    try std.testing.expect(try filter_eval.evaluatePredicate(&predicate, &matching));
 
     var wrong_or = try tth.recordFromValues(allocator, &.{ tth.valText("high"), tth.valText("closed") });
     defer wrong_or.deinit(allocator);
-    try std.testing.expect(!try filter_eval.evaluatePredicate(predicate, wrong_or));
+    try std.testing.expect(!try filter_eval.evaluatePredicate(&predicate, &wrong_or));
 }

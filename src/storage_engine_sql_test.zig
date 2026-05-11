@@ -2,6 +2,8 @@ const std = @import("std");
 const schema = @import("schema.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
 const sql = @import("storage_engine/sql.zig");
+const filter_sql = @import("storage_engine/filter_sql.zig");
+const query_ast = @import("query_ast.zig");
 const ColumnValue = @import("storage_engine.zig").ColumnValue;
 
 test "storage SQL builders quote identifiers" {
@@ -58,4 +60,59 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
         "SELECT \"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\" FROM \"select\" WHERE \"namespace_id\" = ? AND (\"from\", \"id\") > (?, ?) ORDER BY \"from\" ASC, \"id\" ASC",
         sql_buf.items,
     );
+}
+
+test "filter SQL render cleans up all allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, renderFilterSqlForAllocationTest, .{});
+}
+
+fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
+    const fields = [_]schema.Field{schema_helpers.makeField("name", .text)};
+    const table = schema_helpers.makeTable("people", &fields);
+    var tables = [_]schema.Table{table};
+    var sm = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    defer sm.deinit();
+    const table_metadata = sm.getTable("people") orelse return error.TestExpectedValue;
+    const name_index = table_metadata.fieldIndex("name") orelse return error.TestExpectedValue;
+
+    const conds = try allocator.alloc(query_ast.Condition, 2);
+    for (conds) |*cond| {
+        cond.* = .{
+            .field_index = 0,
+            .op = .eq,
+            .value = null,
+            .field_type = .text,
+            .items_type = null,
+        };
+    }
+    var predicate = query_ast.FilterPredicate{ .conditions = conds };
+    var predicate_owned = true;
+    errdefer if (predicate_owned) predicate.deinit(allocator);
+
+    const eq_text = try allocator.dupe(u8, "ada");
+    conds[0] = .{
+        .field_index = name_index,
+        .op = .eq,
+        .value = .{ .scalar = .{ .text = eq_text } },
+        .field_type = .text,
+        .items_type = null,
+    };
+
+    const prefix_text = try allocator.dupe(u8, "a_%");
+    conds[1] = .{
+        .field_index = name_index,
+        .op = .startsWith,
+        .value = .{ .scalar = .{ .text = prefix_text } },
+        .field_type = .text,
+        .items_type = null,
+    };
+
+    var rendered = (try filter_sql.renderAndClause(allocator, table_metadata, &predicate)) orelse return error.TestExpectedValue;
+    defer rendered.deinit(allocator);
+    defer predicate.deinit(allocator);
+    predicate_owned = false;
+
+    try std.testing.expect(rendered.sqlSlice() != null);
+    const rendered_values = rendered.values orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(usize, 2), rendered_values.len);
 }
