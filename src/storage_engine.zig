@@ -663,7 +663,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, sql_query);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const result = try reader.execSelectDocumentTyped(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
+        const result = try reader.execSelectDocument(allocator, &node.conn, stmt, id, effective_namespace_id, table_metadata, if (rendered_guard) |rendered| rendered.values else null);
         if (result) |record| {
             if (self.writer.snapshotVersion() == seq_before) {
                 // Populate cache with a persistent copy (cloned into GPA)
@@ -718,7 +718,7 @@ pub const StorageEngine = struct {
         var mstmt = try node.stmt_cache.acquire(self.allocator, &node.conn, query_res.sql);
         defer mstmt.release();
         const stmt = mstmt.stmt;
-        const exec_res = try reader.execQueryTyped(
+        const exec_res = try reader.execQuery(
             allocator,
             &node.conn,
             stmt,

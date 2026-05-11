@@ -168,7 +168,7 @@ pub const Writer = struct {
         };
         var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
         defer mstmt.release();
-        return reader.execSelectDocumentTyped(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null);
+        return reader.execSelectDocument(self.allocator, &self.conn, mstmt.stmt, id, namespace_id, table_metadata, null);
     }
 
     fn pushOwnedChange(

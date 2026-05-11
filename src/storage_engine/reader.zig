@@ -158,7 +158,7 @@ pub fn decodeRecord(
     };
 }
 
-pub fn execSelectDocumentTyped(
+pub fn execSelectDocument(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
@@ -186,7 +186,7 @@ pub fn execSelectDocumentTyped(
     return try decodeRecord(allocator, stmt, table_metadata);
 }
 
-pub fn execQueryTyped(
+pub fn execQuery(
     allocator: Allocator,
     db: *sqlite.Db,
     stmt: *sqlite.c.sqlite3_stmt,
