@@ -1,6 +1,8 @@
 const std = @import("std");
+const msgpack = @import("msgpack");
 const testing = std.testing;
 const authorization = @import("authorization.zig");
+const evaluate_mod = @import("authorization/evaluate.zig");
 const AuthConfig = authorization.AuthConfig;
 const EvalContext = authorization.EvalContext;
 const typed = @import("typed.zig");
@@ -349,7 +351,7 @@ test "buildDocPredicate produces filter predicate for $doc comparison" {
         .session_user_id = test_id,
     };
 
-    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions != null);
@@ -377,7 +379,7 @@ test "buildDocPredicate returns null for RAM-only allow" {
     });
     defer table.deinit(allocator);
 
-    const predicate = try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
     try testing.expect(predicate == null);
 }
 
@@ -394,7 +396,7 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     });
     defer table.deinit(allocator);
 
-    const predicate = try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    const predicate = try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
     try testing.expect(predicate == null);
 }
 
@@ -411,12 +413,92 @@ test "buildDocPredicate preserves $doc in empty set as match none guard" {
     });
     defer table.deinit(allocator);
 
-    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.isAlwaysFalse());
     try testing.expect(predicate.conditions == null);
     try testing.expect(predicate.or_conditions == null);
+}
+
+test "ResolvedAuthValue intoOwned moves owned value and makes deinit no-op" {
+    const allocator = testing.allocator;
+
+    const text = try allocator.dupe(u8, "private");
+    const original_ptr = text.ptr;
+    var resolved = evaluate_mod.ResolvedAuthValue.fromOwned(.{ .scalar = .{ .text = text } });
+
+    var owned_value = try resolved.intoOwned(allocator);
+    defer owned_value.deinit(allocator);
+
+    try testing.expect(owned_value == .scalar);
+    try testing.expect(owned_value.scalar == .text);
+    try testing.expect(owned_value.scalar.text.ptr == original_ptr);
+    try testing.expectEqual(std.meta.activeTag(evaluate_mod.ResolvedAuthValue{ .borrowed = .nil }), std.meta.activeTag(resolved));
+
+    resolved.deinit(allocator);
+}
+
+test "buildDocPredicate clones borrowed literal RHS into predicate" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"public"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    const literal_text = config.store_rules[0].write.comparison.rhs.literal.scalar.text;
+    const conditions = predicate.conditions orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), conditions.len);
+    const predicate_value = conditions[0].value orelse return error.TestExpectedValue;
+    try testing.expect(predicate_value == .scalar);
+    try testing.expect(predicate_value.scalar == .text);
+    const predicate_text = predicate_value.scalar.text;
+    try testing.expectEqualStrings("public", predicate_text);
+    try testing.expect(predicate_text.ptr != literal_text.ptr);
+}
+
+test "buildDocPredicate resolves value RHS from incoming payload" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"$value.visibility"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try payload.mapPut("visibility", try msgpack.Payload.strToPayload("private", allocator));
+
+    const eval_ctx = EvalContext{
+        .allocator = allocator,
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    defer predicate.deinit(allocator);
+
+    const conditions = predicate.conditions orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), conditions.len);
+    const condition = conditions[0];
+    const condition_value = condition.value orelse return error.TestExpectedValue;
+    try testing.expect(condition_value == .scalar);
+    try testing.expect(condition_value.scalar == .text);
+    try testing.expectEqualStrings("private", condition_value.scalar.text);
 }
 
 test "validateDocPredicate rejects array literal items with wrong type" {
@@ -513,7 +595,7 @@ test "buildDocPredicate preserves logical_or predicate" {
         .session_user_id = test_id,
     };
 
-    var predicate = (try authorization.buildDocPredicate(allocator, config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
+    var predicate = (try authorization.buildDocPredicate(config.store_rules[0].write, eval_ctx, &table)) orelse return error.TestExpectedValue;
     defer predicate.deinit(allocator);
 
     try testing.expect(predicate.conditions == null);

@@ -2,11 +2,12 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 const types = @import("types.zig");
 const typed = @import("../typed.zig");
+const Allocator = std.mem.Allocator;
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
 
 pub const EvalContext = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     session_user_id: ?typed.DocId = null,
     session_external_id: ?[]const u8 = null,
     namespace_captures: ?*const std.StringHashMap([]const u8) = null,
@@ -21,22 +22,46 @@ pub const EvalResult = enum {
     needs_doc_predicate,
 };
 
-pub const ResolvedValue = union(enum) {
+/// A resolved authorization operand plus its lifetime.
+///
+/// `borrowed` is a non-owning view into auth config, session, namespace, or path
+/// state. `owned` is allocated while resolving authorization input, currently
+/// for `$value.*` fields decoded from the incoming MessagePack payload.
+///
+/// Owned values must be deinitialized, or moved out with `intoOwned`, using the
+/// same allocator that created them.
+pub const ResolvedAuthValue = union(enum) {
     borrowed: Value,
     owned: Value,
 
-    pub fn asValue(self: ResolvedValue) Value {
+    pub fn fromBorrowed(value: Value) ResolvedAuthValue {
+        return .{ .borrowed = value };
+    }
+
+    pub fn fromOwned(value: Value) ResolvedAuthValue {
+        return .{ .owned = value };
+    }
+
+    /// Returns a non-owning view. The caller must not deinitialize it.
+    pub fn valueView(self: ResolvedAuthValue) Value {
         return switch (self) {
             .borrowed => |value| value,
             .owned => |value| value,
         };
     }
 
-    pub fn cloneOwned(self: ResolvedValue, allocator: std.mem.Allocator) !Value {
-        return try self.asValue().clone(allocator);
+    /// Returns an owned value by cloning borrowed input or moving owned input.
+    pub fn intoOwned(self: *ResolvedAuthValue, allocator: Allocator) !Value {
+        return switch (self.*) {
+            .borrowed => |value| try value.clone(allocator),
+            .owned => |value| blk: {
+                self.* = .{ .borrowed = .nil };
+                break :blk value;
+            },
+        };
     }
 
-    pub fn deinit(self: *ResolvedValue, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *ResolvedAuthValue, allocator: Allocator) void {
         switch (self.*) {
             .owned => |value| value.deinit(allocator),
             .borrowed => {},
@@ -58,7 +83,7 @@ pub fn evaluateConditionStrict(condition: types.Condition, ctx: EvalContext) boo
 }
 
 pub fn authorizeStoreNamespace(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     config: *const types.AuthConfig,
     namespace: []const u8,
     session_user_id: typed.DocId,
@@ -107,52 +132,44 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
         return if (strict) .deny else .needs_doc_predicate;
     }
 
-    var lhs = resolveLhs(comp.lhs, ctx) orelse return .deny;
+    var lhs = resolveContextVar(comp.lhs, ctx) orelse return .deny;
     defer lhs.deinit(ctx.allocator);
 
-    var rhs = resolveRhs(comp.rhs, ctx) orelse return .deny;
+    var rhs = resolveOperand(comp.rhs, ctx) orelse return .deny;
     defer rhs.deinit(ctx.allocator);
 
-    return if (compareValues(lhs.asValue(), comp.op, rhs.asValue())) .allow else .deny;
+    return if (compareValues(lhs.valueView(), comp.op, rhs.valueView())) .allow else .deny;
 }
 
-fn borrowed(value: Value) ResolvedValue {
-    return .{ .borrowed = value };
-}
-
-fn owned(value: Value) ResolvedValue {
-    return .{ .owned = value };
-}
-
-fn resolveLhs(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedValue {
+fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (var_ctx.scope) {
         .session => if (std.mem.eql(u8, var_ctx.field, "userId"))
-            if (ctx.session_user_id) |id| borrowed(.{ .scalar = .{ .doc_id = id } }) else null
+            if (ctx.session_user_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null
         else if (std.mem.eql(u8, var_ctx.field, "externalId"))
-            if (ctx.session_external_id) |id| borrowed(.{ .scalar = .{ .text = id } }) else null
+            if (ctx.session_external_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } }) else null
         else
             null,
         .namespace => if (ctx.namespace_captures) |captures| blk: {
             const val = captures.get(var_ctx.field) orelse break :blk null;
-            break :blk borrowed(.{ .scalar = .{ .text = val } });
+            break :blk ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = val } });
         } else null,
         .path => if (std.mem.eql(u8, var_ctx.field, "table"))
-            if (ctx.path_table) |t| borrowed(.{ .scalar = .{ .text = t } }) else null
+            if (ctx.path_table) |t| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = t } }) else null
         else
             null,
-        .value => resolveValueField(var_ctx.field, ctx),
+        .value => resolveIncomingValueField(var_ctx.field, ctx),
         .doc => null,
     };
 }
 
-pub fn resolveRhs(value: types.Operand, ctx: EvalContext) ?ResolvedValue {
+pub fn resolveOperand(value: types.Operand, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (value) {
-        .literal => |v| borrowed(v),
-        .context_var => |cv| resolveLhs(cv, ctx),
+        .literal => |v| ResolvedAuthValue.fromBorrowed(v),
+        .context_var => |cv| resolveContextVar(cv, ctx),
     };
 }
 
-fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
+fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthValue {
     const payload = ctx.value_payload orelse return null;
     const table = ctx.value_table orelse return null;
 
@@ -173,7 +190,7 @@ fn resolveValueField(field: []const u8, ctx: EvalContext) ?ResolvedValue {
         };
         if (matched) {
             const value = typed.valueFromPayload(ctx.allocator, field_meta.storage_type, field_meta.items_type, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
-            return owned(value);
+            return ResolvedAuthValue.fromOwned(value);
         }
     }
 

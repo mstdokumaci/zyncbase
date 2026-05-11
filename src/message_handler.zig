@@ -357,7 +357,7 @@ pub const MessageHandler = struct {
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, value);
-        return try authorization.buildDocPredicate(arena, store_rule.write, eval_ctx, table);
+        return try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
     }
 
     fn evaluateStoreReadAuth(
@@ -372,7 +372,7 @@ pub const MessageHandler = struct {
         defer auth_scope.deinit(arena);
 
         const eval_ctx = auth_scope.evalContext(arena, table, null);
-        return try authorization.buildDocPredicate(arena, store_rule.read, eval_ctx, table);
+        return try authorization.buildDocPredicate(store_rule.read, eval_ctx, table);
     }
 
     fn handleStoreSet(
@@ -454,7 +454,7 @@ pub const MessageHandler = struct {
                 const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
                 const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
-                predicates[i] = try authorization.buildDocPredicate(arena_allocator, store_rule.write, eval_ctx, table);
+                predicates[i] = try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
             }
         }
 

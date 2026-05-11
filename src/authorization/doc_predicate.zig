@@ -47,12 +47,12 @@ pub fn validateDocPredicate(condition: types.Condition, table: *const schema.Tab
 }
 
 pub fn buildDocPredicate(
-    allocator: Allocator,
     condition: types.Condition,
     ctx: EvalContext,
     table: *const schema.Table,
 ) !?query_ast.FilterPredicate {
-    var result = try lowerCondition(allocator, condition, ctx, table);
+    const allocator = ctx.allocator;
+    var result = try lowerCondition(condition, ctx, table);
     defer result.deinit(allocator);
     switch (result) {
         .allow => return null,
@@ -72,7 +72,6 @@ pub fn buildDocPredicate(
 }
 
 fn lowerCondition(
-    allocator: Allocator,
     condition: types.Condition,
     ctx: EvalContext,
     table: *const schema.Table,
@@ -80,8 +79,8 @@ fn lowerCondition(
     return switch (condition) {
         .boolean => |b| if (b) .allow else .deny,
         .hook => .deny,
-        .logical_and => |conds| try lowerAnd(allocator, conds, ctx, table),
-        .logical_or => |conds| try lowerOr(allocator, conds, ctx, table),
+        .logical_and => |conds| try lowerAnd(conds, ctx, table),
+        .logical_or => |conds| try lowerOr(conds, ctx, table),
         .comparison => |comp| {
             if (comp.lhs.scope != .doc) {
                 return switch (evaluate_mod.evaluateCondition(.{ .comparison = comp }, ctx)) {
@@ -89,22 +88,22 @@ fn lowerCondition(
                     .deny, .needs_doc_predicate => .deny,
                 };
             }
-            return .{ .filter = try comparisonToFilter(allocator, comp, ctx, table) };
+            return .{ .filter = try comparisonToFilter(comp, ctx, table) };
         },
     };
 }
 
 fn lowerAnd(
-    allocator: Allocator,
     conds: []const types.Condition,
     ctx: EvalContext,
     table: *const schema.Table,
 ) !LowerResult {
+    const allocator = ctx.allocator;
     var builder = PredicateBuilder{};
     errdefer builder.deinit(allocator);
 
     for (conds) |condition| {
-        var result = try lowerCondition(allocator, condition, ctx, table);
+        var result = try lowerCondition(condition, ctx, table);
         defer result.deinit(allocator);
         switch (result) {
             .allow => {},
@@ -122,11 +121,11 @@ fn lowerAnd(
 }
 
 fn lowerOr(
-    allocator: Allocator,
     conds: []const types.Condition,
     ctx: EvalContext,
     table: *const schema.Table,
 ) !LowerResult {
+    const allocator = ctx.allocator;
     var first_filter: ?query_ast.FilterPredicate = null;
     errdefer if (first_filter) |*filter| filter.deinit(allocator);
 
@@ -134,7 +133,7 @@ fn lowerOr(
     errdefer if (or_builder) |*builder| builder.deinit(allocator);
 
     for (conds) |condition| {
-        var result = try lowerCondition(allocator, condition, ctx, table);
+        var result = try lowerCondition(condition, ctx, table);
         defer result.deinit(allocator);
         switch (result) {
             .allow => {
@@ -176,12 +175,12 @@ fn lowerOr(
 }
 
 fn comparisonToFilter(
-    allocator: Allocator,
     comp: types.Comparison,
     ctx: EvalContext,
     table: *const schema.Table,
 ) !query_ast.FilterPredicate {
-    var condition = try comparisonToQueryCondition(allocator, comp, ctx, table);
+    const allocator = ctx.allocator;
+    var condition = try comparisonToQueryCondition(comp, ctx, table);
     errdefer condition.deinit(allocator);
 
     const conditions = try allocator.alloc(query_ast.Condition, 1);
@@ -190,21 +189,21 @@ fn comparisonToFilter(
 }
 
 fn comparisonToQueryCondition(
-    allocator: Allocator,
     comp: types.Comparison,
     ctx: EvalContext,
     table: *const schema.Table,
 ) !query_ast.Condition {
+    const allocator = ctx.allocator;
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field_meta = table.fields[field_index];
 
-    var resolved_value = evaluate_mod.resolveRhs(comp.rhs, ctx) orelse return error.InvalidValue;
-    defer resolved_value.deinit(allocator);
+    var rhs_value = evaluate_mod.resolveOperand(comp.rhs, ctx) orelse return error.InvalidValue;
+    defer rhs_value.deinit(allocator);
 
     return .{
         .field_index = field_index,
         .op = mapToQueryOp(comp.op),
-        .value = try resolved_value.cloneOwned(allocator),
+        .value = try rhs_value.intoOwned(allocator),
         .field_type = field_meta.storage_type,
         .items_type = field_meta.items_type,
     };
