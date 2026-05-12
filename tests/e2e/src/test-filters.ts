@@ -146,6 +146,11 @@ function verifySelfConsistentStates(clients: ClientState[], filterLabel: "A" | "
 			const extra = otherIds.itemIds.filter((id) => !first.itemsRecords.has(id));
 			if (missing.length > 0) errors.push(`Client ${filterClients[i].debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`);
 			if (extra.length > 0) errors.push(`Client ${filterClients[i].debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`);
+
+			const missingEvents = firstIds.eventIds.filter((id) => !filterClients[i].eventsRecords.has(id));
+			const extraEvents = otherIds.eventIds.filter((id) => !first.eventsRecords.has(id));
+			if (missingEvents.length > 0) errors.push(`Client ${filterClients[i].debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`);
+			if (extraEvents.length > 0) errors.push(`Client ${filterClients[i].debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`);
 		}
 	}
 
@@ -208,12 +213,15 @@ function waitForAllFiredAndConverged(
 
 function closeAllClients(clients: ClientState[]) {
 	for (const state of clients) {
+		state.itemsSub?.unsubscribe();
+		state.eventsSub?.unsubscribe();
 		state.client.close();
 	}
 }
 
-async function createClients(totalClients: number, port: number): Promise<ClientState[]> {
+async function createClients(totalClients: number, readWriteCount: number, port: number): Promise<ClientState[]> {
 	const clients: ClientState[] = [];
+	const step = Math.floor(totalClients / readWriteCount);
 	for (let i = 0; i < totalClients; i++) {
 		const client = new ZyncBaseClient({ url: `ws://127.0.0.1:${port}`, debug: false });
 		await client.connect();
@@ -224,7 +232,7 @@ async function createClients(totalClients: number, port: number): Promise<Client
 			eventsSub: null,
 			itemsRecords: new Map(),
 			eventsRecords: new Map(),
-			isReadWrite: i >= totalClients - totalClients / 10,
+			isReadWrite: i % step === 0,
 			fired: false,
 			debugId: i,  // Add debugId property
 		});
@@ -287,7 +295,7 @@ export async function run(port: number = 3000) {
 	const READ_WRITE_COUNT = 10;
 
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
-	const clients = await createClients(TOTAL_CLIENTS, port);
+	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
 	console.log("All clients connected.");
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
