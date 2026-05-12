@@ -6,8 +6,8 @@ const WebSocket = uws.WebSocket;
 
 /// Capacity of the per-connection outbox ring buffer (max queued messages).
 /// One slot is always reserved as the sentinel, so effective capacity is
-/// outbox_capacity - 1 = 31 messages.
-const outbox_capacity = 32;
+/// outbox_capacity - 1 = 15 messages.
+const outbox_capacity = 16;
 
 /// Result returned by Outbox.flush().
 pub const FlushResult = enum {
