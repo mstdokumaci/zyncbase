@@ -1,4 +1,8 @@
-import type { JsonValue, QueryOptions, SubscriptionHandle } from "@zyncbase/client";
+import type {
+	JsonValue,
+	QueryOptions,
+	SubscriptionHandle,
+} from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
 interface ItemRecord {
@@ -94,26 +98,38 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 
 function subscribeClient(state: ClientState) {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
-	const eventsFilter = state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
+	const eventsFilter =
+		state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
 
-	state.itemsSub = state.client.store.subscribe("items", itemsFilter, (items: JsonValue[]) => {
-		state.fired = true;
-		state.itemsRecords.clear();
-		for (const item of items as unknown as ItemRecord[]) {
-			state.itemsRecords.set(item.id, item);
-		}
-	});
+	state.itemsSub = state.client.store.subscribe(
+		"items",
+		itemsFilter,
+		(items: JsonValue[]) => {
+			state.fired = true;
+			state.itemsRecords.clear();
+			for (const item of items as unknown as ItemRecord[]) {
+				state.itemsRecords.set(item.id, item);
+			}
+		},
+	);
 
-	state.eventsSub = state.client.store.subscribe("events", eventsFilter, (events: JsonValue[]) => {
-		state.fired = true;
-		state.eventsRecords.clear();
-		for (const event of events as unknown as EventRecord[]) {
-			state.eventsRecords.set(event.id, event);
-		}
-	});
+	state.eventsSub = state.client.store.subscribe(
+		"events",
+		eventsFilter,
+		(events: JsonValue[]) => {
+			state.fired = true;
+			state.eventsRecords.clear();
+			for (const event of events as unknown as EventRecord[]) {
+				state.eventsRecords.set(event.id, event);
+			}
+		},
+	);
 }
 
-function clientIdSet(state: ClientState): { itemIds: string[]; eventIds: string[] } {
+function clientIdSet(state: ClientState): {
+	itemIds: string[];
+	eventIds: string[];
+} {
 	return {
 		itemIds: [...state.itemsRecords.keys()].sort(),
 		eventIds: [...state.eventsRecords.keys()].sort(),
@@ -132,7 +148,10 @@ function statesMatch(a: ClientState, b: ClientState): boolean {
 	return true;
 }
 
-function verifySelfConsistentStates(clients: ClientState[], filterLabel: "A" | "B"): string[] {
+function verifySelfConsistentStates(
+	clients: ClientState[],
+	filterLabel: "A" | "B",
+): string[] {
 	const errors: string[] = [];
 	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
 
@@ -142,30 +161,56 @@ function verifySelfConsistentStates(clients: ClientState[], filterLabel: "A" | "
 		if (!statesMatch(first, filterClients[i])) {
 			const firstIds = clientIdSet(first);
 			const otherIds = clientIdSet(filterClients[i]);
-			const missing = firstIds.itemIds.filter((id) => !filterClients[i].itemsRecords.has(id));
-			const extra = otherIds.itemIds.filter((id) => !first.itemsRecords.has(id));
-			if (missing.length > 0) errors.push(`Client ${filterClients[i].debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`);
-			if (extra.length > 0) errors.push(`Client ${filterClients[i].debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`);
+			const missing = firstIds.itemIds.filter(
+				(id) => !filterClients[i].itemsRecords.has(id),
+			);
+			const extra = otherIds.itemIds.filter(
+				(id) => !first.itemsRecords.has(id),
+			);
+			if (missing.length > 0)
+				errors.push(
+					`Client ${filterClients[i].debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`,
+				);
+			if (extra.length > 0)
+				errors.push(
+					`Client ${filterClients[i].debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`,
+				);
 
-			const missingEvents = firstIds.eventIds.filter((id) => !filterClients[i].eventsRecords.has(id));
-			const extraEvents = otherIds.eventIds.filter((id) => !first.eventsRecords.has(id));
-			if (missingEvents.length > 0) errors.push(`Client ${filterClients[i].debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`);
-			if (extraEvents.length > 0) errors.push(`Client ${filterClients[i].debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`);
+			const missingEvents = firstIds.eventIds.filter(
+				(id) => !filterClients[i].eventsRecords.has(id),
+			);
+			const extraEvents = otherIds.eventIds.filter(
+				(id) => !first.eventsRecords.has(id),
+			);
+			if (missingEvents.length > 0)
+				errors.push(
+					`Client ${filterClients[i].debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`,
+				);
+			if (extraEvents.length > 0)
+				errors.push(
+					`Client ${filterClients[i].debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`,
+				);
 		}
 	}
 
 	// Verify self-consistency: all records match their filter
-	const matchesItem = filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
-	const matchesEvent = filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
+	const matchesItem =
+		filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
+	const matchesEvent =
+		filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
 	for (const c of filterClients) {
 		for (const [id, item] of c.itemsRecords) {
 			if (!matchesItem(item)) {
-				errors.push(`Client ${c.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`);
+				errors.push(
+					`Client ${c.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`,
+				);
 			}
 		}
 		for (const [id, event] of c.eventsRecords) {
 			if (!matchesEvent(event)) {
-				errors.push(`Client ${c.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`);
+				errors.push(
+					`Client ${c.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`,
+				);
 			}
 		}
 	}
@@ -184,8 +229,14 @@ function waitForAllFiredAndConverged(
 			const allFired = clients.every((c) => c.fired);
 			if (!allFired) {
 				if (Date.now() > deadline) {
-					const notFired = clients.filter((c) => !c.fired).map((c) => c.debugId);
-					reject(new Error(`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`));
+					const notFired = clients
+						.filter((c) => !c.fired)
+						.map((c) => c.debugId);
+					reject(
+						new Error(
+							`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
+						),
+					);
 					return;
 				}
 				setTimeout(check, 100);
@@ -219,11 +270,18 @@ function closeAllClients(clients: ClientState[]) {
 	}
 }
 
-async function createClients(totalClients: number, readWriteCount: number, port: number): Promise<ClientState[]> {
+async function createClients(
+	totalClients: number,
+	readWriteCount: number,
+	port: number,
+): Promise<ClientState[]> {
 	const clients: ClientState[] = [];
 	const step = Math.floor(totalClients / readWriteCount);
 	for (let i = 0; i < totalClients; i++) {
-		const client = new ZyncBaseClient({ url: `ws://127.0.0.1:${port}`, debug: false });
+		const client = new ZyncBaseClient({
+			url: `ws://127.0.0.1:${port}`,
+			debug: false,
+		});
 		await client.connect();
 		clients.push({
 			client,
@@ -234,7 +292,7 @@ async function createClients(totalClients: number, readWriteCount: number, port:
 			eventsRecords: new Map(),
 			isReadWrite: i % step === 0,
 			fired: false,
-			debugId: i,  // Add debugId property
+			debugId: i, // Add debugId property
 		});
 	}
 	return clients;
@@ -250,8 +308,16 @@ async function createInitialData(
 
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
-		createPromises.push(rwClient.store.create("items", createItemData(i)).then((id) => createdItemIds.push(id)));
-		createPromises.push(rwClient.store.create("events", createEventData(i)).then((id) => createdEventIds.push(id)));
+		createPromises.push(
+			rwClient.store
+				.create("items", createItemData(i))
+				.then((id) => createdItemIds.push(id)),
+		);
+		createPromises.push(
+			rwClient.store
+				.create("events", createEventData(i))
+				.then((id) => createdEventIds.push(id)),
+		);
 	}
 
 	await Promise.all(createPromises);
@@ -269,7 +335,8 @@ async function updateRandomRecords(
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
 
-		const randomItemId = createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
+		const randomItemId =
+			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["items", randomItemId], {
 				priority: Math.floor(Math.random() * 10) + 1,
@@ -278,7 +345,8 @@ async function updateRandomRecords(
 			}),
 		);
 
-		const randomEventId = createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
+		const randomEventId =
+			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["events", randomEventId], {
 				score: Math.random() * 100,
@@ -305,11 +373,21 @@ export async function run(port: number = 3000) {
 	}
 
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } = await createInitialData(readWriteClients, READ_WRITE_COUNT);
-	console.log(`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`);
+	const { createdItemIds, createdEventIds } = await createInitialData(
+		readWriteClients,
+		READ_WRITE_COUNT,
+	);
+	console.log(
+		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
+	);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds, READ_WRITE_COUNT);
+	await updateRandomRecords(
+		readWriteClients,
+		createdItemIds,
+		createdEventIds,
+		READ_WRITE_COUNT,
+	);
 	console.log("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
