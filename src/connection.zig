@@ -4,37 +4,22 @@ const typed = @import("typed.zig");
 const uws = @import("uwebsockets_wrapper.zig");
 const WebSocket = uws.WebSocket;
 
-/// Capacity of the per-connection outbox ring buffer (max queued messages).
-/// One slot is always reserved as the sentinel, so effective capacity is
-/// outbox_capacity - 1 = 15 messages.
+// Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
 const outbox_capacity = 16;
 
-/// Result returned by Outbox.flush().
-pub const FlushResult = enum {
-    /// All queued messages were sent successfully.
-    success,
-    /// uWS accepted the last frame but its internal buffer is now full.
-    /// The drain callback will fire when space is available; call flush() again then.
-    backpressure,
-    /// uWS dropped a frame — the connection is dead. Close it.
-    dropped,
-};
+pub const FlushResult = enum { success, backpressure, dropped };
 
-/// Per-connection bounded ring buffer for outgoing subscription deltas.
+/// Per-connection bounded ring buffer for outgoing messages.
 ///
-/// Design contract:
-///   - On SUCCESS  → frame delivered; advance tail, continue.
-///   - On BACKPRESSURE → uWS already owns the frame internally; free our copy,
-///                       advance tail, then STOP sending more until drain fires.
-///   - On DROPPED  → connection is dead; drain the queue (free memory) and
-///                   signal the caller to close the connection.
+/// Send contract:
+///   SUCCESS     → frame delivered; advance and continue.
+///   BACKPRESSURE → uWS owns the frame; advance and stop until drain fires.
+///   DROPPED     → connection dead; free remaining entries and signal close.
 pub const Outbox = struct {
     entries: [outbox_capacity][]u8,
-    head: usize, // index of next write slot
-    tail: usize, // index of next read slot
+    head: usize,
+    tail: usize,
 
-    /// Zero-initialized empty outbox. All entry slots are zeroed so the struct
-    /// is safe to copy and inspect regardless of head/tail state.
     pub const empty: Outbox = .{
         .entries = std.mem.zeroes([outbox_capacity][]u8),
         .head = 0,
@@ -48,22 +33,16 @@ pub const Outbox = struct {
         self.head = next;
     }
 
-    /// Flush as many queued messages as possible.
-    /// Stops early on BACKPRESSURE (uWS will call drain when ready) or DROPPED
-    /// (connection dead — caller must close).
     pub fn flush(self: *Outbox, ws: *WebSocket, allocator: Allocator) FlushResult {
         while (self.tail != self.head) {
             const data = self.entries[self.tail];
             const status = ws.send(data, .binary);
-            // Always free our copy — uWS owns the frame from this point on
-            // regardless of status (it either delivered it, buffered it, or dropped it).
             allocator.free(data);
             self.tail = (self.tail + 1) % outbox_capacity;
             switch (status) {
-                .success => {}, // continue sending
-                .backpressure => return .backpressure, // stop; drain callback will resume
+                .success => {},
+                .backpressure => return .backpressure,
                 .dropped => {
-                    // Free remaining queued entries and signal close.
                     self.deinit(allocator);
                     return .dropped;
                 },
@@ -72,7 +51,6 @@ pub const Outbox = struct {
         return .success;
     }
 
-    /// Free all queued entries without sending. Used on connection close/reset.
     pub fn deinit(self: *Outbox, allocator: Allocator) void {
         while (self.tail != self.head) {
             allocator.free(self.entries[self.tail]);
@@ -91,8 +69,6 @@ pub const Outbox = struct {
 
 pub const unset_namespace_id: i64 = -1;
 
-/// Connection represents a single client session.
-/// It is ref-counted and decoupled from the network/storage infrastructure.
 pub const Connection = struct {
     pub const StoreSession = struct {
         namespace_id: i64,
@@ -100,67 +76,28 @@ pub const Connection = struct {
         ready: bool,
     };
 
-    /// Allocator used for internal metadata (user_id, subscription_ids)
     allocator: Allocator,
-
-    /// Unique identifier for this connection
     id: u64,
-
-    /// External identity string from auth or the SDK anonymous client id.
     user_id: ?[]const u8,
-
-    /// Resolved namespace ID for this connection's active store scope.
     namespace_id: i64,
-
-    /// Active store namespace string, promoted after scope resolution succeeds.
     store_namespace: ?[]const u8,
-
-    /// Store namespace string awaiting async scope resolution.
     pending_store_namespace: ?[]const u8,
-
-    /// Resolved users.id for writes in the active store scope.
     user_doc_id: typed.DocId,
-
-    /// True only after namespace and scoped users.id resolution completed.
     store_ready: bool,
-
-    /// Incremented whenever the active store scope is reset.
     scope_seq: u64,
-
-    /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
-
-    /// Monotonic subscription ID generator (per active session)
     next_subscription_id: u64,
-
-    /// Low-level WebSocket handle
     ws: WebSocket,
-
-    /// Per-connection send queue flushed by the drain callback
     outbox: Outbox = Outbox.empty,
-
-    /// Set when uWS returns BACKPRESSURE on a direct send.
-    /// While true, all deltas are enqueued rather than sent directly.
-    /// Cleared by flushOutbox() after a complete drain.
+    /// True while uWS backpressure is active. All sends are queued until drain clears it.
     is_backpressured: bool = false,
-
-    /// Reference count for thread-safe memory management
     ref_count: std.atomic.Value(usize),
-
-    /// Mutex for protecting connection metadata during concurrent access
     mutex: std.Thread.Mutex,
-
-    /// Timestamp of when the connection was established
     created_at: i64,
-
-    /// Rate limiting: Current available tokens
     request_tokens: f64,
-
-    /// Rate limiting: Last time tokens were replenished
     last_request_time: ?i64,
 
     /// One-time initialization for a connection object in a pool.
-    /// Sets up stable infrastructure (mutex, allocator).
     pub fn initPool(self: *Connection, allocator: Allocator) void {
         self.allocator = allocator;
         self.user_id = null;
@@ -179,7 +116,6 @@ pub const Connection = struct {
     }
 
     /// Activate a pooled connection for a new client session.
-    /// Resets dynamic fields and preserves allocated capacities for reuse.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
         self.resetSession();
         self.id = id;
@@ -191,7 +127,6 @@ pub const Connection = struct {
     }
 
     /// Reset session-specific state and free dynamic memory.
-    /// Retains capacity in subscription_ids for future reuse.
     pub fn resetSession(self: *Connection) void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -206,7 +141,6 @@ pub const Connection = struct {
         self.resetStoreScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
-        // Drain any queued outbox entries so a reused pooled connection starts clean.
         self.outbox.deinit(self.allocator);
         self.is_backpressured = false;
     }
@@ -341,9 +275,7 @@ pub const Connection = struct {
         };
     }
 
-    /// Allocate the next subscription ID in O(1) time.
-    /// Thread-safe: Acquires connection's internal mutex.
-    /// Returns error.SubscriptionIdExhausted if the counter wraps.
+    /// Allocate the next subscription ID in O(1) time. Caller must hold no locks.
     pub fn allocateSubscriptionId(self: *Connection) !u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -374,8 +306,6 @@ pub const Connection = struct {
         }
     }
 
-    /// Result of detaching subscription IDs from a connection.
-    /// `ids` is the valid slice; `allocated` is the full allocated buffer used for freeing.
     pub const DetachedSubscriptions = struct {
         ids: []u64,
         allocated: []u64,
@@ -385,9 +315,7 @@ pub const Connection = struct {
         }
     };
 
-    /// Transfer ownership of the subscription IDs buffer to the caller,
-    /// leaving the connection with an empty list. Zero-allocation.
-    /// Caller must hold self.mutex.
+    /// Transfer ownership of the subscription IDs buffer to the caller. Caller must hold mutex.
     pub fn detachSubscriptionsLocked(self: *Connection) DetachedSubscriptions {
         const result = DetachedSubscriptions{
             .ids = self.subscription_ids.items,
@@ -402,8 +330,7 @@ pub const Connection = struct {
         _ = self.ref_count.fetchAdd(1, .monotonic);
     }
 
-    /// Decrement the reference count.
-    /// Returns true if the count reached zero and the connection should be returned to the pool.
+    /// Decrement the reference count. Returns true if it reached zero.
     pub fn release(self: *Connection) bool {
         if (self.ref_count.fetchSub(1, .release) == 1) {
             _ = self.ref_count.load(.acquire);
@@ -412,90 +339,56 @@ pub const Connection = struct {
         return false;
     }
 
-    /// Fully deinitialize the connection (for heap-allocated or app shutdown).
-    /// Full cleanup of connection-owned resources.
-    /// Note: This is safe to call after resetSession() (e.g. during pool shutdown)
-    /// because resetSession() nullifies user_id and subscription_ids is a standard list.
     pub fn deinit(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.subscription_ids.deinit(self.allocator);
         self.outbox.deinit(self.allocator);
     }
 
-    /// Send a direct response or handshake message (not a subscription delta).
+    /// Send a response or handshake message. Must be called from the event loop thread.
     ///
-    /// When backpressured, the message is enqueued in the outbox to preserve
-    /// causal ordering with any queued subscription deltas. Bypassing the outbox
-    /// while deltas are queued would deliver this response before those deltas,
-    /// breaking ordering guarantees.
-    ///
-    /// Must be called from the uWS event loop thread.
-    ///
-    /// Returns error.Dropped when uWS signals the connection is dead.
-    /// Returns error.Full when the outbox is at capacity (slow client).
-    /// Both conditions require the caller to close the connection.
+    /// When backpressured, enqueues to preserve ordering with queued deltas.
+    /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
     pub fn sendDirect(self: *Connection, data: []const u8) !void {
         if (!self.is_backpressured) {
             switch (self.ws.send(data, .binary)) {
                 .success => return,
                 .backpressure => {
                     self.is_backpressured = true;
-                    // Frame is buffered by uWS — nothing more to do.
                     return;
                 },
                 .dropped => return error.Dropped,
             }
         }
-
-        // Backpressured: enqueue to preserve ordering with queued deltas.
         if (self.outbox.isFull()) return error.Full;
         try self.outbox.enqueue(self.allocator, data);
     }
 
-    /// Send a subscription delta through the outbox.
+    /// Send a subscription delta. Must be called from the event loop thread.
     ///
-    /// When not backpressured, attempts a direct send first to avoid the
-    /// allocation cost of enqueue on the common (no-backpressure) case.
-    /// On BACKPRESSURE, sets the backpressure flag and enqueues the message
-    /// so the drain callback can flush it in order.
-    ///
-    /// Must be called from the uWS event loop thread.
-    ///
-    /// Returns error.Dropped when uWS signals the connection is dead — the caller
-    /// must close the connection.
-    /// Returns error.Full when the outbox capacity is exhausted — the caller must
-    /// close the connection (slow client policy).
+    /// Fast path: direct send when not backpressured. On BACKPRESSURE, sets the flag
+    /// and queues subsequent messages until the drain callback clears it.
+    /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
     pub fn trySendDelta(self: *Connection, data: []const u8) !void {
         if (!self.is_backpressured) {
-            // Fast path: try direct send first.
             switch (self.ws.send(data, .binary)) {
                 .success => return,
                 .backpressure => {
-                    // uWS buffered this frame internally. Mark backpressured so
-                    // subsequent messages are queued until drain fires.
                     self.is_backpressured = true;
                     return;
                 },
                 .dropped => return error.Dropped,
             }
         }
-
-        // We're in backpressure — enqueue and let the drain callback flush in order.
         if (self.outbox.isFull()) return error.Full;
         try self.outbox.enqueue(self.allocator, data);
     }
 
-    /// Called by the drain callback when the uWS send buffer has cleared.
-    /// Returns FlushResult so the caller can close the connection on .dropped.
-    /// Clears the backpressure flag on a complete successful flush.
-    ///
-    /// Must be called from the uWS event loop thread.
+    /// Flush queued messages after uWS signals the send buffer has cleared.
+    /// Must be called from the event loop thread. Clears is_backpressured on full drain.
     pub fn flushOutbox(self: *Connection) FlushResult {
         const result = self.outbox.flush(&self.ws, self.allocator);
-        if (result == .success) {
-            // Buffer fully drained — resume direct sends.
-            self.is_backpressured = false;
-        }
+        if (result == .success) self.is_backpressured = false;
         return result;
     }
 };
