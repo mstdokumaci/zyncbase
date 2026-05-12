@@ -139,27 +139,28 @@ function clientIdSet(state: ClientState): {
 function statesMatch(a: ClientState, b: ClientState): boolean {
 	if (a.itemsRecords.size !== b.itemsRecords.size) return false;
 	if (a.eventsRecords.size !== b.eventsRecords.size) return false;
-	for (const id of a.itemsRecords.keys()) {
-		if (!b.itemsRecords.has(id)) return false;
+	for (const [id, item] of a.itemsRecords) {
+		const other = b.itemsRecords.get(id);
+		if (!other || JSON.stringify(item) !== JSON.stringify(other)) return false;
 	}
-	for (const id of a.eventsRecords.keys()) {
-		if (!b.eventsRecords.has(id)) return false;
+	for (const [id, event] of a.eventsRecords) {
+		const other = b.eventsRecords.get(id);
+		if (!other || JSON.stringify(event) !== JSON.stringify(other)) return false;
 	}
 	return true;
 }
 
-function verifyStateMatch(
+function verifyItemMatch(
 	first: ClientState,
 	client: ClientState,
+	firstItemIds: string[],
 	errors: string[],
 ) {
-	if (statesMatch(first, client)) return;
+	const missing = firstItemIds.filter((id) => !client.itemsRecords.has(id));
+	const extra = [...client.itemsRecords.keys()].filter(
+		(id) => !first.itemsRecords.has(id),
+	);
 
-	const firstIds = clientIdSet(first);
-	const otherIds = clientIdSet(client);
-
-	const missing = firstIds.itemIds.filter((id) => !client.itemsRecords.has(id));
-	const extra = otherIds.itemIds.filter((id) => !first.itemsRecords.has(id));
 	if (missing.length > 0) {
 		errors.push(
 			`Client ${client.debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`,
@@ -171,22 +172,60 @@ function verifyStateMatch(
 		);
 	}
 
-	const missingEvents = firstIds.eventIds.filter(
-		(id) => !client.eventsRecords.has(id),
-	);
-	const extraEvents = otherIds.eventIds.filter(
+	for (const id of firstItemIds) {
+		const itemA = first.itemsRecords.get(id);
+		const itemB = client.itemsRecords.get(id);
+		if (itemA && itemB && JSON.stringify(itemA) !== JSON.stringify(itemB)) {
+			errors.push(
+				`Client ${client.debugId} item ${id} value mismatch vs client ${first.debugId}`,
+			);
+		}
+	}
+}
+
+function verifyEventMatch(
+	first: ClientState,
+	client: ClientState,
+	firstEventIds: string[],
+	errors: string[],
+) {
+	const missing = firstEventIds.filter((id) => !client.eventsRecords.has(id));
+	const extra = [...client.eventsRecords.keys()].filter(
 		(id) => !first.eventsRecords.has(id),
 	);
-	if (missingEvents.length > 0) {
+
+	if (missing.length > 0) {
 		errors.push(
-			`Client ${client.debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`,
+			`Client ${client.debugId} missing events vs client ${first.debugId}: ${missing.join(",")}`,
 		);
 	}
-	if (extraEvents.length > 0) {
+	if (extra.length > 0) {
 		errors.push(
-			`Client ${client.debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`,
+			`Client ${client.debugId} extra events vs client ${first.debugId}: ${extra.join(",")}`,
 		);
 	}
+
+	for (const id of firstEventIds) {
+		const eventA = first.eventsRecords.get(id);
+		const eventB = client.eventsRecords.get(id);
+		if (eventA && eventB && JSON.stringify(eventA) !== JSON.stringify(eventB)) {
+			errors.push(
+				`Client ${client.debugId} event ${id} value mismatch vs client ${first.debugId}`,
+			);
+		}
+	}
+}
+
+function verifyStateMatch(
+	first: ClientState,
+	client: ClientState,
+	errors: string[],
+) {
+	if (statesMatch(first, client)) return;
+
+	const firstIds = clientIdSet(first);
+	verifyItemMatch(first, client, firstIds.itemIds, errors);
+	verifyEventMatch(first, client, firstIds.eventIds, errors);
 }
 
 function verifyRecordsMatchFilter(
@@ -219,6 +258,7 @@ function verifySelfConsistentStates(
 	const errors: string[] = [];
 	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
 
+	if (filterClients.length === 0) return [];
 	const first = filterClients[0];
 	for (let i = 1; i < filterClients.length; i++) {
 		verifyStateMatch(first, filterClients[i], errors);
