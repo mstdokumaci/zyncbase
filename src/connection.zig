@@ -423,17 +423,34 @@ pub const Connection = struct {
     }
 
     /// Send a direct response or handshake message (not a subscription delta).
-    /// These messages bypass the outbox — they are one-shot replies to client requests.
     ///
-    /// Returns error.Dropped when uWS signals the connection is dead — the caller
-    /// should close the connection.
-    /// BACKPRESSURE is treated as success here: uWS has buffered the frame and will
-    /// deliver it; no further action is needed from the caller.
-    pub fn sendDirect(self: *Connection, data: []const u8) error{Dropped}!void {
-        return switch (self.ws.send(data, .binary)) {
-            .success, .backpressure => {},
-            .dropped => error.Dropped,
-        };
+    /// When backpressured, the message is enqueued in the outbox to preserve
+    /// causal ordering with any queued subscription deltas. Bypassing the outbox
+    /// while deltas are queued would deliver this response before those deltas,
+    /// breaking ordering guarantees.
+    ///
+    /// Returns error.Dropped when uWS signals the connection is dead.
+    /// Returns error.Full when the outbox is at capacity (slow client).
+    /// Both conditions require the caller to close the connection.
+    pub fn sendDirect(self: *Connection, data: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (!self.is_backpressured) {
+            switch (self.ws.send(data, .binary)) {
+                .success => return,
+                .backpressure => {
+                    self.is_backpressured = true;
+                    // Frame is buffered by uWS — nothing more to do.
+                    return;
+                },
+                .dropped => return error.Dropped,
+            }
+        }
+
+        // Backpressured: enqueue to preserve ordering with queued deltas.
+        if (self.outbox.isFull()) return error.Full;
+        try self.outbox.enqueue(self.allocator, data);
     }
 
     /// Send a subscription delta through the outbox.
@@ -448,13 +465,16 @@ pub const Connection = struct {
     /// Returns error.Full when the outbox capacity is exhausted — the caller must
     /// close the connection (slow client policy).
     pub fn trySendDelta(self: *Connection, data: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         if (!self.is_backpressured) {
             // Fast path: try direct send first.
             switch (self.ws.send(data, .binary)) {
                 .success => return,
                 .backpressure => {
                     // uWS buffered this frame internally. Mark backpressured so
-                    // subsequent deltas are queued until drain fires.
+                    // subsequent messages are queued until drain fires.
                     self.is_backpressured = true;
                     return;
                 },
@@ -471,6 +491,9 @@ pub const Connection = struct {
     /// Returns FlushResult so the caller can close the connection on .dropped.
     /// Clears the backpressure flag on a complete successful flush.
     pub fn flushOutbox(self: *Connection) FlushResult {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const result = self.outbox.flush(&self.ws, self.allocator);
         if (result == .success) {
             // Buffer fully drained — resume direct sends.
