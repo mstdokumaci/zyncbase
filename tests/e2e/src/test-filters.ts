@@ -28,7 +28,8 @@ interface ClientState {
 	itemsRecords: Map<string, ItemRecord>;
 	eventsRecords: Map<string, EventRecord>;
 	isReadWrite: boolean;
-	fired: boolean;
+	itemsFired: boolean;
+	eventsFired: boolean;
 	debugId: number;
 }
 
@@ -105,7 +106,7 @@ function subscribeClient(state: ClientState) {
 		"items",
 		itemsFilter,
 		(items: JsonValue[]) => {
-			state.fired = true;
+			state.itemsFired = true;
 			state.itemsRecords.clear();
 			for (const item of items as unknown as ItemRecord[]) {
 				state.itemsRecords.set(item.id, item);
@@ -117,7 +118,7 @@ function subscribeClient(state: ClientState) {
 		"events",
 		eventsFilter,
 		(events: JsonValue[]) => {
-			state.fired = true;
+			state.eventsFired = true;
 			state.eventsRecords.clear();
 			for (const event of events as unknown as EventRecord[]) {
 				state.eventsRecords.set(event.id, event);
@@ -282,11 +283,13 @@ async function waitForAllFiredAndConverged(
 	const deadline = Date.now() + timeoutMs;
 
 	while (true) {
-		if (clients.every((c) => c.fired)) {
+		if (clients.every((c) => c.itemsFired && c.eventsFired)) {
 			break;
 		}
 		if (Date.now() > deadline) {
-			const notFired = clients.filter((c) => !c.fired).map((c) => c.debugId);
+			const notFired = clients
+				.filter((c) => !c.itemsFired || !c.eventsFired)
+				.map((c) => c.debugId);
 			throw new Error(
 				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
 			);
@@ -340,8 +343,9 @@ async function createClients(
 			itemsRecords: new Map(),
 			eventsRecords: new Map(),
 			isReadWrite: i % step === 0,
-			fired: false,
-			debugId: i, // Add debugId property
+			itemsFired: false,
+			eventsFired: false,
+			debugId: i,
 		});
 	}
 	return clients;
@@ -441,6 +445,25 @@ export async function run(port: number = 3000) {
 
 	console.log("Waiting for all clients to converge...");
 	await waitForAllFiredAndConverged(clients);
+
+	// Sanity check: converged state must be non-empty to guard against
+	// false-positive convergence on empty data (e.g. server sending nothing).
+	const sampleA = clients.find((c) => c.filterSet === "A");
+	const sampleB = clients.find((c) => c.filterSet === "B");
+	if (
+		sampleA &&
+		sampleA.itemsRecords.size === 0 &&
+		sampleA.eventsRecords.size === 0
+	) {
+		throw new Error("Filter A converged on empty state — no records received");
+	}
+	if (
+		sampleB &&
+		sampleB.itemsRecords.size === 0 &&
+		sampleB.eventsRecords.size === 0
+	) {
+		throw new Error("Filter B converged on empty state — no records received");
+	}
 	console.log("All clients converged — filter state is consistent.");
 
 	closeAllClients(clients);
