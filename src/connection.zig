@@ -33,13 +33,10 @@ pub const Outbox = struct {
     head: usize, // index of next write slot
     tail: usize, // index of next read slot
 
-    /// Zero-initialized empty outbox. `entries` is intentionally undefined
-    /// because only slots in [tail, head) are ever read, and head == tail
-    /// on an empty outbox means no slot is ever accessed.
+    /// Zero-initialized empty outbox. All entry slots are zeroed so the struct
+    /// is safe to copy and inspect regardless of head/tail state.
     pub const empty: Outbox = .{
-        // SAFETY: entries is a ring buffer; only indices in [tail, head) are
-        // read. When head == tail the buffer is empty and no entry is accessed.
-        .entries = undefined,
+        .entries = std.mem.zeroes([outbox_capacity][]u8),
         .head = 0,
         .tail = 0,
     };
