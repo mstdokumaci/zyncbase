@@ -122,8 +122,18 @@ pub const ConnectionManager = struct {
         inserted = true;
         std.log.info("Client connected: id={}", .{conn_id});
 
-        ws.send(connected_msg, .binary);
-        ws.send(self.schema_sync_msg, .binary);
+        // Handshake messages are critical — a dropped send means the connection
+        // is already dead. Close it so the client reconnects cleanly.
+        conn.send(connected_msg) catch {
+            std.log.warn("Connection {}: dropped on connected message, closing", .{conn_id});
+            conn.ws.close();
+            return;
+        };
+        conn.send(self.schema_sync_msg) catch {
+            std.log.warn("Connection {}: dropped on schema_sync message, closing", .{conn_id});
+            conn.ws.close();
+            return;
+        };
     }
 
     /// Entry point for WebSocket message events
@@ -134,7 +144,7 @@ pub const ConnectionManager = struct {
         // ZyncBase uses binary MessagePack for all communications.
         if (msg_type != .binary) {
             std.log.warn("Rejected non-binary (text) message from connection {}", .{conn_id});
-            self.message_handler.sendError(ws, null, wire.getWireError(error.InvalidMessageType)) catch |err| {
+            self.message_handler.sendErrorRaw(ws, null, wire.getWireError(error.InvalidMessageType)) catch |err| {
                 std.log.err("Failed to send error response for invalid message type: {}", .{err});
             };
             return;
@@ -187,5 +197,27 @@ pub const ConnectionManager = struct {
         const conn = self.map.get(id) orelse return error.ConnectionNotFound;
         conn.acquire();
         return conn;
+    }
+
+    /// Called by the uWS drain callback. Flushes queued delta messages for the given connection.
+    /// Closes the connection if uWS signals it is dead (DROPPED).
+    pub fn flushOutbox(self: *ConnectionManager, conn_id: u64) void {
+        self.mutex.lock();
+        const conn = self.map.get(conn_id) orelse {
+            self.mutex.unlock();
+            return;
+        };
+        conn.acquire();
+        self.mutex.unlock();
+
+        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+
+        switch (conn.flushOutbox()) {
+            .success, .backpressure => {},
+            .dropped => {
+                std.log.warn("Connection {}: dropped during drain flush, closing", .{conn_id});
+                conn.ws.close();
+            },
+        }
     }
 };

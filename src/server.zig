@@ -276,6 +276,8 @@ pub const ZyncBaseServer = struct {
         // Wire Notification Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
+        self.websocket_server.drain_handler = drainHandler;
+        self.websocket_server.drain_handler_ctx = self;
 
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
@@ -439,6 +441,12 @@ pub const ZyncBaseServer = struct {
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
         self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
+    }
+
+    fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {
+        if (ctx == null) return;
+        const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+        self.connection_manager.flushOutbox(conn_id);
     }
 };
 

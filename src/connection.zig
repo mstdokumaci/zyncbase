@@ -1,12 +1,74 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const uws = @import("uwebsockets_wrapper.zig");
+const WebSocket = uws.WebSocket;
+
+// Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
+const outbox_capacity = 16;
+
+pub const FlushResult = enum { success, backpressure, dropped };
+
+/// Per-connection bounded ring buffer for outgoing messages.
+///
+/// Send contract:
+///   SUCCESS     → frame delivered; advance and continue.
+///   BACKPRESSURE → uWS owns the frame; advance and stop until drain fires.
+///   DROPPED     → connection dead; free remaining entries and signal close.
+pub const Outbox = struct {
+    entries: [outbox_capacity][]u8,
+    head: usize,
+    tail: usize,
+
+    pub const empty: Outbox = .{
+        .entries = std.mem.zeroes([outbox_capacity][]u8),
+        .head = 0,
+        .tail = 0,
+    };
+
+    pub fn enqueue(self: *Outbox, allocator: Allocator, data: []const u8) !void {
+        const next = (self.head + 1) % outbox_capacity;
+        if (next == self.tail) return error.Full;
+        self.entries[self.head] = try allocator.dupe(u8, data);
+        self.head = next;
+    }
+
+    pub fn flush(self: *Outbox, ws: *WebSocket, allocator: Allocator) FlushResult {
+        while (self.tail != self.head) {
+            const data = self.entries[self.tail];
+            const status = ws.send(data, .binary);
+            allocator.free(data);
+            self.tail = (self.tail + 1) % outbox_capacity;
+            switch (status) {
+                .success => {},
+                .backpressure => return .backpressure,
+                .dropped => {
+                    self.deinit(allocator);
+                    return .dropped;
+                },
+            }
+        }
+        return .success;
+    }
+
+    pub fn deinit(self: *Outbox, allocator: Allocator) void {
+        while (self.tail != self.head) {
+            allocator.free(self.entries[self.tail]);
+            self.tail = (self.tail + 1) % outbox_capacity;
+        }
+    }
+
+    pub fn isEmpty(self: Outbox) bool {
+        return self.tail == self.head;
+    }
+
+    pub fn isFull(self: Outbox) bool {
+        return (self.head + 1) % outbox_capacity == self.tail;
+    }
+};
 
 pub const unset_namespace_id: i64 = -1;
 
-/// Connection represents a single client session.
-/// It is ref-counted and decoupled from the network/storage infrastructure.
 pub const Connection = struct {
     pub const StoreSession = struct {
         namespace_id: i64,
@@ -14,59 +76,28 @@ pub const Connection = struct {
         ready: bool,
     };
 
-    /// Allocator used for internal metadata (user_id, subscription_ids)
     allocator: Allocator,
-
-    /// Unique identifier for this connection
     id: u64,
-
-    /// External identity string from auth or the SDK anonymous client id.
     user_id: ?[]const u8,
-
-    /// Resolved namespace ID for this connection's active store scope.
     namespace_id: i64,
-
-    /// Active store namespace string, promoted after scope resolution succeeds.
     store_namespace: ?[]const u8,
-
-    /// Store namespace string awaiting async scope resolution.
     pending_store_namespace: ?[]const u8,
-
-    /// Resolved users.id for writes in the active store scope.
     user_doc_id: typed.DocId,
-
-    /// True only after namespace and scoped users.id resolution completed.
     store_ready: bool,
-
-    /// Incremented whenever the active store scope is reset.
     scope_seq: u64,
-
-    /// List of active subscription IDs for this connection
     subscription_ids: std.ArrayListUnmanaged(u64),
-
-    /// Monotonic subscription ID generator (per active session)
     next_subscription_id: u64,
-
-    /// Low-level WebSocket handle
     ws: WebSocket,
-
-    /// Reference count for thread-safe memory management
+    outbox: Outbox = Outbox.empty,
+    /// True while uWS backpressure is active. All sends are queued until drain clears it.
+    is_backpressured: bool = false,
     ref_count: std.atomic.Value(usize),
-
-    /// Mutex for protecting connection metadata during concurrent access
     mutex: std.Thread.Mutex,
-
-    /// Timestamp of when the connection was established
     created_at: i64,
-
-    /// Rate limiting: Current available tokens
     request_tokens: f64,
-
-    /// Rate limiting: Last time tokens were replenished
     last_request_time: ?i64,
 
     /// One-time initialization for a connection object in a pool.
-    /// Sets up stable infrastructure (mutex, allocator).
     pub fn initPool(self: *Connection, allocator: Allocator) void {
         self.allocator = allocator;
         self.user_id = null;
@@ -80,10 +111,11 @@ pub const Connection = struct {
         self.next_subscription_id = 1;
         self.mutex = .{};
         self.ref_count = std.atomic.Value(usize).init(0);
+        self.outbox = Outbox.empty;
+        self.is_backpressured = false;
     }
 
     /// Activate a pooled connection for a new client session.
-    /// Resets dynamic fields and preserves allocated capacities for reuse.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
         self.resetSession();
         self.id = id;
@@ -95,7 +127,6 @@ pub const Connection = struct {
     }
 
     /// Reset session-specific state and free dynamic memory.
-    /// Retains capacity in subscription_ids for future reuse.
     pub fn resetSession(self: *Connection) void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -110,6 +141,8 @@ pub const Connection = struct {
         self.resetStoreScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
+        self.outbox.deinit(self.allocator);
+        self.is_backpressured = false;
     }
 
     /// Set the transport external identity. Scoped users.id resolution happens later.
@@ -242,9 +275,7 @@ pub const Connection = struct {
         };
     }
 
-    /// Allocate the next subscription ID in O(1) time.
-    /// Thread-safe: Acquires connection's internal mutex.
-    /// Returns error.SubscriptionIdExhausted if the counter wraps.
+    /// Allocate the next subscription ID in O(1) time. Caller must hold no locks.
     pub fn allocateSubscriptionId(self: *Connection) !u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -275,8 +306,6 @@ pub const Connection = struct {
         }
     }
 
-    /// Result of detaching subscription IDs from a connection.
-    /// `ids` is the valid slice; `allocated` is the full allocated buffer used for freeing.
     pub const DetachedSubscriptions = struct {
         ids: []u64,
         allocated: []u64,
@@ -286,9 +315,7 @@ pub const Connection = struct {
         }
     };
 
-    /// Transfer ownership of the subscription IDs buffer to the caller,
-    /// leaving the connection with an empty list. Zero-allocation.
-    /// Caller must hold self.mutex.
+    /// Transfer ownership of the subscription IDs buffer to the caller. Caller must hold mutex.
     pub fn detachSubscriptionsLocked(self: *Connection) DetachedSubscriptions {
         const result = DetachedSubscriptions{
             .ids = self.subscription_ids.items,
@@ -303,8 +330,7 @@ pub const Connection = struct {
         _ = self.ref_count.fetchAdd(1, .monotonic);
     }
 
-    /// Decrement the reference count.
-    /// Returns true if the count reached zero and the connection should be returned to the pool.
+    /// Decrement the reference count. Returns true if it reached zero.
     pub fn release(self: *Connection) bool {
         if (self.ref_count.fetchSub(1, .release) == 1) {
             _ = self.ref_count.load(.acquire);
@@ -313,12 +339,37 @@ pub const Connection = struct {
         return false;
     }
 
-    /// Fully deinitialize the connection (for heap-allocated or app shutdown).
-    /// Full cleanup of connection-owned resources.
-    /// Note: This is safe to call after resetSession() (e.g. during pool shutdown)
-    /// because resetSession() nullifies user_id and subscription_ids is a standard list.
     pub fn deinit(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.subscription_ids.deinit(self.allocator);
+        self.outbox.deinit(self.allocator);
+    }
+
+    /// Send a message to the client. Must be called from the event loop thread.
+    ///
+    /// Fast path: direct send when not backpressured. On BACKPRESSURE, sets the flag
+    /// and enqueues subsequent messages to preserve ordering until drain clears it.
+    /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
+    pub fn send(self: *Connection, data: []const u8) !void {
+        if (!self.is_backpressured) {
+            switch (self.ws.send(data, .binary)) {
+                .success => return,
+                .backpressure => {
+                    self.is_backpressured = true;
+                    return;
+                },
+                .dropped => return error.Dropped,
+            }
+        }
+        if (self.outbox.isFull()) return error.Full;
+        try self.outbox.enqueue(self.allocator, data);
+    }
+
+    /// Flush queued messages after uWS signals the send buffer has cleared.
+    /// Must be called from the event loop thread. Clears is_backpressured on full drain.
+    pub fn flushOutbox(self: *Connection) FlushResult {
+        const result = self.outbox.flush(&self.ws, self.allocator);
+        if (result == .success) self.is_backpressured = false;
+        return result;
     }
 };
