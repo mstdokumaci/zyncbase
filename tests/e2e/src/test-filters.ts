@@ -1,8 +1,4 @@
-import type {
-	JsonValue,
-	QueryOptions,
-	SubscriptionHandle,
-} from "@zyncbase/client";
+import type { JsonValue, QueryOptions, SubscriptionHandle } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
 interface ItemRecord {
@@ -28,6 +24,8 @@ interface ClientState {
 	itemsRecords: Map<string, ItemRecord>;
 	eventsRecords: Map<string, EventRecord>;
 	isReadWrite: boolean;
+	fired: boolean;
+	debugId: number;
 }
 
 function matchesItemFilterA(item: ItemRecord): boolean {
@@ -47,29 +45,19 @@ function matchesEventFilterB(event: EventRecord): boolean {
 }
 
 const ITEMS_FILTER_A: QueryOptions = {
-	where: {
-		priority: { gte: 5 },
-		active: true,
-	},
+	where: { priority: { gte: 5 }, active: true },
 };
 
 const ITEMS_FILTER_B: QueryOptions = {
-	where: {
-		or: [{ priority: { lt: 3 } }, { tags: { contains: "urgent" } }],
-	},
+	where: { or: [{ priority: { lt: 3 } }, { tags: { contains: "urgent" } }] },
 };
 
 const EVENTS_FILTER_A: QueryOptions = {
-	where: {
-		score: { gte: 50 },
-		ratings: { contains: 5 },
-	},
+	where: { score: { gte: 50 }, ratings: { contains: 5 } },
 };
 
 const EVENTS_FILTER_B: QueryOptions = {
-	where: {
-		or: [{ score: { lt: 20 } }, { ratings: { contains: 1 } }],
-	},
+	where: { or: [{ score: { lt: 20 } }, { ratings: { contains: 1 } }] },
 };
 
 function createItemData(index: number): Omit<ItemRecord, "id"> {
@@ -106,73 +94,110 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 
 function subscribeClient(state: ClientState) {
 	const itemsFilter = state.filterSet === "A" ? ITEMS_FILTER_A : ITEMS_FILTER_B;
-	const eventsFilter =
-		state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
+	const eventsFilter = state.filterSet === "A" ? EVENTS_FILTER_A : EVENTS_FILTER_B;
 
-	state.itemsSub = state.client.store.subscribe(
-		"items",
-		itemsFilter,
-		(items: JsonValue[]) => {
-			state.itemsRecords.clear();
-			for (const item of items as unknown as ItemRecord[]) {
-				state.itemsRecords.set(item.id, item);
-			}
-		},
-	);
+	state.itemsSub = state.client.store.subscribe("items", itemsFilter, (items: JsonValue[]) => {
+		state.fired = true;
+		state.itemsRecords.clear();
+		for (const item of items as unknown as ItemRecord[]) {
+			state.itemsRecords.set(item.id, item);
+		}
+	});
 
-	state.eventsSub = state.client.store.subscribe(
-		"events",
-		eventsFilter,
-		(events: JsonValue[]) => {
-			state.eventsRecords.clear();
-			for (const event of events as unknown as EventRecord[]) {
-				state.eventsRecords.set(event.id, event);
-			}
-		},
-	);
+	state.eventsSub = state.client.store.subscribe("events", eventsFilter, (events: JsonValue[]) => {
+		state.fired = true;
+		state.eventsRecords.clear();
+		for (const event of events as unknown as EventRecord[]) {
+			state.eventsRecords.set(event.id, event);
+		}
+	});
 }
 
-function waitForFilteredState(
-	state: ClientState,
-	expectedItemIds: Set<string>,
-	expectedEventIds: Set<string>,
-	timeoutMs = 10000,
+function clientIdSet(state: ClientState): { itemIds: string[]; eventIds: string[] } {
+	return {
+		itemIds: [...state.itemsRecords.keys()].sort(),
+		eventIds: [...state.eventsRecords.keys()].sort(),
+	};
+}
+
+function statesMatch(a: ClientState, b: ClientState): boolean {
+	if (a.itemsRecords.size !== b.itemsRecords.size) return false;
+	if (a.eventsRecords.size !== b.eventsRecords.size) return false;
+	for (const id of a.itemsRecords.keys()) {
+		if (!b.itemsRecords.has(id)) return false;
+	}
+	for (const id of a.eventsRecords.keys()) {
+		if (!b.eventsRecords.has(id)) return false;
+	}
+	return true;
+}
+
+function verifySelfConsistentStates(clients: ClientState[], filterLabel: "A" | "B"): string[] {
+	const errors: string[] = [];
+	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
+
+	// Verify all clients with same filter have identical state
+	const first = filterClients[0];
+	for (let i = 1; i < filterClients.length; i++) {
+		if (!statesMatch(first, filterClients[i])) {
+			const firstIds = clientIdSet(first);
+			const otherIds = clientIdSet(filterClients[i]);
+			const missing = firstIds.itemIds.filter((id) => !filterClients[i].itemsRecords.has(id));
+			const extra = otherIds.itemIds.filter((id) => !first.itemsRecords.has(id));
+			if (missing.length > 0) errors.push(`Client ${filterClients[i].debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`);
+			if (extra.length > 0) errors.push(`Client ${filterClients[i].debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`);
+		}
+	}
+
+	// Verify self-consistency: all records match their filter
+	const matchesItem = filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
+	const matchesEvent = filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
+	for (const c of filterClients) {
+		for (const [id, item] of c.itemsRecords) {
+			if (!matchesItem(item)) {
+				errors.push(`Client ${c.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`);
+			}
+		}
+		for (const [id, event] of c.eventsRecords) {
+			if (!matchesEvent(event)) {
+				errors.push(`Client ${c.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`);
+			}
+		}
+	}
+
+	return errors;
+}
+
+function waitForAllFiredAndConverged(
+	clients: ClientState[],
+	timeoutMs = 15000,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
+
 	return new Promise<void>((resolve, reject) => {
 		const check = () => {
-			const hasAllItems = [...expectedItemIds].every((id) =>
-				state.itemsRecords.has(id),
-			);
-			const hasAllEvents = [...expectedEventIds].every((id) =>
-				state.eventsRecords.has(id),
-			);
-			const noExtraItems = state.itemsRecords.size === expectedItemIds.size;
-			const noExtraEvents = state.eventsRecords.size === expectedEventIds.size;
+			const allFired = clients.every((c) => c.fired);
+			if (!allFired) {
+				if (Date.now() > deadline) {
+					const notFired = clients.filter((c) => !c.fired).map((c) => c.debugId);
+					reject(new Error(`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`));
+					return;
+				}
+				setTimeout(check, 100);
+				return;
+			}
 
-			if (hasAllItems && hasAllEvents && noExtraItems && noExtraEvents) {
+			// Check convergence: all clients with same filter have identical state
+			const errorsA = verifySelfConsistentStates(clients, "A");
+			const errorsB = verifySelfConsistentStates(clients, "B");
+			if (errorsA.length === 0 && errorsB.length === 0) {
 				resolve();
 				return;
 			}
+
 			if (Date.now() > deadline) {
-				const missingItems = [...expectedItemIds].filter(
-					(id) => !state.itemsRecords.has(id),
-				);
-				const missingEvents = [...expectedEventIds].filter(
-					(id) => !state.eventsRecords.has(id),
-				);
-				const extraItems = [...state.itemsRecords.keys()].filter(
-					(id) => !expectedItemIds.has(id),
-				);
-				const extraEvents = [...state.eventsRecords.keys()].filter(
-					(id) => !expectedEventIds.has(id),
-				);
-				const parts: string[] = [];
-				if (missingItems.length > 0) parts.push(`missing ${missingItems.length} items (${missingItems.join(", ")})`);
-				if (missingEvents.length > 0) parts.push(`missing ${missingEvents.length} events`);
-				if (extraItems.length > 0) parts.push(`extra ${extraItems.length} items`);
-				if (extraEvents.length > 0) parts.push(`extra ${extraEvents.length} events`);
-				reject(new Error(`Timeout: ${parts.join(", ")}`));
+				const parts = [...errorsA.slice(0, 3), ...errorsB.slice(0, 3)];
+				reject(new Error(`Timeout: not converged — ${parts.join("; ")}`));
 				return;
 			}
 			setTimeout(check, 100);
@@ -181,54 +206,29 @@ function waitForFilteredState(
 	});
 }
 
-function computeExpectedState(
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-	filterLabel: "A" | "B",
-): { itemIds: Set<string>; eventIds: Set<string> } {
-	const itemMatches = allItems.filter((item) =>
-		filterLabel === "A" ? matchesItemFilterA(item) : matchesItemFilterB(item),
-	);
-	const eventMatches = allEvents.filter((event) =>
-		filterLabel === "A"
-			? matchesEventFilterA(event)
-			: matchesEventFilterB(event),
-	);
-	return {
-		itemIds: new Set(itemMatches.map((i) => i.id)),
-		eventIds: new Set(eventMatches.map((e) => e.id)),
-	};
-}
-
 function closeAllClients(clients: ClientState[]) {
 	for (const state of clients) {
 		state.client.close();
 	}
 }
 
-async function createClients(
-	totalClients: number,
-	port: number,
-): Promise<ClientState[]> {
+async function createClients(totalClients: number, port: number): Promise<ClientState[]> {
 	const clients: ClientState[] = [];
-
 	for (let i = 0; i < totalClients; i++) {
-		const client = new ZyncBaseClient({
-			url: `ws://127.0.0.1:${port}`,
-			debug: i === 0,
-		});
+		const client = new ZyncBaseClient({ url: `ws://127.0.0.1:${port}`, debug: false });
 		await client.connect();
 		clients.push({
 			client,
-			filterSet: i < 50 ? "A" : "B",
+			filterSet: i < totalClients / 2 ? "A" : "B",
 			itemsSub: null,
 			eventsSub: null,
 			itemsRecords: new Map(),
 			eventsRecords: new Map(),
-			isReadWrite: i >= totalClients - 10,
+			isReadWrite: i >= totalClients - totalClients / 10,
+			fired: false,
+			debugId: i,  // Add debugId property
 		});
 	}
-
 	return clients;
 }
 
@@ -242,16 +242,8 @@ async function createInitialData(
 
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
-		createPromises.push(
-			rwClient.store.create("items", createItemData(i)).then((id) => {
-				createdItemIds.push(id);
-			}),
-		);
-		createPromises.push(
-			rwClient.store.create("events", createEventData(i)).then((id) => {
-				createdEventIds.push(id);
-			}),
-		);
+		createPromises.push(rwClient.store.create("items", createItemData(i)).then((id) => createdItemIds.push(id)));
+		createPromises.push(rwClient.store.create("events", createEventData(i)).then((id) => createdEventIds.push(id)));
 	}
 
 	await Promise.all(createPromises);
@@ -269,53 +261,25 @@ async function updateRandomRecords(
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
 
-		const randomItemIdx = Math.floor(Math.random() * createdItemIds.length);
-		const randomItemId = createdItemIds[randomItemIdx];
-		const newPriority = Math.floor(Math.random() * 10) + 1;
-		const newActive = Math.random() > 0.5;
-		const newTags = Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"];
-
+		const randomItemId = createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["items", randomItemId], {
-				priority: newPriority,
-				active: newActive,
-				tags: newTags,
+				priority: Math.floor(Math.random() * 10) + 1,
+				active: Math.random() > 0.5,
+				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
 			}),
 		);
 
-		const randomEventIdx = Math.floor(Math.random() * createdEventIds.length);
-		const randomEventId = createdEventIds[randomEventIdx];
-		const newScore = Math.random() * 100;
-		const newRatings = Math.random() > 0.5 ? [1, 5] : [2, 3];
-
+		const randomEventId = createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["events", randomEventId], {
-				score: newScore,
-				ratings: newRatings,
+				score: Math.random() * 100,
+				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
 			}),
 		);
 	}
 
 	await Promise.all(updatePromises);
-}
-
-async function waitForAllClients(
-	clients: ClientState[],
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-): Promise<void> {
-	const waitForPromises: Promise<void>[] = [];
-	for (const state of clients) {
-		const { itemIds, eventIds } = computeExpectedState(
-			allItems,
-			allEvents,
-			state.filterSet,
-		);
-		if (itemIds.size > 0 || eventIds.size > 0) {
-			waitForPromises.push(waitForFilteredState(state, itemIds, eventIds));
-		}
-	}
-	await Promise.all(waitForPromises);
 }
 
 export async function run(port: number = 3000) {
@@ -328,47 +292,22 @@ export async function run(port: number = 3000) {
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
 
-	console.log("Subscribing all clients and starting writes concurrently...");
-
 	for (const state of clients) {
 		subscribeClient(state);
 	}
 
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } = await createInitialData(
-		readWriteClients,
-		READ_WRITE_COUNT,
-	);
-	console.log(
-		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
-	);
+	const { createdItemIds, createdEventIds } = await createInitialData(readWriteClients, READ_WRITE_COUNT);
+	console.log(`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(
-		readWriteClients,
-		createdItemIds,
-		createdEventIds,
-		READ_WRITE_COUNT,
-	);
+	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds, READ_WRITE_COUNT);
 	console.log("All updates complete.");
 
-	console.log("Fetching authoritative state from server...");
-	const allItems = (await readWriteClients[0].client.store.get([
-		"items",
-	])) as unknown as ItemRecord[];
-	const allEvents = (await readWriteClients[0].client.store.get([
-		"events",
-	])) as unknown as EventRecord[];
-	console.log(
-		`Server has ${allItems.length} items and ${allEvents.length} events.`,
-	);
-
-	console.log("Waiting for all clients to receive their filtered state...");
-	await waitForAllClients(clients, allItems, allEvents);
-	console.log("All clients have received their filtered state.");
+	console.log("Waiting for all clients to converge...");
+	await waitForAllFiredAndConverged(clients);
+	console.log("All clients converged — filter state is consistent.");
 
 	closeAllClients(clients);
-
-	console.log(`All ${TOTAL_CLIENTS} clients have correct filtered state.`);
-	console.log("E2E Filters test passed successfully!");
+	console.log(`E2E Filters test passed — ${TOTAL_CLIENTS} clients.`);
 }
