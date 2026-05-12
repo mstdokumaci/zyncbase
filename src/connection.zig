@@ -345,31 +345,12 @@ pub const Connection = struct {
         self.outbox.deinit(self.allocator);
     }
 
-    /// Send a response or handshake message. Must be called from the event loop thread.
-    ///
-    /// When backpressured, enqueues to preserve ordering with queued deltas.
-    /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
-    pub fn sendDirect(self: *Connection, data: []const u8) !void {
-        if (!self.is_backpressured) {
-            switch (self.ws.send(data, .binary)) {
-                .success => return,
-                .backpressure => {
-                    self.is_backpressured = true;
-                    return;
-                },
-                .dropped => return error.Dropped,
-            }
-        }
-        if (self.outbox.isFull()) return error.Full;
-        try self.outbox.enqueue(self.allocator, data);
-    }
-
-    /// Send a subscription delta. Must be called from the event loop thread.
+    /// Send a message to the client. Must be called from the event loop thread.
     ///
     /// Fast path: direct send when not backpressured. On BACKPRESSURE, sets the flag
-    /// and queues subsequent messages until the drain callback clears it.
+    /// and enqueues subsequent messages to preserve ordering until drain clears it.
     /// Returns error.Dropped (connection dead) or error.Full (slow client) — both require close.
-    pub fn trySendDelta(self: *Connection, data: []const u8) !void {
+    pub fn send(self: *Connection, data: []const u8) !void {
         if (!self.is_backpressured) {
             switch (self.ws.send(data, .binary)) {
                 .success => return,

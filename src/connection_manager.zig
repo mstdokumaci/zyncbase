@@ -124,12 +124,12 @@ pub const ConnectionManager = struct {
 
         // Handshake messages are critical — a dropped send means the connection
         // is already dead. Close it so the client reconnects cleanly.
-        conn.sendDirect(connected_msg) catch {
+        conn.send(connected_msg) catch {
             std.log.warn("Connection {}: dropped on connected message, closing", .{conn_id});
             conn.ws.close();
             return;
         };
-        conn.sendDirect(self.schema_sync_msg) catch {
+        conn.send(self.schema_sync_msg) catch {
             std.log.warn("Connection {}: dropped on schema_sync message, closing", .{conn_id});
             conn.ws.close();
             return;

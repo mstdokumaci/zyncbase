@@ -133,7 +133,7 @@ pub const MessageHandler = struct {
                 }
             }
             const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
-            conn.sendDirect(response_err) catch {
+            conn.send(response_err) catch {
                 std.log.warn("Connection {}: dropped while sending error response, closing", .{conn_id});
                 ws.close();
             };
@@ -142,7 +142,7 @@ pub const MessageHandler = struct {
 
         // 5. Send immediate response when the route completed synchronously.
         if (response) |payload| {
-            conn.sendDirect(payload) catch {
+            conn.send(payload) catch {
                 std.log.warn("Connection {}: dropped while sending response, closing", .{conn_id});
                 ws.close();
             };
@@ -204,7 +204,7 @@ pub const MessageHandler = struct {
     pub fn sendError(self: *MessageHandler, conn: *Connection, msg_id: ?u64, wire_err: wire.WireError) !void {
         const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
         defer self.allocator.free(error_msg);
-        conn.sendDirect(error_msg) catch {
+        conn.send(error_msg) catch {
             std.log.warn("Connection {}: dropped while sending error, closing", .{conn.id});
             conn.ws.close();
         };

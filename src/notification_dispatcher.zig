@@ -167,7 +167,7 @@ pub const NotificationDispatcher = struct {
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            conn.trySendDelta(out.items) catch |err| switch (err) {
+            conn.send(out.items) catch |err| switch (err) {
                 error.Dropped => {
                     std.log.warn("Connection {} dropped by uWS, closing", .{match.connection_id});
                     conn.ws.close();

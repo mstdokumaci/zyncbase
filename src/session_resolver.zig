@@ -55,7 +55,7 @@ pub const SessionResolver = struct {
             std.log.err("SessionResolver failed to encode stale-scope error: {}", .{encode_err});
             return;
         };
-        conn.sendDirect(msg) catch {
+        conn.send(msg) catch {
             std.log.warn("Connection {}: dropped while sending stale-scope error, closing", .{conn.id});
             conn.ws.close();
         };
@@ -72,7 +72,7 @@ pub const SessionResolver = struct {
             std.log.err("SessionResolver failed to encode error response: {}", .{encode_err});
             return;
         };
-        conn.sendDirect(msg) catch {
+        conn.send(msg) catch {
             std.log.warn("Connection {}: dropped while sending error response, closing", .{conn.id});
             conn.ws.close();
         };
@@ -128,7 +128,7 @@ pub const SessionResolver = struct {
             std.log.err("SessionResolver failed to encode success response: {}", .{encode_err});
             return;
         };
-        conn.sendDirect(msg) catch {
+        conn.send(msg) catch {
             std.log.warn("Connection {}: dropped while sending success response, closing", .{conn.id});
             conn.ws.close();
         };
