@@ -99,7 +99,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(ws, null, wire.getWireError(error.RateLimited));
+                try self.sendError(conn, null, wire.getWireError(error.RateLimited));
                 return;
             }
         }
@@ -114,7 +114,7 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-            try self.sendError(ws, null, wire.getWireError(err));
+            try self.sendError(conn, null, wire.getWireError(err));
             return;
         };
 
@@ -133,13 +133,19 @@ pub const MessageHandler = struct {
                 }
             }
             const response_err = try wire.encodeError(arena_allocator, envelope.id, wire.getWireError(err));
-            ws.send(response_err, .binary);
+            conn.sendDirect(response_err) catch {
+                std.log.warn("Connection {}: dropped while sending error response, closing", .{conn_id});
+                ws.close();
+            };
             return;
         };
 
         // 5. Send immediate response when the route completed synchronously.
         if (response) |payload| {
-            ws.send(payload, .binary);
+            conn.sendDirect(payload) catch {
+                std.log.warn("Connection {}: dropped while sending response, closing", .{conn_id});
+                ws.close();
+            };
         }
     }
 
@@ -195,10 +201,24 @@ pub const MessageHandler = struct {
         }
     }
 
-    pub fn sendError(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
+    pub fn sendError(self: *MessageHandler, conn: *Connection, msg_id: ?u64, wire_err: wire.WireError) !void {
         const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
         defer self.allocator.free(error_msg);
-        ws.send(error_msg, .binary);
+        conn.sendDirect(error_msg) catch {
+            std.log.warn("Connection {}: dropped while sending error, closing", .{conn.id});
+            conn.ws.close();
+        };
+    }
+
+    /// Send an error to a raw WebSocket that has no Connection object yet
+    /// (e.g. rejected non-binary frames before the connection is looked up).
+    pub fn sendErrorRaw(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
+        const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
+        defer self.allocator.free(error_msg);
+        switch (ws.send(error_msg, .binary)) {
+            .success, .backpressure => {},
+            .dropped => ws.close(),
+        }
     }
 
     fn requireStoreSession(conn: *Connection) !Connection.StoreSession {

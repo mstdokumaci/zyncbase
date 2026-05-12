@@ -167,7 +167,20 @@ pub const NotificationDispatcher = struct {
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
-            conn.ws.send(out.items, .binary);
+            conn.trySendDelta(out.items) catch |err| switch (err) {
+                error.Dropped => {
+                    std.log.warn("Connection {} dropped by uWS, closing", .{match.connection_id});
+                    conn.ws.close();
+                },
+                error.Full => {
+                    std.log.warn("Connection {} outbox full (slow client), closing", .{match.connection_id});
+                    conn.ws.close();
+                },
+                else => {
+                    std.log.err("Connection {} unexpected send error: {}", .{ match.connection_id, err });
+                    conn.ws.close();
+                },
+            };
         }
     }
 

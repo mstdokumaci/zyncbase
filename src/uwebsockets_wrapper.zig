@@ -25,6 +25,8 @@ pub const WebSocketServer = struct {
     is_listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     post_handler: ?*const fn (?*anyopaque) void = null,
     post_handler_ctx: ?*anyopaque = null,
+    drain_handler: ?*const fn (?*anyopaque, u64) void = null,
+    drain_handler_ctx: ?*anyopaque = null,
 
     pub const Config = struct {
         port: u16,
@@ -74,6 +76,8 @@ pub const WebSocketServer = struct {
         self.is_listening = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
+        self.drain_handler = null;
+        self.drain_handler_ctx = null;
     }
 
     /// Clean up resources.
@@ -90,6 +94,7 @@ pub const WebSocketServer = struct {
 
         var behavior = std.mem.zeroes(c.uws_socket_behavior_t);
         behavior.maxPayloadLength = 16 * 1024 * 1024;
+        behavior.maxBackpressure = 16 * 1024 * 1024;
         behavior.idleTimeout = 120;
         behavior.sendPingsAutomatically = true;
 
@@ -146,6 +151,18 @@ pub const WebSocketServer = struct {
     }
 };
 
+/// The result of a WebSocket send operation.
+pub const SendStatus = enum(c_uint) {
+    /// The kernel send buffer is full; uWS has internally buffered the frame.
+    /// The drain callback will fire when the buffer clears.
+    backpressure = 0,
+    /// Frame was handed to the kernel successfully.
+    success = 1,
+    /// The connection is dead or the internal backpressure limit was hit.
+    /// The frame was discarded. Callers should close the connection.
+    dropped = 2,
+};
+
 /// WebSocket connection wrapper
 pub const WebSocket = struct {
     ws: ?*c.uws_websocket_t,
@@ -153,13 +170,15 @@ pub const WebSocket = struct {
     user_data: ?*anyopaque = null, // Mock data for testing
     client_id: ?[]const u8 = null,
 
-    pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) void {
-        if (self.ws == null) return;
-        const opcode: c_int = switch (msg_type) {
+    /// Send a message and return the delivery status.
+    /// Callers must inspect the result — never discard it silently.
+    pub fn send(self: *WebSocket, message: []const u8, msg_type: MessageType) SendStatus {
+        if (self.ws == null) return .dropped;
+        const opcode: c_uint = switch (msg_type) {
             .text => c.UWS_OPCODE_TEXT,
             .binary => c.UWS_OPCODE_BINARY,
         };
-        _ = c.uws_ws_send(if (self.ssl) 1 else 0, self.ws.?, message.ptr, message.len, @intCast(opcode));
+        return @enumFromInt(c.uws_ws_send(if (self.ssl) 1 else 0, self.ws.?, message.ptr, message.len, opcode));
     }
 
     pub fn close(self: *WebSocket) void {
@@ -289,8 +308,21 @@ fn onCloseCallbackSSL(ws: ?*c.uws_websocket_t, code: c_int, msg: [*c]const u8, l
     onClose(ws, code, msg, len, true);
 }
 
-fn onDrainCallbackNoSSL(_: ?*c.uws_websocket_t) callconv(.c) void {}
-fn onDrainCallbackSSL(_: ?*c.uws_websocket_t) callconv(.c) void {}
+fn onDrain(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
+    if (ws == null) return;
+    const socket_data = getSocketUserData(ws, is_ssl) orelse return;
+    const server = socket_data.server;
+    if (server.drain_handler) |handler| {
+        handler(server.drain_handler_ctx, @intFromPtr(ws.?));
+    }
+}
+
+fn onDrainCallbackNoSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    onDrain(ws, false);
+}
+fn onDrainCallbackSSL(ws: ?*c.uws_websocket_t) callconv(.c) void {
+    onDrain(ws, true);
+}
 
 fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.uws_req_t, context: ?*c.uws_socket_context_t, _: usize) callconv(.c) void {
     if (upgrade_context == null) return;

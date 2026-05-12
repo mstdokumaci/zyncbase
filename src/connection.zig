@@ -1,7 +1,96 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const uws = @import("uwebsockets_wrapper.zig");
+const WebSocket = uws.WebSocket;
+
+/// Capacity of the per-connection outbox ring buffer (max queued messages).
+/// One slot is always reserved as the sentinel, so effective capacity is
+/// outbox_capacity - 1 = 31 messages.
+const outbox_capacity = 32;
+
+/// Result returned by Outbox.flush().
+pub const FlushResult = enum {
+    /// All queued messages were sent successfully.
+    success,
+    /// uWS accepted the last frame but its internal buffer is now full.
+    /// The drain callback will fire when space is available; call flush() again then.
+    backpressure,
+    /// uWS dropped a frame — the connection is dead. Close it.
+    dropped,
+};
+
+/// Per-connection bounded ring buffer for outgoing subscription deltas.
+///
+/// Design contract:
+///   - On SUCCESS  → frame delivered; advance tail, continue.
+///   - On BACKPRESSURE → uWS already owns the frame internally; free our copy,
+///                       advance tail, then STOP sending more until drain fires.
+///   - On DROPPED  → connection is dead; drain the queue (free memory) and
+///                   signal the caller to close the connection.
+pub const Outbox = struct {
+    entries: [outbox_capacity][]u8,
+    head: usize, // index of next write slot
+    tail: usize, // index of next read slot
+
+    /// Zero-initialized empty outbox. `entries` is intentionally undefined
+    /// because only slots in [tail, head) are ever read, and head == tail
+    /// on an empty outbox means no slot is ever accessed.
+    pub const empty: Outbox = .{
+        // SAFETY: entries is a ring buffer; only indices in [tail, head) are
+        // read. When head == tail the buffer is empty and no entry is accessed.
+        .entries = undefined,
+        .head = 0,
+        .tail = 0,
+    };
+
+    pub fn enqueue(self: *Outbox, allocator: Allocator, data: []const u8) !void {
+        const next = (self.head + 1) % outbox_capacity;
+        if (next == self.tail) return error.Full;
+        self.entries[self.head] = try allocator.dupe(u8, data);
+        self.head = next;
+    }
+
+    /// Flush as many queued messages as possible.
+    /// Stops early on BACKPRESSURE (uWS will call drain when ready) or DROPPED
+    /// (connection dead — caller must close).
+    pub fn flush(self: *Outbox, ws: *WebSocket, allocator: Allocator) FlushResult {
+        while (self.tail != self.head) {
+            const data = self.entries[self.tail];
+            const status = ws.send(data, .binary);
+            // Always free our copy — uWS owns the frame from this point on
+            // regardless of status (it either delivered it, buffered it, or dropped it).
+            allocator.free(data);
+            self.tail = (self.tail + 1) % outbox_capacity;
+            switch (status) {
+                .success => {}, // continue sending
+                .backpressure => return .backpressure, // stop; drain callback will resume
+                .dropped => {
+                    // Free remaining queued entries and signal close.
+                    self.deinit(allocator);
+                    return .dropped;
+                },
+            }
+        }
+        return .success;
+    }
+
+    /// Free all queued entries without sending. Used on connection close/reset.
+    pub fn deinit(self: *Outbox, allocator: Allocator) void {
+        while (self.tail != self.head) {
+            allocator.free(self.entries[self.tail]);
+            self.tail = (self.tail + 1) % outbox_capacity;
+        }
+    }
+
+    pub fn isEmpty(self: Outbox) bool {
+        return self.tail == self.head;
+    }
+
+    pub fn isFull(self: Outbox) bool {
+        return (self.head + 1) % outbox_capacity == self.tail;
+    }
+};
 
 pub const unset_namespace_id: i64 = -1;
 
@@ -50,6 +139,9 @@ pub const Connection = struct {
     /// Low-level WebSocket handle
     ws: WebSocket,
 
+    /// Per-connection send queue flushed by the drain callback
+    outbox: Outbox = Outbox.empty,
+
     /// Reference count for thread-safe memory management
     ref_count: std.atomic.Value(usize),
 
@@ -80,6 +172,7 @@ pub const Connection = struct {
         self.next_subscription_id = 1;
         self.mutex = .{};
         self.ref_count = std.atomic.Value(usize).init(0);
+        self.outbox = Outbox.empty;
     }
 
     /// Activate a pooled connection for a new client session.
@@ -110,6 +203,8 @@ pub const Connection = struct {
         self.resetStoreScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
+        // Drain any queued outbox entries so a reused pooled connection starts clean.
+        self.outbox.deinit(self.allocator);
     }
 
     /// Set the transport external identity. Scoped users.id resolution happens later.
@@ -320,5 +415,54 @@ pub const Connection = struct {
     pub fn deinit(self: *Connection) void {
         if (self.user_id) |uid| self.allocator.free(uid);
         self.subscription_ids.deinit(self.allocator);
+        self.outbox.deinit(self.allocator);
+    }
+
+    /// Send a direct response or handshake message (not a subscription delta).
+    /// These messages bypass the outbox — they are one-shot replies to client requests.
+    ///
+    /// Returns error.Dropped when uWS signals the connection is dead — the caller
+    /// should close the connection.
+    /// BACKPRESSURE is treated as success here: uWS has buffered the frame and will
+    /// deliver it; no further action is needed from the caller.
+    pub fn sendDirect(self: *Connection, data: []const u8) error{Dropped}!void {
+        return switch (self.ws.send(data, .binary)) {
+            .success, .backpressure => {},
+            .dropped => error.Dropped,
+        };
+    }
+
+    /// Send a subscription delta through the outbox.
+    ///
+    /// Fast path: if the outbox is empty, attempt a direct send first to avoid
+    /// the allocation cost of enqueue on the common (no-backpressure) case.
+    ///
+    /// Returns error.Dropped when uWS signals the connection is dead — the caller
+    /// must close the connection.
+    /// Returns error.Full when the outbox capacity is exhausted — the caller must
+    /// close the connection (slow client policy).
+    pub fn trySendDelta(self: *Connection, data: []const u8) !void {
+        // Fast path: outbox empty → try direct send first.
+        if (self.outbox.isEmpty()) {
+            switch (self.ws.send(data, .binary)) {
+                .success => return,
+                .backpressure => {
+                    // uWS buffered it internally — nothing more to do until drain fires.
+                    return;
+                },
+                .dropped => return error.Dropped,
+            }
+        }
+
+        // Outbox has pending entries (we're in backpressure) — enqueue and let
+        // the drain callback flush in order.
+        if (self.outbox.isFull()) return error.Full;
+        try self.outbox.enqueue(self.allocator, data);
+    }
+
+    /// Called by the drain callback when the uWS send buffer has cleared.
+    /// Returns FlushResult so the caller can close the connection on .dropped.
+    pub fn flushOutbox(self: *Connection) FlushResult {
+        return self.outbox.flush(&self.ws, self.allocator);
     }
 };
