@@ -148,6 +148,70 @@ function statesMatch(a: ClientState, b: ClientState): boolean {
 	return true;
 }
 
+function verifyStateMatch(
+	first: ClientState,
+	client: ClientState,
+	errors: string[],
+) {
+	if (statesMatch(first, client)) return;
+
+	const firstIds = clientIdSet(first);
+	const otherIds = clientIdSet(client);
+
+	const missing = firstIds.itemIds.filter((id) => !client.itemsRecords.has(id));
+	const extra = otherIds.itemIds.filter((id) => !first.itemsRecords.has(id));
+	if (missing.length > 0) {
+		errors.push(
+			`Client ${client.debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`,
+		);
+	}
+	if (extra.length > 0) {
+		errors.push(
+			`Client ${client.debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`,
+		);
+	}
+
+	const missingEvents = firstIds.eventIds.filter(
+		(id) => !client.eventsRecords.has(id),
+	);
+	const extraEvents = otherIds.eventIds.filter(
+		(id) => !first.eventsRecords.has(id),
+	);
+	if (missingEvents.length > 0) {
+		errors.push(
+			`Client ${client.debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`,
+		);
+	}
+	if (extraEvents.length > 0) {
+		errors.push(
+			`Client ${client.debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`,
+		);
+	}
+}
+
+function verifyRecordsMatchFilter(
+	client: ClientState,
+	filterLabel: "A" | "B",
+	matchesItem: (item: ItemRecord) => boolean,
+	matchesEvent: (event: EventRecord) => boolean,
+	errors: string[],
+) {
+	for (const [id, item] of client.itemsRecords) {
+		if (!matchesItem(item)) {
+			errors.push(
+				`Client ${client.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`,
+			);
+		}
+	}
+	for (const [id, event] of client.eventsRecords) {
+		if (!matchesEvent(event)) {
+			errors.push(
+				`Client ${client.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`,
+			);
+		}
+	}
+}
+
 function verifySelfConsistentStates(
 	clients: ClientState[],
 	filterLabel: "A" | "B",
@@ -155,111 +219,56 @@ function verifySelfConsistentStates(
 	const errors: string[] = [];
 	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
 
-	// Verify all clients with same filter have identical state
 	const first = filterClients[0];
 	for (let i = 1; i < filterClients.length; i++) {
-		if (!statesMatch(first, filterClients[i])) {
-			const firstIds = clientIdSet(first);
-			const otherIds = clientIdSet(filterClients[i]);
-			const missing = firstIds.itemIds.filter(
-				(id) => !filterClients[i].itemsRecords.has(id),
-			);
-			const extra = otherIds.itemIds.filter(
-				(id) => !first.itemsRecords.has(id),
-			);
-			if (missing.length > 0)
-				errors.push(
-					`Client ${filterClients[i].debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`,
-				);
-			if (extra.length > 0)
-				errors.push(
-					`Client ${filterClients[i].debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`,
-				);
-
-			const missingEvents = firstIds.eventIds.filter(
-				(id) => !filterClients[i].eventsRecords.has(id),
-			);
-			const extraEvents = otherIds.eventIds.filter(
-				(id) => !first.eventsRecords.has(id),
-			);
-			if (missingEvents.length > 0)
-				errors.push(
-					`Client ${filterClients[i].debugId} missing events vs client ${first.debugId}: ${missingEvents.join(",")}`,
-				);
-			if (extraEvents.length > 0)
-				errors.push(
-					`Client ${filterClients[i].debugId} extra events vs client ${first.debugId}: ${extraEvents.join(",")}`,
-				);
-		}
+		verifyStateMatch(first, filterClients[i], errors);
 	}
 
-	// Verify self-consistency: all records match their filter
 	const matchesItem =
 		filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
 	const matchesEvent =
 		filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
 	for (const c of filterClients) {
-		for (const [id, item] of c.itemsRecords) {
-			if (!matchesItem(item)) {
-				errors.push(
-					`Client ${c.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`,
-				);
-			}
-		}
-		for (const [id, event] of c.eventsRecords) {
-			if (!matchesEvent(event)) {
-				errors.push(
-					`Client ${c.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`,
-				);
-			}
-		}
+		verifyRecordsMatchFilter(c, filterLabel, matchesItem, matchesEvent, errors);
 	}
 
 	return errors;
 }
 
-function waitForAllFiredAndConverged(
+async function waitForAllFiredAndConverged(
 	clients: ClientState[],
 	timeoutMs = 15000,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 
-	return new Promise<void>((resolve, reject) => {
-		const check = () => {
-			const allFired = clients.every((c) => c.fired);
-			if (!allFired) {
-				if (Date.now() > deadline) {
-					const notFired = clients
-						.filter((c) => !c.fired)
-						.map((c) => c.debugId);
-					reject(
-						new Error(
-							`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
-						),
-					);
-					return;
-				}
-				setTimeout(check, 100);
-				return;
-			}
+	while (true) {
+		if (clients.every((c) => c.fired)) {
+			break;
+		}
+		if (Date.now() > deadline) {
+			const notFired = clients.filter((c) => !c.fired).map((c) => c.debugId);
+			throw new Error(
+				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
 
-			// Check convergence: all clients with same filter have identical state
-			const errorsA = verifySelfConsistentStates(clients, "A");
-			const errorsB = verifySelfConsistentStates(clients, "B");
-			if (errorsA.length === 0 && errorsB.length === 0) {
-				resolve();
-				return;
-			}
-
-			if (Date.now() > deadline) {
-				const parts = [...errorsA.slice(0, 3), ...errorsB.slice(0, 3)];
-				reject(new Error(`Timeout: not converged — ${parts.join("; ")}`));
-				return;
-			}
-			setTimeout(check, 100);
-		};
-		check();
-	});
+	while (true) {
+		const errors = [
+			...verifySelfConsistentStates(clients, "A"),
+			...verifySelfConsistentStates(clients, "B"),
+		];
+		if (errors.length === 0) {
+			return;
+		}
+		if (Date.now() > deadline) {
+			throw new Error(
+				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
 }
 
 function closeAllClients(clients: ClientState[]) {
