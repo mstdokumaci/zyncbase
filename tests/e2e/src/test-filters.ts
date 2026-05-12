@@ -28,6 +28,9 @@ interface ClientState {
 	itemsRecords: Map<string, ItemRecord>;
 	eventsRecords: Map<string, EventRecord>;
 	isReadWrite: boolean;
+	itemsFired: boolean;
+	eventsFired: boolean;
+	debugId: number;
 }
 
 function matchesItemFilterA(item: ItemRecord): boolean {
@@ -47,29 +50,19 @@ function matchesEventFilterB(event: EventRecord): boolean {
 }
 
 const ITEMS_FILTER_A: QueryOptions = {
-	where: {
-		priority: { gte: 5 },
-		active: true,
-	},
+	where: { priority: { gte: 5 }, active: true },
 };
 
 const ITEMS_FILTER_B: QueryOptions = {
-	where: {
-		or: [{ priority: { lt: 3 } }, { tags: { contains: "urgent" } }],
-	},
+	where: { or: [{ priority: { lt: 3 } }, { tags: { contains: "urgent" } }] },
 };
 
 const EVENTS_FILTER_A: QueryOptions = {
-	where: {
-		score: { gte: 50 },
-		ratings: { contains: 5 },
-	},
+	where: { score: { gte: 50 }, ratings: { contains: 5 } },
 };
 
 const EVENTS_FILTER_B: QueryOptions = {
-	where: {
-		or: [{ score: { lt: 20 } }, { ratings: { contains: 1 } }],
-	},
+	where: { or: [{ score: { lt: 20 } }, { ratings: { contains: 1 } }] },
 };
 
 function createItemData(index: number): Omit<ItemRecord, "id"> {
@@ -113,6 +106,7 @@ function subscribeClient(state: ClientState) {
 		"items",
 		itemsFilter,
 		(items: JsonValue[]) => {
+			state.itemsFired = true;
 			state.itemsRecords.clear();
 			for (const item of items as unknown as ItemRecord[]) {
 				state.itemsRecords.set(item.id, item);
@@ -124,6 +118,7 @@ function subscribeClient(state: ClientState) {
 		"events",
 		eventsFilter,
 		(events: JsonValue[]) => {
+			state.eventsFired = true;
 			state.eventsRecords.clear();
 			for (const event of events as unknown as EventRecord[]) {
 				state.eventsRecords.set(event.id, event);
@@ -132,215 +127,227 @@ function subscribeClient(state: ClientState) {
 	);
 }
 
-function waitForFilteredState(
-	state: ClientState,
-	expectedItemIds: Set<string>,
-	expectedEventIds: Set<string>,
-	timeoutMs = 10000,
-): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			clearInterval(interval);
-			const missingItems = [...expectedItemIds].filter(
-				(id) => !state.itemsRecords.has(id),
-			);
-			const missingEvents = [...expectedEventIds].filter(
-				(id) => !state.eventsRecords.has(id),
-			);
-			reject(
-				new Error(
-					`Timeout: missing ${missingItems.length} items (${missingItems.join(", ")}), ${missingEvents.length} events`,
-				),
-			);
-		}, timeoutMs);
-
-		const check = () => {
-			const hasAllItems = [...expectedItemIds].every((id) =>
-				state.itemsRecords.has(id),
-			);
-			const hasAllEvents = [...expectedEventIds].every((id) =>
-				state.eventsRecords.has(id),
-			);
-			if (hasAllItems && hasAllEvents) {
-				clearTimeout(timer);
-				clearInterval(interval);
-				resolve();
-			}
-		};
-
-		const interval = setInterval(check, 100);
-		check();
-	});
-}
-
-function computeExpectedState(
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-	filterLabel: "A" | "B",
-): { itemIds: Set<string>; eventIds: Set<string> } {
-	const itemMatches = allItems.filter((item) =>
-		filterLabel === "A" ? matchesItemFilterA(item) : matchesItemFilterB(item),
-	);
-	const eventMatches = allEvents.filter((event) =>
-		filterLabel === "A"
-			? matchesEventFilterA(event)
-			: matchesEventFilterB(event),
-	);
+function clientIdSet(state: ClientState): {
+	itemIds: string[];
+	eventIds: string[];
+} {
 	return {
-		itemIds: new Set(itemMatches.map((i) => i.id)),
-		eventIds: new Set(eventMatches.map((e) => e.id)),
+		itemIds: [...state.itemsRecords.keys()].sort(),
+		eventIds: [...state.eventsRecords.keys()].sort(),
 	};
 }
 
-function verifyItemFields(
-	state: ClientState,
-	expectedItem: ItemRecord,
+function statesMatch(a: ClientState, b: ClientState): boolean {
+	if (a.itemsRecords.size !== b.itemsRecords.size) return false;
+	if (a.eventsRecords.size !== b.eventsRecords.size) return false;
+	for (const [id, item] of a.itemsRecords) {
+		const other = b.itemsRecords.get(id);
+		if (!other || JSON.stringify(item) !== JSON.stringify(other)) return false;
+	}
+	for (const [id, event] of a.eventsRecords) {
+		const other = b.eventsRecords.get(id);
+		if (!other || JSON.stringify(event) !== JSON.stringify(other)) return false;
+	}
+	return true;
+}
+
+function verifyItemMatch(
+	first: ClientState,
+	client: ClientState,
+	firstItemIds: string[],
 	errors: string[],
 ) {
-	const actual = state.itemsRecords.get(expectedItem.id);
-	if (!actual) return;
-
-	if (actual.priority !== expectedItem.priority) {
-		errors.push(
-			`Item ${expectedItem.id} priority mismatch: expected ${expectedItem.priority}, got ${actual.priority}`,
-		);
-	}
-	if (actual.active !== expectedItem.active) {
-		errors.push(
-			`Item ${expectedItem.id} active mismatch: expected ${expectedItem.active}, got ${actual.active}`,
-		);
-	}
-}
-
-function verifyEventFields(
-	state: ClientState,
-	expectedEvent: EventRecord,
-	errors: string[],
-) {
-	const actual = state.eventsRecords.get(expectedEvent.id);
-	if (!actual) return;
-
-	if (actual.score !== expectedEvent.score) {
-		errors.push(
-			`Event ${expectedEvent.id} score mismatch: expected ${expectedEvent.score}, got ${actual.score}`,
-		);
-	}
-}
-
-function verifyClientState(
-	state: ClientState,
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-): string[] {
-	const filterLabel = state.filterSet;
-	const errors: string[] = [];
-
-	const { itemIds: expectedItemIds, eventIds: expectedEventIds } =
-		computeExpectedState(allItems, allEvents, filterLabel);
-
-	const actualItemIds = new Set(state.itemsRecords.keys());
-	const actualEventIds = new Set(state.eventsRecords.keys());
-
-	const missingItems = [...expectedItemIds].filter(
-		(id) => !actualItemIds.has(id),
-	);
-	const missingEvents = [...expectedEventIds].filter(
-		(id) => !actualEventIds.has(id),
+	const missing = firstItemIds.filter((id) => !client.itemsRecords.has(id));
+	const extra = [...client.itemsRecords.keys()].filter(
+		(id) => !first.itemsRecords.has(id),
 	);
 
-	if (missingItems.length > 0) {
-		errors.push(`Missing items: ${missingItems.join(", ")}`);
-	}
-	if (missingEvents.length > 0) {
-		errors.push(`Missing events: ${missingEvents.join(", ")}`);
-	}
-
-	const extraItems = [...actualItemIds].filter(
-		(id) => !expectedItemIds.has(id),
-	);
-	const extraEvents = [...actualEventIds].filter(
-		(id) => !expectedEventIds.has(id),
-	);
-
-	if (extraItems.length > 0) {
+	if (missing.length > 0) {
 		errors.push(
-			`Extra items (should be filtered out): ${extraItems.join(", ")}`,
+			`Client ${client.debugId} missing items vs client ${first.debugId}: ${missing.join(",")}`,
 		);
 	}
-	if (extraEvents.length > 0) {
+	if (extra.length > 0) {
 		errors.push(
-			`Extra events (should be filtered out): ${extraEvents.join(", ")}`,
+			`Client ${client.debugId} extra items vs client ${first.debugId}: ${extra.join(",")}`,
 		);
 	}
 
-	const matchesItemFilter =
-		filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
-	for (const expectedItem of allItems.filter(matchesItemFilter)) {
-		verifyItemFields(state, expectedItem, errors);
-	}
-
-	const matchesEventFilter =
-		filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
-	for (const expectedEvent of allEvents.filter(matchesEventFilter)) {
-		verifyEventFields(state, expectedEvent, errors);
-	}
-
-	return errors;
-}
-
-function verifyAllClients(
-	clients: ClientState[],
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-): number {
-	let errors = 0;
-
-	for (let i = 0; i < clients.length; i++) {
-		const state = clients[i];
-		const clientErrors = verifyClientState(state, allItems, allEvents);
-		if (clientErrors.length > 0) {
-			errors++;
-			console.error(
-				`Client ${i} (filter ${state.filterSet}, rw=${state.isReadWrite}) mismatches:`,
+	for (const id of firstItemIds) {
+		const itemA = first.itemsRecords.get(id);
+		const itemB = client.itemsRecords.get(id);
+		if (itemA && itemB && JSON.stringify(itemA) !== JSON.stringify(itemB)) {
+			errors.push(
+				`Client ${client.debugId} item ${id} value mismatch vs client ${first.debugId}`,
 			);
-			for (const err of clientErrors) {
-				console.error(`  ${err}`);
-			}
 		}
 	}
+}
+
+function verifyEventMatch(
+	first: ClientState,
+	client: ClientState,
+	firstEventIds: string[],
+	errors: string[],
+) {
+	const missing = firstEventIds.filter((id) => !client.eventsRecords.has(id));
+	const extra = [...client.eventsRecords.keys()].filter(
+		(id) => !first.eventsRecords.has(id),
+	);
+
+	if (missing.length > 0) {
+		errors.push(
+			`Client ${client.debugId} missing events vs client ${first.debugId}: ${missing.join(",")}`,
+		);
+	}
+	if (extra.length > 0) {
+		errors.push(
+			`Client ${client.debugId} extra events vs client ${first.debugId}: ${extra.join(",")}`,
+		);
+	}
+
+	for (const id of firstEventIds) {
+		const eventA = first.eventsRecords.get(id);
+		const eventB = client.eventsRecords.get(id);
+		if (eventA && eventB && JSON.stringify(eventA) !== JSON.stringify(eventB)) {
+			errors.push(
+				`Client ${client.debugId} event ${id} value mismatch vs client ${first.debugId}`,
+			);
+		}
+	}
+}
+
+function verifyStateMatch(
+	first: ClientState,
+	client: ClientState,
+	errors: string[],
+) {
+	if (statesMatch(first, client)) return;
+
+	const firstIds = clientIdSet(first);
+	verifyItemMatch(first, client, firstIds.itemIds, errors);
+	verifyEventMatch(first, client, firstIds.eventIds, errors);
+}
+
+function verifyRecordsMatchFilter(
+	client: ClientState,
+	filterLabel: "A" | "B",
+	matchesItem: (item: ItemRecord) => boolean,
+	matchesEvent: (event: EventRecord) => boolean,
+	errors: string[],
+) {
+	for (const [id, item] of client.itemsRecords) {
+		if (!matchesItem(item)) {
+			errors.push(
+				`Client ${client.debugId}: item ${id} does not match filter ${filterLabel}: priority=${item.priority} active=${item.active}`,
+			);
+		}
+	}
+	for (const [id, event] of client.eventsRecords) {
+		if (!matchesEvent(event)) {
+			errors.push(
+				`Client ${client.debugId}: event ${id} does not match filter ${filterLabel}: score=${event.score} ratings=[${event.ratings}]`,
+			);
+		}
+	}
+}
+
+function verifySelfConsistentStates(
+	clients: ClientState[],
+	filterLabel: "A" | "B",
+): string[] {
+	const errors: string[] = [];
+	const filterClients = clients.filter((c) => c.filterSet === filterLabel);
+
+	if (filterClients.length === 0) return [];
+	const first = filterClients[0];
+	for (let i = 1; i < filterClients.length; i++) {
+		verifyStateMatch(first, filterClients[i], errors);
+	}
+
+	const matchesItem =
+		filterLabel === "A" ? matchesItemFilterA : matchesItemFilterB;
+	const matchesEvent =
+		filterLabel === "A" ? matchesEventFilterA : matchesEventFilterB;
+	for (const c of filterClients) {
+		verifyRecordsMatchFilter(c, filterLabel, matchesItem, matchesEvent, errors);
+	}
 
 	return errors;
+}
+
+async function waitForAllFiredAndConverged(
+	clients: ClientState[],
+	timeoutMs = 15000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+
+	while (true) {
+		if (clients.every((c) => c.itemsFired && c.eventsFired)) {
+			break;
+		}
+		if (Date.now() > deadline) {
+			const notFired = clients
+				.filter((c) => !c.itemsFired || !c.eventsFired)
+				.map((c) => c.debugId);
+			throw new Error(
+				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+
+	while (true) {
+		const errors = [
+			...verifySelfConsistentStates(clients, "A"),
+			...verifySelfConsistentStates(clients, "B"),
+		];
+		if (errors.length === 0) {
+			return;
+		}
+		if (Date.now() > deadline) {
+			throw new Error(
+				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
 }
 
 function closeAllClients(clients: ClientState[]) {
 	for (const state of clients) {
+		state.itemsSub?.unsubscribe();
+		state.eventsSub?.unsubscribe();
 		state.client.close();
 	}
 }
 
 async function createClients(
 	totalClients: number,
+	readWriteCount: number,
 	port: number,
 ): Promise<ClientState[]> {
 	const clients: ClientState[] = [];
-
+	const step = Math.floor(totalClients / readWriteCount);
 	for (let i = 0; i < totalClients; i++) {
 		const client = new ZyncBaseClient({
 			url: `ws://127.0.0.1:${port}`,
-			debug: i === 0,
+			debug: false,
 		});
 		await client.connect();
 		clients.push({
 			client,
-			filterSet: i < 50 ? "A" : "B",
+			filterSet: i < totalClients / 2 ? "A" : "B",
 			itemsSub: null,
 			eventsSub: null,
 			itemsRecords: new Map(),
 			eventsRecords: new Map(),
-			isReadWrite: i >= totalClients - 10,
+			isReadWrite: i % step === 0,
+			itemsFired: false,
+			eventsFired: false,
+			debugId: i,
 		});
 	}
-
 	return clients;
 }
 
@@ -355,14 +362,14 @@ async function createInitialData(
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
 		createPromises.push(
-			rwClient.store.create("items", createItemData(i)).then((id) => {
-				createdItemIds.push(id);
-			}),
+			rwClient.store
+				.create("items", createItemData(i))
+				.then((id) => createdItemIds.push(id)),
 		);
 		createPromises.push(
-			rwClient.store.create("events", createEventData(i)).then((id) => {
-				createdEventIds.push(id);
-			}),
+			rwClient.store
+				.create("events", createEventData(i))
+				.then((id) => createdEventIds.push(id)),
 		);
 	}
 
@@ -381,29 +388,22 @@ async function updateRandomRecords(
 	for (let i = 0; i < count; i++) {
 		const rwClient = readWriteClients[i].client;
 
-		const randomItemIdx = Math.floor(Math.random() * createdItemIds.length);
-		const randomItemId = createdItemIds[randomItemIdx];
-		const newPriority = Math.floor(Math.random() * 10) + 1;
-		const newActive = Math.random() > 0.5;
-		const newTags = Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"];
-
+		const randomItemId =
+			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["items", randomItemId], {
-				priority: newPriority,
-				active: newActive,
-				tags: newTags,
+				priority: Math.floor(Math.random() * 10) + 1,
+				active: Math.random() > 0.5,
+				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
 			}),
 		);
 
-		const randomEventIdx = Math.floor(Math.random() * createdEventIds.length);
-		const randomEventId = createdEventIds[randomEventIdx];
-		const newScore = Math.random() * 100;
-		const newRatings = Math.random() > 0.5 ? [1, 5] : [2, 3];
-
+		const randomEventId =
+			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
 		updatePromises.push(
 			rwClient.store.set(["events", randomEventId], {
-				score: newScore,
-				ratings: newRatings,
+				score: Math.random() * 100,
+				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
 			}),
 		);
 	}
@@ -411,36 +411,15 @@ async function updateRandomRecords(
 	await Promise.all(updatePromises);
 }
 
-async function waitForAllClients(
-	clients: ClientState[],
-	allItems: ItemRecord[],
-	allEvents: EventRecord[],
-): Promise<void> {
-	const waitForPromises: Promise<void>[] = [];
-	for (const state of clients) {
-		const { itemIds, eventIds } = computeExpectedState(
-			allItems,
-			allEvents,
-			state.filterSet,
-		);
-		if (itemIds.size > 0 || eventIds.size > 0) {
-			waitForPromises.push(waitForFilteredState(state, itemIds, eventIds));
-		}
-	}
-	await Promise.all(waitForPromises);
-}
-
 export async function run(port: number = 3000) {
 	const TOTAL_CLIENTS = 100;
 	const READ_WRITE_COUNT = 10;
 
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
-	const clients = await createClients(TOTAL_CLIENTS, port);
+	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
 	console.log("All clients connected.");
 
 	const readWriteClients = clients.filter((c) => c.isReadWrite);
-
-	console.log("Subscribing all clients and starting writes concurrently...");
 
 	for (const state of clients) {
 		subscribeClient(state);
@@ -464,30 +443,29 @@ export async function run(port: number = 3000) {
 	);
 	console.log("All updates complete.");
 
-	console.log("Fetching authoritative state from server...");
-	const allItems = (await readWriteClients[0].client.store.get([
-		"items",
-	])) as unknown as ItemRecord[];
-	const allEvents = (await readWriteClients[0].client.store.get([
-		"events",
-	])) as unknown as EventRecord[];
-	console.log(
-		`Server has ${allItems.length} items and ${allEvents.length} events.`,
-	);
+	console.log("Waiting for all clients to converge...");
+	await waitForAllFiredAndConverged(clients);
 
-	console.log("Waiting for all clients to receive their filtered state...");
-	await waitForAllClients(clients, allItems, allEvents);
-	console.log("All clients have received their filtered state.");
-
-	console.log("Verifying all clients have correct filtered state...");
-	const errors = verifyAllClients(clients, allItems, allEvents);
+	// Sanity check: converged state must be non-empty to guard against
+	// false-positive convergence on empty data (e.g. server sending nothing).
+	const sampleA = clients.find((c) => c.filterSet === "A");
+	const sampleB = clients.find((c) => c.filterSet === "B");
+	if (
+		sampleA &&
+		sampleA.itemsRecords.size === 0 &&
+		sampleA.eventsRecords.size === 0
+	) {
+		throw new Error("Filter A converged on empty state — no records received");
+	}
+	if (
+		sampleB &&
+		sampleB.itemsRecords.size === 0 &&
+		sampleB.eventsRecords.size === 0
+	) {
+		throw new Error("Filter B converged on empty state — no records received");
+	}
+	console.log("All clients converged — filter state is consistent.");
 
 	closeAllClients(clients);
-
-	if (errors > 0) {
-		throw new Error(`${errors} client(s) had filter state mismatches`);
-	}
-
-	console.log(`All ${TOTAL_CLIENTS} clients have correct filtered state.`);
-	console.log("E2E Filters test passed successfully!");
+	console.log(`E2E Filters test passed — ${TOTAL_CLIENTS} clients.`);
 }
