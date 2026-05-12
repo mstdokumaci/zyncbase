@@ -429,13 +429,12 @@ pub const Connection = struct {
     /// while deltas are queued would deliver this response before those deltas,
     /// breaking ordering guarantees.
     ///
+    /// Must be called from the uWS event loop thread.
+    ///
     /// Returns error.Dropped when uWS signals the connection is dead.
     /// Returns error.Full when the outbox is at capacity (slow client).
     /// Both conditions require the caller to close the connection.
     pub fn sendDirect(self: *Connection, data: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (!self.is_backpressured) {
             switch (self.ws.send(data, .binary)) {
                 .success => return,
@@ -460,14 +459,13 @@ pub const Connection = struct {
     /// On BACKPRESSURE, sets the backpressure flag and enqueues the message
     /// so the drain callback can flush it in order.
     ///
+    /// Must be called from the uWS event loop thread.
+    ///
     /// Returns error.Dropped when uWS signals the connection is dead — the caller
     /// must close the connection.
     /// Returns error.Full when the outbox capacity is exhausted — the caller must
     /// close the connection (slow client policy).
     pub fn trySendDelta(self: *Connection, data: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (!self.is_backpressured) {
             // Fast path: try direct send first.
             switch (self.ws.send(data, .binary)) {
@@ -490,10 +488,9 @@ pub const Connection = struct {
     /// Called by the drain callback when the uWS send buffer has cleared.
     /// Returns FlushResult so the caller can close the connection on .dropped.
     /// Clears the backpressure flag on a complete successful flush.
+    ///
+    /// Must be called from the uWS event loop thread.
     pub fn flushOutbox(self: *Connection) FlushResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         const result = self.outbox.flush(&self.ws, self.allocator);
         if (result == .success) {
             // Buffer fully drained — resume direct sends.
