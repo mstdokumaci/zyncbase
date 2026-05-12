@@ -207,7 +207,10 @@ pub const ConnectionManager = struct {
             self.mutex.unlock();
             return;
         };
+        conn.acquire();
         self.mutex.unlock();
+
+        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
 
         switch (conn.flushOutbox()) {
             .success, .backpressure => {},

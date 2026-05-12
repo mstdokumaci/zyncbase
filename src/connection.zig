@@ -142,6 +142,11 @@ pub const Connection = struct {
     /// Per-connection send queue flushed by the drain callback
     outbox: Outbox = Outbox.empty,
 
+    /// Set when uWS returns BACKPRESSURE on a direct send.
+    /// While true, all deltas are enqueued rather than sent directly.
+    /// Cleared by flushOutbox() after a complete drain.
+    is_backpressured: bool = false,
+
     /// Reference count for thread-safe memory management
     ref_count: std.atomic.Value(usize),
 
@@ -173,6 +178,7 @@ pub const Connection = struct {
         self.mutex = .{};
         self.ref_count = std.atomic.Value(usize).init(0);
         self.outbox = Outbox.empty;
+        self.is_backpressured = false;
     }
 
     /// Activate a pooled connection for a new client session.
@@ -205,6 +211,7 @@ pub const Connection = struct {
         self.next_subscription_id = 1;
         // Drain any queued outbox entries so a reused pooled connection starts clean.
         self.outbox.deinit(self.allocator);
+        self.is_backpressured = false;
     }
 
     /// Set the transport external identity. Scoped users.id resolution happens later.
@@ -434,35 +441,44 @@ pub const Connection = struct {
 
     /// Send a subscription delta through the outbox.
     ///
-    /// Fast path: if the outbox is empty, attempt a direct send first to avoid
-    /// the allocation cost of enqueue on the common (no-backpressure) case.
+    /// When not backpressured, attempts a direct send first to avoid the
+    /// allocation cost of enqueue on the common (no-backpressure) case.
+    /// On BACKPRESSURE, sets the backpressure flag and enqueues the message
+    /// so the drain callback can flush it in order.
     ///
     /// Returns error.Dropped when uWS signals the connection is dead — the caller
     /// must close the connection.
     /// Returns error.Full when the outbox capacity is exhausted — the caller must
     /// close the connection (slow client policy).
     pub fn trySendDelta(self: *Connection, data: []const u8) !void {
-        // Fast path: outbox empty → try direct send first.
-        if (self.outbox.isEmpty()) {
+        if (!self.is_backpressured) {
+            // Fast path: try direct send first.
             switch (self.ws.send(data, .binary)) {
                 .success => return,
                 .backpressure => {
-                    // uWS buffered it internally — nothing more to do until drain fires.
+                    // uWS buffered this frame internally. Mark backpressured so
+                    // subsequent deltas are queued until drain fires.
+                    self.is_backpressured = true;
                     return;
                 },
                 .dropped => return error.Dropped,
             }
         }
 
-        // Outbox has pending entries (we're in backpressure) — enqueue and let
-        // the drain callback flush in order.
+        // We're in backpressure — enqueue and let the drain callback flush in order.
         if (self.outbox.isFull()) return error.Full;
         try self.outbox.enqueue(self.allocator, data);
     }
 
     /// Called by the drain callback when the uWS send buffer has cleared.
     /// Returns FlushResult so the caller can close the connection on .dropped.
+    /// Clears the backpressure flag on a complete successful flush.
     pub fn flushOutbox(self: *Connection) FlushResult {
-        return self.outbox.flush(&self.ws, self.allocator);
+        const result = self.outbox.flush(&self.ws, self.allocator);
+        if (result == .success) {
+            // Buffer fully drained — resume direct sends.
+            self.is_backpressured = false;
+        }
+        return result;
     }
 };
