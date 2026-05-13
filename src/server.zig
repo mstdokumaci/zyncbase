@@ -130,7 +130,7 @@ pub const ZyncBaseServer = struct {
             };
             defer if (config.schema_content == null and json_text.ptr != schema_mod.implicit_users_schema_json.ptr) self.memory_strategy.generalAllocator().free(json_text);
 
-            self.schema_manager = try Schema.init(self.memory_strategy.generalAllocator(), json_text);
+            self.schema_manager = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
             errdefer self.schema_manager.deinit();
         }
 
@@ -148,7 +148,7 @@ pub const ZyncBaseServer = struct {
                     }
                     return err;
                 };
-                self.auth_config = try authorization.AuthConfig.init(self.memory_strategy.generalAllocator(), auth_json, &self.schema_manager);
+                self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema_manager);
                 self.memory_strategy.generalAllocator().free(auth_json);
             } else {
                 self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema_manager);

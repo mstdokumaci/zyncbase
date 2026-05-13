@@ -300,7 +300,7 @@ test "namespaceRuleFor finds matching rule with captures" {
     var config = try initTestConfig(allocator, json);
     defer config.deinit();
 
-    var match = try config.namespaceRuleFor(allocator, "tenant:acme");
+    var match = try authorization.matchNamespaceRule(allocator, &config, "tenant:acme");
     try testing.expect(match != null);
     try testing.expect(std.mem.eql(u8, match.?.rule.pattern, "tenant:{tenant_id}"));
     try testing.expect(std.mem.eql(u8, match.?.captures.get("tenant_id").?, "acme"));
@@ -312,7 +312,7 @@ test "namespaceRuleFor returns null when no match" {
     var config = try implicitTestConfig(allocator);
     defer config.deinit();
 
-    const match = try config.namespaceRuleFor(allocator, "unknown:something");
+    const match = try authorization.matchNamespaceRule(allocator, &config, "unknown:something");
     try testing.expect(match == null);
 }
 
@@ -621,7 +621,7 @@ test "AuthConfig rejects unsupported store hook predicates at boot" {
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
     var sm = try makeAuthTestSchema(allocator);
     defer sm.deinit();
-    return AuthConfig.init(allocator, json, &sm);
+    return authorization.initAuthConfig(allocator, json, &sm);
 }
 
 fn implicitTestConfig(allocator: std.mem.Allocator) !AuthConfig {

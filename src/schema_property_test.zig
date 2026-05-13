@@ -20,7 +20,7 @@ test "schema_property: generated valid identifiers survive normalization" {
         );
         defer allocator.free(json_text);
 
-        var parsed = try schema.Schema.init(allocator, json_text);
+        var parsed = try schema.initSchema(allocator, json_text);
         defer parsed.deinit();
 
         const table = parsed.table(table_name) orelse return error.TestExpectedValue;
@@ -40,7 +40,7 @@ test "schema_property: generated invalid identifiers fail" {
             .{name},
         );
         defer allocator.free(table_json);
-        try std.testing.expectError(error.InvalidTableName, schema.Schema.init(allocator, table_json));
+        try std.testing.expectError(error.InvalidTableName, schema.initSchema(allocator, table_json));
 
         if (name.len == 0) continue;
         const field_json = try std.fmt.allocPrint(
@@ -49,7 +49,7 @@ test "schema_property: generated invalid identifiers fail" {
             .{name},
         );
         defer allocator.free(field_json);
-        try std.testing.expectError(error.InvalidFieldName, schema.Schema.init(allocator, field_json));
+        try std.testing.expectError(error.InvalidFieldName, schema.initSchema(allocator, field_json));
     }
 }
 
@@ -66,7 +66,7 @@ test "schema_property: nested flattening uses only internal separator" {
     };
 
     for (cases) |json_text| {
-        var parsed = try schema.Schema.init(allocator, json_text);
+        var parsed = try schema.initSchema(allocator, json_text);
         defer parsed.deinit();
 
         const table = parsed.table("t") orelse return error.TestExpectedValue;
@@ -84,13 +84,13 @@ test "schema_property: format round trip preserves normalized structure" {
         \\{"version":"1.0.0","store":{"posts":{"required":["profile.name"],"fields":{"profile":{"type":"object","fields":{"name":{"type":"string"},"age":{"type":"integer"}}},"tags":{"type":"array","items":"string"}}}}}
     ;
 
-    var parsed = try schema.Schema.init(allocator, json_text);
+    var parsed = try schema.initSchema(allocator, json_text);
     defer parsed.deinit();
 
-    const formatted = try parsed.format(allocator);
+    const formatted = try schema.format(allocator, &parsed);
     defer allocator.free(formatted);
 
-    var reparsed = try schema.Schema.init(allocator, formatted);
+    var reparsed = try schema.initSchema(allocator, formatted);
     defer reparsed.deinit();
 
     const posts = reparsed.table("posts") orelse return error.TestExpectedValue;

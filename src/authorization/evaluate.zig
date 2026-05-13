@@ -1,6 +1,7 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const types = @import("types.zig");
+const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed.zig");
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
@@ -89,7 +90,7 @@ pub fn authorizeStoreNamespace(
     session_user_id: typed.DocId,
     session_external_id: []const u8,
 ) !void {
-    var match = (try config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
+    var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
     defer match.deinit(allocator);
 
     const ctx: EvalContext = .{

@@ -217,7 +217,7 @@ pub fn deinitTestSchema(_: std.mem.Allocator, schema_value: *Schema) void {
 }
 
 pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Schema, path: []const u8) !void {
-    const json_text = try schema_value.format(allocator);
+    const json_text = try schema.format(allocator, schema_value);
     defer allocator.free(json_text);
 
     // Ensure directory exists

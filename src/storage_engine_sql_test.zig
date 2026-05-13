@@ -11,7 +11,7 @@ test "storage SQL builders quote identifiers" {
     const fields = [_]schema.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema.Table{table};
-    var sm = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    var sm = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer sm.deinit();
     const table_metadata = sm.getTable("select") orelse return error.TestExpectedValue;
 
@@ -36,7 +36,7 @@ test "storage SELECT SQL helpers quote and compose identifiers" {
     const fields = [_]schema.Field{schema_helpers.makeField("from", .text)};
     const table = schema_helpers.makeTable("select", &fields);
     var tables = [_]schema.Table{table};
-    var sm = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    var sm = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer sm.deinit();
     const table_metadata = sm.getTable("select") orelse return error.TestExpectedValue;
 
@@ -70,7 +70,7 @@ fn renderFilterSqlForAllocationTest(allocator: std.mem.Allocator) !void {
     const fields = [_]schema.Field{schema_helpers.makeField("name", .text)};
     const table = schema_helpers.makeTable("people", &fields);
     var tables = [_]schema.Table{table};
-    var sm = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    var sm = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer sm.deinit();
     const table_metadata = sm.getTable("people") orelse return error.TestExpectedValue;
     const name_index = table_metadata.fieldIndex("name") orelse return error.TestExpectedValue;

@@ -3,25 +3,6 @@ const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const PatternSegment = types.PatternSegment;
 
-pub const PatternMatch = struct {
-    /// Extracted captures from the namespace string.
-    /// Key = capture name (e.g. "tenant_id"), Value = matched segment value.
-    captures: std.StringHashMap([]const u8),
-
-    pub fn deinit(self: *PatternMatch, allocator: Allocator) void {
-        var it = self.captures.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.*);
-        }
-        self.captures.deinit();
-    }
-
-    pub fn get(self: *const PatternMatch, key: []const u8) ?[]const u8 {
-        return self.captures.get(key);
-    }
-};
-
 /// Parse a pattern string into PatternSegments.
 /// "tenant:{tenant_id}" -> [literal("tenant"), capture("tenant_id")]
 pub fn parsePattern(allocator: Allocator, pattern: []const u8) ![]PatternSegment {
@@ -55,7 +36,7 @@ pub fn matchNamespace(
     allocator: Allocator,
     segments: []const PatternSegment,
     namespace: []const u8,
-) !?PatternMatch {
+) !?types.PatternMatch {
     var parts = std.ArrayListUnmanaged([]const u8).empty;
     defer parts.deinit(allocator);
 
@@ -83,13 +64,13 @@ pub fn matchNamespace(
     for (parts.items, segments) |part, seg| {
         switch (seg) {
             .literal => |lit| if (!std.mem.eql(u8, lit, "*") and !std.mem.eql(u8, lit, part)) {
-                var match = PatternMatch{ .captures = captures };
+                var match = types.PatternMatch{ .captures = captures };
                 match.deinit(allocator);
                 return null;
             },
             .capture => |name| {
                 if (part.len == 0) {
-                    var match = PatternMatch{ .captures = captures };
+                    var match = types.PatternMatch{ .captures = captures };
                     match.deinit(allocator);
                     return null;
                 }
@@ -102,5 +83,20 @@ pub fn matchNamespace(
         }
     }
 
-    return PatternMatch{ .captures = captures };
+    return types.PatternMatch{ .captures = captures };
+}
+
+/// Find the first NamespaceRule whose pattern matches the given namespace string.
+/// Caller must call deinit() on the returned match to free captures.
+pub fn matchNamespaceRule(
+    allocator: Allocator,
+    config: *const types.AuthConfig,
+    namespace: []const u8,
+) !?types.AuthConfig.NamespaceRuleMatch {
+    for (config.namespace_rules) |*rule| {
+        if (try matchNamespace(allocator, rule.segments, namespace)) |match| {
+            return .{ .rule = rule, .captures = match };
+        }
+    }
+    return null;
 }
