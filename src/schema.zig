@@ -1,6 +1,8 @@
+const std = @import("std");
 const types = @import("schema/types.zig");
 const system = @import("schema/system.zig");
 const parse = @import("schema/parse.zig");
+const format_mod = @import("schema/format.zig");
 const index_mod = @import("schema/index.zig");
 const errors = @import("schema/errors.zig");
 
@@ -37,8 +39,14 @@ pub const getSystemColumn = system.getSystemColumn;
 pub const isSystemColumn = system.isSystemColumn;
 pub const effectiveNamespaceLabel = system.effectiveNamespaceLabel;
 
+pub const initSchema = parse.initFromJson;
+
+pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const types.Table) !types.Schema {
+    return parse.initFromTables(allocator, version, null, tables);
+}
 pub const mapType = parse.mapType;
 pub const mapPrimitiveType = parse.mapPrimitiveType;
 pub const parseOnDelete = parse.parseOnDelete;
 pub const buildRuntimeTable = parse.buildRuntimeTable;
 pub const buildTableIndex = index_mod.buildTableIndex;
+pub const format = format_mod.format;

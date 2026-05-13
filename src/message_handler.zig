@@ -273,7 +273,7 @@ pub const MessageHandler = struct {
         const external_user_id = try conn.dupeExternalUserId(allocator);
         errdefer allocator.free(external_user_id);
 
-        const namespace_match = (try self.auth_config.namespaceRuleFor(allocator, namespace)) orelse return error.NamespaceUnauthorized;
+        const namespace_match = (try authorization.matchNamespaceRule(allocator, self.auth_config, namespace)) orelse return error.NamespaceUnauthorized;
 
         return .{
             .session = session,

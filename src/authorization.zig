@@ -21,9 +21,11 @@ pub const AuthError = errors.AuthError;
 
 pub const implicitConfig = defaults.implicitConfig;
 
-pub const PatternMatch = pattern_mod.PatternMatch;
+pub const PatternMatch = types.PatternMatch;
 pub const matchNamespace = pattern_mod.matchNamespace;
 pub const parsePattern = pattern_mod.parsePattern;
+pub const matchNamespaceRule = pattern_mod.matchNamespaceRule;
+pub const initAuthConfig = parse_mod.initFromJson;
 
 pub const EvalContext = evaluate_mod.EvalContext;
 pub const EvalResult = evaluate_mod.EvalResult;

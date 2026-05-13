@@ -176,14 +176,6 @@ pub const Schema = struct {
     has_index: bool = false,
     metadata: ?Metadata = null,
 
-    pub fn init(allocator: Allocator, json_text: []const u8) !Schema {
-        return @import("parse.zig").initFromJson(allocator, json_text);
-    }
-
-    pub fn initFromTables(allocator: Allocator, version: []const u8, tables: []const Table) !Schema {
-        return @import("parse.zig").initFromTables(allocator, version, null, tables);
-    }
-
     pub fn deinit(self: *Schema) void {
         if (self.has_index) {
             if (self.table_index_map) |*map| map.deinit();
@@ -210,9 +202,5 @@ pub const Schema = struct {
 
     pub fn getTableByIndex(self: *const Schema, index: usize) ?*const Table {
         return self.tableByIndex(index);
-    }
-
-    pub fn format(self: *const Schema, allocator: Allocator) ![]const u8 {
-        return @import("format.zig").format(allocator, self);
     }
 };

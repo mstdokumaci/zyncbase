@@ -64,7 +64,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                var target_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &target_tables);
                 defer target_schema.deinit();
                 const users_table = target_schema.getTable("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
@@ -91,7 +91,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                var existing_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
                 const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
@@ -109,7 +109,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     allocator.free(new_field.name);
                     allocator.free(new_field.name_quoted);
                 }
-                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                var target_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &target_tables);
                 defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
@@ -135,7 +135,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                var existing_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
                 const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
@@ -146,7 +146,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                var target_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &target_tables);
                 defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
@@ -173,7 +173,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                 defer allocator.free(existing_ddl);
                 try execDDL(&db, allocator, existing_ddl);
 
-                var existing_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &existing_tables);
+                var existing_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &existing_tables);
                 defer existing_schema.deinit();
                 const users_table = existing_schema.getTable("users") orelse return error.TestExpectedValue;
                 try execTableDDL(&db, allocator, &gen, users_table.*);
@@ -184,7 +184,7 @@ test "migration_detector: migration plan accurately describes schema diff" {
                     allocator.free(target_tables[0].name);
                     allocator.free(target_tables[0].name_quoted);
                 }
-                var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &target_tables);
+                var target_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &target_tables);
                 defer target_schema.deinit();
 
                 var detector = MigrationDetector.init(allocator, &db, &existing_schema);
@@ -249,7 +249,7 @@ test "migration_detector: matching schema produces empty migration plan" {
             tables[ti] = try schema_helpers.makeTableAlloc(allocator, tname, fields);
         }
 
-        var target_schema = try schema.Schema.initFromTables(allocator, "1.0.0", tables);
+        var target_schema = try schema.initSchemaFromTables(allocator, "1.0.0", tables);
         defer target_schema.deinit();
         try execSchemaDDL(&db, allocator, &gen, &target_schema);
 

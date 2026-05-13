@@ -29,7 +29,7 @@ test "schema_index: direct table fixtures build lookup maps" {
         table("tasks", &task_fields),
     };
 
-    var runtime_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    var runtime_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer runtime_schema.deinit();
 
     const users = runtime_schema.tableByIndex(0) orelse return error.TestExpectedValue;
@@ -47,7 +47,7 @@ test "schema_index: exposes field kinds and writable ranges" {
     var fields = [_]schema.Field{field("title", .text)};
     var tables = [_]schema.Table{table("posts", &fields)};
 
-    var runtime_schema = try schema.Schema.initFromTables(allocator, "1.0.0", &tables);
+    var runtime_schema = try schema.initSchemaFromTables(allocator, "1.0.0", &tables);
     defer runtime_schema.deinit();
 
     const posts = runtime_schema.table("posts") orelse return error.TestExpectedValue;
@@ -61,7 +61,7 @@ test "schema_index: exposes field kinds and writable ranges" {
 test "schema_index: users external_id is not indexed" {
     const allocator = std.testing.allocator;
 
-    var runtime_schema = try schema.Schema.init(allocator,
+    var runtime_schema = try schema.initSchema(allocator,
         \\{"version":"1.0.0","store":{}}
     );
     defer runtime_schema.deinit();

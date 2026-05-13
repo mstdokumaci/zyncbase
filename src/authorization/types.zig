@@ -1,18 +1,30 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("../typed.zig");
-const schema = @import("../schema.zig");
 const Value = typed.Value;
+
+pub const PatternMatch = struct {
+    captures: std.StringHashMap([]const u8),
+
+    pub fn deinit(self: *PatternMatch, allocator: Allocator) void {
+        var it = self.captures.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        self.captures.deinit();
+    }
+
+    pub fn get(self: *const PatternMatch, key: []const u8) ?[]const u8 {
+        return self.captures.get(key);
+    }
+};
 
 pub const AuthConfig = struct {
     allocator: Allocator,
     namespace_rules: []NamespaceRule,
     store_rules: []StoreRule,
     wildcard_store_index: ?usize,
-
-    pub fn init(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !AuthConfig {
-        return @import("parse.zig").initFromJson(allocator, json_text, schema_manager);
-    }
 
     pub fn deinit(self: *AuthConfig) void {
         for (self.namespace_rules) |*rule| rule.deinit(self.allocator);
@@ -34,24 +46,12 @@ pub const AuthConfig = struct {
 
     pub const NamespaceRuleMatch = struct {
         rule: *const NamespaceRule,
-        captures: @import("pattern.zig").PatternMatch,
+        captures: PatternMatch,
 
         pub fn deinit(self: *NamespaceRuleMatch, allocator: Allocator) void {
             self.captures.deinit(allocator);
         }
     };
-
-    /// Find the first NamespaceRule whose pattern matches the given namespace string.
-    /// Caller must call deinit() on the returned match to free captures.
-    pub fn namespaceRuleFor(self: *const AuthConfig, allocator: Allocator, namespace: []const u8) !?NamespaceRuleMatch {
-        const pattern_mod = @import("pattern.zig");
-        for (self.namespace_rules) |*rule| {
-            if (try pattern_mod.matchNamespace(allocator, rule.segments, namespace)) |match| {
-                return .{ .rule = rule, .captures = match };
-            }
-        }
-        return null;
-    }
 };
 
 pub const NamespaceRule = struct {
