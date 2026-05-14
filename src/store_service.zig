@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const msgpack = @import("msgpack_utils.zig");
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 const storage_mod = @import("storage_engine.zig");
 const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
@@ -32,15 +32,15 @@ fn isIdEqualsFilter(filter: *const query_ast.QueryFilter, id_index: usize) ?DocI
 /// Validates a single field write operation.
 /// Checks for immutability, existence, nullability, and type constraints.
 pub fn validateFieldWrite(
-    tbl_md: *const schema.Table,
+    tbl_md: *const schema_mod.Table,
     field_index: usize,
     value: msgpack.Payload,
-) !schema.Field {
+) !schema_mod.Field {
     if (field_index >= tbl_md.fields.len) return StorageError.UnknownField;
 
     // Leading system columns and trailing timestamps are immutable.
     // The last two fields are created_at and updated_at, which are also immutable by the client.
-    if (field_index < schema.first_user_field_index or
+    if (field_index < schema_mod.first_user_field_index or
         field_index >= tbl_md.fields.len - 2) return StorageError.ImmutableField;
     const field = tbl_md.fields[field_index];
 
@@ -68,14 +68,14 @@ pub fn validateFieldWrite(
 pub const StoreService = struct {
     allocator: Allocator,
     storage_engine: *StorageEngine,
-    schema_manager: *const schema.Schema,
+    schema: *const schema_mod.Schema,
     auth_config: *const authorization.AuthConfig,
 
-    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, sm: *const schema.Schema, auth_config: *const authorization.AuthConfig) StoreService {
+    pub fn init(allocator: Allocator, storage_engine: *StorageEngine, schema: *const schema_mod.Schema, auth_config: *const authorization.AuthConfig) StoreService {
         return .{
             .allocator = allocator,
             .storage_engine = storage_engine,
-            .schema_manager = sm,
+            .schema = schema,
             .auth_config = auth_config,
         };
     }
@@ -100,7 +100,7 @@ pub const StoreService = struct {
 
     const StorePath = struct {
         table_index: usize,
-        table: *const schema.Table,
+        table: *const schema_mod.Table,
         doc_id: DocId,
         segments_len: usize,
         field_index: ?usize,
@@ -111,8 +111,8 @@ pub const StoreService = struct {
         if (external_user_id.len == 0) return error.InvalidMessageFormat;
 
         const namespace_id = self.storage_engine.cachedNamespaceId(namespace) orelse return null;
-        const users_table = self.schema_manager.table("users") orelse return error.UnknownTable;
-        const identity_namespace_id = if (users_table.namespaced) namespace_id else schema.global_namespace_id;
+        const users_table = self.schema.table("users") orelse return error.UnknownTable;
+        const identity_namespace_id = if (users_table.namespaced) namespace_id else schema_mod.global_namespace_id;
         const user_doc_id = self.storage_engine.cachedUserId(identity_namespace_id, external_user_id) orelse return null;
 
         return .{
@@ -211,12 +211,12 @@ pub const StoreService = struct {
         auth_predicate: ?*const query_ast.FilterPredicate,
     ) !QueryResult {
         const table_index = msgpack.extractPayloadUint(table_index_payload) orelse return error.InvalidMessageFormat;
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
-        var filter = try query_parser.parseQueryFilter(allocator, self.schema_manager, table_index, payload);
+        var filter = try query_parser.parseQueryFilter(allocator, self.schema, table_index, payload);
         errdefer filter.deinit(allocator);
 
-        if (isIdEqualsFilter(&filter, schema.id_field_index)) |id| {
+        if (isIdEqualsFilter(&filter, schema_mod.id_field_index)) |id| {
             var result = try self.storage_engine.selectDocument(allocator, table_index, id, namespace_id, auth_predicate);
             errdefer result.deinit();
             return .{
@@ -251,7 +251,7 @@ pub const StoreService = struct {
         next_cursor: []const u8,
         auth_predicate: ?*const query_ast.FilterPredicate,
     ) !CursorResult {
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
         const cursor = try query_parser.decodeCursorToken(allocator, next_cursor, filter.order_by.field_type, filter.order_by.items_type);
 
         if (filter.after) |*old| old.deinit(allocator);
@@ -283,7 +283,7 @@ pub const StoreService = struct {
         }
 
         const table_index = msgpack.extractPayloadUint(path[0]) orelse return error.InvalidMessageFormat;
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
 
         if (path[1] != .bin) return error.InvalidMessageFormat;
         const parsed_doc_id = try typed.docIdFromBytes(path[1].bin.value());
@@ -439,7 +439,7 @@ pub const StoreService = struct {
 
 pub const QueryResult = struct {
     table_index: usize,
-    table: *const schema.Table,
+    table: *const schema_mod.Table,
     results: storage_mod.ManagedResult,
     filter: query_ast.QueryFilter,
     next_cursor_str: ?[]const u8 = null,
@@ -452,7 +452,7 @@ pub const QueryResult = struct {
 };
 
 pub const CursorResult = struct {
-    table: *const schema.Table,
+    table: *const schema_mod.Table,
     results: storage_mod.ManagedResult,
     next_cursor_str: ?[]const u8 = null,
 

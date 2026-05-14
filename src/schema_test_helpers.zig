@@ -1,6 +1,6 @@
 const std = @import("std");
-const schema = @import("schema.zig");
-const Schema = schema.Schema;
+const schema_mod = @import("schema.zig");
+const Schema = schema_mod.Schema;
 const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const ddl_generator = @import("ddl_generator.zig");
 const migration_detector = @import("migration_detector.zig");
@@ -13,13 +13,13 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 
 /// Comptime field builder — auto-computes name_quoted at compile time.
 /// For runtime names, use makeFieldAlloc.
-pub fn makeField(comptime name: []const u8, sql_type: schema.FieldType) schema.Field {
+pub fn makeField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
     return .{
         .name = name,
         .name_quoted = "\"" ++ name ++ "\"",
         .declared_type = sql_type,
         .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema.FieldType.text else null,
+        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
         .required = false,
         .indexed = false,
         .references = null,
@@ -28,21 +28,21 @@ pub fn makeField(comptime name: []const u8, sql_type: schema.FieldType) schema.F
 }
 
 /// Comptime indexed field builder.
-pub fn makeIndexedField(comptime name: []const u8, sql_type: schema.FieldType) schema.Field {
+pub fn makeIndexedField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
     var f = makeField(name, sql_type);
     f.indexed = true;
     return f;
 }
 
 /// Comptime required field builder.
-pub fn makeRequiredField(comptime name: []const u8, sql_type: schema.FieldType) schema.Field {
+pub fn makeRequiredField(comptime name: []const u8, sql_type: schema_mod.FieldType) schema_mod.Field {
     var f = makeField(name, sql_type);
     f.required = true;
     return f;
 }
 
 /// Comptime table builder — auto-computes name_quoted at compile time.
-pub fn makeTable(comptime name: []const u8, fields: []const schema.Field) schema.Table {
+pub fn makeTable(comptime name: []const u8, fields: []const schema_mod.Field) schema_mod.Table {
     return .{
         .name = name,
         .name_quoted = "\"" ++ name ++ "\"",
@@ -52,20 +52,20 @@ pub fn makeTable(comptime name: []const u8, fields: []const schema.Field) schema
     };
 }
 
-pub fn isClientWritableFieldIndex(table: *const schema.Table, index: usize) bool {
+pub fn isClientWritableFieldIndex(table: *const schema_mod.Table, index: usize) bool {
     if (!table.canonical_fields) return index < table.fields.len;
     return index >= table.user_field_start and index < table.user_field_end;
 }
 
 /// Runtime field builder (for property tests with randomized names).
 /// Caller must free: allocator.free(f.name); allocator.free(f.name_quoted);
-pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema.FieldType) !schema.Field {
+pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: schema_mod.FieldType) !schema_mod.Field {
     return .{
         .name = try allocator.dupe(u8, name),
         .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
         .declared_type = sql_type,
         .storage_type = sql_type,
-        .items_type = if (sql_type == .array) schema.FieldType.text else null,
+        .items_type = if (sql_type == .array) schema_mod.FieldType.text else null,
         .required = false,
         .indexed = false,
         .references = null,
@@ -75,7 +75,7 @@ pub fn makeFieldAlloc(allocator: std.mem.Allocator, name: []const u8, sql_type: 
 
 /// Runtime table builder with auto-computed name_quoted.
 /// Caller must free: allocator.free(t.name); allocator.free(t.name_quoted);
-pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema.Field) !schema.Table {
+pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []const schema_mod.Field) !schema_mod.Table {
     return .{
         .name = try allocator.dupe(u8, name),
         .name_quoted = try std.fmt.allocPrint(allocator, "\"{s}\"", .{name}),
@@ -88,11 +88,11 @@ pub fn makeTableAlloc(allocator: std.mem.Allocator, name: []const u8, fields: []
 pub const TableDef = struct {
     name: []const u8,
     fields: []const []const u8,
-    types: ?[]const schema.FieldType = null,
+    types: ?[]const schema_mod.FieldType = null,
 };
 
-fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema.Table {
-    var fields = try allocator.alloc(schema.Field, td.fields.len);
+fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema_mod.Table {
+    var fields = try allocator.alloc(schema_mod.Field, td.fields.len);
     var field_count: usize = 0;
     errdefer {
         for (fields[0..field_count]) |field| field.deinit(allocator);
@@ -109,7 +109,7 @@ fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema
             .name_quoted = fname_quoted,
             .declared_type = if (td.types) |ts| ts[j] else .text,
             .storage_type = if (td.types) |ts| ts[j] else .text,
-            .items_type = if (td.types) |ts| if (ts[j] == .array) schema.FieldType.text else null else null,
+            .items_type = if (td.types) |ts| if (ts[j] == .array) schema_mod.FieldType.text else null else null,
             .required = false,
             .indexed = false,
             .references = null,
@@ -132,8 +132,8 @@ fn buildDeclaredTableFromDef(allocator: std.mem.Allocator, td: TableDef) !schema
     };
 }
 
-fn buildImplicitUsersTable(allocator: std.mem.Allocator) !schema.Table {
-    const fields = try allocator.alloc(schema.Field, 0);
+fn buildImplicitUsersTable(allocator: std.mem.Allocator) !schema_mod.Table {
+    const fields = try allocator.alloc(schema_mod.Field, 0);
     errdefer allocator.free(fields);
     const name = try allocator.dupe(u8, "users");
     errdefer allocator.free(name);
@@ -158,7 +158,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     };
 
     const declared_len = tables_def.len + @intFromBool(!has_users);
-    var declared = try allocator.alloc(schema.Table, declared_len);
+    var declared = try allocator.alloc(schema_mod.Table, declared_len);
     var decl_count: usize = 0;
     defer {
         for (declared[0..decl_count]) |*t| t.deinit(allocator);
@@ -185,7 +185,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     }
 
     // Build runtime tables
-    var runtime_tables = try allocator.alloc(schema.Table, decl_count);
+    var runtime_tables = try allocator.alloc(schema_mod.Table, decl_count);
     var built_count: usize = 0;
     errdefer {
         for (runtime_tables[0..built_count]) |*t| t.deinit(allocator);
@@ -193,7 +193,7 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     }
 
     for (declared, 0..) |dt, idx| {
-        runtime_tables[built_count] = try schema.buildRuntimeTable(allocator, dt, idx);
+        runtime_tables[built_count] = try schema_mod.buildRuntimeTable(allocator, dt, idx);
         built_count += 1;
     }
 
@@ -204,12 +204,8 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
     };
     errdefer result.deinit();
 
-    try schema.buildTableIndex(allocator, &result);
+    try schema_mod.buildTableIndex(allocator, &result);
     return result;
-}
-
-pub fn createTestSchemaManager(allocator: std.mem.Allocator, tables_def: []const TableDef) !Schema {
-    return createTestSchema(allocator, tables_def);
 }
 
 pub fn deinitTestSchema(_: std.mem.Allocator, schema_value: *Schema) void {
@@ -217,7 +213,7 @@ pub fn deinitTestSchema(_: std.mem.Allocator, schema_value: *Schema) void {
 }
 
 pub fn writeSchemaToFile(allocator: std.mem.Allocator, schema_value: *const Schema, path: []const u8) !void {
-    const json_text = try schema.format(allocator, schema_value);
+    const json_text = try schema_mod.format(allocator, schema_value);
     defer allocator.free(json_text);
 
     // Ensure directory exists
@@ -286,17 +282,17 @@ pub fn normalizeTestStorageOptions(options: StorageEngine.Options) StorageEngine
     return effective;
 }
 
-pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, sm: *const Schema, options: StorageEngine.Options) !void {
-    try setupTestEngineWithPerformance(engine, allocator, memory_strategy, context, sm, .{}, options);
+pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, schema: *const Schema, options: StorageEngine.Options) !void {
+    try setupTestEngineWithPerformance(engine, allocator, memory_strategy, context, schema, .{}, options);
 }
 
-pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, sm: *const Schema, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
+pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *const TestContext, schema: *const Schema, performance_config: StorageEngine.PerformanceConfig, options: StorageEngine.Options) !void {
     const effective_options = normalizeTestStorageOptions(options);
-    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, sm, performance_config, effective_options, null, null);
+    try engine.init(allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
 
     var gen = ddl_generator.DDLGenerator.init(allocator);
-    for (sm.tables) |table| {
+    for (schema.tables) |table| {
         const ddl = try gen.generateDDL(table);
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
@@ -306,8 +302,8 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
 
     // Detect and execute migrations
     const setup_conn = try engine.getSetupConn();
-    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn, sm);
-    const plan = try detector.detectChanges(sm);
+    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn, schema);
+    const plan = try detector.detectChanges(schema);
     defer detector.deinit(plan);
 
     if (plan.changes.len > 0) {
@@ -317,7 +313,7 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
             &gen,
             .{},
         );
-        try executor.execute(plan, sm.version);
+        try executor.execute(plan, schema.version);
     }
 
     try engine.start();

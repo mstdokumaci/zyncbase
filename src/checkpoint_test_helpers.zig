@@ -8,7 +8,7 @@ const schema_helpers = @import("schema_test_helpers.zig");
 pub const Context = struct {
     allocator: std.mem.Allocator,
     memory_strategy: MemoryStrategy,
-    schema_manager: Schema,
+    schema: Schema,
     test_context: schema_helpers.TestContext,
     storage_engine: StorageEngine,
     manager: CheckpointManager,
@@ -16,13 +16,13 @@ pub const Context = struct {
     pub fn init(self: *Context, allocator: std.mem.Allocator, config: CheckpointManager.Config) !void {
         self.allocator = allocator;
 
-        self.schema_manager = try schema_helpers.createTestSchemaManager(allocator, &.{
+        self.schema = try schema_helpers.createTestSchema(allocator, &.{
             .{
                 .name = "items",
                 .fields = &.{"name"},
             },
         });
-        errdefer self.schema_manager.deinit();
+        errdefer self.schema.deinit();
 
         try self.memory_strategy.init(allocator);
         errdefer self.memory_strategy.deinit();
@@ -35,7 +35,7 @@ pub const Context = struct {
             allocator,
             &self.memory_strategy,
             &self.test_context,
-            &self.schema_manager,
+            &self.schema,
             .{ .in_memory = true },
         );
         errdefer self.storage_engine.deinit();
@@ -48,7 +48,7 @@ pub const Context = struct {
         self.manager.deinit();
         self.storage_engine.deinit();
         self.test_context.deinit();
-        self.schema_manager.deinit();
+        self.schema.deinit();
         self.memory_strategy.deinit();
     }
 };

@@ -32,10 +32,10 @@ pub const ConnectionManager = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
-        schema_manager: *const Schema,
+        schema: *const Schema,
     ) !void {
         // Pre-build SchemaSync message once at startup
-        const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema_manager);
+        const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema);
 
         self.* = .{
             .allocator = allocator,

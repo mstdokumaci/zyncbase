@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const sth = @import("storage_engine_test_helpers.zig");
-const schema = sth.schema;
+const schema_mod = sth.schema_mod;
 
 // This property test verifies that the server remains stable when database errors occur:
 // 1. No panics or crashes on database errors
@@ -20,7 +20,7 @@ const schema = sth.schema;
 test "storage: stability no crashes on concurrent errors" {
     const allocator = testing.allocator;
 
-    var fields = [_]schema.Field{sth.makeField("val", .text, false)};
+    var fields = [_]schema_mod.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("test", &fields);
 
     var ctx: sth.EngineTestContext = undefined;
@@ -39,7 +39,7 @@ test "storage: stability no crashes on concurrent errors" {
         fn run(t_ctx: ThreadContext) void {
             var i: usize = 0;
             const ops = 40;
-            const tbl_md = t_ctx.ctx.sm.getTable("test") orelse @panic("test table missing");
+            const tbl_md = t_ctx.ctx.schema.getTable("test") orelse @panic("test table missing");
             while (i < ops) : (i += 1) {
                 // Mix of operations that might fail
                 const key: u128 = t_ctx.thread_id * 1_000 + i + 1;

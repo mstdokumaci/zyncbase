@@ -209,7 +209,7 @@ test "StoreService: remove" {
 
     // Setup: Create a document
     {
-        const tbl_people = app.schema_manager.getTable("people") orelse return error.UnknownTable;
+        const tbl_people = app.schema.getTable("people") orelse return error.UnknownTable;
         const val = try store_helpers.createDocumentMapPayload(allocator, tbl_people, .{
             .{ "name", "Alice" },
             .{ "age", @as(i64, 30) },
@@ -225,7 +225,7 @@ test "StoreService: remove" {
 
     // 1. Negative: Remove field (segments_len == 3) is forbidden
     {
-        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
@@ -241,7 +241,7 @@ test "StoreService: remove" {
         try service.removePath(writeCtx(1), path);
         try app.storage_engine.flushPendingWrites();
 
-        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
         var managed = try app.storage_engine.selectDocument(allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();
         try testing.expect(managed.records.len == 0);
@@ -258,7 +258,7 @@ test "StoreService: remove" {
 
     // 4. Negative: Field removal is forbidden even if field name is unknown
     {
-        const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
+        const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
         var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
         defer path.free(allocator);
 
@@ -428,7 +428,7 @@ test "StoreService: query - basic search" {
     try people.flush();
 
     // Build filter: { "conditions": [ ["id", 0, 1] ] }
-    const tbl_md = app.schema_manager.getTable("people") orelse return error.UnknownTable;
+    const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
         .conditions = .{.{ "id", 0, @as(u128, 1) }},
     });
@@ -459,7 +459,7 @@ test "StoreService: query - orderBy and limit" {
     try app.storage_engine.flushPendingWrites();
 
     // Filter: orderBy created_at DESC, limit 2
-    const tbl_md = app.schema_manager.getTable("tasks") orelse return error.UnknownTable;
+    const tbl_md = app.schema.getTable("tasks") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
         .orderBy = .{ "created_at", 1 }, // DESC
         .limit = 2,
@@ -485,7 +485,7 @@ test "StoreService: query - negative cases" {
 
     // 1. Unknown collection
     {
-        const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
+        const tbl_md = app.schema.getTable("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
         defer filter_map.free(allocator);
         const err = service.queryCollection(allocator, 1, msgpack.Payload.uintToPayload(999), filter_map, null);
@@ -494,7 +494,7 @@ test "StoreService: query - negative cases" {
 
     // 2. Unknown field
     {
-        const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
+        const tbl_md = app.schema.getTable("data") orelse return error.UnknownTable;
         const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
             .conditions = .{.{ @as(usize, 999), 0, "val" }}, // Explicitly use an invalid field index
         });
@@ -527,7 +527,7 @@ test "StoreService: queryMore - pagination" {
     try data_table.flush();
 
     // 1. Initial query: limit 2
-    const tbl_md = app.schema_manager.getTable("data") orelse return error.UnknownTable;
+    const tbl_md = app.schema.getTable("data") orelse return error.UnknownTable;
     const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{
         .limit = 2,
     });
@@ -573,7 +573,7 @@ test "StoreService: validateFieldWrite tests" {
     defer app.deinit();
 
     const service = &app.store_service;
-    const tbl_md = service.schema_manager.getTable("users") orelse return error.TestExpectedValue;
+    const tbl_md = service.schema.getTable("users") orelse return error.TestExpectedValue;
 
     // 1. Immutable fields
     {
