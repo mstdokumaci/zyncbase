@@ -114,14 +114,14 @@ pub const AppTestContext = struct {
         const json_text = try schema_mod.format(allocator, &schema_value);
         defer allocator.free(json_text);
 
-        var schema = try schema_mod.initSchema(allocator, json_text);
-        errdefer schema.deinit();
+        const schema = try schema_mod.initSchema(allocator, json_text);
+        // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
-        var schema = try schema_mod.initSchema(allocator, json);
-        errdefer schema.deinit();
+        const schema = try schema_mod.initSchema(allocator, json);
+        // No errdefer here — ownership transfers to initWithSchemaAndOptions
         try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
     }
 
