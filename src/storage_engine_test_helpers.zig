@@ -231,11 +231,6 @@ pub const EngineTestContext = struct {
         return md.index;
     }
 
-    pub fn fieldIndex(self: *const EngineTestContext, table_name: []const u8, field_name: []const u8) usize {
-        const tbl = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
-        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
-    }
-
     pub fn table(self: *EngineTestContext, table_name: []const u8) !TableFixture {
         return .{
             .engine = &self.engine,
