@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const doc_predicate = @import("doc_predicate.zig");
-const schema = @import("../schema.zig");
+const schema_mod = @import("../schema.zig");
 const typed = @import("../typed.zig");
 const ScalarValue = typed.ScalarValue;
 const Value = typed.Value;
 
 /// Parse authorization.json text into an AuthConfig.
-pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager: *const schema.Schema) !types.AuthConfig {
+pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema: *const schema_mod.Schema) !types.AuthConfig {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
     defer parsed.deinit();
 
@@ -58,24 +58,24 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8, schema_manager:
     };
     errdefer config.deinit();
 
-    try validateConfig(&config, schema_manager);
+    try validateConfig(&config, schema);
     return config;
 }
 
-pub fn validateConfig(config: *const types.AuthConfig, schema_manager: *const schema.Schema) !void {
+pub fn validateConfig(config: *const types.AuthConfig, schema: *const schema_mod.Schema) !void {
     for (config.store_rules) |rule| {
         if (rule.is_wildcard) {
-            for (schema_manager.tables) |*table| {
+            for (schema.tables) |*table| {
                 try validateStoreRule(rule, table);
             }
         } else {
-            const table = schema_manager.getTable(rule.collection) orelse return error.UnknownTable;
+            const table = schema.getTable(rule.collection) orelse return error.UnknownTable;
             try validateStoreRule(rule, table);
         }
     }
 }
 
-fn validateStoreRule(rule: types.StoreRule, table: *const schema.Table) !void {
+fn validateStoreRule(rule: types.StoreRule, table: *const schema_mod.Table) !void {
     try doc_predicate.validateDocPredicate(rule.read, table);
     try doc_predicate.validateDocPredicate(rule.write, table);
 }

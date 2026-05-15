@@ -3,7 +3,7 @@ const query_parser = @import("query_parser.zig");
 const query_ast = @import("query_ast.zig");
 const msgpack = @import("msgpack_utils.zig");
 const schema_helpers = @import("schema_test_helpers.zig");
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
 const qth = @import("query_parser_test_helpers.zig");
 const testing = std.testing;
@@ -11,14 +11,14 @@ const testing = std.testing;
 test "basic query filter parsing" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "age", "status" },
-        .types = &[_]schema.FieldType{ .integer, .text },
+        .types = &[_]schema_mod.FieldType{ .integer, .text },
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 4, 18 }, // gte
@@ -28,9 +28,9 @@ test "basic query filter parsing" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
-    const users_md = sm.getTable("users") orelse return error.UnknownTable;
+    const users_md = schema.getTable("users") orelse return error.UnknownTable;
     const age_index = users_md.fieldIndex("age") orelse return error.UnknownField;
     const status_index = users_md.fieldIndex("status") orelse return error.UnknownField;
 
@@ -45,13 +45,13 @@ test "basic query filter parsing" {
 test "query with orConditions" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .or_conditions = .{
             .{ "role", 0, "admin" },
@@ -60,9 +60,9 @@ test "query with orConditions" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
-    const users_md = sm.getTable("users") orelse return error.UnknownTable;
+    const users_md = schema.getTable("users") orelse return error.UnknownTable;
     const role_index = users_md.fieldIndex("role") orelse return error.UnknownField;
 
     try testing.expect(filter.predicate.or_conditions != null);
@@ -74,12 +74,12 @@ test "query with orConditions" {
 test "query with orderBy and after" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"val"},
-        .types = &[_]schema.FieldType{.text},
+        .types = &[_]schema_mod.FieldType{.text},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     // cursor: Base64(MsgPack([42, doc_id(2)]))
     const cursor: typed.Cursor = .{
@@ -89,17 +89,17 @@ test "query with orderBy and after" {
     const after_token = try query_parser.encodeCursorToken(allocator, cursor);
     defer allocator.free(after_token);
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .orderBy = .{ "created_at", 1 }, // desc
         .cursor = after_token,
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
-    const items_md = sm.getTable("items") orelse return error.UnknownTable;
+    const items_md = schema.getTable("items") orelse return error.UnknownTable;
     const created_at_index = items_md.fieldIndex("created_at") orelse return error.UnknownField;
     try testing.expectEqual(created_at_index, filter.order_by.field_index);
     try testing.expectEqual(true, filter.order_by.desc);
@@ -109,13 +109,13 @@ test "query with orderBy and after" {
 test "query rejects invalid Base64 after cursor token" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .cursor = "%%%INVALID_BASE64%%%",
     });
@@ -123,20 +123,20 @@ test "query rejects invalid Base64 after cursor token" {
 
     try testing.expectError(
         error.InvalidMessageFormat,
-        query_parser.parseQueryFilter(allocator, &sm, tbl.index, root),
+        query_parser.parseQueryFilter(allocator, &schema, tbl.index, root),
     );
 }
 
 test "isNull condition (no value tuple)" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"deleted_at"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "deleted_at", 11 }, // isNull
@@ -144,7 +144,7 @@ test "isNull condition (no value tuple)" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), filter.predicate.conditions.?.len);
@@ -155,14 +155,14 @@ test "isNull condition (no value tuple)" {
 test "unknown field name (including flattened paths)" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"address"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     // Use raw invalid index instead of string to reach server-side UnknownField logic
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ @as(usize, 999), 0, "NYC" },
@@ -170,17 +170,17 @@ test "unknown field name (including flattened paths)" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.UnknownField, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.UnknownField, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "malformed after field (panic regression test)" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
@@ -189,17 +189,17 @@ test "malformed after field (panic regression test)" {
     malformed_after[1] = msgpack.Payload.uintToPayload(99); // Malformed: should be a string
     try root.mapPut("after", .{ .arr = malformed_after });
 
-    try testing.expectError(error.InvalidMessageFormat, query_parser.parseQueryFilter(allocator, &sm, sm.getTable("items").?.index, root));
+    try testing.expectError(error.InvalidMessageFormat, query_parser.parseQueryFilter(allocator, &schema, schema.getTable("items").?.index, root));
 }
 
 test "in condition parses to typed array" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const values = try allocator.alloc(msgpack.Payload, 2);
     values[0] = try msgpack.Payload.strToPayload("admin", allocator);
@@ -207,7 +207,7 @@ test "in condition parses to typed array" {
     const values_payload = msgpack.Payload{ .arr = values };
     defer values_payload.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, values_payload },
@@ -215,7 +215,7 @@ test "in condition parses to typed array" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     const conds = filter.predicate.conditions orelse return error.TestExpectedValue;
@@ -228,17 +228,17 @@ test "in condition parses to typed array" {
 test "query normalization drops AND notIn empty set" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "role", "age" },
-        .types = &[_]schema.FieldType{ .text, .integer },
+        .types = &[_]schema_mod.FieldType{ .text, .integer },
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 10, empty_values },
@@ -247,7 +247,7 @@ test "query normalization drops AND notIn empty set" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
@@ -261,17 +261,17 @@ test "query normalization drops AND notIn empty set" {
 test "query normalization marks AND in empty set as match none" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
-        .types = &[_]schema.FieldType{.text},
+        .types = &[_]schema_mod.FieldType{.text},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, empty_values },
@@ -279,7 +279,7 @@ test "query normalization marks AND in empty set as match none" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.predicate.isAlwaysFalse());
@@ -290,17 +290,17 @@ test "query normalization marks AND in empty set as match none" {
 test "query normalization drops OR tautology but keeps AND conditions" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{ "role", "age" },
-        .types = &[_]schema.FieldType{ .text, .integer },
+        .types = &[_]schema_mod.FieldType{ .text, .integer },
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 0, 18 },
@@ -311,7 +311,7 @@ test "query normalization drops OR tautology but keeps AND conditions" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(query_ast.PredicateState.conditional, filter.predicate.state);
@@ -322,17 +322,17 @@ test "query normalization drops OR tautology but keeps AND conditions" {
 test "query normalization marks OR group with only false terms as match none" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
-        .types = &[_]schema.FieldType{.text},
+        .types = &[_]schema_mod.FieldType{.text},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const empty_values = try emptyArrayPayload(allocator);
     defer empty_values.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .or_conditions = .{
             .{ "role", 9, empty_values },
@@ -340,7 +340,7 @@ test "query normalization marks OR group with only false terms as match none" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
     try testing.expect(filter.predicate.isAlwaysFalse());
@@ -351,13 +351,13 @@ test "query normalization marks OR group with only false terms as match none" {
 test "in condition rejects non-array operand" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, "admin" }, // Value should be array for IN (9)
@@ -365,17 +365,17 @@ test "in condition rejects non-array operand" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.InvalidInOperand, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.InvalidInOperand, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "in condition rejects nil element" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"role"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const values = try allocator.alloc(msgpack.Payload, 2);
     values[0] = try msgpack.Payload.strToPayload("admin", allocator);
@@ -383,7 +383,7 @@ test "in condition rejects nil element" {
     const values_payload = msgpack.Payload{ .arr = values };
     defer values_payload.free(allocator);
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "role", 9, values_payload },
@@ -391,20 +391,20 @@ test "in condition rejects nil element" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.NullOperandUnsupported, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.NullOperandUnsupported, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "contains on array field parses using element type" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"tags"},
-        .types = &[_]schema.FieldType{.array},
+        .types = &[_]schema_mod.FieldType{.array},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "tags", 6, "urgent" }, // contains
@@ -412,23 +412,23 @@ test "contains on array field parses using element type" {
     });
     defer root.free(allocator);
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
     defer filter.deinit(allocator);
 
-    try testing.expectEqual(schema.FieldType.array, filter.predicate.conditions.?[0].field_type);
+    try testing.expectEqual(schema_mod.FieldType.array, filter.predicate.conditions.?[0].field_type);
     try testing.expectEqualStrings("urgent", filter.predicate.conditions.?[0].value.?.scalar.text);
 }
 
 test "contains on text rejects non-string operand" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"name"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "name", 6, 42 }, // non-string for contains
@@ -436,20 +436,20 @@ test "contains on text rejects non-string operand" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.InvalidOperandType, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.InvalidOperandType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "startsWith on non-text field is rejected" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &[_][]const u8{"age"},
-        .types = &[_]schema.FieldType{.integer},
+        .types = &[_]schema_mod.FieldType{.integer},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("users") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("users") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "age", 7, "1" }, // startsWith on integer
@@ -457,22 +457,22 @@ test "startsWith on non-text field is rejected" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.UnsupportedOperatorForFieldType, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "isNull with operand is rejected" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"deleted_at"},
-        .types = &[_]schema.FieldType{.integer},
+        .types = &[_]schema_mod.FieldType{.integer},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     // Manually construct null condition with extra operand to bypass helper's valid construction
     var cond_arr = try allocator.alloc(msgpack.Payload, 3);
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     cond_arr[0] = msgpack.Payload.uintToPayload(tbl.fieldIndex("deleted_at") orelse return error.TestExpectedValue);
     cond_arr[1] = msgpack.Payload.uintToPayload(11); // isNull
     cond_arr[2] = msgpack.Payload.uintToPayload(1); // unexpected operand
@@ -483,19 +483,19 @@ test "isNull with operand is rejected" {
     conds[0] = .{ .arr = cond_arr };
     try root.mapPut("conditions", .{ .arr = conds });
 
-    try testing.expectError(error.UnexpectedOperand, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.UnexpectedOperand, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "eq with nil operand is rejected" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{"name"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const root = try qth.createQueryFilterPayload(allocator, tbl, .{
         .conditions = .{
             .{ "name", 0, msgpack.Payload{ .nil = {} } },
@@ -503,38 +503,38 @@ test "eq with nil operand is rejected" {
     });
     defer root.free(allocator);
 
-    try testing.expectError(error.NullOperandUnsupported, query_parser.parseQueryFilter(allocator, &sm, tbl.index, root));
+    try testing.expectError(error.NullOperandUnsupported, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
 }
 
 test "orderBy rejects invalid direction value" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     // Manually construct invalid orderBy
     var root = msgpack.Payload.mapPayload(allocator);
     defer root.free(allocator);
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
-    const tbl_items = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl_items = schema.getTable("items") orelse return error.TestExpectedValue;
     order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(2); // invalid direction
     try root.mapPut("orderBy", .{ .arr = order_arr });
 
-    try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &sm, tbl_items.index, root));
+    try testing.expectError(error.InvalidSortFormat, query_parser.parseQueryFilter(allocator, &schema, tbl_items.index, root));
 }
 
 test "after is parsed using final orderBy regardless of map insertion order" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "items",
         .fields = &[_][]const u8{},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
     const cursor: typed.Cursor = .{
         .sort_value = .{ .scalar = .{ .integer = 42 } },
@@ -548,12 +548,12 @@ test "after is parsed using final orderBy regardless of map insertion order" {
     try root.mapPut("after", try msgpack.Payload.strToPayload(after_token, allocator));
 
     var order_arr = try allocator.alloc(msgpack.Payload, 2);
-    const tbl_items = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl_items = schema.getTable("items") orelse return error.TestExpectedValue;
     order_arr[0] = msgpack.Payload.uintToPayload(tbl_items.fieldIndex("created_at") orelse return error.TestExpectedValue);
     order_arr[1] = msgpack.Payload.uintToPayload(1);
     try root.mapPut("orderBy", .{ .arr = order_arr });
 
-    var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl_items.index, root);
+    var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl_items.index, root);
     defer filter.deinit(allocator);
 
     try testing.expectEqual(@as(i64, 42), filter.after.?.sort_value.scalar.integer);

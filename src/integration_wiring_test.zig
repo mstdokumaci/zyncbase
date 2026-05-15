@@ -57,7 +57,7 @@ test "Integration: Error propagation through layers" {
     const server = try setupTestServer(allocator, &context, "schema_prop.json");
     defer server.deinit();
 
-    const test_tbl = server.storage_engine.schema_manager.getTable("test") orelse return error.TableNotFound;
+    const test_tbl = server.storage_engine.schema.getTable("test") orelse return error.TableNotFound;
     // Verify storage engine interaction through wiring
     var managed = try server.storage_engine.selectDocument(allocator, test_tbl.index, 999, 1, null);
     defer managed.deinit();

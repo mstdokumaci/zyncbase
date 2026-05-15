@@ -8,12 +8,12 @@ const Helpers = @This();
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageError = storage_engine.StorageError;
-pub const schema = @import("schema.zig");
-pub const Schema = schema.Schema;
-pub const Table = schema.Table;
-pub const Field = schema.Field;
-pub const FieldType = schema.FieldType;
-pub const TableMetadata = schema.Table;
+pub const schema_mod = @import("schema.zig");
+pub const Schema = schema_mod.Schema;
+pub const Table = schema_mod.Table;
+pub const Field = schema_mod.Field;
+pub const FieldType = schema_mod.FieldType;
+pub const TableMetadata = schema_mod.Table;
 pub const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const query_ast = @import("query_ast.zig");
@@ -126,14 +126,6 @@ pub const ManagedDocument = struct {
         self.managed.deinit();
     }
 
-    pub fn getFieldText(self: *const ManagedDocument, key: []const u8) ![]const u8 {
-        return Helpers.getFieldText(self.managed.records[0], self.fixture.metadata, key);
-    }
-
-    pub fn getFieldTextOrNull(self: *const ManagedDocument, key: []const u8) ?[]const u8 {
-        return Helpers.getFieldTextOrNull(self.managed.records[0], self.fixture.metadata, key);
-    }
-
     pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed.DocId {
         return Helpers.getFieldDocIdOrNull(self.managed.records[0], self.fixture.metadata, key);
     }
@@ -161,18 +153,6 @@ pub const ManagedDocument = struct {
     pub fn expectFieldInt(self: *const ManagedDocument, key: []const u8, expected: i64) !i64 {
         return Helpers.expectFieldInt(self.managed.records[0], self.fixture.metadata, key, expected);
     }
-
-    pub fn expectFieldReal(self: *const ManagedDocument, key: []const u8, expected: f64) !f64 {
-        return Helpers.expectFieldReal(self.managed.records[0], self.fixture.metadata, key, expected);
-    }
-
-    pub fn expectFieldBool(self: *const ManagedDocument, key: []const u8, expected: bool) !bool {
-        return Helpers.expectFieldBool(self.managed.records[0], self.fixture.metadata, key, expected);
-    }
-
-    pub fn expectFieldArray(self: *const ManagedDocument, key: []const u8, expected_len: usize) !typed.Value {
-        return Helpers.expectFieldArray(self.managed.records[0], self.fixture.metadata, key, expected_len);
-    }
 };
 
 fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageEngine.Options) !TestContext {
@@ -186,7 +166,7 @@ fn createTestContext(allocator: Allocator, prefix: []const u8, options: StorageE
 pub const EngineTestContext = struct {
     allocator: Allocator,
     engine: StorageEngine,
-    sm: Schema,
+    schema: Schema,
     memory_strategy: MemoryStrategy,
     test_context: TestContext,
 
@@ -207,10 +187,10 @@ pub const EngineTestContext = struct {
         try self.memory_strategy.init(allocator);
         errdefer self.memory_strategy.deinit();
 
-        self.sm = try createSchema(allocator, tables);
-        errdefer self.sm.deinit();
+        self.schema = try createSchema(allocator, tables);
+        errdefer self.schema.deinit();
 
-        try schema_helpers.setupTestEngineWithPerformance(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.sm, performance_config, effective_options);
+        try schema_helpers.setupTestEngineWithPerformance(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, performance_config, effective_options);
         errdefer self.engine.deinit();
     }
 
@@ -223,17 +203,12 @@ pub const EngineTestContext = struct {
     }
 
     pub fn tableMetadata(self: *const EngineTestContext, table_name: []const u8) !*const TableMetadata {
-        return self.sm.getTable(table_name) orelse StorageError.UnknownTable;
+        return self.schema.getTable(table_name) orelse StorageError.UnknownTable;
     }
 
     pub fn tableIndex(self: *const EngineTestContext, table_name: []const u8) usize {
-        const md = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const md = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return md.index;
-    }
-
-    pub fn fieldIndex(self: *const EngineTestContext, table_name: []const u8, field_name: []const u8) usize {
-        const tbl = self.sm.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
-        return tbl.getFieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 
     pub fn table(self: *EngineTestContext, table_name: []const u8) !TableFixture {
@@ -289,7 +264,7 @@ pub const EngineTestContext = struct {
 
     fn deinitInternal(self: *EngineTestContext, cleanup: bool) void {
         self.engine.deinit();
-        self.sm.deinit();
+        self.schema.deinit();
         self.memory_strategy.deinit();
         if (cleanup) {
             self.test_context.deinit();
@@ -335,7 +310,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     }
 
     for (tables, 0..) |declared, idx| {
-        runtime_tables[built_count] = try schema.buildRuntimeTable(allocator, declared, idx);
+        runtime_tables[built_count] = try schema_mod.buildRuntimeTable(allocator, declared, idx);
         built_count += 1;
     }
 
@@ -346,7 +321,7 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
     };
     errdefer result.deinit();
 
-    try schema.buildTableIndex(allocator, &result);
+    try schema_mod.buildTableIndex(allocator, &result);
     return result;
 }
 
@@ -357,12 +332,12 @@ pub fn createDummySchema(allocator: Allocator) !Schema {
 
     var tables = try allocator.alloc(Table, 1);
     tables[0] = makeTable("_dummy", fields);
-    const sm = try createSchema(allocator, tables);
+    const schema = try createSchema(allocator, tables);
 
     allocator.free(fields);
     allocator.free(tables);
 
-    return sm;
+    return schema;
 }
 
 /// Setup a storage engine with a single table.
@@ -403,10 +378,10 @@ fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allo
     try ctx.memory_strategy.init(allocator);
     errdefer ctx.memory_strategy.deinit();
 
-    ctx.sm = try createSchema(allocator, tables);
-    errdefer ctx.sm.deinit();
+    ctx.schema = try createSchema(allocator, tables);
+    errdefer ctx.schema.deinit();
 
-    try schema_helpers.setupTestEngine(&ctx.engine, allocator, &ctx.memory_strategy, &ctx.test_context, &ctx.sm, effective_options);
+    try schema_helpers.setupTestEngine(&ctx.engine, allocator, &ctx.memory_strategy, &ctx.test_context, &ctx.schema, effective_options);
     errdefer ctx.engine.deinit();
 }
 
@@ -445,12 +420,6 @@ fn getRecordField(doc: typed.Record, metadata: *const TableMetadata, key: []cons
     return doc.values[idx];
 }
 
-pub fn getFieldTextOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?[]const u8 {
-    const val = getRecordField(doc, metadata, key) orelse return null;
-    if (val != .scalar or val.scalar != .text) return null;
-    return val.scalar.text;
-}
-
 pub fn getFieldDocIdOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?typed.DocId {
     const val = getRecordField(doc, metadata, key) orelse return null;
     if (val != .scalar or val.scalar != .doc_id) return null;
@@ -461,12 +430,6 @@ pub fn getFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []con
     const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
     return error.TypeMismatch;
-}
-
-pub fn getFieldText(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ![]const u8 {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    if (val != .scalar or val.scalar != .text) return error.TypeMismatch;
-    return val.scalar.text;
 }
 
 pub fn getFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) !typed.DocId {
@@ -506,26 +469,4 @@ pub fn expectFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []
     const actual = try getFieldInt(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
-}
-
-pub fn expectFieldReal(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
-    const actual = val.scalar.real;
-    try testing.expectApproxEqAbs(expected, actual, 0.00001);
-    return actual;
-}
-
-pub fn expectFieldBool(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    try testing.expect(val == .scalar and val.scalar == .boolean);
-    try testing.expectEqual(expected, val.scalar.boolean);
-    return val.scalar.boolean;
-}
-
-pub fn expectFieldArray(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !typed.Value {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    try testing.expect(val == .array);
-    try testing.expectEqual(expected_len, val.array.len);
-    return val;
 }

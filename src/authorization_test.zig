@@ -619,20 +619,20 @@ test "AuthConfig rejects unsupported store hook predicates at boot" {
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {
-    var sm = try makeAuthTestSchema(allocator);
-    defer sm.deinit();
-    return authorization.initAuthConfig(allocator, json, &sm);
+    var schema = try makeAuthTestSchema(allocator);
+    defer schema.deinit();
+    return authorization.initAuthConfig(allocator, json, &schema);
 }
 
 fn implicitTestConfig(allocator: std.mem.Allocator) !AuthConfig {
-    var sm = try makeAuthTestSchema(allocator);
-    defer sm.deinit();
-    return authorization.implicitConfig(allocator, &sm);
+    var schema = try makeAuthTestSchema(allocator);
+    defer schema.deinit();
+    return authorization.implicitConfig(allocator, &schema);
 }
 
 fn makeAuthTestSchema(allocator: std.mem.Allocator) !schema_mod.Schema {
     const text_types = [_]schema_mod.FieldType{.text};
-    return schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{
+    return schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{
         .{
             .name = "posts",
             .fields = &[_][]const u8{"visibility"},

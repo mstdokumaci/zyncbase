@@ -10,22 +10,22 @@ const RecordChange = @import("subscription_engine.zig").RecordChange;
 const msgpack = @import("msgpack_utils.zig");
 const Payload = msgpack.Payload;
 const wire = @import("wire.zig");
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 
 pub const NotificationDispatcher = struct {
     change_buffer: *ChangeBuffer,
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
-    schema_manager: *const schema.Schema,
+    schema: *const schema_mod.Schema,
     allocator: Allocator,
     drain_buf: std.ArrayListUnmanaged(OwnedRecordChange) = .empty,
 
-    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, sm: *const schema.Schema) !void {
+    pub fn init(self: *NotificationDispatcher, allocator: Allocator, change_buffer: *ChangeBuffer, subscription_engine: *SubscriptionEngine, memory_strategy: *MemoryStrategy, schema: *const schema_mod.Schema) !void {
         self.* = .{
             .change_buffer = change_buffer,
             .subscription_engine = subscription_engine,
             .memory_strategy = memory_strategy,
-            .schema_manager = sm,
+            .schema = schema,
             .allocator = allocator,
             .drain_buf = .empty,
         };
@@ -51,7 +51,7 @@ pub const NotificationDispatcher = struct {
     }
 
     fn dispatchChange(self: *NotificationDispatcher, change: OwnedRecordChange, cm: *ConnectionManager) void {
-        const table_metadata = self.schema_manager.getTableByIndex(change.table_index) orelse {
+        const table_metadata = self.schema.getTableByIndex(change.table_index) orelse {
             std.log.err("NotificationDispatcher skipping delta for unknown table index {d}", .{change.table_index});
             return;
         };
@@ -66,7 +66,7 @@ pub const NotificationDispatcher = struct {
         };
 
         const id_val = if (change.new_record orelse change.old_record) |record|
-            if (record.values.len > schema.id_field_index) record.values[schema.id_field_index] else null
+            if (record.values.len > schema_mod.id_field_index) record.values[schema_mod.id_field_index] else null
         else
             null;
 

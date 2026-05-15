@@ -15,7 +15,7 @@ const BatchOpForTest = struct {
 const DirectWriterContext = struct {
     allocator: std.mem.Allocator,
     engine: storage_mod.StorageEngine,
-    sm: sth.Schema,
+    schema: sth.Schema,
     memory_strategy: sth.MemoryStrategy,
     test_context: sth.TestContext,
 
@@ -29,14 +29,14 @@ const DirectWriterContext = struct {
 
         const users_fields = [_]sth.Field{};
         const users_table = sth.makeTable("users", &users_fields);
-        self.sm = try sth.createSchema(allocator, &[_]sth.Table{ users_table, table });
-        errdefer self.sm.deinit();
+        self.schema = try sth.createSchema(allocator, &[_]sth.Table{ users_table, table });
+        errdefer self.schema.deinit();
 
         try self.engine.init(
             allocator,
             &self.memory_strategy,
             self.test_context.test_dir,
-            &self.sm,
+            &self.schema,
             .{},
             .{ .in_memory = true, .reader_pool_size = 1 },
             null,
@@ -45,7 +45,7 @@ const DirectWriterContext = struct {
         errdefer self.engine.deinit();
 
         var gen = DDLGenerator.init(allocator);
-        for (self.sm.tables) |schema_table| {
+        for (self.schema.tables) |schema_table| {
             const ddl = try gen.generateDDL(schema_table);
             defer allocator.free(ddl);
             const ddl_z = try allocator.dupeZ(u8, ddl);
@@ -56,7 +56,7 @@ const DirectWriterContext = struct {
 
     fn deinit(self: *DirectWriterContext) void {
         self.engine.deinit();
-        self.sm.deinit();
+        self.schema.deinit();
         self.memory_strategy.deinit();
         self.test_context.deinit();
     }

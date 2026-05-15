@@ -1,6 +1,6 @@
 const std = @import("std");
 const msgpack = @import("msgpack_utils.zig");
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const query_parser = @import("query_parser.zig");
 const testing = std.testing;
@@ -10,17 +10,17 @@ test "property: random valid query filters" {
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
 
-    var fields = [_]schema.Field{
+    var fields = [_]schema_mod.Field{
         sth.makeField("field", .text, false),
     };
-    const tables = [_]schema.Table{
+    const tables = [_]schema_mod.Table{
         sth.makeTable("items", &fields),
     };
 
-    var sm = try sth.createSchema(allocator, &tables);
-    defer sm.deinit();
+    var schema = try sth.createSchema(allocator, &tables);
+    defer schema.deinit();
 
-    const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
+    const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
     const field_index = tbl.fieldIndex("field") orelse return error.TestExpectedValue;
 
     for (0..100) |_| {
@@ -52,7 +52,7 @@ test "property: random valid query filters" {
             order_arr[1] = msgpack.Payload.uintToPayload(if (random.boolean()) 1 else 0);
             try root.mapPut("orderBy", .{ .arr = order_arr });
         }
-        var filter = try query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+        var filter = try query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
         filter.deinit(allocator);
     }
 }
@@ -71,20 +71,20 @@ test "property: reject unknown field names" {
         conds_arr[0] = try generateRandomCondition(allocator, random, true, 0, .text);
         try root.mapPut("conditions", .{ .arr = conds_arr });
 
-        const tables = [_]schema.Table{
-            sth.makeTable("items", &[_]schema.Field{}),
+        const tables = [_]schema_mod.Table{
+            sth.makeTable("items", &[_]schema_mod.Field{}),
         };
 
-        var sm = try sth.createSchema(allocator, &tables);
-        defer sm.deinit();
+        var schema = try sth.createSchema(allocator, &tables);
+        defer schema.deinit();
 
-        const tbl = sm.getTable("items") orelse return error.TestExpectedValue;
-        const result = query_parser.parseQueryFilter(allocator, &sm, tbl.index, root);
+        const tbl = schema.getTable("items") orelse return error.TestExpectedValue;
+        const result = query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
         try testing.expectError(error.UnknownField, result);
     }
 }
 
-fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_index: usize, field_type: schema.FieldType) !msgpack.Payload {
+fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, force_unknown_field: bool, field_index: usize, field_type: schema_mod.FieldType) !msgpack.Payload {
     const resolved_field_index: usize = if (force_unknown_field) 9999 else field_index;
     const op_code = random.intRangeAtMost(u8, 0, 12);
 
@@ -107,7 +107,7 @@ fn generateRandomCondition(allocator: std.mem.Allocator, random: std.Random, for
     }
 }
 
-fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema.FieldType) !msgpack.Payload {
+fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_mod.FieldType) !msgpack.Payload {
     return switch (field_type) {
         .text => msgpack.Payload.strToPayload("v", allocator),
         .doc_id => blk: {
@@ -126,7 +126,7 @@ fn randomValueForType(allocator: std.mem.Allocator, random: std.Random, field_ty
     };
 }
 
-fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema.FieldType) !msgpack.Payload {
+fn randomInValueForType(allocator: std.mem.Allocator, random: std.Random, field_type: schema_mod.FieldType) !msgpack.Payload {
     const len = random.intRangeAtMost(usize, 0, 3);
     const arr = try allocator.alloc(msgpack.Payload, len);
     for (arr) |*item| {

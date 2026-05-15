@@ -30,7 +30,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (tex
     try sth.setupEngine(&ctx, allocator, "contains-array-text-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
-    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
+    const items_md = ctx.schema.getTable("items") orelse return error.UnknownTable;
 
     const ns = 1;
 
@@ -135,7 +135,7 @@ test "contains on array field: SQL and in-memory evaluator return same rows (int
     try sth.setupEngine(&ctx, allocator, "contains-array-int-equiv", table);
     defer ctx.deinit();
     const engine = &ctx.engine;
-    const players_md = ctx.sm.getTable("players") orelse return error.UnknownTable;
+    const players_md = ctx.schema.getTable("players") orelse return error.UnknownTable;
 
     const ns = 1;
 

@@ -43,7 +43,7 @@ pub const ZyncBaseServer = struct {
     store_service: StoreService,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
-    schema_manager: Schema,
+    schema: Schema,
     auth_config: authorization.AuthConfig,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
@@ -64,7 +64,7 @@ pub const ZyncBaseServer = struct {
         const self = try allocator.create(ZyncBaseServer);
         errdefer allocator.destroy(self);
         self.allocator = allocator;
-        // schema_manager will be initialized later
+        // schema will be initialized later
 
         // Initialize memory strategy
         try self.memory_strategy.init(allocator);
@@ -130,8 +130,8 @@ pub const ZyncBaseServer = struct {
             };
             defer if (config.schema_content == null and json_text.ptr != schema_mod.implicit_users_schema_json.ptr) self.memory_strategy.generalAllocator().free(json_text);
 
-            self.schema_manager = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
-            errdefer self.schema_manager.deinit();
+            self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
+            errdefer self.schema.deinit();
         }
 
         auth_init: {
@@ -143,15 +143,15 @@ pub const ZyncBaseServer = struct {
                 ) catch |err| {
                     if (err == error.FileNotFound) {
                         std.log.info("Auth file '{s}' not found, using implicit defaults", .{file});
-                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema_manager);
+                        self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
                         break :auth_init;
                     }
                     return err;
                 };
-                self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema_manager);
+                self.auth_config = try authorization.initAuthConfig(self.memory_strategy.generalAllocator(), auth_json, &self.schema);
                 self.memory_strategy.generalAllocator().free(auth_json);
             } else {
-                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema_manager);
+                self.auth_config = try authorization.implicitConfig(self.memory_strategy.generalAllocator(), &self.schema);
             }
             errdefer self.auth_config.deinit();
         }
@@ -162,7 +162,7 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             config.data_dir,
-            &self.schema_manager,
+            &self.schema,
             config.performance,
             .{},
             storageEngineWakeup,
@@ -172,7 +172,7 @@ pub const ZyncBaseServer = struct {
 
         // Run migrations and DDL
         {
-            const schema_ptr = &self.schema_manager;
+            const schema_ptr = &self.schema;
             // Apply DDL for each table
             var gen = DDLGenerator.init(self.memory_strategy.generalAllocator());
             for (schema_ptr.tables) |table| {
@@ -230,7 +230,7 @@ pub const ZyncBaseServer = struct {
         self.store_service = StoreService.init(
             self.memory_strategy.generalAllocator(),
             &self.storage_engine,
-            &self.schema_manager,
+            &self.schema,
             &self.auth_config,
         );
 
@@ -242,7 +242,7 @@ pub const ZyncBaseServer = struct {
             &self.subscription_engine,
             config.security,
             &self.auth_config,
-            &self.schema_manager,
+            &self.schema,
         );
         errdefer self.message_handler.deinit();
 
@@ -252,7 +252,7 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
             &self.message_handler,
-            &self.schema_manager,
+            &self.schema,
         );
         errdefer self.connection_manager.deinit();
 
@@ -262,7 +262,7 @@ pub const ZyncBaseServer = struct {
             self.storage_engine.changeBuffer(),
             &self.subscription_engine,
             &self.memory_strategy,
-            &self.schema_manager,
+            &self.schema,
         );
         errdefer self.notification_dispatcher.deinit();
 
@@ -426,7 +426,7 @@ pub const ZyncBaseServer = struct {
         self.auth_config.deinit();
 
         // Free schema manager
-        self.schema_manager.deinit();
+        self.schema.deinit();
 
         std.log.debug("Deinitializing memory_strategy", .{});
         self.memory_strategy.deinit();

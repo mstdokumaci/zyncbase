@@ -12,8 +12,8 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
-const schema = @import("schema.zig");
-const Schema = schema.Schema;
+const schema_mod = @import("schema.zig");
+const Schema = schema_mod.Schema;
 const schema_helpers = @import("schema_test_helpers.zig");
 pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
@@ -96,7 +96,7 @@ pub const AppTestContext = struct {
     store_service: StoreService,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
-    schema_manager: Schema,
+    schema: Schema,
     auth_config: authorization.AuthConfig,
     test_context: schema_helpers.TestContext,
     test_resolution_mutex: std.Thread.Mutex,
@@ -106,30 +106,30 @@ pub const AppTestContext = struct {
     }
 
     pub fn initWithOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef, options: StorageEngine.Options) !void {
-        const sm = try schema_helpers.createTestSchemaManager(allocator, table_defs);
-        try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, options);
+        const schema = try schema_helpers.createTestSchema(allocator, table_defs);
+        try self.initWithSchemaAndOptions(allocator, prefix, schema, options);
     }
 
     pub fn initWithSchema(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema_value: Schema) !void {
-        const json_text = try schema.format(allocator, &schema_value);
+        const json_text = try schema_mod.format(allocator, &schema_value);
         defer allocator.free(json_text);
 
-        var sm = try schema.initSchema(allocator, json_text);
-        errdefer sm.deinit();
-        try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
+        const schema = try schema_mod.initSchema(allocator, json_text);
+        // No errdefer here — ownership transfers to initWithSchemaAndOptions
+        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
     }
 
     pub fn initWithSchemaJSON(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, json: []const u8) !void {
-        var sm = try schema.initSchema(allocator, json);
-        errdefer sm.deinit();
-        try self.initWithSchemaManagerAndOptions(allocator, prefix, sm, .{ .in_memory = true });
+        const schema = try schema_mod.initSchema(allocator, json);
+        // No errdefer here — ownership transfers to initWithSchemaAndOptions
+        try self.initWithSchemaAndOptions(allocator, prefix, schema, .{ .in_memory = true });
     }
 
-    pub fn initWithSchemaManagerAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, sm: Schema, options: StorageEngine.Options) !void {
+    pub fn initWithSchemaAndOptions(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, schema: Schema, options: StorageEngine.Options) !void {
         self.allocator = allocator;
         self.test_resolution_mutex = .{};
-        self.schema_manager = sm;
-        errdefer self.schema_manager.deinit();
+        self.schema = schema;
+        errdefer self.schema.deinit();
 
         // 1. Initialize Memory Strategy
         try self.memory_strategy.init(allocator);
@@ -147,7 +147,7 @@ pub const AppTestContext = struct {
         errdefer self.test_context.deinit();
 
         // 4. Initialize Storage Engine
-        try schema_helpers.setupTestEngine(&self.storage_engine, allocator, &self.memory_strategy, &self.test_context, &self.schema_manager, options);
+        try schema_helpers.setupTestEngine(&self.storage_engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, options);
         errdefer self.storage_engine.deinit();
 
         // 5. Initialize Subscription Engine
@@ -155,18 +155,18 @@ pub const AppTestContext = struct {
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization.implicitConfig(allocator, &self.schema_manager);
+        self.auth_config = try authorization.implicitConfig(allocator, &self.schema);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service
-        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema_manager, &self.auth_config);
+        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema, &self.auth_config);
 
         // 8. Initialize Handler and Manager
-        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema_manager);
+        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
-        try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema_manager);
+        try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema);
         errdefer self.connection_manager.deinit();
 
         // 10. Initialize Session Resolver
@@ -191,23 +191,23 @@ pub const AppTestContext = struct {
 
         // 5. Cleanup remaining infrastructure
         self.auth_config.deinit();
-        self.schema_manager.deinit();
+        self.schema.deinit();
         self.test_context.deinit();
         self.violation_tracker.deinit();
         self.memory_strategy.deinit();
     }
 
-    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema.Table {
-        return self.schema_manager.getTable(table_name) orelse error.UnknownTable;
+    pub fn tableMetadata(self: *const AppTestContext, table_name: []const u8) !*const schema_mod.Table {
+        return self.schema.getTable(table_name) orelse error.UnknownTable;
     }
 
     pub fn tableIndex(self: *const AppTestContext, table_name: []const u8) usize {
-        const md = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const md = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return md.index;
     }
 
     pub fn fieldIndex(self: *const AppTestContext, table_name: []const u8, field_name: []const u8) usize {
-        const tbl = self.schema_manager.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
+        const tbl = self.schema.getTable(table_name) orelse std.debug.panic("test schema missing table '{s}'", .{table_name});
         return tbl.fieldIndex(field_name) orelse std.debug.panic("test schema table '{s}' missing field '{s}'", .{ table_name, field_name });
     }
 
@@ -279,10 +279,6 @@ pub const AppTestContext = struct {
     /// Should be used with 'defer if (conn.release()) app.releaseConnection(conn);'
     pub fn releaseConnection(self: *AppTestContext, conn: *Connection) void {
         self.memory_strategy.releaseConnection(conn);
-    }
-
-    pub fn pollSessionResolver(self: *AppTestContext) void {
-        self.session_resolver.poll(&self.connection_manager);
     }
 
     pub fn resolveStoreScopeForTest(

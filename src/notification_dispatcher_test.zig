@@ -5,7 +5,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 const typed = @import("typed.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 
@@ -22,13 +22,13 @@ test "NotificationDispatcher: empty poll" {
     try memory.init(alloc);
     defer memory.deinit();
 
-    const empty_fields = [_]schema.Field{};
+    const empty_fields = [_]schema_mod.Field{};
     const table = sth.makeTable("_test", &empty_fields);
-    var sm = try sth.createSchema(alloc, &[_]schema.Table{table});
-    defer sm.deinit();
+    var schema = try sth.createSchema(alloc, &[_]schema_mod.Table{table});
+    defer schema.deinit();
 
     var nd: NotificationDispatcher = undefined;
-    try nd.init(alloc, &cb, &sub_engine, &memory, &sm);
+    try nd.init(alloc, &cb, &sub_engine, &memory, &schema);
     defer nd.deinit();
 
     var cm: ConnectionManager = undefined;
@@ -48,16 +48,16 @@ test "NotificationDispatcher: poll processes items" {
     try memory.init(alloc);
     defer memory.deinit();
 
-    const empty_fields = [_]schema.Field{};
+    const empty_fields = [_]schema_mod.Field{};
     const table = sth.makeTable("coll", &empty_fields);
-    var sm = try sth.createSchema(alloc, &[_]schema.Table{table});
-    defer sm.deinit();
+    var schema = try sth.createSchema(alloc, &[_]schema_mod.Table{table});
+    defer schema.deinit();
 
     var nd: NotificationDispatcher = undefined;
-    try nd.init(alloc, &cb, &sub_engine, &memory, &sm);
+    try nd.init(alloc, &cb, &sub_engine, &memory, &schema);
     defer nd.deinit();
 
-    const tbl_md = sm.getTable("coll") orelse return error.TestExpectedValue;
+    const tbl_md = schema.getTable("coll") orelse return error.TestExpectedValue;
     const values = try alloc.alloc(typed.Value, tbl_md.fields.len);
     errdefer alloc.free(values);
     for (values, 0..) |*value, i| {
@@ -69,7 +69,7 @@ test "NotificationDispatcher: poll processes items" {
         }
     }
 
-    const id_index = schema.id_field_index;
+    const id_index = schema_mod.id_field_index;
     values[id_index] = .{ .scalar = .{ .text = try alloc.dupe(u8, "1") } };
 
     const new_record = typed.Record{

@@ -265,13 +265,13 @@ test "encodeError: produces valid MsgPack" {
 test "encodeQuery: includes subscription pagination fields" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &.{"name"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
+    const table_metadata = schema.getTable("users") orelse return error.UnknownTable;
     const records = try allocator.alloc(typed.Record, 1);
     records[0] = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer {
@@ -326,13 +326,13 @@ test "encodeQuery: includes subscription pagination fields" {
 test "encodeSetDeltaSuffix: set operation" {
     const allocator = testing.allocator;
 
-    var sm = try schema_helpers.createTestSchemaManager(allocator, &[_]schema_helpers.TableDef{.{
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
         .name = "users",
         .fields = &.{"name"},
     }});
-    defer sm.deinit();
+    defer schema.deinit();
 
-    const table_metadata = sm.getTable("users") orelse return error.UnknownTable;
+    const table_metadata = schema.getTable("users") orelse return error.UnknownTable;
     const record = try makeDeltaTestRecord(allocator, "user-123", "Ada");
     defer record.deinit(allocator);
 

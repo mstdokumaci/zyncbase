@@ -12,18 +12,18 @@ test "storage: error handling invalid database path" {
     const allocator = testing.allocator;
 
     // Try to create storage engine with invalid path
-    var sm = try sth.createSchema(allocator, &.{
+    var schema = try sth.createSchema(allocator, &.{
         sth.makeTable("_dummy", &.{sth.makeField("val", .text, false)}),
         sth.makeTable("data_table", &.{sth.makeField("val", .text, false)}),
     });
-    defer sm.deinit();
+    defer schema.deinit();
 
     var ms: sth.MemoryStrategy = undefined;
     try ms.init(allocator);
     defer ms.deinit();
 
     var storage: StorageEngine = undefined;
-    const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &sm, .{}, .{ .in_memory = false }, null, null);
+    const result = storage.init(allocator, &ms, "/invalid/nonexistent/path/that/cannot/be/created", &schema, .{}, .{ .in_memory = false }, null, null);
     // Verify we get an error
     if (result) |_| {
         storage.deinit();
@@ -106,7 +106,7 @@ test "storage: error handling concurrent access safety" {
         }
     }.run;
     var threads: [4]std.Thread = undefined;
-    const tbl_md = ctx.sm.getTable("data_table") orelse return error.UnknownTable;
+    const tbl_md = ctx.schema.getTable("data_table") orelse return error.UnknownTable;
     for (&threads) |*t| {
         t.* = try std.Thread.spawn(.{}, runRead, .{ ThreadContext{ .storage = storage, .allocator = allocator }, tbl_md.index });
     }

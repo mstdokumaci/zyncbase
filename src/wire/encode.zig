@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const msgpack = @import("../msgpack_utils.zig");
 const storage_mod = @import("../storage_engine.zig");
 const typed = @import("../typed.zig");
-const schema = @import("../schema.zig");
+const schema_mod = @import("../schema.zig");
 const WireError = @import("errors.zig").WireError;
 const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 
@@ -198,7 +198,7 @@ pub fn encodeQuery(
     return list.toOwnedSlice(arena_allocator);
 }
 
-pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const u8 {
+pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) ![]const u8 {
     var list = std.ArrayListUnmanaged(u8).empty;
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
@@ -208,7 +208,7 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const
     try list.appendSlice(allocator, Keys.type);
     try list.appendSlice(allocator, Values.schema_sync);
 
-    const tables = sm.tables;
+    const tables = schema.tables;
 
     try list.appendSlice(allocator, Keys.tables);
     try msgpack.encodeArrayHeader(writer, tables.len);
@@ -219,7 +219,7 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const
     try list.appendSlice(allocator, Keys.fields);
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
-        const tbl_md = sm.getTable(table.name) orelse return error.UnknownTable;
+        const tbl_md = schema.getTable(table.name) orelse return error.UnknownTable;
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             try msgpack.writeMsgPackStr(writer, field.name);
@@ -229,7 +229,7 @@ pub fn encodeSchemaSync(allocator: Allocator, sm: *const schema.Schema) ![]const
     try list.appendSlice(allocator, Keys.field_flags);
     try msgpack.encodeArrayHeader(writer, tables.len);
     for (tables) |table| {
-        const tbl_md = sm.getTable(table.name) orelse return error.UnknownTable;
+        const tbl_md = schema.getTable(table.name) orelse return error.UnknownTable;
         try msgpack.encodeArrayHeader(writer, tbl_md.fields.len);
         for (tbl_md.fields) |field| {
             var flags: u8 = 0;

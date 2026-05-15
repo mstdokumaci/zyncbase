@@ -33,7 +33,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
 
     // 3) Subscribe AFTER write is acknowledged/queued but BEFORE commit/flush.
     //    Filter matches exactly the row above.
-    const items_md = ctx.sm.getTable("items") orelse return error.UnknownTable;
+    const items_md = ctx.schema.getTable("items") orelse return error.UnknownTable;
     const val_index = items_md.fieldIndex("val") orelse return error.UnknownField;
     const conditions = try allocator.alloc(query_ast.Condition, 1);
     conditions[0] = query_ast.Condition{
@@ -48,7 +48,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     filter.predicate.conditions = conditions;
     defer filter.deinit(allocator);
 
-    _ = try sub_engine.subscribe(1, (ctx.sm.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
+    _ = try sub_engine.subscribe(1, (ctx.schema.getTable("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
 
     // 4) Flush queued writes into DB + change buffer.
     try engine.flushPendingWrites();

@@ -275,7 +275,7 @@ test "logging: error details" {
     // Test 3: Database errors are logged
     // Storage engine logs errors internally when operations fail
     {
-        const tbl_md = app.schema_manager.getTable("data_table") orelse return error.TableNotFound;
+        const tbl_md = app.schema.getTable("data_table") orelse return error.TableNotFound;
         // Try to get from non-existent namespace/path
         var managed = try storage_engine.selectDocument(testing.allocator, tbl_md.index, 1, 1, null);
         defer managed.deinit();

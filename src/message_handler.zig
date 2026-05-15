@@ -12,7 +12,7 @@ const SecurityConfig = @import("config_loader.zig").Config.SecurityConfig;
 const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
-const schema = @import("schema.zig");
+const schema_mod = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
 
 /// Message handler for WebSocket events
@@ -25,7 +25,7 @@ pub const MessageHandler = struct {
     subscription_engine: *SubscriptionEngine,
     security_config: SecurityConfig,
     auth_config: *const authorization.AuthConfig,
-    schema_manager: *const schema.Schema,
+    schema: *const schema_mod.Schema,
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -37,7 +37,7 @@ pub const MessageHandler = struct {
         subscription_engine: *SubscriptionEngine,
         security_config: SecurityConfig,
         auth_config: *const authorization.AuthConfig,
-        schema_manager: *const schema.Schema,
+        schema: *const schema_mod.Schema,
     ) void {
         self.* = .{
             .allocator = allocator,
@@ -47,7 +47,7 @@ pub const MessageHandler = struct {
             .subscription_engine = subscription_engine,
             .security_config = security_config,
             .auth_config = auth_config,
-            .schema_manager = schema_manager,
+            .schema = schema,
         };
     }
 
@@ -246,7 +246,7 @@ pub const MessageHandler = struct {
         fn evalContext(
             self: *const StoreAuthScope,
             allocator: std.mem.Allocator,
-            table: ?*const schema.Table,
+            table: ?*const schema_mod.Table,
             value: ?*const msgpack.Payload,
         ) authorization.EvalContext {
             return .{
@@ -341,7 +341,7 @@ pub const MessageHandler = struct {
         var sub_query = (try self.subscription_engine.getSubscriptionQuery(arena_allocator, sub_key)) orelse return error.SubscriptionNotFound;
         defer sub_query.deinit(arena_allocator);
 
-        const table = self.schema_manager.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
+        const table = self.schema.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
         var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
@@ -368,7 +368,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         arena: std.mem.Allocator,
         conn: *Connection,
-        table: *const schema.Table,
+        table: *const schema_mod.Table,
         value: ?*const msgpack.Payload,
     ) !?query_ast.FilterPredicate {
         const session = try requireStoreSession(conn);
@@ -384,7 +384,7 @@ pub const MessageHandler = struct {
         self: *MessageHandler,
         arena: std.mem.Allocator,
         conn: *Connection,
-        table: *const schema.Table,
+        table: *const schema_mod.Table,
     ) !?query_ast.FilterPredicate {
         const session = try requireStoreSession(conn);
         const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
@@ -407,7 +407,7 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
 
         const table_index = try extractTableIndexFromPath(payloads.path);
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
         const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
@@ -435,7 +435,7 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
 
         const table_index = try extractTableIndexFromPath(payloads.path);
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
         const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
@@ -469,7 +469,7 @@ pub const MessageHandler = struct {
                 if (op_payload != .arr or op_payload.arr.len < 2) continue;
                 const path = op_payload.arr[1];
                 const table_index = try extractTableIndexFromPath(path);
-                const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+                const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
 
                 const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
@@ -505,7 +505,7 @@ pub const MessageHandler = struct {
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
         const namespace_id = try requireStoreNamespace(conn);
 
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
@@ -541,7 +541,7 @@ pub const MessageHandler = struct {
 
         const namespace_id = try requireStoreNamespace(conn);
 
-        const table = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 

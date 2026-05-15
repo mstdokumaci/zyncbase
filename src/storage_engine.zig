@@ -8,8 +8,8 @@ const reader = @import("storage_engine/reader.zig");
 const storage_writer = @import("storage_engine/writer.zig");
 const Writer = storage_writer.Writer;
 const connection = @import("storage_engine/connection.zig");
-const schema = @import("schema.zig");
-const Schema = schema.Schema;
+const schema_mod = @import("schema.zig");
+const Schema = schema_mod.Schema;
 const query_ast = @import("query_ast.zig");
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed = @import("typed.zig");
@@ -24,7 +24,7 @@ const SessionResolutionBuffer = @import("session_resolution_buffer.zig").Session
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = sql.ColumnValue;
-pub const TableMetadata = schema.Table;
+pub const TableMetadata = schema_mod.Table;
 pub const CheckpointMode = write_queue.CheckpointMode;
 pub const ReaderNode = connection.ReaderNode;
 pub const CheckpointStats = write_queue.CheckpointStats;
@@ -76,7 +76,7 @@ pub const StorageEngine = struct {
     migration_active: std.atomic.Value(bool),
     reconnection_config: ReconnectionConfig,
     node_pool: MemoryStrategy.IndexPool(WriteQueue.Node),
-    schema_manager: *const Schema,
+    schema: *const Schema,
     metadata_cache: metadata_cache_type,
     namespace_cache: namespace_cache_type,
     identity_cache: identity_cache_type,
@@ -88,7 +88,7 @@ pub const StorageEngine = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         data_dir: []const u8,
-        sm: *const Schema,
+        schema: *const Schema,
         performance_config: PerformanceConfig,
         options: Options,
         event_loop_notifier: ?*const fn (ctx: ?*anyopaque) void,
@@ -184,7 +184,7 @@ pub const StorageEngine = struct {
             // SAFETY: Initialized below via .node_pool.init().
             .node_pool = undefined,
             .next_reader_idx = std.atomic.Value(usize).init(0),
-            .schema_manager = sm,
+            .schema = schema,
             // SAFETY: Initialized below
             .metadata_cache = undefined,
             // SAFETY: Initialized below
@@ -213,7 +213,7 @@ pub const StorageEngine = struct {
                 .namespace_cache = undefined,
                 // SAFETY: Set after cache init below
                 .identity_cache = undefined,
-                .schema = sm,
+                .schema = schema,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_ready = std.atomic.Value(bool).init(false),
                 // SAFETY: Initialized below via .write_queue.init().
@@ -448,8 +448,8 @@ pub const StorageEngine = struct {
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
         var queued = false;
 
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
@@ -503,7 +503,7 @@ pub const StorageEngine = struct {
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
 
         for (entries) |entry| {
-            _ = self.schema_manager.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
+            _ = self.schema.getTableByIndex(entry.table_index) orelse return StorageError.UnknownTable;
         }
 
         const op = WriteOp{
@@ -530,8 +530,8 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
         timestamp: i64,
     ) !BatchEntry {
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
 
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
@@ -570,8 +570,8 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
         timestamp: i64,
     ) !BatchEntry {
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
 
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
@@ -619,8 +619,8 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
     ) !ManagedResult {
         try self.ensureRunning();
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
 
         if (guard_predicate) |predicate| {
             if (predicate.isAlwaysFalse()) return ManagedResult{ .records = &[_]Record{}, .allocator = null };
@@ -688,8 +688,8 @@ pub const StorageEngine = struct {
         guard_predicate: ?*const query_ast.FilterPredicate,
     ) !struct { result: ManagedResult, next_cursor_str: ?[]const u8 } {
         try self.ensureRunning();
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
 
         if (filter.predicate.isAlwaysFalse()) {
             return .{
@@ -744,11 +744,11 @@ pub const StorageEngine = struct {
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
-        const table_metadata = self.schema_manager.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         if (guard_predicate) |predicate| {
             if (predicate.isAlwaysFalse()) return;
         }
-        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema.global_namespace_id;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
         var queued = false;
 
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
