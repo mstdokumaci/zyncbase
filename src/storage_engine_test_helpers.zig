@@ -126,14 +126,6 @@ pub const ManagedDocument = struct {
         self.managed.deinit();
     }
 
-    pub fn getFieldText(self: *const ManagedDocument, key: []const u8) ![]const u8 {
-        return Helpers.getFieldText(self.managed.records[0], self.fixture.metadata, key);
-    }
-
-    pub fn getFieldTextOrNull(self: *const ManagedDocument, key: []const u8) ?[]const u8 {
-        return Helpers.getFieldTextOrNull(self.managed.records[0], self.fixture.metadata, key);
-    }
-
     pub fn getFieldDocIdOrNull(self: *const ManagedDocument, key: []const u8) ?typed.DocId {
         return Helpers.getFieldDocIdOrNull(self.managed.records[0], self.fixture.metadata, key);
     }
@@ -160,18 +152,6 @@ pub const ManagedDocument = struct {
 
     pub fn expectFieldInt(self: *const ManagedDocument, key: []const u8, expected: i64) !i64 {
         return Helpers.expectFieldInt(self.managed.records[0], self.fixture.metadata, key, expected);
-    }
-
-    pub fn expectFieldReal(self: *const ManagedDocument, key: []const u8, expected: f64) !f64 {
-        return Helpers.expectFieldReal(self.managed.records[0], self.fixture.metadata, key, expected);
-    }
-
-    pub fn expectFieldBool(self: *const ManagedDocument, key: []const u8, expected: bool) !bool {
-        return Helpers.expectFieldBool(self.managed.records[0], self.fixture.metadata, key, expected);
-    }
-
-    pub fn expectFieldArray(self: *const ManagedDocument, key: []const u8, expected_len: usize) !typed.Value {
-        return Helpers.expectFieldArray(self.managed.records[0], self.fixture.metadata, key, expected_len);
     }
 };
 
@@ -440,12 +420,6 @@ fn getRecordField(doc: typed.Record, metadata: *const TableMetadata, key: []cons
     return doc.values[idx];
 }
 
-pub fn getFieldTextOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?[]const u8 {
-    const val = getRecordField(doc, metadata, key) orelse return null;
-    if (val != .scalar or val.scalar != .text) return null;
-    return val.scalar.text;
-}
-
 pub fn getFieldDocIdOrNull(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ?typed.DocId {
     const val = getRecordField(doc, metadata, key) orelse return null;
     if (val != .scalar or val.scalar != .doc_id) return null;
@@ -456,12 +430,6 @@ pub fn getFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []con
     const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
     if (val == .scalar and val.scalar == .integer) return val.scalar.integer;
     return error.TypeMismatch;
-}
-
-pub fn getFieldText(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) ![]const u8 {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    if (val != .scalar or val.scalar != .text) return error.TypeMismatch;
-    return val.scalar.text;
 }
 
 pub fn getFieldDocId(doc: typed.Record, metadata: *const TableMetadata, key: []const u8) !typed.DocId {
@@ -501,26 +469,4 @@ pub fn expectFieldInt(doc: typed.Record, metadata: *const TableMetadata, key: []
     const actual = try getFieldInt(doc, metadata, key);
     try testing.expectEqual(expected, actual);
     return actual;
-}
-
-pub fn expectFieldReal(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: f64) !f64 {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    if (val != .scalar or val.scalar != .real) return error.TypeMismatch;
-    const actual = val.scalar.real;
-    try testing.expectApproxEqAbs(expected, actual, 0.00001);
-    return actual;
-}
-
-pub fn expectFieldBool(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected: bool) !bool {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    try testing.expect(val == .scalar and val.scalar == .boolean);
-    try testing.expectEqual(expected, val.scalar.boolean);
-    return val.scalar.boolean;
-}
-
-pub fn expectFieldArray(doc: typed.Record, metadata: *const TableMetadata, key: []const u8, expected_len: usize) !typed.Value {
-    const val = getRecordField(doc, metadata, key) orelse return error.FieldNotFound;
-    try testing.expect(val == .array);
-    try testing.expectEqual(expected_len, val.array.len);
-    return val;
 }
