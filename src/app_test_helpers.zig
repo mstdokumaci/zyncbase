@@ -281,10 +281,6 @@ pub const AppTestContext = struct {
         self.memory_strategy.releaseConnection(conn);
     }
 
-    pub fn pollSessionResolver(self: *AppTestContext) void {
-        self.session_resolver.poll(&self.connection_manager);
-    }
-
     pub fn resolveStoreScopeForTest(
         self: *AppTestContext,
         namespace: []const u8,
