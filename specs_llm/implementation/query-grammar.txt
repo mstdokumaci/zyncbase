@@ -75,9 +75,20 @@ Query Language Grammar SQL Translation v1 Implementation Specification specifies
   "after":   "eyJpZCI6..."
 }
 ```Encoding Rules SDK field Wire key Encoding `where` conditions `conditions`[field_index op value tuples `where.or` `orConditions`_index value tuples `orderBy`[field_index desc` tuple `limit` Integer (unchanged `after` String (unchanged Flattening Rules Clients submit paths nested JSON ZyncBase stores nested JSON objects flat columns query nested structure"address SDK flattens field path joining keys `__` condition tuple field `"address__city"` SQLite JSON Extractors `json_extract()->> operators reading document properties Property queries run against `__` delimited flat columns Abstract Syntax Tree wire tuples map Zig AST parser validates wire integer indices against schema field array bounds```zig
+pub const PredicateState = enum(u8) {
+    conditional,
+    match_all,
+    match_none,
+};
+
+pub const FilterPredicate = struct {
+    state: PredicateState = .conditional,
+    conditions: ?[]Condition = null,
+    or_conditions: ?[]Condition = null,
+};
+
 pub const QueryFilter = struct {
-    conditions: []const Condition,
-    or_conditions: ?[]const Condition = null,
+    predicate: FilterPredicate,
     order_by: SortDescriptor,
 };
 
@@ -95,7 +106,9 @@ pub const Condition = struct {
 pub const Operator = enum {
     eq, ne, gt, lt, gte, lte, contains, startsWith, endsWith, in, notIn, isNull, isNotNull
 };
-```Wire AST Mapping server deserializes condition tuple into `Condition struct without string lookup Tuple position AST field[0]` `Condition.field_index assignment `[1]` `Condition.op` `Operator `[2]` `Condition.value` Absent `isNull Sort tuples map `SortDescriptor` Tuple position AST field[0]` `SortDescriptor.field_index` Integer index assignment `[1]` `SortDescriptor.desc` `1` `true `0` `false` SQLite Translation Rules Core Selection collection queries operate `namespace boundaries```sql
+```Wire → AST Mapping server deserializes condition tuple into `Condition` struct without string lookup Tuple position AST field[0]` `Condition.field_index` Integer assignment `[1]` `Condition.op` `Operator enum `[2]` `Condition.value` value Absent `isNull Sort tuples map to `SortDescriptor` Tuple position AST field[0]` `SortDescriptor.field_index` Integer index assignment `[1]` `SortDescriptor.desc` `1` → `true `0` → `false` Predicate Normalization ZyncBase normalizes predicates before execution semantic-preserving uses `PredicateState` values fake SQL conditions `field IN []` `match_none` NOT IN [] `match_all` AND group `match_none` condition makes predicate `match_none` conditions removed OR group `match_all` condition removes_none terms removed If removed predicate becomes `match_none` no conditions predicate becomes `match_all` `conditions_conditions retain meaning```text
+conditions AND (or_conditions[0] OR or_conditions[1] ...)
+```_none empty predicate Empty predicates `match_all impossible predicates `match_none SQLite Translation Rules Core Selection collection queries `namespace boundaries```sql
 SELECT value_msgpack 
 FROM "collection_name" 
 WHERE _namespace = ? 

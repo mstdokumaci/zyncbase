@@ -174,7 +174,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Reserved `users` Collection hybrid table managed by ZyncBase defaults to"namespaced false `external_id column maps external identity token `id column internal `BLOB(16) UUIDv7 `owner_id foreign keys extend optional custom fields```json
+```Reserved `users` Collection hybrid table managed by ZyncBase defaults to false `external_id column maps external identity string client JWT subject internal `BLOB(16) UUIDv7 `owner_id$session.userId `userId foreign keys extend optional custom fields```json
 {
   "version": "1.0.0",
   "store": {
@@ -204,7 +204,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Custom fields `users `required server auto-creates identity authenticated connection needs internal user ID before application profile data ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries document structure```sql
+```Custom fields `users `required server auto-creates identity rows session needs internal user ID before application profile data If `users.namespaced = true external identity different user IDs namespaces ZyncBase generates flattens nested objects into column names double underscore separator allows SQL queries document structure```sql
 CREATE TABLE users (
     id BLOB NOT NULL CHECK(length(id) = 16),
     namespace_id INTEGER NOT NULL, -- 0 for the default global users collection

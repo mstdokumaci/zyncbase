@@ -144,7 +144,8 @@ pub const Server = struct {
 │  4. WebSocket Connection Established            │
 │     - Binary frames (MessagePack)               │
 │     - Bidirectional communication               │
-│     - Real-time state updates                   │
+│     - Transport-level Connected push            │
+│     - Store/presence scopes resolve separately  │
 └─────────────────────────────────────────────────┘
                     │
                     ▼
@@ -154,7 +155,7 @@ pub const Server = struct {
 │     - Clear presence data                       │
 │     - Cleanup subscriptions                     │
 └─────────────────────────────────────────────────┘
-```Frame WebSocket minimal overhead```
+```Transport scoped session readiness WebSocket accepted lifecycle messages valid until scope ready `AuthRefresh ping/pong close Store messages ready scope Presence messages ready scope Frame WebSocket frames minimal overhead```
 ┌─────────────────────────────────────────────────┐
 │  Frame Header (2-6 bytes)                       │
 │  ┌──────────┬──────────┬──────────┬──────────┐  │
@@ -235,6 +236,9 @@ const Connection = struct {
     id: u64,
     socket: WebSocket,
     auth_context: AuthContext,
+    external_user_id: []const u8,
+    store_scope: ?ScopedSession,
+    presence_scope: ?ScopedSession,
     subscriptions: ArrayList(SubscriptionId),
     presence: ?json.Value,
     
@@ -242,6 +246,12 @@ const Connection = struct {
         const bytes = try msgpack.encode(msg);
         try self.socket.send(bytes);
     }
+};
+
+const ScopedSession = struct {
+    namespace_id: i64,
+    user_doc_id: DocId,
+    ready: bool,
 };
 ```Authentication **Ticket-based (recommended): ZyncBase SDK abstracts process Developers provide `createClient( token: 'jwt' SDK performs exchange token `ws:// URL```
 1. Client requests ticket from HTTP endpoint
@@ -254,7 +264,9 @@ const Connection = struct {
 3. Client connects with ticket
    ws://server/ws?ticket=abc123...
    
-4. Server validates ticket, establishes connection
+4. Server validates ticket, establishes transport connection
+5. Client selects store/presence namespaces
+6. Server resolves scoped `users.id` values and marks scopes ready
 ```tickets Short-lived (5-10 minutes Not logged revoked Separate JWTs Origin Validation Cross-Site WebSocket Hijacking```zig
 fn validateOrigin(origin: []const u8, allowed: []const []const u8) bool {
     for (allowed) |allowed_origin| {

@@ -33,14 +33,14 @@ const client = createClient({
   storeNamespace: 'tenant:acme:workspace:ws-1',
   presenceNamespace: 'tenant:acme:workspace:ws-1:document:doc-123'
 })
-```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary ADR-025)`Connected server sends message `userId `session active SDK wait `SchemaSync `Connected pushes before resolving `connect() promise```typescript
+```Connection Lifecycle `client.connect() Initiates connection sequence (HTTP POST/auth/ticket obtains single-use ticket external JWT **WebSocket /ws?ticket=... opens WebSocket connection`SchemaSync server sends message table field arrays SDK builds integer routing dictionary`Connected server sends transport-level session context SDK sends store namespace selections server resolves namespace `users.id SDK for `SchemaSync `Connected` namespace acknowledgements before resolving `connect()```typescript
 await client.connect()
-// Connection is fully established, ready to use store and presence APIs
+// Required store and presence scopes are ready.
 ````Promise<void> `ZyncBaseError `AUTH_FAILED `CONNECTION_FAILED `client.disconnect() closes connection clears active namespace```typescript
 client.disconnect()
-```wire-level details connection lifecycle (ticket format `Connected payload heartbeat see [Wire Protocol#connection Namespace Switching `client.setStoreNamespace(namespace Switch active store namespace runtime subscriptions invalidated client re-subscribe```typescript
+```wire-level details connection lifecycle format `Connected payload heartbeat see [Wire Protocol#connection Namespace Switching.setStoreNamespace(namespace Switch active store namespace runtime returned promise resolves server resolves namespace ID store user ID store subscriptions invalidated client re-subscribe```typescript
 await client.setStoreNamespace('tenant:acme:workspace:ws-2')
-````namespace `Promise<void> `ZyncBaseError` `NAMESPACE_UNAUTHORIZED permitted `client.setPresenceNamespace(namespace) Switch active presence namespace clears presence old joins new```typescript
+````namespace `Promise<void> `ZyncBaseError `NAMESPACE_UNAUTHORIZED `client.setPresenceNamespace(namespace) Switch active presence namespace returned promise resolves server resolves namespace ID user ID clears presence old namespace joins new```typescript
 await client.setPresenceNamespace('tenant:acme:document:doc-456')
 ````namespace `Promise<void> Event Listeners `client.on(event callback connection lifecycle events```typescript
 client.on('connected', () => {
@@ -63,9 +63,9 @@ client.on('tokenExpired', async () => {
   const newToken = await refreshAuthToken()
   await client.authRefresh(newToken)
 })
-```Events Callback Signature Description `connected`() => void` WebSocket established `Connected push received `disconnected`() => void Connection closed retries `reconnecting`() => void` reconnect disconnect `error` ZyncBaseError) => void Error fire-and-forget write subscription `tokenExpired`() => void Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
+```Events Callback Signature Description `connected`() => void` WebSocket established scopes ready `disconnected`() => void` Connection closed retries `reconnecting`() => void` reconnect after disconnect `error` ZyncBaseError) => void` Error fire-and-forget write subscription `tokenExpired`() => void` Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
 client.on('statusChange', (status, detail) => {
-  // status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+  // status: 'connecting' | 'scoping' | 'connected' | 'reconnecting' | 'disconnected'
   // detail.previousStatus: the state before this transition
   // detail.retryCount: current attempt number (0 when first connecting)
   // detail.retryIn: ms until next attempt (null if not reconnecting)
@@ -80,7 +80,7 @@ Attempt 3: ~4s
 Attempt 4: ~8s
 Attempt 5: ~16s
 Attempt 6+: ~30s (capped)
-```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh.authRefresh(token Update session new external JWT without disconnecting```typescript
+```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh `client.authRefresh(token) Update session new external JWT without disconnecting scopes ready re-resolved before promise```typescript
 client.on('tokenExpired', async () => {
   const newToken = await myAuthService.refresh()
   await client.authRefresh(newToken)

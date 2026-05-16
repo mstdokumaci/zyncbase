@@ -1,4 +1,4 @@
-Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory schemaless validated against `schema.json cleaned on disconnect Table of Contents [Methods-methods [Namespaces-namespaces [Use Cases Examples [Best Practices Presence Methods `presence.set(data) presence data broadcast users same```typescript
+Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory schemaless validated against `schema.json cleaned on disconnect methods require ready presence scope.connect(.setPresenceNamespace(namespace resolve after resolved namespace user ID calling before fails with `SESSION_NOT_READY` Table of Contents [Methods-methods [Namespaces-namespaces [Use Cases Examples Practices Presence Methods `presence.set(data) Set presence data broadcast to users same```typescript
 client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
 ````presence.subscribe Subscribe real-time changes leaves updates users namespace```typescript
 const unsubscribe = client.presence.subscribe((users) => {
@@ -6,7 +6,7 @@ const unsubscribe = client.presence.subscribe((users) => {
 })
 ```<PresenceEntry> each entry contains```typescript
 {
-  userId: string,        // Authenticated user ID
+  userId: string,        // Internal users.id for the active presence scope
   data: object,          // User's presence data (cursor, status, etc.)
   joinedAt: number       // Unix timestamp of when the user joined
 }
@@ -16,7 +16,7 @@ const alice = client.presence.get('user-123')
 const everyone = client.presence.getAll({ includeSelf: true })
 ````presence.remove() presence data Called automatically disconnect manually```typescript
 client.presence.remove()
-```Presence Namespaces scoped [Client Initialization/configuration users same namespace see each other Document-Scoped Presence**```typescript
+```Presence Namespaces scoped [Client Initialization users same namespace see other `users.namespaced = true determines internal user ID presence Document-Scoped Presence**```typescript
 const client = createClient({
   presenceNamespace: 'workspace:acme:doc:123'
 })
