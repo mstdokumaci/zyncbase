@@ -263,7 +263,7 @@ pub const ZyncBaseServer = struct {
             &self.memory_strategy,
             &self.message_handler,
             &self.schema,
-            config.security.max_connections_per_ip,
+            config.security.max_connections,
         );
         errdefer self.connection_manager.deinit();
 

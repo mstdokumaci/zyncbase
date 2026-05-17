@@ -83,7 +83,7 @@ Main server configuration file.
     ],
     "allowLocalhost": true,
     "maxMessagesPerSecond": 100,
-    "maxConnectionsPerIP": 10,
+    "maxConnections": 10,
     "maxMessageSize": 1048576,
     "violationThreshold": 10
   },
@@ -195,7 +195,7 @@ Security settings.
     ],
     "allowLocalhost": true,
     "maxMessagesPerSecond": 100,
-    "maxConnectionsPerIP": 10,
+    "maxConnections": 10,
     "maxMessageSize": 1048576,
     "violationThreshold": 10
   }

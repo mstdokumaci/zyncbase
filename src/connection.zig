@@ -117,7 +117,7 @@ pub const Connection = struct {
 
     /// One-time initialization for a connection object in a pool, with pre-allocated
     /// subscription capacity to avoid per-subscription heap allocations on the event
-    /// loop thread. Falls back to zero-capacity init if the allocation fails.
+    /// loop thread. Propagates OutOfMemory if pre-allocation fails.
     pub fn initPoolWithCapacity(self: *Connection, allocator: Allocator) !void {
         self.initPool(allocator);
         // Pre-allocate a small initial capacity so the first few addSubscription

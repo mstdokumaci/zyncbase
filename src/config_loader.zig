@@ -29,7 +29,7 @@ pub const Config = struct {
         allowed_origins: []const []const u8 = &.{},
         allow_localhost: bool = true,
         max_messages_per_second: u32 = 100,
-        max_connections_per_ip: u32 = 100,
+        max_connections: u32 = 100_000,
         violation_threshold: u32 = 10,
         max_message_size: usize = 1024 * 1024, // 1MB
     };
@@ -323,9 +323,9 @@ pub const ConfigLoader = struct {
                     }
                 }
 
-                if (security_obj.get("maxConnectionsPerIP")) |limit| {
+                if (security_obj.get("maxConnections")) |limit| {
                     if (limit == .integer) {
-                        config.security.max_connections_per_ip = @intCast(limit.integer);
+                        config.security.max_connections = @intCast(limit.integer);
                     }
                 }
 
