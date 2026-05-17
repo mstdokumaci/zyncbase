@@ -3,6 +3,9 @@ const Allocator = std.mem.Allocator;
 const typed = @import("../typed.zig");
 const Value = typed.Value;
 
+/// Result of matching namespace against pattern.
+/// Lifetime: borrows capture keys from `AuthConfig` segments and values from namespace (do not use after either is freed).
+/// Call `deinit(allocator)` to release the hash map's internal bucket storage.
 pub const PatternMatch = struct {
     captures: std.StringHashMapUnmanaged([]const u8),
 

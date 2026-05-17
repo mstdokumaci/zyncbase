@@ -29,9 +29,10 @@ pub fn parsePattern(allocator: Allocator, pattern: []const u8) ![]PatternSegment
     return segments.toOwnedSlice(allocator);
 }
 
-/// Match a concrete namespace string against parsed segments.
-/// Returns null if no match, PatternMatch with captures on success.
-/// "tenant:acme" vs [literal("tenant"), capture("tenant_id")] -> captures{"tenant_id": "acme"}
+/// Match concrete namespace against segments (returns null if no match, PatternMatch on success).
+/// E.g., "tenant:acme" vs [literal("tenant"), capture("tenant_id")] -> captures{"tenant_id": "acme"}.
+/// Lifetime: borrows keys from `segments` (AuthConfig-owned) and values from `namespace` (do not use after either is freed).
+/// Call `PatternMatch.deinit(allocator)` to release the internal hash map storage.
 pub fn matchNamespace(
     allocator: Allocator,
     segments: []const PatternSegment,
@@ -39,34 +40,26 @@ pub fn matchNamespace(
 ) !?types.PatternMatch {
     var iter = std.mem.splitScalar(u8, namespace, ':');
     var captures = std.StringHashMapUnmanaged([]const u8){};
-    errdefer captures.deinit(allocator);
+    var success = false;
+    defer if (!success) captures.deinit(allocator);
 
     for (segments) |seg| {
-        const part = iter.next() orelse {
-            captures.deinit(allocator);
-            return null;
-        };
+        const part = iter.next() orelse return null;
 
         switch (seg) {
             .literal => |lit| if (!std.mem.eql(u8, lit, "*") and !std.mem.eql(u8, lit, part)) {
-                captures.deinit(allocator);
                 return null;
             },
             .capture => |name| {
-                if (part.len == 0) {
-                    captures.deinit(allocator);
-                    return null;
-                }
+                if (part.len == 0) return null;
                 try captures.put(allocator, name, part);
             },
         }
     }
 
-    if (iter.next() != null) {
-        captures.deinit(allocator);
-        return null;
-    }
+    if (iter.next() != null) return null;
 
+    success = true;
     return types.PatternMatch{ .captures = captures };
 }
 
