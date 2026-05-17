@@ -9,6 +9,14 @@ const evaluate_mod = @import("evaluate.zig");
 const EvalContext = evaluate_mod.EvalContext;
 const Value = typed.Value;
 
+pub const DocPredicateError = error{
+    InvalidFieldName,
+    InvalidValue,
+    InvalidContextVariable,
+    UnsupportedAuthorizationPredicate,
+    UnsupportedOperatorForFieldType,
+} || Allocator.Error;
+
 const LowerResult = union(enum) {
     allow,
     deny,
@@ -75,7 +83,7 @@ fn lowerCondition(
     condition: types.Condition,
     ctx: EvalContext,
     table: *const schema.Table,
-) anyerror!LowerResult {
+) DocPredicateError!LowerResult {
     return switch (condition) {
         .boolean => |b| if (b) .allow else .deny,
         .hook => .deny,
@@ -209,7 +217,7 @@ fn comparisonToQueryCondition(
     };
 }
 
-fn validateShape(condition: types.Condition, table: *const schema.Table) anyerror!Shape {
+fn validateShape(condition: types.Condition, table: *const schema.Table) DocPredicateError!Shape {
     return switch (condition) {
         .boolean => .{},
         .hook => error.UnsupportedAuthorizationPredicate,
