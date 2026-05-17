@@ -368,7 +368,7 @@ test "AuthCache: concurrent put enforcement" {
         thread_id: usize,
         count: usize,
 
-        fn run(ctx: @This()) void {
+        fn run(ctx: @This()) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
                 const req = AuthRequest{
@@ -383,7 +383,7 @@ test "AuthCache: concurrent put enforcement" {
                     .reason = null,
                     .cache_ttl_sec = 60,
                 };
-                ctx.cache.put(req, resp) catch {}; // zwanzig-disable-line: empty-catch-engine
+                try ctx.cache.put(req, resp);
             }
         }
     };

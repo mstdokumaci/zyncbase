@@ -3,14 +3,14 @@ const Allocator = std.mem.Allocator;
 
 /// Connection violation tracker for repeated limit violations
 pub const ConnectionViolationTracker = struct {
-    violations: std.AutoHashMap(u64, u32),
+    violations: std.AutoHashMapUnmanaged(u64, u32),
     allocator: Allocator,
     threshold: u32,
     mutex: std.Thread.Mutex,
 
     pub fn init(self: *ConnectionViolationTracker, allocator: Allocator, threshold: u32) void {
         self.* = ConnectionViolationTracker{
-            .violations = std.AutoHashMap(u64, u32).init(allocator),
+            .violations = .empty,
             .allocator = allocator,
             .threshold = threshold,
             .mutex = .{},
@@ -20,7 +20,7 @@ pub const ConnectionViolationTracker = struct {
     pub fn deinit(self: *ConnectionViolationTracker) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        self.violations.deinit();
+        self.violations.deinit(self.allocator);
     }
 
     /// Record a violation for a connection. Returns true if connection should be closed.
@@ -28,7 +28,7 @@ pub const ConnectionViolationTracker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const result = try self.violations.getOrPut(connection_id);
+        const result = try self.violations.getOrPut(self.allocator, connection_id);
         if (result.found_existing) {
             result.value_ptr.* += 1;
         } else {

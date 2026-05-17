@@ -128,7 +128,7 @@ pub const Table = struct {
     namespaced: bool = true,
     is_users_table: bool = false,
     index: usize = 0,
-    field_index_map: ?std.StringHashMap(usize) = null,
+    field_index_map: ?std.StringHashMapUnmanaged(usize) = null,
     has_index: bool = false,
     canonical_fields: bool = false,
     user_field_start: usize = 0,
@@ -137,7 +137,7 @@ pub const Table = struct {
 
     pub fn deinit(self: *Table, allocator: Allocator) void {
         if (self.has_index) {
-            if (self.field_index_map) |*map| map.deinit();
+            if (self.field_index_map) |*map| map.deinit(allocator);
         }
         for (self.fields) |f| f.deinit(allocator);
         allocator.free(self.fields);
@@ -172,13 +172,13 @@ pub const Schema = struct {
     allocator: Allocator,
     version: []const u8,
     tables: []Table,
-    table_index_map: ?std.StringHashMap(usize) = null,
+    table_index_map: ?std.StringHashMapUnmanaged(usize) = null,
     has_index: bool = false,
     metadata: ?Metadata = null,
 
     pub fn deinit(self: *Schema) void {
         if (self.has_index) {
-            if (self.table_index_map) |*map| map.deinit();
+            if (self.table_index_map) |*map| map.deinit(self.allocator);
         }
         for (self.tables) |*tbl| tbl.deinit(self.allocator);
         self.allocator.free(self.tables);

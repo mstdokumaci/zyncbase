@@ -29,60 +29,37 @@ pub fn parsePattern(allocator: Allocator, pattern: []const u8) ![]PatternSegment
     return segments.toOwnedSlice(allocator);
 }
 
-/// Match a concrete namespace string against parsed segments.
-/// Returns null if no match, PatternMatch with captures on success.
-/// "tenant:acme" vs [literal("tenant"), capture("tenant_id")] -> captures{"tenant_id": "acme"}
+/// Match concrete namespace against segments (returns null if no match, PatternMatch on success).
+/// E.g., "tenant:acme" vs [literal("tenant"), capture("tenant_id")] -> captures{"tenant_id": "acme"}.
+/// Lifetime: borrows keys from `segments` (AuthConfig-owned) and values from `namespace` (do not use after either is freed).
+/// Call `PatternMatch.deinit(allocator)` to release the internal hash map storage.
 pub fn matchNamespace(
     allocator: Allocator,
     segments: []const PatternSegment,
     namespace: []const u8,
 ) !?types.PatternMatch {
-    var parts = std.ArrayListUnmanaged([]const u8).empty;
-    defer parts.deinit(allocator);
+    var iter = std.mem.splitScalar(u8, namespace, ':');
+    var captures = std.StringHashMapUnmanaged([]const u8){};
+    var success = false;
+    defer if (!success) captures.deinit(allocator);
 
-    var start: usize = 0;
-    for (namespace, 0..) |c, i| {
-        if (c == ':') {
-            try parts.append(allocator, namespace[start..i]);
-            start = i + 1;
-        }
-    }
-    try parts.append(allocator, namespace[start..]);
+    for (segments) |seg| {
+        const part = iter.next() orelse return null;
 
-    if (parts.items.len != segments.len) return null;
-
-    var captures = std.StringHashMap([]const u8).init(allocator);
-    errdefer {
-        var it = captures.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.*);
-        }
-        captures.deinit();
-    }
-
-    for (parts.items, segments) |part, seg| {
         switch (seg) {
             .literal => |lit| if (!std.mem.eql(u8, lit, "*") and !std.mem.eql(u8, lit, part)) {
-                var match = types.PatternMatch{ .captures = captures };
-                match.deinit(allocator);
                 return null;
             },
             .capture => |name| {
-                if (part.len == 0) {
-                    var match = types.PatternMatch{ .captures = captures };
-                    match.deinit(allocator);
-                    return null;
-                }
-                const key = try allocator.dupe(u8, name);
-                errdefer allocator.free(key);
-                const value = try allocator.dupe(u8, part);
-                errdefer allocator.free(value);
-                try captures.put(key, value);
+                if (part.len == 0) return null;
+                try captures.put(allocator, name, part);
             },
         }
     }
 
+    if (iter.next() != null) return null;
+
+    success = true;
     return types.PatternMatch{ .captures = captures };
 }
 

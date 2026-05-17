@@ -223,9 +223,9 @@ test "evaluateCondition $namespace capture lookup" {
     } };
     defer cond.deinit(allocator);
 
-    var captures = std.StringHashMap([]const u8).init(allocator);
-    defer captures.deinit();
-    try captures.put("tenant_id", "acme");
+    var captures = std.StringHashMapUnmanaged([]const u8){};
+    defer captures.deinit(allocator);
+    try captures.put(allocator, "tenant_id", "acme");
 
     const ctx = EvalContext{
         .allocator = allocator,
@@ -278,9 +278,9 @@ test "evaluateCondition in_set works with array" {
     } };
     // No defer deinit — all memory is arena-owned
 
-    var captures = std.StringHashMap([]const u8).init(allocator);
-    defer captures.deinit();
-    try captures.put("tenant_id", "acme");
+    var captures = std.StringHashMapUnmanaged([]const u8){};
+    defer captures.deinit(allocator);
+    try captures.put(allocator, "tenant_id", "acme");
 
     const ctx = EvalContext{
         .allocator = arena_allocator,
