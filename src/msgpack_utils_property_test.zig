@@ -41,7 +41,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
     // wire_limits.max_array_length = 100,000, so 100,001 elements should trigger ArrayTooLarge.
     {
         const count: u32 = 100001;
-        var array_bomb: [5 + 100001]u8 = undefined;
+        const array_bomb = try allocator.alloc(u8, 5 + 100001);
+        defer allocator.free(array_bomb);
         array_bomb[0] = 0xdd; // array32 format byte
         array_bomb[1] = @intCast((count >> 24) & 0xff);
         array_bomb[2] = @intCast((count >> 16) & 0xff);
@@ -51,7 +52,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             array_bomb[i] = 0xc0; // nil
         }
 
-        var reader: std.Io.Reader = .fixed(&array_bomb);
+        var reader: std.Io.Reader = .fixed(array_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
@@ -68,7 +69,8 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
     // wire_limits.max_map_size = 100,000, so 100,001 entries should trigger MapTooLarge.
     {
         const count: u32 = 100001;
-        var map_bomb: [5 + 200002]u8 = undefined;
+        const map_bomb = try allocator.alloc(u8, 5 + 200002);
+        defer allocator.free(map_bomb);
         map_bomb[0] = 0xdf; // map32 format byte
         map_bomb[1] = @intCast((count >> 24) & 0xff);
         map_bomb[2] = @intCast((count >> 16) & 0xff);
@@ -78,7 +80,7 @@ test "msgpack: reject oversized payloads (depth, array, map, string)" {
             map_bomb[i] = 0xc0; // nil (key and value both nil)
         }
 
-        var reader: std.Io.Reader = .fixed(&map_bomb);
+        var reader: std.Io.Reader = .fixed(map_bomb);
         const result = msgpack_utils.decode(allocator, &reader);
         if (result) |payload| {
             payload.free(allocator);
