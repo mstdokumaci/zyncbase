@@ -16,7 +16,7 @@ pub const ConnectionManager = struct {
     message_handler: *MessageHandler,
 
     /// Map of connection IDs to Connection objects
-    map: std.AutoHashMap(u64, *Connection),
+    map: std.AutoHashMapUnmanaged(u64, *Connection),
 
     /// Mutex for protecting the map during concurrent access
     mutex: std.Thread.Mutex,
@@ -41,7 +41,7 @@ pub const ConnectionManager = struct {
             .allocator = allocator,
             .memory_strategy = memory_strategy,
             .message_handler = message_handler,
-            .map = std.AutoHashMap(u64, *Connection).init(memory_strategy.generalAllocator()),
+            .map = .empty,
             .mutex = .{},
             .schema_sync_msg = schema_sync_msg,
         };
@@ -58,7 +58,7 @@ pub const ConnectionManager = struct {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
-        self.map.deinit();
+        self.map.deinit(self.memory_strategy.generalAllocator());
         self.mutex.unlock();
 
         self.allocator.free(self.schema_sync_msg);
@@ -118,7 +118,7 @@ pub const ConnectionManager = struct {
         const connected_msg = try wire.encodeConnected(self.allocator, conn.user_id);
         defer self.allocator.free(connected_msg);
 
-        try self.map.put(conn_id, conn);
+        try self.map.put(self.memory_strategy.generalAllocator(), conn_id, conn);
         inserted = true;
         std.log.info("Client connected: id={}", .{conn_id});
 

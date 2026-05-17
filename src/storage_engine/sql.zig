@@ -23,16 +23,16 @@ const Entry = struct {
 pub const StatementCache = struct {
     const LruList = std.DoublyLinkedList;
 
-    map: std.StringHashMap(*LruList.Node),
+    map: std.StringHashMapUnmanaged(*LruList.Node),
     list: LruList,
     count: usize,
     cache_limit: usize,
 
     pub fn init(self: *StatementCache, allocator: Allocator, cache_limit: usize) void {
-        const map = std.StringHashMap(*LruList.Node).init(allocator);
+        _ = allocator;
         const list = LruList{};
         self.* = .{
-            .map = map,
+            .map = .empty,
             .list = list,
             .count = 0,
             .cache_limit = cache_limit,
@@ -41,7 +41,7 @@ pub const StatementCache = struct {
 
     pub fn deinit(self: *StatementCache, allocator: Allocator) void {
         self.clear(allocator);
-        self.map.deinit();
+        self.map.deinit(allocator);
     }
 
     /// Finalizes all cached statements and clears the cache.
@@ -104,7 +104,7 @@ pub const StatementCache = struct {
             .node = .{},
         };
 
-        try self.map.put(sql_owned, &entry.node);
+        try self.map.put(allocator, sql_owned, &entry.node);
         self.list.prepend(&entry.node);
         self.count += 1;
     }
