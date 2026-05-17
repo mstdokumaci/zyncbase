@@ -11,7 +11,7 @@ pub const EvalContext = struct {
     allocator: Allocator,
     session_user_id: ?typed.DocId = null,
     session_external_id: ?[]const u8 = null,
-    namespace_captures: ?*const std.StringHashMap([]const u8) = null,
+    namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
     value_table: ?*const @import("../schema.zig").Table = null,
