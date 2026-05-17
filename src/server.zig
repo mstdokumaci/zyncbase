@@ -24,8 +24,10 @@ const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
-// Global server reference for signal handlers
-var global_server: ?*ZyncBaseServer = null;
+// Atomic global server reference for signal handlers (written once before registration,
+// read from signal handler thread). Explicit acquire/release atomics are required as
+// plain pointer loads on AArch64 are not guaranteed to be atomic.
+var global_server: std.atomic.Value(?*ZyncBaseServer) = std.atomic.Value(?*ZyncBaseServer).init(null);
 
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
@@ -109,9 +111,10 @@ pub const ZyncBaseServer = struct {
         );
 
         {
-            const json_text = if (config.schema_content) |content|
-                content
-            else blk: {
+            // Determine schema source and track ownership explicitly.
+            const SchemaSource = enum { borrowed_config, borrowed_builtin, owned_file_read };
+            const json_text: []const u8 = blk: {
+                if (config.schema_content) |content| break :blk content;
                 const schema_path = config.schema_file;
                 std.log.info("Loading schema from: {s}", .{schema_path});
                 const loaded = std.fs.cwd().readFileAlloc(
@@ -128,7 +131,13 @@ pub const ZyncBaseServer = struct {
                 };
                 break :blk loaded;
             };
-            defer if (config.schema_content == null and json_text.ptr != schema_mod.implicit_users_schema_json.ptr) self.memory_strategy.generalAllocator().free(json_text);
+            const schema_source: SchemaSource = if (config.schema_content != null)
+                .borrowed_config
+            else if (json_text.ptr == schema_mod.implicit_users_schema_json.ptr)
+                .borrowed_builtin
+            else
+                .owned_file_read;
+            defer if (schema_source == .owned_file_read) self.memory_strategy.generalAllocator().free(json_text);
 
             self.schema = try schema_mod.initSchema(self.memory_strategy.generalAllocator(), json_text);
             errdefer self.schema.deinit();
@@ -223,6 +232,7 @@ pub const ZyncBaseServer = struct {
             .{
                 .port = config.server.port,
                 .host = config.server.host,
+                .max_payload_length = config.security.max_message_size,
             },
         );
         errdefer self.websocket_server.deinit();
@@ -253,6 +263,7 @@ pub const ZyncBaseServer = struct {
             &self.memory_strategy,
             &self.message_handler,
             &self.schema,
+            config.security.max_connections_per_ip,
         );
         errdefer self.connection_manager.deinit();
 
@@ -361,8 +372,9 @@ pub const ZyncBaseServer = struct {
 
     /// Setup signal handlers for SIGTERM and SIGINT
     fn setupSignalHandlers(self: *ZyncBaseServer) !void {
-        // Store global reference for signal handler
-        global_server = self;
+        // Store global reference for signal handler with release ordering so the
+        // signal handler (which uses acquire) always sees a fully-initialized pointer.
+        global_server.store(self, .release);
 
         // Setup SIGTERM handler
         const sigterm_action = std.posix.Sigaction{
@@ -453,7 +465,7 @@ pub const ZyncBaseServer = struct {
 /// Signal handler for SIGTERM and SIGINT
 /// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
 fn handleSignal(_: c_int) callconv(.c) void {
-    if (global_server) |server| {
+    if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
         server.websocket_server.close();
     }

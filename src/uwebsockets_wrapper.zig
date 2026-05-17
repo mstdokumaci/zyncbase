@@ -16,6 +16,9 @@ pub const WebSocketServer = struct {
     app: *c.uws_app_t,
     allocator: Allocator,
     ssl: bool,
+    max_payload_length: usize,
+    max_backpressure: usize,
+    idle_timeout: u16,
     handlers: WebSocketHandlers = .{},
     user_data: ?*anyopaque = null,
     listen_socket: ?*c.struct_us_listen_socket_t = null,
@@ -34,6 +37,13 @@ pub const WebSocketServer = struct {
         ssl: bool = false,
         ssl_cert_path: ?[]const u8 = null,
         ssl_key_path: ?[]const u8 = null,
+        /// Maximum incoming WebSocket message size in bytes. Connections sending
+        /// larger frames are dropped by uWS before the message reaches Zig code.
+        max_payload_length: usize = 16 * 1024 * 1024,
+        /// Maximum bytes uWS will buffer per connection before dropping frames.
+        max_backpressure: usize = 16 * 1024 * 1024,
+        /// Seconds of inactivity before uWS closes the connection (0 = disabled).
+        idle_timeout: u16 = 120,
     };
 
     pub const Error = error{
@@ -67,6 +77,9 @@ pub const WebSocketServer = struct {
         self.app = app.?;
         self.allocator = allocator;
         self.ssl = config.ssl;
+        self.max_payload_length = config.max_payload_length;
+        self.max_backpressure = config.max_backpressure;
+        self.idle_timeout = config.idle_timeout;
         self.handlers = .{};
         self.user_data = null;
         self.listen_socket = null;
@@ -80,12 +93,11 @@ pub const WebSocketServer = struct {
         self.drain_handler_ctx = null;
     }
 
-    /// Clean up resources.
-    /// CAUTION: Must be called only after the event loop (run()) has exited.
-    /// In multi-threaded environments, ensure the server thread has joined.
-    pub fn deinit(_: *WebSocketServer) void {
-        // Only infrastructure cleanup (none currently)
-    }
+    /// Clean up resources after run() exits & server thread is joined.
+    /// NOTE: uws_app_t isn't freed as uws_wrapper.h lacks uws_app_destroy; instead,
+    /// uws_app_close() in postHandler() closes it & releases the listen socket
+    /// during graceful shutdown. No further C API cleanup is possible or required.
+    pub fn deinit(_: *WebSocketServer) void {}
 
     /// Register WebSocket handlers for a specific pattern
     pub fn registerWebSocketHandlers(self: *WebSocketServer, pattern: []const u8, handlers: WebSocketHandlers, user_data: ?*anyopaque) void {
@@ -93,9 +105,9 @@ pub const WebSocketServer = struct {
         self.user_data = user_data;
 
         var behavior = std.mem.zeroes(c.uws_socket_behavior_t);
-        behavior.maxPayloadLength = 16 * 1024 * 1024;
-        behavior.maxBackpressure = 16 * 1024 * 1024;
-        behavior.idleTimeout = 120;
+        behavior.maxPayloadLength = @intCast(self.max_payload_length);
+        behavior.maxBackpressure = @intCast(self.max_backpressure);
+        behavior.idleTimeout = self.idle_timeout;
         behavior.sendPingsAutomatically = true;
 
         const ssl_flag: c_int = if (self.ssl) 1 else 0;
