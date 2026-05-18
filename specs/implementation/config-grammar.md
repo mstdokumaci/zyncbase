@@ -56,7 +56,7 @@ This document defines the formal grammar and property specification for `zyncbas
 | `allowedOrigins` | `array<string>` | `[]` | CORS `Access-Control-Allow-Origin` list. |
 | `allowLocalhost` | `boolean` | `true` | Always allow connections from local loopback. |
 | `maxMessagesPerSecond` | `number` | `100` | Max messages per connection per second. |
-| `maxConnectionsPerIP` | `number` | `10` | Max simultaneous connections per IP. |
+| `maxConnections` | `number` | `100000` | Max simultaneous connections (global limit across all connections). |
 | `maxMessageSize` | `number` | `1048576` | Max size of a single WebSocket message (bytes). |
 | `violationThreshold` | `number` | `10` | Number of security violations before IP ban. |
 

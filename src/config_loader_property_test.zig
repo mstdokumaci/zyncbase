@@ -470,7 +470,7 @@ test "config: round-trip - security config" {
         \\    "allowedOrigins": ["https://example.com", "https://app.example.com"],
         \\    "allowLocalhost": false,
         \\    "maxMessagesPerSecond": 200,
-        \\    "maxConnectionsPerIP": 20,
+        \\    "maxConnections": 20,
         \\    "maxMessageSize": 2097152
         \\  }},
         \\  "schema": "{s}"
@@ -490,7 +490,7 @@ test "config: round-trip - security config" {
     try std.testing.expectEqualStrings("https://app.example.com", config.security.allowed_origins[1]);
     try std.testing.expectEqual(false, config.security.allow_localhost);
     try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
-    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections_per_ip);
+    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections);
     try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 }
 
@@ -593,7 +593,7 @@ test "config: round-trip - complete config" {
         \\    "allowedOrigins": ["https://example.com"],
         \\    "allowLocalhost": false,
         \\    "maxMessagesPerSecond": 200,
-        \\    "maxConnectionsPerIP": 20,
+        \\    "maxConnections": 20,
         \\    "maxMessageSize": 2097152
         \\  }},
         \\  "logging": {{

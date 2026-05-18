@@ -4,7 +4,6 @@ const msgpack = @import("msgpack_utils.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const subscription_mod = @import("subscription_engine.zig");
 const SubscriptionEngine = subscription_mod.SubscriptionEngine;
-const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const connection_mod = @import("connection.zig");
 const Connection = connection_mod.Connection;
@@ -99,7 +98,7 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(conn, null, wire.getWireError(error.RateLimited));
+                try self.sendError(self.allocator, conn, null, wire.getWireError(error.RateLimited));
                 return;
             }
         }
@@ -114,7 +113,7 @@ pub const MessageHandler = struct {
                     return;
                 }
             }
-            try self.sendError(conn, null, wire.getWireError(err));
+            try self.sendError(self.allocator, conn, null, wire.getWireError(err));
             return;
         };
 
@@ -201,24 +200,13 @@ pub const MessageHandler = struct {
         }
     }
 
-    pub fn sendError(self: *MessageHandler, conn: *Connection, msg_id: ?u64, wire_err: wire.WireError) !void {
-        const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
-        defer self.allocator.free(error_msg);
+    pub fn sendError(_: *MessageHandler, allocator: std.mem.Allocator, conn: *Connection, msg_id: ?u64, wire_err: wire.WireError) !void {
+        const error_msg = try wire.encodeError(allocator, msg_id, wire_err);
+        defer allocator.free(error_msg);
         conn.send(error_msg) catch {
             std.log.warn("Connection {}: dropped while sending error, closing", .{conn.id});
             conn.ws.close();
         };
-    }
-
-    /// Send an error to a raw WebSocket that has no Connection object yet
-    /// (e.g. rejected non-binary frames before the connection is looked up).
-    pub fn sendErrorRaw(self: *MessageHandler, ws: *WebSocket, msg_id: ?u64, wire_err: wire.WireError) !void {
-        const error_msg = try wire.encodeError(self.allocator, msg_id, wire_err);
-        defer self.allocator.free(error_msg);
-        switch (ws.send(error_msg, .binary)) {
-            .success, .backpressure => {},
-            .dropped => ws.close(),
-        }
     }
 
     fn requireStoreSession(conn: *Connection) !Connection.StoreSession {

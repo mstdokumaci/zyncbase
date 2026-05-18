@@ -33,6 +33,7 @@ pub const ConnectionManager = struct {
         memory_strategy: *MemoryStrategy,
         message_handler: *MessageHandler,
         schema: *const Schema,
+        max_connections: usize,
     ) !void {
         // Pre-build SchemaSync message once at startup
         const schema_sync_msg = try wire.encodeSchemaSync(allocator, schema);
@@ -43,6 +44,7 @@ pub const ConnectionManager = struct {
             .message_handler = message_handler,
             .map = .empty,
             .mutex = .{},
+            .max_connections = max_connections,
             .schema_sync_msg = schema_sync_msg,
         };
     }
@@ -144,9 +146,15 @@ pub const ConnectionManager = struct {
         // ZyncBase uses binary MessagePack for all communications.
         if (msg_type != .binary) {
             std.log.warn("Rejected non-binary (text) message from connection {}", .{conn_id});
-            self.message_handler.sendErrorRaw(ws, null, wire.getWireError(error.InvalidMessageType)) catch |err| {
-                std.log.err("Failed to send error response for invalid message type: {}", .{err});
-            };
+            if (wire.encodeError(self.allocator, null, wire.getWireError(error.InvalidMessageType))) |error_msg| {
+                defer self.allocator.free(error_msg);
+                switch (ws.send(error_msg, .binary)) {
+                    .success, .backpressure => {},
+                    .dropped => ws.close(),
+                }
+            } else |err| {
+                std.log.err("Failed to encode error response for invalid message type: {}", .{err});
+            }
             return;
         }
 

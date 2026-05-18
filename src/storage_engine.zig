@@ -630,7 +630,8 @@ pub const StorageEngine = struct {
 
         if (self.metadata_cache.get(cache_key)) |handle| {
             const typed_record_ptr = handle.data();
-            const slice = @as([*]Record, @ptrCast(typed_record_ptr))[0..1];
+            // Cast *Record to *[1]Record for a zero-copy single-element slice (cache handle keeps memory alive).
+            const slice: []Record = typed_record_ptr[0..1];
             if (guard_predicate) |predicate| {
                 if (!try filter_eval.evaluatePredicate(predicate, &slice[0])) {
                     handle.release();

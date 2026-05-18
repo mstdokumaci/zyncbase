@@ -154,7 +154,7 @@ test "ConfigLoader parses security config" {
     const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "security-schema.json" });
     defer allocator.free(schema_file);
 
-    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"security\": {\"allowedOrigins\": [\"https://example.com\", \"https://app.example.com\"], \"allowLocalhost\": false, \"maxMessagesPerSecond\": 200, \"maxConnectionsPerIP\": 20, \"maxMessageSize\": 2097152}, \"schema\": \"", context.test_dir, "/security-schema.json\"}" });
+    const final_config_content = try std.mem.concat(allocator, u8, &.{ "{\"security\": {\"allowedOrigins\": [\"https://example.com\", \"https://app.example.com\"], \"allowLocalhost\": false, \"maxMessagesPerSecond\": 200, \"maxConnections\": 20, \"maxMessageSize\": 2097152}, \"schema\": \"", context.test_dir, "/security-schema.json\"}" });
     defer allocator.free(final_config_content);
 
     try std.fs.cwd().writeFile(.{ .sub_path = temp_file, .data = final_config_content });
@@ -169,7 +169,7 @@ test "ConfigLoader parses security config" {
     try std.testing.expectEqualStrings("https://app.example.com", config.security.allowed_origins[1]);
     try std.testing.expectEqual(false, config.security.allow_localhost);
     try std.testing.expectEqual(@as(u32, 200), config.security.max_messages_per_second);
-    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections_per_ip);
+    try std.testing.expectEqual(@as(u32, 20), config.security.max_connections);
     try std.testing.expectEqual(@as(usize, 2097152), config.security.max_message_size);
 }
 

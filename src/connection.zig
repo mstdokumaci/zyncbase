@@ -115,6 +115,16 @@ pub const Connection = struct {
         self.is_backpressured = false;
     }
 
+    /// One-time initialization for a connection object in a pool, with pre-allocated
+    /// subscription capacity to avoid per-subscription heap allocations on the event
+    /// loop thread. Propagates OutOfMemory if pre-allocation fails.
+    pub fn initPoolWithCapacity(self: *Connection, allocator: Allocator) !void {
+        self.initPool(allocator);
+        // Pre-allocate a small initial capacity so the first few addSubscription
+        // calls on the event loop thread don't trigger heap allocations.
+        try self.subscription_ids.ensureTotalCapacity(allocator, 16);
+    }
+
     /// Activate a pooled connection for a new client session.
     pub fn activate(self: *Connection, id: u64, ws: WebSocket) void {
         self.resetSession();
