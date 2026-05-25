@@ -31,6 +31,8 @@ const Key = struct {
     pub const value = comptimeKeyPayload("value");
     pub const table_index = comptimeKeyPayload("table_index");
     pub const ops = comptimeKeyPayload("ops");
+    pub const confirm = comptimeKeyPayload("confirm");
+    pub const write_id = comptimeKeyPayload("writeId");
 };
 
 // === Low-Level MessagePack Parser Primitives ===
@@ -366,6 +368,8 @@ pub fn extractStoreTableIndexFast(bytes: []const u8) !u64 {
 pub const StorePathPayloads = struct {
     path: Payload,
     value: ?Payload,
+    confirm: ?[]const u8 = null,
+    write_id: ?[]const u8 = null,
 };
 
 pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator) !StorePathPayloads {
@@ -374,6 +378,8 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
 
     var path: ?Payload = null;
     var value: ?Payload = null;
+    var confirm: ?[]const u8 = null;
+    var write_id: ?[]const u8 = null;
 
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
@@ -381,16 +387,27 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
             path = try readSubtree(bytes, &pos, allocator);
         } else if (std.mem.eql(u8, key, Key.value)) {
             value = try readSubtree(bytes, &pos, allocator);
+        } else if (std.mem.eql(u8, key, Key.confirm)) {
+            confirm = try readStr(bytes, &pos);
+        } else if (std.mem.eql(u8, key, Key.write_id)) {
+            write_id = try readStr(bytes, &pos);
         } else {
             try skipValue(bytes, &pos);
         }
     }
 
-    return .{ .path = path orelse return error.MissingRequiredFields, .value = value };
+    return .{
+        .path = path orelse return error.MissingRequiredFields,
+        .value = value,
+        .confirm = confirm,
+        .write_id = write_id,
+    };
 }
 
 pub const StoreBatchPayloads = struct {
     ops: Payload,
+    confirm: ?[]const u8 = null,
+    write_id: ?[]const u8 = null,
 };
 
 pub fn extractStoreBatchPayloads(
@@ -401,17 +418,27 @@ pub fn extractStoreBatchPayloads(
     const map_len = try readMapHeader(bytes, &pos);
 
     var ops: ?Payload = null;
+    var confirm: ?[]const u8 = null;
+    var write_id: ?[]const u8 = null;
 
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         if (std.mem.eql(u8, key, Key.ops)) {
             ops = try readSubtree(bytes, &pos, allocator);
+        } else if (std.mem.eql(u8, key, Key.confirm)) {
+            confirm = try readStr(bytes, &pos);
+        } else if (std.mem.eql(u8, key, Key.write_id)) {
+            write_id = try readStr(bytes, &pos);
         } else {
             try skipValue(bytes, &pos);
         }
     }
 
-    return .{ .ops = ops orelse return error.MissingRequiredFields };
+    return .{
+        .ops = ops orelse return error.MissingRequiredFields,
+        .confirm = confirm,
+        .write_id = write_id,
+    };
 }
 
 fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {

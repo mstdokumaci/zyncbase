@@ -26,3 +26,5 @@ pub const encodeSchemaSync = encode.encodeSchemaSync;
 pub const encodeDeleteDeltaSuffix = encode.encodeDeleteDeltaSuffix;
 pub const encodeSetDeltaSuffix = encode.encodeSetDeltaSuffix;
 pub const encodeRecord = encode.encodeRecord;
+pub const encodeWriteCommitted = encode.encodeWriteCommitted;
+pub const encodeWriteError = encode.encodeWriteError;

@@ -100,7 +100,7 @@ pub const TableFixture = struct {
         id: typed.DocId,
         namespace_id: i64,
     ) !void {
-        return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null);
+        return self.engine.deleteDocument(self.metadata.index, id, namespace_id, null, null, null);
     }
 
     pub fn getOne(
@@ -409,7 +409,7 @@ fn insertNamedWithMetadata(
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null);
+    try engine.insertOrReplace(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null, null, null);
 }
 
 // ─── Record field accessors (module-level, for callers with raw Record + metadata) ───

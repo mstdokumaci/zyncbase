@@ -13,7 +13,9 @@ import type {
 	StoreSet,
 	StoreSubscribe,
 	StoreUnsubscribe,
+	WriteOptions,
 } from "./types.js";
+import { generateUUIDv7 } from "./uuid.js";
 
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
@@ -43,6 +45,7 @@ const OP_CODES: Record<string, number> = {
 export function buildSet(
 	path: Path,
 	value: JsonValue,
+	options?: WriteOptions,
 ): StoreCommand<WithoutId<StoreSet>> {
 	const segments = normalizePath(path);
 	if (segments.length === 1) {
@@ -59,11 +62,18 @@ export function buildSet(
 			type: "StoreSet",
 			path: segments,
 			value: encodeWriteValue(segments, value),
+			...(options?.confirm ? { confirm: options.confirm } : {}),
+			...(options?.confirm === "committed"
+				? { writeId: generateUUIDv7().replace(/-/g, "") }
+				: {}),
 		},
 	};
 }
 
-export function buildRemove(path: Path): StoreCommand<WithoutId<StoreRemove>> {
+export function buildRemove(
+	path: Path,
+	options?: WriteOptions,
+): StoreCommand<WithoutId<StoreRemove>> {
 	const segments = normalizePath(path);
 	if (segments.length !== 2) {
 		throw new ZyncBaseError(
@@ -78,7 +88,14 @@ export function buildRemove(path: Path): StoreCommand<WithoutId<StoreRemove>> {
 
 	return {
 		segments,
-		message: { type: "StoreRemove", path: segments },
+		message: {
+			type: "StoreRemove",
+			path: segments,
+			...(options?.confirm ? { confirm: options.confirm } : {}),
+			...(options?.confirm === "committed"
+				? { writeId: generateUUIDv7().replace(/-/g, "") }
+				: {}),
+		},
 	};
 }
 
@@ -86,6 +103,7 @@ export function buildCreate(
 	collection: string,
 	value: JsonValue,
 	id: string,
+	options?: WriteOptions,
 ): StoreCommand<WithoutId<StoreSet>> {
 	const segments = [collection, id];
 	return {
@@ -94,6 +112,10 @@ export function buildCreate(
 			type: "StoreSet",
 			path: segments,
 			value: encodeWriteValue(segments, value),
+			...(options?.confirm ? { confirm: options.confirm } : {}),
+			...(options?.confirm === "committed"
+				? { writeId: generateUUIDv7().replace(/-/g, "") }
+				: {}),
 		},
 	};
 }
@@ -122,6 +144,7 @@ export function buildQuery(
 
 export function buildBatch(
 	operations: BatchOperation[],
+	options?: WriteOptions,
 ): WithoutId<StoreBatch> {
 	if (operations.length > 500) {
 		throw new ZyncBaseError("Batch exceeds maximum of 500 operations", {
@@ -152,7 +175,14 @@ export function buildBatch(
 		ops.push(["s", segments, encodeWriteValue(segments, op.value ?? null)]);
 	}
 
-	return { type: "StoreBatch", ops };
+	return {
+		type: "StoreBatch",
+		ops,
+		...(options?.confirm ? { confirm: options.confirm } : {}),
+		...(options?.confirm === "committed"
+			? { writeId: generateUUIDv7().replace(/-/g, "") }
+			: {}),
+	};
 }
 
 export function buildListen(
