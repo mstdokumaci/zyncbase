@@ -308,41 +308,47 @@ const StorageLayer = struct {
 
 ---
 
-## Asynchronous Completion Tracking
+## Write Completion Tracking
 
-To support **Asynchronous Error Reporting (NACKs)**, the `StorageLayer` must track the origin of each write operation.
+To support `confirm: "committed"` and `WriteError`, the `StorageLayer` tracks requester metadata only for writes that need a writer-thread outcome. Default accepted writes can be enqueued without durable completion state; after acceptance, subscriptions remain the source of truth for committed observable state.
 
-### Proposed Structural Changes
+### Structural Requirements
 
-1. **`WriteOp` Expansion**:
-    Add metadata to link the operation back to the requester.
+1. **`WriteOp` Metadata**:
+    Add optional metadata to link tracked or confirmed writes back to the live requester.
     ```zig
     pub const WriteOp = struct {
         type: enum { ... },
         // ... existing fields ...
-        client_id: ?u64 = null,    // Unique identifier for the WebSocket connection
-        request_id: ?u64 = null,  // Original id from the client message
+        client_id: ?u64 = null,    // Live WebSocket connection for tracked/confirmed writes
+        write_id: ?[]const u8 = null, // Correlation id for writer-thread outcomes
     };
     ```
 
-2. **Notification Callback**:
-    The `StorageLayer` should take a callback interface during initialization to report background processing results.
+    If `write_id` is present, `client_id` must also be present. Operation status is retained in memory and scoped to the originating live connection.
+
+2. **Completion Callback**:
+    The `StorageLayer` reports writer-thread outcomes for tracked or confirmed writes.
     ```zig
     const StorageLayer = struct {
         // ...
-        on_error: ?*const fn (client_id: u64, request_id: u64, err: anyerror) void = null,
+        on_write_committed: ?*const fn (client_id: u64, write_id: []const u8) void = null,
+        on_write_error: ?*const fn (client_id: u64, write_id: []const u8, err: anyerror) void = null,
 
         fn flushBatch(self: *StorageLayer) !void {
             // ... inside batch execution loop ...
-            if (result == .error and op.client_id != null) {
-                if (self.on_error) |cb| cb(op.client_id.?, op.request_id.?, err);
+            if (op.write_id) |write_id| {
+                switch (result) {
+                    .ok => if (self.on_write_committed) |cb| cb(op.client_id.?, write_id),
+                    .err => |err| if (self.on_write_error) |cb| cb(op.client_id.?, write_id, err),
+                }
             }
         }
     };
     ```
 
 ### Server Integration
-The `ZyncBaseServer` will implement the `on_error` callback by looking up the `client_id` in its active connection registry and sending a late `error` message over the corresponding WebSocket.
+The `ZyncBaseServer` implements the completion callbacks by looking up `client_id` in its active connection registry. On success it sends SDK-consumed `WriteCommitted`; on failure it sends `WriteError`. If the connection is gone, completion status is discarded because write-status records are not durable.
 
 ---
 

@@ -178,8 +178,10 @@ SQLite's single-writer limitation is mitigated by an async ring-buffer queue and
 - **Timeout**: Triggered if operations have waited past the configured `performance.batchTimeout` (default 10ms) to maintain low latency.
 - **Wakeup policy**: The writer sleeps until new work arrives or the current batch deadline expires; it does not poll on a fixed interval.
 
-### Batching Trade-off: Asynchronous Error Reporting
-Because writes are asynchronous (fire-and-forget for low latency), the server returns an `ok` as soon as the operation is accepted into the memory queue. If a write fails during background persistence (e.g., disk full, constraint violation), the server is responsible for sending an asynchronous error message (NACK) to the client so the SDK can revert the optimistic update.
+### Batching Trade-off: Write Confirmation
+Because writes are asynchronous, default mutations return `ok` as soon as the operation is accepted into the memory queue. That response does not mean the writer has committed the mutation. Committed observable state is delivered through subscriptions after storage and cache state are updated.
+
+For `confirm: "committed"` or otherwise tracked writes, the queued operation carries a `writeId`. The server uses that `writeId` to resolve the waiting SDK promise on commit or report `WriteError` on writer-thread failure. Default untracked writes do not receive guaranteed per-operation async error delivery after acceptance.
 
 ---
 

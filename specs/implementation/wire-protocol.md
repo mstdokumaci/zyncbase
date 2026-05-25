@@ -94,14 +94,15 @@ Every message is a MessagePack **map** with at minimum a `type` field. Client-or
 
 #### `StoreSet`
 
-Write a value at a path. Applied optimistically on the client.
+Write a value at a path. Default confirmation is accepted/eventual: the response confirms the server accepted the mutation into the write pipeline, not that the writer has committed it. The SDK does not optimistically update local subscription state.
 
 ```
 {
-  "type":  "StoreSet",
-  "id":    2,
-  "path":  [0, <bin16("rect-1")>],
-  "value": { 1: 100, 2: 200, 3: 50, 4: 50 } // Integer-keyed map for field indices
+  "type":    "StoreSet",
+  "id":      2,
+  "path":    [0, <bin16("rect-1")>],
+  "value":   { 1: 100, 2: 200, 3: 50, 4: 50 }, // Integer-keyed map for field indices
+  "confirm": "accepted"                         // Optional: "accepted" (default) | "committed"
 }
 ```
 
@@ -109,24 +110,26 @@ Write a value at a path. Applied optimistically on the client.
 
 ```
 {
-  "type": "ok",
-  "id":   2
+  "type":    "ok",
+  "id":      2,
+  "writeId": "wr_..." // Present for tracked/committed writes
 }
 ```
 
-On failure, an error response triggers an optimistic revert on the client.
+For `confirm: "accepted"`, `ok` means the mutation was accepted into the write pipeline. For `confirm: "committed"`, the SDK resolves the mutation promise only after the writer commits or produces an accepted no-op. Writer failures surface as `WriteError` or an `error` response with `details.phase = "write"`.
 
 ---
 
 #### `StoreRemove`
 
-Remove a value at a path.
+Remove a document at a path. Deleting a missing document is success/no-op.
 
 ```
 {
-  "type": "StoreRemove",
-  "id":   3,
-  "path": [0, <bin16("rect-1")>]
+  "type":    "StoreRemove",
+  "id":      3,
+  "path":    [0, <bin16("rect-1")>],
+  "confirm": "accepted" // Optional: "accepted" (default) | "committed"
 }
 ```
 
@@ -134,8 +137,9 @@ Remove a value at a path.
 
 ```
 {
-  "type": "ok",
-  "id":   3
+  "type":    "ok",
+  "id":      3,
+  "writeId": "wr_..." // Present for tracked/committed writes
 }
 ```
 
@@ -147,13 +151,14 @@ Perform multiple write operations atomically. See the [Batch Operations Specific
 
 ```
 {
-  "type": "StoreBatch",
-  "id":   4,
-  "ops": [
+  "type":    "StoreBatch",
+  "id":      4,
+  "ops":     [
     ["s", [1, <bin16("123")>], { 3: "assigned" }],
     ["s", [0, <bin16("bob")>, 8], 5],
     ["r", [2, <bin16("123")>]]
-  ]
+  ],
+  "confirm": "accepted" // Optional: "accepted" (default) | "committed"
 }
 ```
 
@@ -165,12 +170,13 @@ Perform multiple write operations atomically. See the [Batch Operations Specific
 
 ```
 {
-  "type": "ok",
-  "id":   4
+  "type":    "ok",
+  "id":      4,
+  "writeId": "wr_..." // Present for tracked/committed writes
 }
 ```
 
-On failure, the `details` object in the error response will include `batchIndex` pointing to the first operation that caused the failure.
+For `confirm: "committed"`, the batch resolves only if the full batch commits or produces accepted no-op outcomes. On failure, the `details` object in the error response will include `batchIndex` when the failing operation can be identified.
 
 ---
 
@@ -520,6 +526,37 @@ Notifies a subscribed client that their subscription's result set has changed.
 | `"remove"` | A record was deleted. No `value` field. |
 
 > **Design note (ADR-023):** Deltas are record-level only — full records for `set`, record ID for `remove`. The SDK handles field-level projection and change detection locally. The client maintains local state and applies these operations.
+>
+> **Consistency note (ADR-031):** `StoreDelta` is the authoritative committed-state channel for subscriptions. Mutation responses and write-result messages report write outcome; they do not deliver subscription state.
+
+#### `WriteCommitted`
+
+SDK-consumed writer-result push for tracked/committed writes. SDKs use this to resolve committed mutation promises; it is not exposed as a public application event.
+
+```
+{
+  "type":    "WriteCommitted",
+  "writeId": "wr_..."
+}
+```
+
+#### `WriteError`
+
+Notifies the SDK that a tracked or confirmed write failed after acceptance. This is not a rollback command.
+
+```
+{
+  "type":    "WriteError",
+  "writeId": "wr_...",
+  "code":    "PERMISSION_DENIED",
+  "message": "Rule blocked operation",
+  "path":    [0, <bin16("rect-1")>], // Optional, best-effort
+  "details": {
+    "phase":      "write",
+    "batchIndex": 2                  // Optional, batch failures only
+  }
+}
+```
 
 ---
 
@@ -666,8 +703,10 @@ All errors follow a consistent envelope:
 {
   "type":       "error",
   "id":         2,                          // Echoed request ID (if responding to a request)
+  "writeId":    "wr_...",                   // Optional, tracked/committed writes
   "code":       "SCHEMA_VALIDATION_FAILED", // Machine-readable error code
   "message":    "Field 'priority' must be an integer, got string.",
+  "details":    { "phase": "accept" },      // Optional structured context
   "retryAfter": 5000                        // (Optional) ms to wait before retry
 }
 ```
@@ -788,6 +827,8 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | S→C | `SchemaSync` | — | Push (no `id`) |
 | S→C | `Connected` | — | Push (no `id`) |
 | S→C | `StoreDelta` | — | Push (no `id`) |
+| S→C | `WriteCommitted` | — | Push (no `id`, SDK-consumed) |
+| S→C | `WriteError` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |
 | Z↔H | `HookServerOnConnect` | — | Request/Response |

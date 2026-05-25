@@ -1,6 +1,6 @@
 # Error Handling
 
-How the SDK surfaces errors to developers: the `ZyncBaseError` interface, propagation model, auto-retry behavior, and optimistic revert semantics.
+How the SDK surfaces errors to developers: the `ZyncBaseError` interface, propagation model, write failure reporting, and auto-retry behavior.
 
 > [!NOTE]
 > This document defines the SDK consumer contract. For the full internal error catalog and server-side retry implementation, see [Error Taxonomy](../implementation/error-taxonomy.md).
@@ -12,7 +12,7 @@ How the SDK surfaces errors to developers: the `ZyncBaseError` interface, propag
 1. [The ZyncBaseError Object](#the-zyncbaseerror-object)
 2. [Error Propagation](#error-propagation)
 3. [Common Error Codes](#common-error-codes)
-4. [Optimistic Revert Behavior](#optimistic-revert-behavior)
+4. [Write Failure Reporting](#write-failure-reporting)
 5. [Auto-Retry Summary](#auto-retry-summary)
 
 ---
@@ -26,8 +26,14 @@ interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
   retryable: boolean;                    // Whether the SDK can/will auto-retry
   retryAfter?: number;                   // ms to wait before retry (server-provided)
-  requestId?: number;                    // ID of the failed request
+  requestId?: number;                    // ID of the failed immediate request
+  writeId?: string;                      // ID of a tracked or confirmed write, if applicable
   path?: string[];                       // Affected data path, if applicable
+  details?: {
+    phase?: 'accept' | 'write';           // Request acceptance or writer-thread outcome
+    batchIndex?: number;                  // Failed batch operation, when known
+    [key: string]: unknown;
+  };
 }
 ```
 
@@ -39,7 +45,7 @@ Errors reach the developer through two channels:
 
 ### 1. `try/catch` on async methods
 
-Methods that return a `Promise` (e.g., `connect()`, `query()`, `batch()`) throw `ZyncBaseError` directly:
+Methods that return a `Promise` throw `ZyncBaseError` directly:
 
 ```typescript
 try {
@@ -51,24 +57,38 @@ try {
 }
 ```
 
-### 2. `client.on('error', ...)` for fire-and-forget writes
+Mutation promises use two phases:
 
-`store.set()` and `store.remove()` are optimistic and return `void` (not a Promise). If the server rejects the write, the error is emitted via the global error event:
+- `phase: "accept"`: the server rejected the request before the writer owned it.
+- `phase: "write"`: the writer reported a failure for a confirmed write.
+
+Default mutations use `confirm: "accepted"` and resolve after request acceptance. They do not optimistically update local subscription state and do not receive guaranteed per-operation async error delivery after acceptance.
+
+```typescript
+try {
+  await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
+} catch (error: ZyncBaseError) {
+  if (error.details?.phase === 'write') {
+    // Writer-thread failure for this confirmed write
+  }
+}
+```
+
+### 2. `client.on('error', ...)` for connection and systemic errors
+
+The global error event surfaces connection-level errors, systemic writer/storage failures, and tracked write errors that are not attached to a currently awaited confirmed mutation:
 
 ```typescript
 client.on('error', (error: ZyncBaseError) => {
-  // error.path contains the affected data path
-  // Optimistic state has already been reverted by the SDK
-  console.error(`Write failed at ${error.path?.join('.')}:`, error.message)
+  console.error(error.code, error.message)
 })
 ```
 
-### 3. Async NACKs (Late-arriving errors)
+### 3. WriteError events
 
-For high-throughput writes where the server returns `ok` immediately after queueing, the server may send a later error if background persistence fails (e.g., `DATABASE_BUSY`). The SDK must:
-1. Match the error's `requestId` to the original write
-2. Revert the optimistic state for that write
-3. Surface the error via `client.on('error', ...)`
+Asynchronous writer failures are `WriteError`s, not rollback NACKs. They use `writeId` to correlate with tracked or confirmed writes.
+
+`WriteError` is used for user feedback and diagnostics. It does not imply local rollback because the SDK does not apply speculative local subscription updates.
 
 ### 4. Framework hooks
 
@@ -134,15 +154,17 @@ Error codes relevant to SDK consumers, grouped by category:
 
 ---
 
-## Optimistic Revert Behavior
+## Write Failure Reporting
 
-`store.set()` and `store.remove()` apply changes to local state immediately (optimistic update). If the server rejects the write:
+ZyncBase separates state delivery from write outcome reporting:
 
-1. The SDK **automatically reverts** the local state to its pre-write value
-2. The error is emitted via `client.on('error', ...)`
-3. Any active subscriptions fire with the reverted state
+1. Subscription callbacks are the authoritative channel for committed observable state.
+2. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance.
+3. Confirmed writes reject their promise when the writer reports failure.
+4. Tracked write errors use `writeId` and may include best-effort `path` metadata.
+5. Batch write errors include `details.batchIndex` when the failing operation is known.
 
-This applies to both immediate error responses and [async NACKs](#3-async-nacks-late-arriving-errors).
+Confirmed write timeouts mean confirmation was not received. They do not imply the write was aborted or failed to commit. After reconnect, subscriptions remain the source of truth for final state.
 
 ---
 
@@ -163,6 +185,6 @@ This applies to both immediate error responses and [async NACKs](#3-async-nacks-
 ## See Also
 
 - [Connection Management](./connection-management.md) — Client lifecycle and events
-- [Store API](./store-api.md) — Optimistic write methods
+- [Store API](./store-api.md) — Accepted/committed mutation methods
 - [Error Taxonomy](../implementation/error-taxonomy.md) — Full internal error catalog and retry implementations
 - [Wire Protocol](../implementation/wire-protocol.md#error-format) — Error envelope wire format

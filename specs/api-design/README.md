@@ -36,7 +36,7 @@ Complete guide to server configuration, including:
 ## Error Handling ([error-handling.md](./error-handling.md))
 - `ZyncBaseError` interface and error codes
 - Error propagation model (try/catch vs events)
-- Optimistic revert behavior
+- Write failure reporting
 - Auto-retry summary
 
 ## Framework Integrations ([framework-integrations.md](./framework-integrations.md))

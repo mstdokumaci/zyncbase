@@ -171,7 +171,7 @@ client.on('tokenExpired', async () => {
 | `connected` | `() => void` | WebSocket established and initial required scopes are ready |
 | `disconnected` | `() => void` | Connection closed (manually or after max retries) |
 | `reconnecting` | `() => void` | Attempting to reconnect after unexpected disconnect |
-| `error` | `(error: ZyncBaseError) => void` | Error from a fire-and-forget write or subscription |
+| `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
 | `tokenExpired` | `() => void` | Server indicates token has expired; SDK should refresh |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
 

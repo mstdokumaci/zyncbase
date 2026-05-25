@@ -177,7 +177,7 @@ No. ZyncBase is designed exclusively for vertical scaling (single server, all CP
 ## ADR-007: Optimistic Writes by Default
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
+**Status**: Superseded by ADR-031  
 
 **Context**: 
 How should the Client SDK handle real-time state updates for a fluid user experience?
@@ -778,7 +778,7 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 **Context**:  
 ADR-029 established the scoped session readiness gate, where `StoreSetNamespace` triggers namespace and user identity resolution through the writer thread. The initial implementation uses `CompletionSignal.wait()` — a Mutex+Condition blocking call — on the uWS event loop thread to synchronously wait for the writer thread's result. This blocks the entire reactor for 500μs–2ms per resolution, stalling all concurrent WebSocket connections and violating the p50 < 1ms latency target (ADR-020).
 
-The problem is specific to `StoreSetNamespace` (and the future `PresenceSetNamespace` / `AuthRefresh`). All other operations are either fire-and-forget writes (ADR-007) or fast reader-pool reads. Resolution is the only code path that performs a blocking round-trip to the writer thread from the uWS reactor.
+The problem is specific to `StoreSetNamespace` (and the future `PresenceSetNamespace` / `AuthRefresh`). All other operations are either accepted/eventual writes (ADR-031) or fast reader-pool reads. Resolution is the only code path that performs a blocking round-trip to the writer thread from the uWS reactor.
 
 **Decision**:  
 Replace blocking `CompletionSignal.wait()` resolution with a two-tier strategy: an in-memory identity cache for the common case, and an async SPSC ring buffer + event loop wakeup handoff for cache misses.
@@ -825,3 +825,252 @@ Replace blocking `CompletionSignal.wait()` resolution with a two-tier strategy: 
 - ✅ Other connections completely unaffected during cold-start resolution.
 - ⚠️ Async response delivery adds ~1 event loop iteration of latency for cache misses (negligible in practice).
 - ⚠️ Two new lock-free cache instances add memory proportional to the number of unique (namespace, user) pairs — typically small.
+
+---
+
+## ADR-031: Mutation Acknowledgement and Realtime Consistency Semantics
+
+**Date**: 2026-05-25  
+**Status**: Accepted  
+**Supersedes**: ADR-007: Optimistic Writes by Default  
+
+**Context**:
+ZyncBase is a realtime-first database. Client-visible state is observed through subscriptions, and committed changes become visible through server-pushed subscription deltas.
+
+Mutation acknowledgement semantics must be explicit because writes pass through an asynchronous server-side write pipeline. A mutation can be accepted by the server before the writer thread has committed it. Separately, a subscription update can arrive after the mutation response. These are related but distinct events.
+
+The TypeScript SDK does not optimistically update local subscription data for mutating operations such as `store.set`, `store.remove`, and `store.batch`. Local subscription state changes only when the server emits subscription updates. Therefore, write failure reporting is not needed for rollback. It is needed for user feedback, diagnostics, and workflows that require precise write outcome reporting.
+
+**Decision**:
+ZyncBase uses subscription-first eventual state propagation as the default consistency model for client-visible data.
+
+Default mutation methods are accepted/eventual writes:
+
+- `store.set`, `store.remove`, and `store.batch` do not optimistically mutate local subscription state.
+- A successful default mutation response means the server accepted the mutation request into the write pipeline.
+- A successful default mutation response does not mean the write has committed.
+- Subscription callbacks are the authoritative source of committed observable state.
+- Clients must not infer write failure solely from the absence of a subscription delta.
+
+ZyncBase distinguishes two confirmation levels:
+
+```ts
+await store.set(path, value);
+await store.set(path, value, { confirm: "accepted" });
+// Resolves when the server accepts the mutation into the write pipeline.
+
+await store.set(path, value, { confirm: "committed" });
+// Resolves when the writer commits the mutation or an accepted no-op.
+// Rejects when the writer reports failure.
+```
+
+`confirm: "accepted"` is the default and may be represented in SDK types, but ordinary examples should prefer the no-options form. `confirm: "committed"` applies only to mutating operations: `store.set`, `store.remove`, and `store.batch`.
+
+**Terminology**:
+
+- **accepted**: the server parsed, validated, authorized as far as possible before enqueue, and accepted the mutation into the write pipeline.
+- **committed**: the writer-thread result succeeded, including accepted no-op outcomes.
+- **request id**: the existing request/response correlation id for immediate `ok` or `error` responses.
+- **writeId**: the correlation id for tracked or confirmed writer-thread outcomes.
+- **WriteError**: an asynchronous writer failure message or SDK event.
+
+The public protocol and SDK documentation must not use "NACK" for this feature. Writer failures are write errors, not rollback commands.
+
+**Immediate Request Errors**:
+Immediate request errors reject the mutation before the writer owns the operation.
+
+Examples include:
+
+- malformed messages
+- invalid paths
+- invalid payload shapes
+- unknown tables or fields detected before enqueue
+- session not ready
+- authorization failures detected before enqueue
+- queue admission failure
+- other request handling failures before writer ownership
+
+Confirmed write failures and immediate request failures use the same SDK error type, `ZyncBaseError`, with metadata identifying the phase:
+
+```ts
+{
+  phase: "accept" | "write"
+}
+```
+
+**Write Outcome Reporting**:
+Writer-thread failures are exposed as write errors, not as subscription state and not as rollback instructions.
+
+Tracked or confirmed writes use `writeId` to correlate writer outcomes. The existing request `id` remains scoped to the immediate request response.
+
+For confirmed writes, the SDK promise is the public success signal. ZyncBase does not expose a public `WriteCommitted` event as part of the core API. If the confirmed write promise resolves, the write committed or produced an accepted no-op. If it rejects, the writer reported failure or confirmation was not received.
+
+`WriteError` is the public async failure name:
+
+```ts
+{
+  type: "WriteError",
+  writeId: "...",
+  code: "PERMISSION_DENIED",
+  message: "...",
+  details: {
+    phase: "write"
+  }
+}
+```
+
+`path` is best-effort metadata:
+
+- single `set` or `remove`: include `path` when available
+- batch failure with known operation: include `path` and `batchIndex`
+- transaction-level or systemic failure: `path` may be omitted
+
+Global write-error events are for tracked writes or systemic writer failures. Default untracked writes do not receive guaranteed per-operation async error delivery after acceptance.
+
+**Subscription Ordering**:
+Commit confirmation and subscription delivery are not ordered relative to each other.
+
+If a confirmed write resolves, matching active subscriptions will eventually receive the corresponding state change, subject to normal subscription filtering and connection state. The SDK must not guarantee that a subscription callback has already run before the confirmed write promise resolves.
+
+Subscriptions remain the authoritative committed-state channel. Write confirmation is outcome reporting, not state delivery.
+
+**Batch Semantics**:
+`store.batch(..., { confirm: "committed" })` is atomic:
+
+- resolves only if the full batch commits or produces accepted no-op outcomes
+- rejects if any operation fails
+- exposes no partial success result in the public API
+- does not commit partial writes on failure
+
+Batch failures include `batchIndex` when the failing operation can be identified:
+
+```ts
+{
+  code: "PERMISSION_DENIED",
+  message: "...",
+  details: {
+    batchIndex: 2,
+    phase: "write"
+  }
+}
+```
+
+For transaction-level failures where no single operation caused the failure, `batchIndex` is omitted.
+
+Default `store.batch()` follows the same accepted/eventual contract as individual writes.
+
+**Authorization Semantics**:
+Write authorization rules must preserve this invariant:
+
+> A client must not be able to create a document that the same session could not later update under the same write rules.
+
+For `StoreSet`, `$doc` in write rules is interpreted by write kind:
+
+- **Create**: `$doc` is the candidate document being created.
+- **Update**: `$doc` is the existing stored document.
+- **Delete**: `$doc` is the existing stored document.
+
+Create authorization is evaluated in RAM against the candidate document. The candidate document includes:
+
+- document id
+- injected `owner_id = $session.userId`
+- incoming normalized fields
+- server-managed fields and defaults when applicable
+
+Because `owner_id` is injected by the server, ownership rules such as the following naturally pass for creates by the owning session:
+
+```json
+{ "$doc.owner_id": { "eq": "$session.userId" } }
+```
+
+If a create rule references a `$doc` field that is absent from the candidate document and is not server-injected or defaulted, the create is denied.
+
+Update and delete authorization remains guarded against existing stored rows. ZyncBase does not require general post-image authorization for updates. A user may update a document they are currently allowed to write into a state that they cannot later update under the same rule.
+
+For example, a write rule that allows writes only while `status == "draft"` can allow an update from `draft` to `published`; after that transition, the same rule no longer allows further updates.
+
+**No-Op Semantics**:
+
+Deleting a missing document is success/no-op.
+
+Setting a field or document to the same canonical stored value is success. ZyncBase may suppress deltas when the canonical stored value did not change. Applications must not rely on a delta for same-value writes.
+
+A committed write that does not match one of the client's active subscriptions is not a write error. A write may produce no delta for a subscription because it is filtered out, targets data the client is not subscribed to, or does not change the subscription result.
+
+Default accepted writes do not perform extra storage reads solely to classify writer zero-row outcomes. Confirmed writes may classify guarded zero-row outcomes to produce precise errors:
+
+- existing row fails write guard: `PERMISSION_DENIED`
+- absent row for idempotent delete: success/no-op
+- storage or transaction failure: appropriate storage error
+
+**Connection And Failure Semantics**:
+Operation status is retained in memory and scoped to the originating live connection for tracked or confirmed writes. ZyncBase does not retain durable write-status records across disconnects.
+
+If the connection drops before a confirmed write result is delivered, the SDK rejects the promise with a connection error. The write may still later commit. After reconnect, subscriptions remain the source of truth for final state.
+
+Confirmed writes need a timeout. A timeout means confirmation was not received; it does not imply the write was aborted or failed to commit.
+
+ZyncBase does not guarantee abort after a write has been accepted into the writer pipeline.
+
+Automatic idempotency keys for retried writes are outside this decision. Some operations are naturally idempotent, but exactly-once retry behavior requires a separate idempotency design.
+
+Systemic writer or storage failures are engine health events, not only individual write failures. If the writer encounters a condition that prevents reliable write processing, new writes should fail during acceptance once the engine is marked unhealthy. Confirmed writes reject with `ZyncBaseError`, and server or connection status should surface the degraded state.
+
+Write errors classify retryability conservatively:
+
+- transient operational failures may be retryable
+- access denied, invalid values, schema errors, and constraint violations are not retryable
+- operator-action conditions such as disk full should not encourage automatic client retry loops
+
+**Rationale**:
+This decision separates three concepts:
+
+- request acceptance: the server accepted the mutation into the write pipeline
+- state observation: subscriptions delivered committed observable state
+- write outcome reporting: optional operation status and error feedback for user workflows
+
+This preserves ZyncBase's realtime-first model while giving applications precise feedback when user-facing actions require it.
+
+Making every mutation wait for writer commit would push ZyncBase toward request/response database semantics and increase latency for writes that only require eventual subscription propagation. Restoring optimistic local writes would require rollback and conflict handling complexity that the current subscription-first model avoids.
+
+Write errors remain valuable, but their purpose is user feedback and diagnostics, not local state repair.
+
+**Consequences**:
+
+Positive:
+
+- Keeps default writes low latency.
+- Preserves subscriptions as the authority for committed client-visible state.
+- Avoids optimistic rollback machinery.
+- Gives UI-critical workflows precise committed-write confirmation.
+- Gives tracked writes a clear async failure reporting model.
+- Keeps request ids and writer outcome ids conceptually separate.
+
+Negative:
+
+- `await store.set()` does not mean "committed"; documentation must be explicit.
+- Applications that need save confirmation must request committed confirmation.
+- Confirmed writes add writer-result correlation and timeout handling.
+- Confirmed authorization errors may require additional classification work.
+
+**Rejected Alternatives**:
+
+### Make every mutation wait for writer commit
+
+Rejected as the default because it changes the default programming model from realtime/eventual to strongly confirmed request/response writes, increasing latency for all writes.
+
+### Restore optimistic local writes
+
+Rejected for default SDK behavior. Optimistic local writes require rollback, conflict handling, and more complex local materialized-view semantics.
+
+### Do not report writer-thread failures to clients
+
+Rejected as the complete model. Missing subscription deltas are ambiguous and cannot support user-facing save failure feedback.
+
+### Use eventual NACKs as rollback messages
+
+Rejected. There is no speculative local subscription state to roll back. Writer failures are write-status errors, not rollback commands.
+
+### Reuse request id as the writer outcome id
+
+Rejected. Request ids correlate immediate request responses. Writer outcomes need a separate `writeId` for tracked or confirmed writes.

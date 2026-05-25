@@ -15,14 +15,14 @@ This implementation follows the decisions established in:
 
 ## 1. Error Categories
 
-Errors are grouped into 7 functional categories to determine automatic SDK behavior (retries, reverts, etc.).
+Errors are grouped into 7 functional categories to determine automatic SDK behavior such as retries and user-facing surfacing.
 
 | Category | Typical Codes | Retryable? | SDK Behavior |
 |----------|---------------|------------|--------------|
 | **Connection** | `CONNECTION_FAILED`, `TIMEOUT` | **Yes (Auto)** | Exponential backoff + jitter until reconnected. |
 | **Authentication** | `AUTH_FAILED`, `TOKEN_EXPIRED`, `SESSION_NOT_READY` | **Partial** | Fire `tokenExpired` event, wait for `authRefresh`, or wait for scope readiness. |
-| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface error immediately; revert optimistic update. |
-| **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface error; revert optimistic update. |
+| **Authorization** | `NAMESPACE_UNAUTHORIZED`, `PERMISSION_DENIED` | No | Surface immediately. |
+| **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface immediately. |
 | **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Auto-retry with backoff if `RATE_LIMITED`. |
 | **Server** | `INTERNAL_ERROR` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
 | **Hook Server** | `HOOK_SERVER_UNAVAILABLE`, `HOOK_DENIED` | No | Surface error; indicates issue in developer's hook logic. |
@@ -82,8 +82,14 @@ interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code (e.g., 'RATE_LIMITED')
   retryable: boolean;     // Whether the SDK can/will retry this
   retryAfter?: number;    // ms suggested by server to wait
-  requestId?: number;     // ID of the failed request
+  requestId?: number;     // ID of the failed immediate request
+  writeId?: string;       // ID of a tracked or confirmed write, if applicable
   path?: string[];        // Affected data path (if applicable)
+  details?: {
+    phase?: 'accept' | 'write';
+    batchIndex?: number;
+    [key: string]: unknown;
+  };
 }
 ```
 
@@ -91,16 +97,16 @@ interface ZyncBaseError extends Error {
 
 1. **Exponential Backoff**: For all retryable errors, the SDK uses `initialDelay * base ^ attempt + jitter`.
 2. **Rate-Limit Retries**: Enabled by default. If the server provides `retryAfter`, the SDK respects it exactly.
-3. **Optimistic Reverts**: If a `store.set` or `store.remove` receives an error response, the SDK **must** immediately revert the local state change to maintain synchronization.
+3. **Write Confirmation**: Default mutations resolve after request acceptance. Confirmed mutations (`confirm: "committed"`) surface writer-thread failures through the same `ZyncBaseError` type with `details.phase = "write"`.
 
 ---
 
 ## 4. Error Propagation Flow
 
-1. **Wire Layer**: Server sends `{ type: "error", code: "...", message: "...", ... }`.
-2. **SDK Internal**: Reverts optimistic state if request `id` matches a pending write.
+1. **Wire Layer**: Server sends `{ type: "error", code: "...", message: "...", ... }` for request failures or `WriteError` for tracked writer failures.
+2. **SDK Internal**: Rejects the associated promise for immediate request errors and confirmed write failures. No optimistic subscription state is reverted.
 3. **Core API**:
-   - `await` calls (e.g., `connect()`, `query()`) throw the `ZyncBaseError`.
+   - `await` calls throw the `ZyncBaseError`.
    - Continuous streams (subscriptions) fire the global `client.on('error', ...)` event.
 4. **Framework Hooks**: (React/Vue/Svelte) Populate the `error` state in the hook result.
 
@@ -110,13 +116,13 @@ const { data, error } = useStore('tasks.123');
 
 ```
 
-### 4.1 Asynchronous Error Reporting (NACKs)
+### 4.1 Write Error Reporting
 
-For high-throughput "fire-and-forget" operations (where the server returns `ok` immediately after queueing), the server may send a later, unsolicited error message if the background persistence fails.
+For tracked or confirmed writes, the server may send a `WriteError` if writer-thread processing fails after request acceptance.
 
-1. **Protocol**: The server sends an error message where `requestId` matches the original write request, but potentially seconds later.
+1. **Protocol**: The server sends a `WriteError` with `writeId` matching the tracked or confirmed write.
 2. **Context**: These errors are primarily related to `DATABASE_BUSY`, `DATABASE_LOCKED`, `DISK_FULL`, or `SCHEMA_VIOLATION` that occur during background batch processing.
-3. **SDK Action**: Upon receiving an unsolicited error with a known `requestId`, the SDK **must** asynchronously revert the optimistic state associated with that ID, even if the user has already moved on to other operations.
+3. **SDK Action**: For confirmed writes, reject the pending promise. For tracked write errors, surface the error through the configured SDK error channel. Do not revert subscription state; subscriptions remain the authoritative state channel.
 
 ---
 
@@ -282,9 +288,7 @@ client.on('tokenExpired', async () => {
 // Retrying won't help - fix the code
 if (isValidationError(error)) {
   console.error('Client validation error:', error)
-  // Revert optimistic update
-  revertOptimisticUpdate(error.requestId)
-  // Surface error to developer
+  // Surface error to developer or user
   throw error
 }
 ```
@@ -312,8 +316,14 @@ interface ZyncBaseError extends Error {
   code: string;           // Machine-readable code from the catalog above
   retryable: boolean;     // Whether the SDK will automatically retry
   retryAfter?: number;    // ms to wait before retry (server-provided)
-  requestId?: number;     // Echoed request id from the failed message
+  requestId?: number;     // Echoed request id for immediate request failures
+  writeId?: string;       // Correlation id for tracked/confirmed writer outcomes
   path?: string[];        // Affected data path, if applicable
+  details?: {
+    phase?: 'accept' | 'write';
+    batchIndex?: number;
+    [key: string]: unknown;
+  };
 }
 ```
 
@@ -324,4 +334,3 @@ interface ZyncBaseError extends Error {
 - [Security Model](./security.md) — Rate limiter and circuit breaker implementation
 - [Wire Protocol](./wire-protocol.md) — Error envelope wire format
 - [ADR-019](../architecture/adrs.md#adr-019-formal-error-taxonomy-and-handling-strategy) — Decision record for this taxonomy
-

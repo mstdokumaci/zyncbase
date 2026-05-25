@@ -4,6 +4,8 @@ The Store API handles durable, synchronized data. Everything in this namespace i
 
 Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`; calling store methods before that point fails with `SESSION_NOT_READY`.
 
+Mutating methods use subscription-first eventual state propagation (ADR-031). By default, `store.set`, `store.remove`, and `store.batch` resolve when the server accepts the mutation into the write pipeline. They do not optimistically update local subscription state, and they do not wait for writer commit unless `confirm: "committed"` is requested. Subscription callbacks are the authoritative source of committed observable state.
+
 ## Table of Contents
 
 1.  [Direct Path Access](#direct-path-access-crud)
@@ -26,13 +28,12 @@ There are strict rules on what you can write based on the depth of the path:
 | **Field** (`'users.u1.name'`) | `3+` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
 
 ### `store.create(collection, value)`
-Creates a new document within a collection. The SDK synchronously generates a canonical lowercase UUIDv7 string and calls `set` under the hood.
+Creates a new document within a collection. The SDK generates a canonical lowercase UUIDv7 string and calls `set` under the hood.
 
 ```typescript
-// ID is generated locally for immediate optimistic UI rendering
-const id = client.store.create('elements', { type: 'rect', x: 10 })
+const id = await client.store.create('elements', { type: 'rect', x: 10 })
 ```
-**Returns**: `string` (The generated ID)
+**Returns**: `Promise<string>` resolving to the generated ID after the create is accepted. Use `confirm: "committed"` when the caller needs writer-thread confirmation.
 
 Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.
 
@@ -48,7 +49,7 @@ const element = client.store.get('elements.rect-1')
 - `undefined`: If the path is not found
 
 ### `store.set(path, value)`
-Write a value or upsert a document. **Optimistic by default**: applied locally first, then synced. Reverted if the server rejects it.
+Write a value or upsert a document.
 
 **Path Constraints**: Must target a **Document** (depth 2) or a **Field** (depth 3+). Targeting a collection (depth 1) throws an error.
 **Clearing Fields**: To remove a field, `set` it to `null`. This triggers schema validation to ensure the field is not required.
@@ -56,24 +57,33 @@ Write a value or upsert a document. **Optimistic by default**: applied locally f
 
 ```typescript
 // Upsert a full document. ID is extracted from path if needed.
-client.store.set('users.u1', { name: 'Alice', status: 'active' })
+await client.store.set('users.u1', { name: 'Alice', status: 'active' })
 
 // Update a specific field
-client.store.set('users.u1.status', 'offline')
+await client.store.set('users.u1.status', 'offline')
 
 // Clear an optional field (instead of remove)
-client.store.set('users.u1.address', null)
+await client.store.set('users.u1.address', null)
 
 // Typed array field is canonicalized as sorted set
-client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
+await client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
 // Stored/read as: ['backend', 'urgent']
+
+// UI-critical write that needs writer-thread confirmation
+await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
 ```
 
 **Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the Path level.
 
-**Error Handling**: Since `set()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
+**Confirmation**:
+- `confirm: "accepted"` (default): resolves when the server accepts the mutation into the write pipeline.
+- `confirm: "committed"`: resolves when the writer commits the mutation or an accepted no-op; rejects if the writer reports failure.
 
-**Returns**: `void`
+**State Propagation**: Local subscription data changes only when the server emits subscription updates. A successful mutation promise is not a substitute for subscription state.
+
+**Error Handling**: Immediate request errors reject the promise. Confirmed write failures reject the promise with `ZyncBaseError`. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance. See [Error Handling](./error-handling.md#error-propagation).
+
+**Returns**: `Promise<void>`
 
 ### `store.remove(path)`
 Deletes an entire document.
@@ -81,12 +91,14 @@ Deletes an entire document.
 **Path Constraints**: Must target a **Document** (exactly depth 2). Targeting a collection (depth 1) or a field (depth 3+) throws an error. To remove a field, use `store.set(path, null)`.
 
 ```typescript
-client.store.remove('elements.rect-1')
+await client.store.remove('elements.rect-1')
 ```
 
-**Error Handling**: Since `remove()` is fire-and-forget, errors are reported via `client.on('error', ...)`. See [Error Handling](./error-handling.md#error-propagation).
+**Confirmation**: Same as `store.set`. Deleting a missing document is success/no-op.
 
-**Returns**: `void`
+**Error Handling**: Same as `store.set`.
+
+**Returns**: `Promise<void>`
 
 
 ### `store.listen(path, callback)`
@@ -175,16 +187,28 @@ if (hasMore) await loadMore()
 Perform multiple write operations (`set` and `remove`) atomically.
 
 ### `store.batch(operations)`
-If *any* operation in the batch fails, the *entire* batch is rejected (locally reverted).
+Performs all operations atomically.
 ```typescript
 await client.store.batch([
   { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
   { op: 'remove', path: 'temporary_locks.123' }
 ])
 ```
+
+With default confirmation, the promise resolves when the batch is accepted into the write pipeline. With `confirm: "committed"`, the promise resolves only if the full batch commits or produces accepted no-op outcomes. If any operation fails, the entire confirmed batch rejects and no partial writes are committed.
+
+```typescript
+await client.store.batch([
+  { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
+  { op: 'remove', path: 'temporary_locks.123' }
+], { confirm: 'committed' })
+```
+
 **Limits**: 
 - Max 500 operations per batch.
 - Only `set` and `remove` allowed.
+
+**Error Details**: Confirmed batch failures include `details.batchIndex` when the failing operation can be identified.
 
 ---
 
@@ -239,4 +263,4 @@ client.store.get(['users', userId, 'name'])
 - [Query Language Reference](./query-language.md) - Detailed query syntax
 - [Configuration & Schema](./configuration.md) - For schema definitions
 - [Connection Management](./connection-management.md) - Client lifecycle and events
-- [Error Handling](./error-handling.md) - Error types and optimistic revert behavior
+- [Error Handling](./error-handling.md) - Error types and write failure reporting

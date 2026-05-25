@@ -49,27 +49,33 @@ A `Condition` can be:
 
 To guarantee strict predictability and sub-microsecond performance, ZyncBase heavily restricts which variables are available during which wire command. 
 
-Variables are evaluated using two distinct execution paths:
+Variables are evaluated using two execution paths:
 1. **RAM Evaluation**: Instant, stateless check performed in memory.
-2. **Predicate Lowering**: `$doc` comparisons are lowered into the same flat `FilterPredicate` shape used by `StoreQuery` and `StoreSubscribe`. The storage layer owns SQL rendering.
+2. **Predicate Lowering**: Existing-row `$doc` comparisons are lowered into the same flat `FilterPredicate` shape used by `StoreQuery` and `StoreSubscribe`. The storage layer owns SQL rendering.
 
 | Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$doc` |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
 | `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
 | `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
-| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ✅ Predicate Lowering |
+| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ✅ Create: RAM candidate / Update: Predicate Lowering |
 | `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
 | `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ✅ RAM | ❌ |
 | `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
 
 *(Note: If a rule references a forbidden variable for a specific command, evaluation fails safely, and access is denied. `StoreLoadMore` and `StoreUnsubscribe` inherit authorization established during `StoreSubscribe`.)*
 
-For `StoreSet`, `$doc` predicates are applied only to the existing-row update branch. A create has no existing `$doc`; the server injects `owner_id` from `$session.userId` and evaluates only the RAM-available variables (`$session`, `$namespace`, `$path`, `$value`).
+For `StoreSet`, `$doc` in write rules is interpreted by write kind:
+
+- **Create**: `$doc` is the candidate document being created. It is evaluated in RAM without a storage read.
+- **Update**: `$doc` is the existing stored document. It is enforced by predicate lowering.
+- **Delete**: `$doc` is the existing stored document. It is enforced by predicate lowering.
+
+The create candidate includes the document id, injected `owner_id = $session.userId`, normalized incoming fields, and server-managed fields/defaults when applicable. If a create rule references a `$doc` field that is absent from the candidate document and is not server-injected or defaulted, the create is denied. This preserves the invariant that a client cannot create a document the same session could not later update under the same write rules.
 
 ## Predicate Lowering Strategy
 
-The `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the authorization layer lowers the condition into a storage-neutral `FilterPredicate`. The storage layer then renders that predicate into a SQL `WHERE` fragment with bound values.
+For existing-row checks, the `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the authorization layer lowers the condition into a storage-neutral `FilterPredicate`. The storage layer then renders that predicate into a SQL `WHERE` fragment with bound values.
 
 At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Unsupported hooks, unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
 
@@ -79,10 +85,12 @@ The supported `$doc` shape is intentionally no more expressive than StoreQuery: 
 ```json
 "write": { "$doc.owner_id": { "eq": "$session.userId" } }
 ```
-When updating a document (`StoreSet`), Zig evaluates `$session.userId` in RAM as the internal `BLOB(16)` user ID resolved through the `users` table. It recognizes `$doc.owner_id` as a column reference, lowers it to a filter condition, and the storage layer renders it with a bound binary parameter:
+When creating a document, the server injects `owner_id` from `$session.userId`, treats the candidate document as `$doc`, and evaluates the ownership rule in RAM.
+
+When updating a document (`StoreSet`) or deleting a document (`StoreRemove`), Zig evaluates `$session.userId` in RAM as the internal `BLOB(16)` user ID resolved through the `users` table. It recognizes `$doc.owner_id` as a column reference, lowers it to a filter condition, and the storage layer renders it with a bound binary parameter:
 `UPDATE tasks SET ... WHERE id = ? AND owner_id = ?`
 
-If the user does not own the document, 0 rows are affected, and the operation fails naturally without an extra `SELECT` overhead.
+If the user does not own the existing document, 0 rows are affected without an extra `SELECT` overhead. Default accepted writes do not perform extra reads solely to classify that zero-row outcome. Confirmed writes may classify it and report `PERMISSION_DENIED`.
 
 ## Zero-Config Default (Implicit Rules)
 
@@ -112,4 +120,4 @@ If `authorization.json` is missing or not provided in the server configuration, 
 **What this default means:**
 1. The only accessible namespace is `public`.
 2. Anyone (including anonymous users via the SDK's auto-generated `anon_id`) can read all data and broadcast presence in the `public` namespace.
-3. Users can create records owned by their own `$session.userId`, and can strictly only modify or delete records they created (enforced via AST Injection of `$doc.owner_id == $session.userId` on existing rows).
+3. Users can create records owned by their own `$session.userId`, and can strictly only modify or delete records they created. Creates satisfy `$doc.owner_id == $session.userId` through server-side owner injection; updates and deletes enforce the same rule on existing rows through predicate lowering.
