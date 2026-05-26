@@ -288,7 +288,17 @@ export class StoreImpl {
 		options: WriteOptions | undefined,
 		fallbackMessage: string,
 	): Promise<void> {
-		if (options?.confirm === "committed" && writeId) {
+		if (options?.confirm === "committed") {
+			if (!writeId) {
+				throw new ZyncBaseError(
+					"writeId is required for committed confirmation",
+					{
+						code: ErrorCodes.INVALID_MESSAGE,
+						category: "client",
+						retryable: false,
+					},
+				);
+			}
 			let commitResolve: () => void = () => {};
 			let commitReject: (err: Error) => void = () => {};
 			const commitPromise = new Promise<void>((resolve, reject) => {

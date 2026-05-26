@@ -613,7 +613,11 @@ fn isSecurityError(err: anyerror) bool {
 }
 
 fn parseWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?struct { write_id: [16]u8 } {
-    const confirm_val = confirm_str orelse return null;
+    const confirm_val = confirm_str orelse {
+        // No confirm field — a writeId without confirm is a client bug.
+        if (write_id_str != null) return error.InvalidWriteAck;
+        return null;
+    };
     if (!std.mem.eql(u8, confirm_val, "committed")) {
         // "accepted" (or any other value) with a writeId is a client bug: the
         // writeId would never be resolved, causing a silent hang on the client.
@@ -621,9 +625,10 @@ fn parseWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?struct {
         if (write_id_str != null) return error.InvalidWriteAck;
         return null;
     }
-    const wid_str = write_id_str orelse return null;
-    if (wid_str.len != 32) return null;
+    // confirm == "committed": writeId is required and must be valid.
+    const wid_str = write_id_str orelse return error.InvalidWriteAck;
+    if (wid_str.len != 32) return error.InvalidWriteAck;
     var write_id: [16]u8 = undefined;
-    _ = std.fmt.hexToBytes(&write_id, wid_str) catch return null;
+    _ = std.fmt.hexToBytes(&write_id, wid_str) catch return error.InvalidWriteAck;
     return .{ .write_id = write_id };
 }
