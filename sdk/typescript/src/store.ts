@@ -57,6 +57,7 @@ export class StoreImpl {
 	) {
 		this.conn.onMessage((msg) => this.handleInboundMessage(msg));
 		this.conn.on("disconnected", () => this.rejectAllInFlight());
+		this.conn.on("reconnecting", () => this.rejectAllInFlight());
 	}
 
 	async set(

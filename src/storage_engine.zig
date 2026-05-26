@@ -66,6 +66,25 @@ pub const StorageEngine = struct {
         reader_pool_size: usize = 0,
     };
 
+    const Buffers = struct {
+        change_buffer: ChangeBuffer,
+        session_resolution_buffer: SessionResolutionBuffer,
+        write_outcome_buffer: WriteOutcomeBuffer,
+
+        fn init(allocator: Allocator) !Buffers {
+            var cb = try ChangeBuffer.init(allocator);
+            errdefer cb.deinit();
+            var srb = try SessionResolutionBuffer.init(allocator);
+            errdefer srb.deinit();
+            const wob = try WriteOutcomeBuffer.init(allocator);
+            return .{
+                .change_buffer = cb,
+                .session_resolution_buffer = srb,
+                .write_outcome_buffer = wob,
+            };
+        }
+    };
+
     pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
 
     pub const State = enum(u8) { setup, running, shutdown };
@@ -167,21 +186,7 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
-        const change_buffer = try ChangeBuffer.init(allocator);
-        errdefer {
-            var cb = change_buffer;
-            cb.deinit();
-        }
-        const session_resolution_buffer = try SessionResolutionBuffer.init(allocator);
-        errdefer {
-            var rb = session_resolution_buffer;
-            rb.deinit();
-        }
-        const write_outcome_buffer = try WriteOutcomeBuffer.init(allocator);
-        errdefer {
-            var wb = write_outcome_buffer;
-            wb.deinit();
-        }
+        const buffers = try Buffers.init(allocator);
 
         self.* = .{
             .allocator = allocator,
@@ -209,9 +214,9 @@ pub const StorageEngine = struct {
                 .mutex = .{},
                 .flush_cond = .{},
                 .pending_count = std.atomic.Value(usize).init(0),
-                .change_buffer = change_buffer,
-                .session_resolution_buffer = session_resolution_buffer,
-                .write_outcome_buffer = write_outcome_buffer,
+                .change_buffer = buffers.change_buffer,
+                .session_resolution_buffer = buffers.session_resolution_buffer,
+                .write_outcome_buffer = buffers.write_outcome_buffer,
                 .notifier_ptr = event_loop_notifier,
                 .notifier_ctx = notifier_ctx,
                 // SAFETY: Set after metadata_cache init below
