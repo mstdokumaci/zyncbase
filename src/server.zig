@@ -13,6 +13,7 @@ const StorageEngine = @import("storage_engine.zig").StorageEngine;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
 const NotificationDispatcher = @import("notification_dispatcher.zig").NotificationDispatcher;
 const SessionResolver = @import("session_resolver.zig").SessionResolver;
+const WriteOutcomeDispatcher = @import("write_outcome_dispatcher.zig").WriteOutcomeDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
@@ -40,6 +41,7 @@ pub const ZyncBaseServer = struct {
     storage_engine: StorageEngine,
     notification_dispatcher: NotificationDispatcher,
     session_resolver: SessionResolver,
+    write_outcome_dispatcher: WriteOutcomeDispatcher,
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
     store_service: StoreService,
@@ -284,6 +286,13 @@ pub const ZyncBaseServer = struct {
         );
         errdefer self.session_resolver.deinit();
 
+        self.write_outcome_dispatcher.init(
+            self.memory_strategy.generalAllocator(),
+            self.storage_engine.writeOutcomeBuffer(),
+            &self.memory_strategy,
+        );
+        errdefer self.write_outcome_dispatcher.deinit();
+
         // Wire Notification Dispatcher hook into WebSocket Server
         self.websocket_server.post_handler = notifyPostHandler;
         self.websocket_server.post_handler_ctx = self;
@@ -407,6 +416,9 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
+        std.log.debug("Deinitializing write_outcome_dispatcher", .{});
+        self.write_outcome_dispatcher.deinit();
+
         std.log.debug("Deinitializing session_resolver", .{});
         self.session_resolver.deinit();
 
@@ -453,6 +465,7 @@ pub const ZyncBaseServer = struct {
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
         self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
+        self.write_outcome_dispatcher.poll(&self.connection_manager);
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {

@@ -92,7 +92,7 @@ test "StorageEngine: match-none guard permits insert branch and blocks update br
         .index = title_index,
         .value = tth.valText("first"),
     }};
-    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, &guard);
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &insert_columns, &guard, null, null);
     try tasks.flush();
 
     {
@@ -105,7 +105,7 @@ test "StorageEngine: match-none guard permits insert branch and blocks update br
         .index = title_index,
         .value = tth.valText("second"),
     }};
-    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, &guard);
+    try ctx.engine.insertOrReplace(table.index, 1, 1, 1, &update_columns, &guard, null, null);
     try tasks.flush();
 
     var doc = try tasks.getOne(allocator, 1, 1);

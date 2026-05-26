@@ -15,6 +15,8 @@ const ChangeBuffer = change_buffer.ChangeBuffer;
 const session_resolution = @import("../session_resolution_buffer.zig");
 const SessionResolutionBuffer = session_resolution.SessionResolutionBuffer;
 const SessionResolutionResult = session_resolution.SessionResolutionResult;
+const write_outcome = @import("../write_outcome_buffer.zig");
+const WriteOutcomeBuffer = write_outcome.WriteOutcomeBuffer;
 const PerformanceConfig = @import("../config_loader.zig").Config.PerformanceConfig;
 
 const DocId = typed.DocId;
@@ -36,6 +38,7 @@ pub const Writer = struct {
     pending_count: std.atomic.Value(usize),
     change_buffer: ChangeBuffer,
     session_resolution_buffer: SessionResolutionBuffer,
+    write_outcome_buffer: WriteOutcomeBuffer,
     notifier_ptr: ?*const fn (ctx: ?*anyopaque) void,
     notifier_ctx: ?*anyopaque,
     metadata_cache: *storage_cache.metadata_cache_type,
@@ -137,6 +140,7 @@ pub const Writer = struct {
         self.queue.deinit();
         self.change_buffer.deinit();
         self.session_resolution_buffer.deinit();
+        self.write_outcome_buffer.deinit();
     }
     // Use sqlite3_exec for transaction-control statements because sqlite.Db.exec
     // logs an error from Statement.deinit when a control statement is expected to fail.
@@ -375,18 +379,46 @@ pub const Writer = struct {
                 self.metadata_cache.bulkEvict(eviction_keys.items);
             }
 
+            var pushed_outcome = false;
             for (batch.items) |op| {
+                if (op.getWriteAckInfo()) |info| {
+                    self.write_outcome_buffer.push(.{
+                        .conn_id = info.conn_id,
+                        .write_id = info.write_id,
+                        .err = null,
+                    }) catch |push_err| {
+                        std.log.err("Failed to push write outcome: {}", .{push_err});
+                    };
+                    pushed_outcome = true;
+                }
                 if (op.getCompletionSignal()) |sig| sig.signal(null);
                 op.deinit(self.allocator);
+            }
+            if (pushed_outcome) {
+                self.notifyChanges();
             }
 
             flushPendingChanges(self, &pending_changes);
         } else |err| {
             const classified_err = errors.classifyError(err);
             std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
+            var pushed_outcome = false;
             for (batch.items) |op| {
+                if (op.getWriteAckInfo()) |info| {
+                    self.write_outcome_buffer.push(.{
+                        .conn_id = info.conn_id,
+                        .write_id = info.write_id,
+                        .err = classified_err,
+                    }) catch |push_err| {
+                        std.log.err("Failed to push write outcome (error path): {}", .{push_err});
+                    };
+                    pushed_outcome = true;
+                }
                 if (op.getCompletionSignal()) |sig| sig.signal(classified_err);
                 op.deinit(self.allocator);
+            }
+            if (pushed_outcome) {
+                self.notifyChanges();
             }
         }
         batch.clearRetainingCapacity();
@@ -516,6 +548,7 @@ pub const Writer = struct {
         const entries = bop.entries;
         var tx_started = false;
         var final_err: ?anyerror = null;
+        var failed_batch_index: ?usize = null;
         defer {
             if (tx_started) {
                 execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
@@ -529,6 +562,22 @@ pub const Writer = struct {
             self.allocator.free(entries);
 
             if (bop.completion_signal) |sig| sig.signal(final_err);
+
+            if (@hasField(@TypeOf(bop), "conn_id")) {
+                if (bop.conn_id) |cid| {
+                    if (bop.write_id) |wid| {
+                        self.write_outcome_buffer.push(.{
+                            .conn_id = cid,
+                            .write_id = wid,
+                            .err = final_err,
+                            .batch_index = if (final_err != null) failed_batch_index else null,
+                        }) catch |push_err| {
+                            std.log.err("Failed to push batch write outcome: {}", .{push_err});
+                        };
+                        self.notifyChanges();
+                    }
+                }
+            }
 
             self.endOp(1);
             self.wakeFlushWaiters();
@@ -571,10 +620,11 @@ pub const Writer = struct {
             sql_cache.deinit();
         }
 
-        for (entries) |entry| {
+        for (entries, 0..) |entry, entry_idx| {
             const table_metadata = self.schema.getTableByIndex(entry.table_index) orelse {
                 final_err = StorageError.UnknownTable;
                 std.log.debug("Batch entry references unknown table index {d}", .{entry.table_index});
+                failed_batch_index = entry_idx;
                 break;
             };
             const namespace_id = if (table_metadata.namespaced) entry.namespace_id else schema.global_namespace_id;
@@ -601,6 +651,7 @@ pub const Writer = struct {
                                 var r = new_record;
                                 r.deinit(self.allocator);
                                 final_err = classified_err;
+                                failed_batch_index = entry_idx;
                                 break;
                             }
                         } else {
@@ -613,6 +664,7 @@ pub const Writer = struct {
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
                         final_err = classified_err;
+                        failed_batch_index = entry_idx;
                         break;
                     }
                 },
@@ -627,6 +679,7 @@ pub const Writer = struct {
                                 var r = old_record;
                                 r.deinit(self.allocator);
                                 final_err = classified_err;
+                                failed_batch_index = entry_idx;
                                 break;
                             }
                         } else {
@@ -637,6 +690,7 @@ pub const Writer = struct {
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatchOp DELETE", classified_err, table_metadata.name);
                         final_err = classified_err;
+                        failed_batch_index = entry_idx;
                         break;
                     }
                 },

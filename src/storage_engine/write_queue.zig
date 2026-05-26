@@ -72,6 +72,8 @@ pub const WriteOp = union(enum) {
         guard_values: ?[]typed.Value = null,
         timestamp: i64,
         completion_signal: ?*CompletionSignal = null,
+        conn_id: ?u64 = null,
+        write_id: ?[16]u8 = null,
     },
     delete: struct {
         table_index: usize,
@@ -80,6 +82,8 @@ pub const WriteOp = union(enum) {
         sql: []const u8,
         guard_values: ?[]typed.Value = null,
         completion_signal: ?*CompletionSignal = null,
+        conn_id: ?u64 = null,
+        write_id: ?[16]u8 = null,
     },
     resolve_session: struct {
         conn_id: u64,
@@ -93,6 +97,8 @@ pub const WriteOp = union(enum) {
     batch: struct {
         entries: []BatchEntry,
         completion_signal: ?*CompletionSignal = null,
+        conn_id: ?u64 = null,
+        write_id: ?[16]u8 = null,
     },
 
     pub const CompletionSignal = struct {
@@ -135,6 +141,24 @@ pub const WriteOp = union(enum) {
             .delete => |op| op.completion_signal,
             .resolve_session => null,
             .batch => |op| op.completion_signal,
+        };
+    }
+
+    pub fn getWriteAckInfo(self: WriteOp) ?struct { conn_id: u64, write_id: [16]u8 } {
+        return switch (self) {
+            .upsert => |op| if (op.conn_id != null and op.write_id != null)
+                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
+            else
+                null,
+            .delete => |op| if (op.conn_id != null and op.write_id != null)
+                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
+            else
+                null,
+            .batch => |op| if (op.conn_id != null and op.write_id != null)
+                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
+            else
+                null,
+            else => null,
         };
     }
 

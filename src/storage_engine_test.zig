@@ -409,7 +409,7 @@ test "StorageEngine: batchWrite rejects unknown tables before enqueue" {
 
     const entries = try makeDeleteBatchEntries(allocator, 999);
 
-    ctx.engine.batchWrite(entries) catch |err| {
+    ctx.engine.batchWrite(entries, null, null) catch |err| {
         try testing.expectEqual(storage_mod.StorageError.UnknownTable, err);
         try testing.expectEqual(@as(usize, 0), ctx.engine.writer.pendingOpCount());
         return;

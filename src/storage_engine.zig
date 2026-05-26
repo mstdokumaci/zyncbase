@@ -21,6 +21,7 @@ const filter_sql = @import("storage_engine/filter_sql.zig");
 const filter_eval = @import("filter_eval.zig");
 const ChangeBuffer = @import("change_buffer.zig").ChangeBuffer;
 const SessionResolutionBuffer = @import("session_resolution_buffer.zig").SessionResolutionBuffer;
+const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
 
 pub const StorageError = storage_errors.StorageError;
 pub const ColumnValue = sql.ColumnValue;
@@ -63,6 +64,25 @@ pub const StorageEngine = struct {
     pub const Options = struct {
         in_memory: bool = false,
         reader_pool_size: usize = 0,
+    };
+
+    const Buffers = struct {
+        change_buffer: ChangeBuffer,
+        session_resolution_buffer: SessionResolutionBuffer,
+        write_outcome_buffer: WriteOutcomeBuffer,
+
+        fn init(allocator: Allocator) !Buffers {
+            var cb = try ChangeBuffer.init(allocator);
+            errdefer cb.deinit();
+            var srb = try SessionResolutionBuffer.init(allocator);
+            errdefer srb.deinit();
+            const wob = try WriteOutcomeBuffer.init(allocator);
+            return .{
+                .change_buffer = cb,
+                .session_resolution_buffer = srb,
+                .write_outcome_buffer = wob,
+            };
+        }
     };
 
     pub const PerformanceConfig = @import("config_loader.zig").Config.PerformanceConfig;
@@ -166,16 +186,7 @@ pub const StorageEngine = struct {
             initialized_readers += 1;
         }
 
-        const change_buffer = try ChangeBuffer.init(allocator);
-        errdefer {
-            var cb = change_buffer;
-            cb.deinit();
-        }
-        const session_resolution_buffer = try SessionResolutionBuffer.init(allocator);
-        errdefer {
-            var rb = session_resolution_buffer;
-            rb.deinit();
-        }
+        const buffers = try Buffers.init(allocator);
 
         self.* = .{
             .allocator = allocator,
@@ -203,8 +214,9 @@ pub const StorageEngine = struct {
                 .mutex = .{},
                 .flush_cond = .{},
                 .pending_count = std.atomic.Value(usize).init(0),
-                .change_buffer = change_buffer,
-                .session_resolution_buffer = session_resolution_buffer,
+                .change_buffer = buffers.change_buffer,
+                .session_resolution_buffer = buffers.session_resolution_buffer,
+                .write_outcome_buffer = buffers.write_outcome_buffer,
                 .notifier_ptr = event_loop_notifier,
                 .notifier_ctx = notifier_ctx,
                 // SAFETY: Set after metadata_cache init below
@@ -384,6 +396,10 @@ pub const StorageEngine = struct {
         return &self.writer.session_resolution_buffer;
     }
 
+    pub fn writeOutcomeBuffer(self: *StorageEngine) *WriteOutcomeBuffer {
+        return &self.writer.write_outcome_buffer;
+    }
+
     pub fn cachedNamespaceId(self: *StorageEngine, namespace: []const u8) ?i64 {
         const handle = self.namespace_cache.get(storage_cache.namespaceCacheKey(namespace)) catch return null;
         defer handle.release();
@@ -445,6 +461,8 @@ pub const StorageEngine = struct {
         owner_doc_id: DocId,
         columns: []const ColumnValue,
         guard_predicate: ?*const query_ast.FilterPredicate,
+        conn_id: ?u64,
+        write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -480,6 +498,8 @@ pub const StorageEngine = struct {
                 .guard_values = guard_values,
                 .timestamp = std.time.timestamp(),
                 .completion_signal = null,
+                .conn_id = conn_id,
+                .write_id = write_id,
             },
         };
 
@@ -492,6 +512,8 @@ pub const StorageEngine = struct {
     pub fn batchWrite(
         self: *StorageEngine,
         entries: []BatchEntry,
+        conn_id: ?u64,
+        write_id: ?[16]u8,
     ) !void {
         var entries_owned = true;
         errdefer if (entries_owned) {
@@ -510,6 +532,8 @@ pub const StorageEngine = struct {
             .batch = .{
                 .entries = entries,
                 .completion_signal = null,
+                .conn_id = conn_id,
+                .write_id = write_id,
             },
         };
         var queued = false;
@@ -742,6 +766,8 @@ pub const StorageEngine = struct {
         id: DocId,
         namespace_id: i64,
         guard_predicate: ?*const query_ast.FilterPredicate,
+        conn_id: ?u64,
+        write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
@@ -771,6 +797,8 @@ pub const StorageEngine = struct {
                 .sql = sql_string,
                 .guard_values = guard_values,
                 .completion_signal = null,
+                .conn_id = conn_id,
+                .write_id = write_id,
             },
         };
 

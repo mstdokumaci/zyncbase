@@ -25,6 +25,10 @@ const Keys = struct {
     pub const tables = comptimeEncodeKey("tables");
     pub const fields = comptimeEncodeKey("fields");
     pub const field_flags = comptimeEncodeKey("fieldFlags");
+    pub const write_id = comptimeEncodeKey("writeId");
+    pub const details = comptimeEncodeKey("details");
+    pub const phase = comptimeEncodeKey("phase");
+    pub const batch_index = comptimeEncodeKey("batchIndex");
 };
 
 const Values = struct {
@@ -35,6 +39,9 @@ const Values = struct {
     pub const store_delta = comptimeEncodeKey("StoreDelta");
     pub const op_remove = comptimeEncodeKey("remove");
     pub const op_set = comptimeEncodeKey("set");
+    pub const write_committed = comptimeEncodeKey("WriteCommitted");
+    pub const write_error = comptimeEncodeKey("WriteError");
+    pub const phase_write = comptimeEncodeKey("write");
 };
 
 // === Comptime-encoded hot-path headers ===
@@ -310,4 +317,56 @@ pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
         try typed.writeMsgPack(typed_value, writer);
     }
+}
+
+pub fn encodeWriteCommitted(allocator: Allocator, write_id: [16]u8) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 2);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.write_committed);
+
+    try list.appendSlice(allocator, Keys.write_id);
+    const hex_buf = std.fmt.bytesToHex(write_id, .lower);
+    try msgpack.writeMsgPackStr(writer, &hex_buf);
+
+    return list.toOwnedSlice(allocator);
+}
+
+pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireError, batch_index: ?usize) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    // 5 fixed fields + optional batchIndex
+    const map_size: usize = if (batch_index != null) 6 else 5;
+    try msgpack.encodeMapHeader(writer, map_size);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.write_error);
+
+    try list.appendSlice(allocator, Keys.write_id);
+    const hex_buf = std.fmt.bytesToHex(write_id, .lower);
+    try msgpack.writeMsgPackStr(writer, &hex_buf);
+
+    try list.appendSlice(allocator, Keys.code);
+    try list.appendSlice(allocator, wire_err.code);
+
+    try list.appendSlice(allocator, Keys.message);
+    try list.appendSlice(allocator, wire_err.message);
+
+    // phase is always "write" for async writer-thread outcomes.
+    // Accept-phase failures are synchronous request errors, not WriteError messages.
+    try list.appendSlice(allocator, Keys.phase);
+    try list.appendSlice(allocator, Values.phase_write);
+
+    if (batch_index) |idx| {
+        try list.appendSlice(allocator, Keys.batch_index);
+        try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
+    }
+
+    return list.toOwnedSlice(allocator);
 }

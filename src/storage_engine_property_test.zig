@@ -219,7 +219,7 @@ test "storage: insert/delete inverse consistency" {
         try testing.expect(managed1.records.len > 0);
 
         // Delete
-        try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id, null);
+        try engine.deleteDocument(test_table.metadata.index, tc.id, tc.namespace_id, null, null, null);
         try engine.flushPendingWrites();
         // Verify it's gone
         var managed2 = try test_table.selectDocument(allocator, tc.id, tc.namespace_id);
@@ -458,7 +458,7 @@ test "storage: random operations fuzzing" {
             },
             1 => {
                 // Delete
-                try engine.deleteDocument(0, id, ns, null);
+                try engine.deleteDocument(0, id, ns, null, null, null);
             },
             2 => {
                 // Query

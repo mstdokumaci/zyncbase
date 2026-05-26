@@ -414,6 +414,57 @@ test "getWireError: returns non-empty comptime-encoded messages" {
     try testing.expect(err2.message.len > 0);
 }
 
+test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
+    const allocator = testing.allocator;
+    const write_id = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    const msg = try wire.encodeWriteCommitted(allocator, write_id);
+    defer allocator.free(msg);
+
+    var reader: std.Io.Reader = .fixed(msg);
+    const p = try msgpack.decode(allocator, &reader);
+    defer p.free(allocator);
+
+    const type_val = (try p.mapGet("type")) orelse return error.MissingType;
+    try testing.expectEqualStrings("WriteCommitted", type_val.str.value());
+    const wid_val = (try p.mapGet("writeId")) orelse return error.MissingWriteId;
+    try testing.expectEqualStrings("0102030405060708090a0b0c0d0e0f10", wid_val.str.value());
+}
+
+test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
+    const allocator = testing.allocator;
+    const write_id = [_]u8{0} ** 16;
+    const wire_err = wire.getWireError(error.PermissionDenied);
+    const msg = try wire.encodeWriteError(allocator, write_id, wire_err, null);
+    defer allocator.free(msg);
+
+    var reader: std.Io.Reader = .fixed(msg);
+    const p = try msgpack.decode(allocator, &reader);
+    defer p.free(allocator);
+
+    const type_val = (try p.mapGet("type")) orelse return error.MissingType;
+    try testing.expectEqualStrings("WriteError", type_val.str.value());
+    const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
+    try testing.expectEqualStrings("write", phase_val.str.value());
+    try testing.expect((try p.mapGet("batchIndex")) == null);
+}
+
+test "encodeWriteError: 6-field map includes batchIndex when set" {
+    const allocator = testing.allocator;
+    const write_id = [_]u8{0} ** 16;
+    const wire_err = wire.getWireError(error.PermissionDenied);
+    const msg = try wire.encodeWriteError(allocator, write_id, wire_err, 2);
+    defer allocator.free(msg);
+
+    var reader: std.Io.Reader = .fixed(msg);
+    const p = try msgpack.decode(allocator, &reader);
+    defer p.free(allocator);
+
+    const batch_idx = (try p.mapGet("batchIndex")) orelse return error.MissingBatchIndex;
+    try testing.expectEqual(@as(u64, 2), batch_idx.uint);
+    const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
+    try testing.expectEqualStrings("write", phase_val.str.value());
+}
+
 test "getWireError: query parser errors keep distinct human messages" {
     const allocator = testing.allocator;
     const check = struct {

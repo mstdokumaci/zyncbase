@@ -86,6 +86,8 @@ pub const StoreService = struct {
         namespace_id: i64,
         owner_doc_id: DocId,
         auth_predicate: ?*const query_ast.FilterPredicate = null,
+        conn_id: ?u64 = null,
+        write_id: ?[16]u8 = null,
     };
 
     pub const ScopedSession = struct {
@@ -149,7 +151,7 @@ pub const StoreService = struct {
         path: msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path, .document_only);
-        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, ctx.auth_predicate);
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
     }
 
     pub fn batchWrite(
@@ -199,7 +201,7 @@ pub const StoreService = struct {
         }
 
         entries_owned = false;
-        try self.storage_engine.batchWrite(entries);
+        try self.storage_engine.batchWrite(entries, ctx.conn_id, ctx.write_id);
     }
 
     pub fn queryCollection(
@@ -338,7 +340,7 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, ctx.auth_predicate);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
@@ -349,7 +351,7 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed_value,
             }};
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_predicate);
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
         } else {
             return StorageError.InvalidPath;
         }

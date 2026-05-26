@@ -342,6 +342,10 @@ export class ConnectionManager {
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
 				break;
+			case "WriteCommitted":
+			case "WriteError":
+				// Routed to StoreImpl via messageHandler below.
+				break;
 		}
 
 		this.messageHandler?.(msg);

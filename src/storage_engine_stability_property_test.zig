@@ -50,7 +50,7 @@ test "storage: stability no crashes on concurrent errors" {
                 defer managed.deinit();
                 _ = managed.records;
                 // Try to delete the value
-                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1, null) catch continue; // zwanzig-disable-line: swallowed-error
+                t_ctx.ctx.engine.deleteDocument(tbl_md.index, key, 1, null, null, null) catch continue; // zwanzig-disable-line: swallowed-error
             }
         }
     }.run;

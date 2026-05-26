@@ -50,6 +50,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.HookServerUnavailable => wireError("HOOK_SERVER_UNAVAILABLE", "Logic runtime down"),
         error.HookDenied => wireError("HOOK_DENIED", "Logic rejected write"),
         error.BatchTooLarge => wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations"),
+        error.InvalidWriteAck => wireError("INVALID_MESSAGE", "writeId requires confirm: committed"),
         else => wireError("INTERNAL_ERROR", "Zig core failure"),
     };
 }

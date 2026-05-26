@@ -189,3 +189,55 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         try testing.expectEqualStrings("INVALID_ARRAY_ELEMENT", result.code.?);
     }
 }
+
+test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID_MESSAGE" {
+    const allocator = testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-invalid-write-ack", &.{
+        .{ .name = "items", .fields = &.{"val"} },
+    });
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const conn = sc.conn;
+    const table = try app.tableMetadata("items");
+
+    // Build a StoreSet message with confirm="accepted" + a writeId.
+    // The server must reject this combination immediately.
+    var buf = std.ArrayListUnmanaged(u8).empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
+
+    try buf.append(allocator, 0x86); // fixmap(6)
+    try msgpack.writeMsgPackStr(writer, "type");
+    try msgpack.writeMsgPackStr(writer, "StoreSet");
+    try msgpack.writeMsgPackStr(writer, "id");
+    try buf.append(allocator, 0xcf);
+    try writer.writeInt(u64, 1, .big);
+    try msgpack.writeMsgPackStr(writer, "path");
+    try buf.append(allocator, 0x92); // fixarray(2)
+    try buf.append(allocator, 0xcf);
+    try writer.writeInt(u64, table.index, .big);
+    const doc_id_bytes = @import("typed.zig").docIdToBytes(1);
+    try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
+    try msgpack.writeMsgPackStr(writer, "value");
+    try msgpack.writeMsgPackStr(writer, "hello");
+    try msgpack.writeMsgPackStr(writer, "confirm");
+    try msgpack.writeMsgPackStr(writer, "accepted");
+    try msgpack.writeMsgPackStr(writer, "writeId");
+    // 32-char hex string (valid format)
+    try msgpack.writeMsgPackStr(writer, "00000000000000000000000000000000");
+
+    const message = try buf.toOwnedSlice(allocator);
+    defer allocator.free(message);
+
+    const response = try routeWithArena(&app.handler, allocator, conn, message);
+    defer allocator.free(response);
+    const result = try parseResponse(allocator, response);
+    defer allocator.free(result.resp_type);
+    defer if (result.code) |code| allocator.free(code);
+
+    try testing.expectEqualStrings("error", result.resp_type);
+    try testing.expectEqualStrings("INVALID_MESSAGE", result.code.?);
+}

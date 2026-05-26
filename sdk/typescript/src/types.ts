@@ -24,6 +24,10 @@ export type LifecycleEvent =
 	| "statusChange"
 	| "schemaChange";
 
+export interface WriteOptions {
+	confirm?: "accepted" | "committed";
+}
+
 // ─── Client configuration ────────────────────────────────────────────────────
 
 export interface ClientOptions {
@@ -72,15 +76,23 @@ export interface SubscriptionHandle {
 
 export interface Store {
 	/** Set a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	set(path: Path, value: JsonValue): Promise<void>;
+	set(path: Path, value: JsonValue, options?: WriteOptions): Promise<void>;
 	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
-	remove(path: Path): Promise<void>;
+	remove(path: Path, options?: WriteOptions): Promise<void>;
 	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
-	create(collection: string, value: JsonValue): Promise<string>;
+	create(
+		collection: string,
+		value: JsonValue,
+		options?: WriteOptions,
+	): Promise<string>;
 	/** Push a new value to a collection with an auto-generated ULID/UUID. Returns a Promise of the ID. */
-	push(collection: string, value: JsonValue): Promise<string>;
+	push(
+		collection: string,
+		value: JsonValue,
+		options?: WriteOptions,
+	): Promise<string>;
 	/** Merge fields into an existing document. Returns a Promise that resolves when the server acknowledges. */
-	update(path: Path, value: JsonValue): Promise<void>;
+	update(path: Path, value: JsonValue, options?: WriteOptions): Promise<void>;
 	/** Get current value(s) in a one-off read. */
 	get(path: Path): Promise<JsonValue | null | undefined>;
 	/** Listen for changes at a path. Returns an unlisten function. */
@@ -92,7 +104,7 @@ export interface Store {
 		callback: (results: JsonValue[]) => void,
 	): SubscriptionHandle;
 	// Batch — async
-	batch(operations: BatchOperation[]): Promise<void>;
+	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
 	query(
 		collection: string,
 		options?: QueryOptions,
@@ -106,12 +118,16 @@ export interface StoreSet {
 	id: number;
 	path: string[];
 	value: JsonValue;
+	confirm?: "accepted" | "committed";
+	writeId?: string;
 }
 
 export interface StoreRemove {
 	type: "StoreRemove";
 	id: number;
 	path: string[];
+	confirm?: "accepted" | "committed";
+	writeId?: string;
 }
 
 /** ops are positional tuples: ["s", path, value] for set, ["r", path] for remove */
@@ -119,6 +135,8 @@ export interface StoreBatch {
 	type: "StoreBatch";
 	id: number;
 	ops: (["s", string[], JsonValue] | ["r", string[]])[];
+	confirm?: "accepted" | "committed";
+	writeId?: string;
 }
 
 export interface StoreSetNamespace {
@@ -226,10 +244,28 @@ export interface ConnectedMessage {
 	presenceNamespace?: string;
 }
 
+export interface WriteCommitted {
+	type: "WriteCommitted";
+	writeId: string;
+}
+
+export interface WriteError {
+	type: "WriteError";
+	writeId: string;
+	code: string;
+	message: string;
+	/** Always "write" — async writer-thread failures. Accept-phase failures are synchronous request errors. */
+	phase: "write";
+	/** Index of the failing operation within a StoreBatch, when identifiable. */
+	batchIndex?: number;
+}
+
 /** Union of all inbound message types. */
 export type InboundMessage =
 	| OkResponse
 	| ErrorResponse
 	| StoreDelta
 	| SchemaSync
-	| ConnectedMessage;
+	| ConnectedMessage
+	| WriteCommitted
+	| WriteError;

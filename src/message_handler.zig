@@ -399,11 +399,16 @@ pub const MessageHandler = struct {
         var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
         const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
+        // Parse write acknowledgment metadata
+        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
+
         try self.store_service.setPath(
             .{
                 .namespace_id = session.namespace_id,
                 .owner_doc_id = session.user_doc_id,
                 .auth_predicate = auth_predicate_ptr,
+                .conn_id = if (write_ack != null) conn.id else null,
+                .write_id = if (write_ack) |ack| ack.write_id else null,
             },
             payloads.path,
             value,
@@ -427,8 +432,17 @@ pub const MessageHandler = struct {
         var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
         const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
 
+        // Parse write acknowledgment metadata
+        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
+
         try self.store_service.removePath(
-            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id, .auth_predicate = auth_predicate_ptr },
+            .{
+                .namespace_id = session.namespace_id,
+                .owner_doc_id = session.user_doc_id,
+                .auth_predicate = auth_predicate_ptr,
+                .conn_id = if (write_ack != null) conn.id else null,
+                .write_id = if (write_ack) |ack| ack.write_id else null,
+            },
             payloads.path,
         );
 
@@ -466,8 +480,16 @@ pub const MessageHandler = struct {
             }
         }
 
+        // Parse write acknowledgment metadata
+        const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
+
         try self.store_service.batchWrite(
-            .{ .namespace_id = session.namespace_id, .owner_doc_id = session.user_doc_id },
+            .{
+                .namespace_id = session.namespace_id,
+                .owner_doc_id = session.user_doc_id,
+                .conn_id = if (write_ack != null) conn.id else null,
+                .write_id = if (write_ack) |ack| ack.write_id else null,
+            },
             payloads.ops,
             auth_predicates,
         );
@@ -588,4 +610,25 @@ fn isSecurityError(err: anyerror) bool {
         => true,
         else => false,
     };
+}
+
+fn parseWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?struct { write_id: [16]u8 } {
+    const confirm_val = confirm_str orelse {
+        // No confirm field — a writeId without confirm is a client bug.
+        if (write_id_str != null) return error.InvalidWriteAck;
+        return null;
+    };
+    if (!std.mem.eql(u8, confirm_val, "committed")) {
+        // "accepted" (or any other value) with a writeId is a client bug: the
+        // writeId would never be resolved, causing a silent hang on the client.
+        // Reject early so the client gets an immediate error instead.
+        if (write_id_str != null) return error.InvalidWriteAck;
+        return null;
+    }
+    // confirm == "committed": writeId is required and must be valid.
+    const wid_str = write_id_str orelse return error.InvalidWriteAck;
+    if (wid_str.len != 32) return error.InvalidWriteAck;
+    var write_id: [16]u8 = undefined;
+    _ = std.fmt.hexToBytes(&write_id, wid_str) catch return error.InvalidWriteAck;
+    return .{ .write_id = write_id };
 }
