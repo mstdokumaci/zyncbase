@@ -58,7 +58,6 @@ Important: Project is still in early development stage. Give no consideration to
 
 ## Maintenance & Setup
 - **Build BoringSSL:** `./scripts/build-boringssl.sh` (Required before first build or after submodule update)
-- **Apply Patches:** `./scripts/apply-patches.sh` (Applies patches to vendor dependencies)
 - **Compress Specs:** `npm run specs:compress` (Syncs `specs/` to `specs_llm/`)
 
 ## Linting

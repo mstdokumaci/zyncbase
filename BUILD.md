@@ -40,15 +40,11 @@ If you already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### 2. Apply Patches to Bun's uWebSockets
+### 2. uWebSockets
 
-Bun's uWebSockets fork includes several dependencies we don't need (like libdeflate and SIMDUTF). We use minimal patches to disable them and stub functions for Bun-specific runtime hooks.
+uWebSockets and µSockets are directly vendored under `vendor/uwebsockets/` and `vendor/usockets/`.
 
-```bash
-./scripts/apply-patches.sh
-```
-
-For detailed technical information about the patches and stubs, see [patches.md](specs/implementation/patches.md).
+For detailed technical information about the stubs, see the comments in `src/uws_stubs.c`.
 
 ### 3. Build BoringSSL
 

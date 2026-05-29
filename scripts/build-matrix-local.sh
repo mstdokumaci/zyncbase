@@ -27,11 +27,7 @@ TARGETS=(
     "x86_64-linux-gnu|Linux x86_64|linux-x86_64"
 )
 
-# 1. Apply patches
-echo -e "\n${YELLOW}📦 Patching dependencies...${NC}"
-./scripts/apply-patches.sh
-
-# Determine macOS SDK path once
+# 1. Determine macOS SDK path once
 MACOS_SDK=""
 if [[ "$OSTYPE" == "darwin"* ]]; then
     MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)

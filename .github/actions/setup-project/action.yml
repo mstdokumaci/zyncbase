@@ -28,10 +28,6 @@ runs:
       with:
         bun-version: latest
 
-    - name: Apply patches
-      shell: bash
-      run: ./scripts/apply-patches.sh
-
     - name: Resolve BoringSSL cache inputs
       id: boringssl-cache-inputs
       shell: bash
@@ -52,7 +48,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ steps.boringssl-cache-inputs.outputs.build_dir }}
-        key: boringssl-${{ runner.os }}-${{ runner.arch }}-${{ steps.boringssl-cache-inputs.outputs.image_os }}-${{ inputs.boringssl-target }}-${{ steps.boringssl-cache-inputs.outputs.boringssl_rev }}-${{ hashFiles('scripts/build-boringssl.sh', 'scripts/apply-patches.sh', 'patches/**') }}
+        key: boringssl-${{ runner.os }}-${{ runner.arch }}-${{ steps.boringssl-cache-inputs.outputs.image_os }}-${{ inputs.boringssl-target }}-${{ steps.boringssl-cache-inputs.outputs.boringssl_rev }}-${{ hashFiles('scripts/build-boringssl.sh') }}
         restore-keys: |
           boringssl-${{ runner.os }}-${{ runner.arch }}-${{ steps.boringssl-cache-inputs.outputs.image_os }}-${{ inputs.boringssl-target }}-${{ steps.boringssl-cache-inputs.outputs.boringssl_rev }}-
 
