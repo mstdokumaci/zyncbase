@@ -172,9 +172,8 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     } else {
         step.addIncludePath(b.path(b_b_include));
     }
-    step.addIncludePath(b.path("vendor/bun/packages/bun-uws/src"));
-    step.addIncludePath(b.path("vendor/bun/packages/bun-usockets/src"));
-    step.addIncludePath(b.path("vendor/bun/src/deps"));
+    step.addIncludePath(b.path("vendor/uwebsockets"));
+    step.addIncludePath(b.path("vendor/usockets"));
     step.addIncludePath(b.path("src"));
 
     if (is_absolute) {
@@ -212,13 +211,11 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-DLIBUS_USE_BORINGSSL=1",
         "-DWITH_BORINGSSL=1",
         "-Wno-nullability-completeness",
-        "-I",
-        "vendor/bun/packages",
         b.fmt("-I{s}", .{b_b_include}),
     } }) catch |err| @panic(b.fmt("Failed to concat uws_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
-        .file = b.path("vendor/bun/src/deps/libuwsockets.cpp"),
+        .file = b.path("src/uws_bridge.cpp"),
         .flags = uws_flags,
     });
 
@@ -238,13 +235,13 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     step.addCSourceFiles(.{
         .files = &.{
-            "vendor/bun/packages/bun-usockets/src/eventing/epoll_kqueue.c",
-            "vendor/bun/packages/bun-usockets/src/crypto/openssl.c",
-            "vendor/bun/packages/bun-usockets/src/context.c",
-            "vendor/bun/packages/bun-usockets/src/loop.c",
-            "vendor/bun/packages/bun-usockets/src/socket.c",
-            "vendor/bun/packages/bun-usockets/src/bsd.c",
-            "vendor/bun/packages/bun-usockets/src/udp.c",
+            "vendor/usockets/eventing/epoll_kqueue.c",
+            "vendor/usockets/crypto/openssl.c",
+            "vendor/usockets/context.c",
+            "vendor/usockets/loop.c",
+            "vendor/usockets/socket.c",
+            "vendor/usockets/bsd.c",
+            "vendor/usockets/udp.c",
         },
         .flags = usockets_flags,
     });
@@ -261,7 +258,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     } }) catch |err| @panic(b.fmt("Failed to concat sni_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
-        .file = b.path("vendor/bun/packages/bun-usockets/src/crypto/sni_tree.cpp"),
+        .file = b.path("vendor/usockets/crypto/sni_tree.cpp"),
         .flags = sni_flags,
     });
 

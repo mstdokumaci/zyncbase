@@ -14,8 +14,8 @@ const TestSslPaths = struct {
     fn init(allocator: Allocator) !TestSslPaths {
         return .{
             .allocator = allocator,
-            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.pem"),
-            .key_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.key"),
+            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.pem"),
+            .key_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.key"),
         };
     }
 

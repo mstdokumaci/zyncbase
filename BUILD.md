@@ -138,7 +138,7 @@ Error: BoringSSL build failed
 ### Submodule Not Initialized
 
 ```
-Error: vendor/bun/packages/bun-uws/src not found
+Error: vendor/uwebsockets/App.h not found
 ```
 
 **Solution:**
