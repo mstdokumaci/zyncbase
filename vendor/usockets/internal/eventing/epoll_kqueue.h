@@ -32,8 +32,6 @@
  * We therefore have our own bitfield we then translate in every call */
 #define LIBUS_SOCKET_READABLE 1
 #define LIBUS_SOCKET_WRITABLE 2
-
-#include <mach/mach.h>
 #endif
 
 struct us_loop_t {
@@ -51,28 +49,19 @@ struct us_loop_t {
     /* Loop's own file descriptor */
     int fd;
 
-    /* Number of polls owned by bun */
-    unsigned int bun_polls;
-
-    /* Incremented atomically by wakeup(), swapped to 0 before epoll/kqueue.
-     * If non-zero, the event loop will return immediately so we can skip the GC safepoint. */
-    unsigned int pending_wakeups;
-
     /* The list of ready polls */
 #ifdef LIBUS_USE_EPOLL
-    alignas(LIBUS_EXT_ALIGNMENT) struct epoll_event ready_polls[1024];
+    struct epoll_event ready_polls[1024];
 #else
-    alignas(LIBUS_EXT_ALIGNMENT) struct kevent64_s ready_polls[1024];
+    struct kevent ready_polls[1024];
 #endif
 };
 
 struct us_poll_t {
     alignas(LIBUS_EXT_ALIGNMENT) struct {
-        signed int fd : 27; // we could have this unsigned if we wanted to, -1 should never be used
-        unsigned int poll_type : 5;
+        signed int fd : 28; // we could have this unsigned if we wanted to, -1 should never be used
+        unsigned int poll_type : 4;
     } state;
 };
-
-#undef FD_BITS
 
 #endif // EPOLL_KQUEUE_H

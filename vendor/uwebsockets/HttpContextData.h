@@ -22,19 +22,10 @@
 
 #include <vector>
 #include "MoveOnlyFunction.h"
-#include "HttpParser.h"
+
 namespace uWS {
 template<bool> struct HttpResponse;
 struct HttpRequest;
-
-struct HttpFlags {
-    bool isParsingHttp: 1 = false;
-    bool rejectUnauthorized: 1 = false;
-    bool usingCustomExpectHandler: 1 = false;
-    bool requireHostHeader: 1 = true;
-    bool isAuthorized: 1 = false;
-    bool useStrictMethodValidation: 1 = false;
-};
 
 template <bool SSL>
 struct alignas(16) HttpContextData {
@@ -43,11 +34,6 @@ struct alignas(16) HttpContextData {
     template <bool> friend struct TemplatedApp;
 private:
     std::vector<MoveOnlyFunction<void(HttpResponse<SSL> *, int)>> filterHandlers;
-    using OnSocketDataCallback = void (*)(void* userData, int is_ssl, struct us_socket_t *rawSocket, const char *data, int length, bool last);
-    using OnSocketDrainCallback = void (*)(void* userData, int is_ssl, struct us_socket_t *rawSocket);
-    using OnSocketUpgradedCallback = void (*)(void* userData, int is_ssl, struct us_socket_t *rawSocket);
-    using OnClientErrorCallback = MoveOnlyFunction<void(int is_ssl, struct us_socket_t *rawSocket, uWS::HttpParserError errorCode, char *rawPacket, int rawPacketLength)>;
-    using OnSocketClosedCallback = void (*)(void* userData, int is_ssl, struct us_socket_t *rawSocket);
 
     MoveOnlyFunction<void(const char *hostname)> missingServerNameHandler;
 
@@ -62,25 +48,11 @@ private:
     /* This is the default router for default SNI or non-SSL */
     HttpRouter<RouterData> router;
     void *upgradedWebSocket = nullptr;
-    /* Used to simulate Node.js socket events. */
-    OnSocketClosedCallback onSocketClosed = nullptr;
-    OnSocketDrainCallback onSocketDrain = nullptr;
-    OnSocketDataCallback onSocketData = nullptr;
-    OnSocketUpgradedCallback onSocketUpgraded = nullptr;
-    OnClientErrorCallback onClientError = nullptr;
+    bool isParsingHttp = false;
 
-    uint64_t maxHeaderSize = 0; // 0 means no limit
-
-    // TODO: SNI
-    void clearRoutes() {
-        this->router = HttpRouter<RouterData>{};
-        this->currentRouter = &router;
-        filterHandlers.clear();
-    }
-
-public:
-    
-    HttpFlags flags;
+    /* If we are main acceptor, distribute to these apps */
+    std::vector<void *> childApps;
+    unsigned int roundRobin = 0;
 };
 
 }

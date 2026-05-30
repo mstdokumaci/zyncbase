@@ -52,12 +52,14 @@ struct WebSocketContextData {
 private:
 
 public:
+
     /* This one points to the App's shared topicTree */
     TopicTree<TopicTreeMessage, TopicTreeBigMessage> *topicTree;
 
     /* The callbacks for this context */
     MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *)> openHandler = nullptr;
     MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *, std::string_view, OpCode)> messageHandler = nullptr;
+    MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *, std::string_view, OpCode)> droppedHandler = nullptr;
     MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *)> drainHandler = nullptr;
     MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *, std::string_view, int, int)> subscriptionHandler = nullptr;
     MoveOnlyFunction<void(WebSocket<SSL, true, USERDATA> *, int, std::string_view)> closeHandler = nullptr;
@@ -81,7 +83,7 @@ public:
     std::pair<unsigned short, unsigned short> idleTimeoutComponents;
 
     /* This is run once on start-up */
-    void calculateIdleTimeoutComponents(unsigned short idleTimeout) {
+    void calculateIdleTimeoutCompnents(unsigned short idleTimeout) {
         unsigned short margin = 4;
         /* 4, 8 or 16 seconds margin based on idleTimeout */
         while ((int) idleTimeout - margin * 2 >= margin * 2 && margin < 16) {

@@ -28,6 +28,9 @@ SOFTWARE.
 #define _ANY_INVOKABLE_H_
 
 #include <functional>
+
+#if !defined(__cpp_lib_move_only_function) || __cpp_lib_move_only_function < 202110L
+
 #include <memory>
 #include <type_traits>
 
@@ -82,14 +85,7 @@ namespace ofats {
 
 namespace any_detail {
 
-template <std::size_t Len, std::size_t Align>
-class my_aligned_storage_t {
-private:
-    alignas(Align) std::byte t_buff[Len];
-};
-
-
-using buffer = my_aligned_storage_t<sizeof(void*) * 2, alignof(void*)>;
+using buffer = std::aligned_storage_t<sizeof(void*) * 2, alignof(void*)>;
 
 template <class T>
 inline constexpr bool is_small_object_v =
@@ -380,5 +376,14 @@ namespace uWS {
   template <class T>
   using MoveOnlyFunction = ofats::any_invocable<T>;
 }
+
+#else // !defined(__cpp_lib_move_only_function) || __cpp_lib_move_only_function < 202110L
+
+namespace uWS {
+  template <class T>
+  using MoveOnlyFunction = std::move_only_function<T>;
+}
+
+#endif
 
 #endif  // _ANY_INVOKABLE_H_

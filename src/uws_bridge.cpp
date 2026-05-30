@@ -5,9 +5,8 @@
 #include "internal/internal.h"
 #include <string_view>
 
-extern "C" const char* ares_inet_ntop(int af, const char *src, char *dst, size_t size);
+#define uws_res_r uws_res_t*
 
-#define uws_res_r uws_res_t* nonnull_arg
 static inline std::string_view stringViewFromC(const char* message, size_t length) {
     if (length) {
         return std::string_view(message, length);
@@ -21,13 +20,13 @@ using TCPWebSocket = uWS::WebSocket<false, true, void *>;
 extern "C"
 {
 
-    uws_app_t *uws_create_app(int ssl, struct us_bun_socket_context_options_t options)
+    uws_app_t *uws_create_app(int ssl, struct us_socket_context_options_t options)
     {
         if (ssl) {
             uWS::SocketContextOptions socket_context_options;
             memcpy(&socket_context_options, &options,
                    sizeof(uWS::SocketContextOptions));
-            return (uws_app_t *)uWS::SSLApp::create(socket_context_options);
+            return (uws_app_t *)new uWS::SSLApp(socket_context_options);
         }
         return (uws_app_t *)new uWS::App();
     }
@@ -36,7 +35,7 @@ extern "C"
                      size_t pattern_len, uws_method_handler handler,
                      void *user_data)
     {
-        std::string_view pattern = std::string_view(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr, pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -66,7 +65,7 @@ extern "C"
                       size_t pattern_len, uws_method_handler handler,
                       void *user_data)
     {
-        std::string_view pattern = std::string_view(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr, pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -96,7 +95,7 @@ extern "C"
                          size_t pattern_len, uws_method_handler handler,
                          void *user_data)
     {
-        std::string_view pattern = std::string_view(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr, pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -323,11 +322,9 @@ extern "C"
     {
         if (ssl) {
             uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
-            uwsRes->clearOnWritableAndAborted();
             uwsRes->end(stringViewFromC(data, length), close_connection);
         } else {
             uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
-            uwsRes->clearOnWritableAndAborted();
             uwsRes->end(stringViewFromC(data, length), close_connection);
         }
     }
@@ -339,22 +336,22 @@ extern "C"
     {
         if (ssl) {
             uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
-            auto *onAborted = reinterpret_cast<void (*)(
-                uWS::HttpResponse<true> *, void *)>(handler);
             if (handler) {
-                uwsRes->onAborted(optional_data, onAborted);
+                uwsRes->onAborted([handler, res, optional_data]() {
+                    handler(res, optional_data);
+                });
             } else {
-                uwsRes->clearOnAborted();
+                uwsRes->onAborted(nullptr);
             }
         } else {
             uWS::HttpResponse<false> *uwsRes =
                 (uWS::HttpResponse<false> *)res;
-            auto *onAborted = reinterpret_cast<void (*)(
-                uWS::HttpResponse<false> *, void *)>(handler);
             if (handler) {
-                uwsRes->onAborted(optional_data, onAborted);
+                uwsRes->onAborted([handler, res, optional_data]() {
+                    handler(res, optional_data);
+                });
             } else {
-                uwsRes->clearOnAborted();
+                uwsRes->onAborted(nullptr);
             }
         }
     }
@@ -367,31 +364,31 @@ extern "C"
     {
         if (ssl) {
             uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
-            auto onData = reinterpret_cast<void (*)(
-                uWS::HttpResponse<true> *response, const char *chunk,
-                size_t chunk_length, bool, void *)>(handler);
             if (handler) {
-                uwsRes->onData(optional_data, onData);
+                uwsRes->onData(
+                    [handler, res, optional_data](
+                        std::string_view chunk, bool is_end) {
+                        handler(res, chunk.data(), chunk.size(), is_end,
+                                optional_data);
+                    });
             } else {
-                uwsRes->onData(optional_data, nullptr);
+                uwsRes->onData(nullptr);
             }
         } else {
             uWS::HttpResponse<false> *uwsRes =
                 (uWS::HttpResponse<false> *)res;
-            auto onData = reinterpret_cast<void (*)(
-                uWS::HttpResponse<false> *response, const char *chunk,
-                size_t chunk_length, bool, void *)>(handler);
             if (handler) {
-                uwsRes->onData(optional_data, onData);
+                uwsRes->onData(
+                    [handler, res, optional_data](
+                        std::string_view chunk, bool is_end) {
+                        handler(res, chunk.data(), chunk.size(), is_end,
+                                optional_data);
+                    });
             } else {
-                uwsRes->onData(optional_data, nullptr);
+                uwsRes->onData(nullptr);
             }
         }
     }
-
-    size_t uws_req_get_header(uws_req_t *res, const char *lower_case_header,
-                              size_t lower_case_header_length,
-                              const char **dest) nonnull_fn_decl;
 
     size_t uws_req_get_header(uws_req_t *res, const char *lower_case_header,
                               size_t lower_case_header_length,
@@ -414,7 +411,7 @@ extern "C"
         return value.length();
     }
 
-    us_socket_t *uws_res_upgrade(
+    void uws_res_upgrade(
         int ssl, uws_res_r res, void *data,
         const char *sec_web_socket_key, size_t sec_web_socket_key_length,
         const char *sec_web_socket_protocol,
@@ -424,7 +421,7 @@ extern "C"
     {
         if (ssl) {
             uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
-            return uwsRes->template upgrade<void *>(
+            uwsRes->template upgrade<void *>(
                 data ? std::move(data) : nullptr,
                 stringViewFromC(sec_web_socket_key,
                                 sec_web_socket_key_length),
@@ -436,7 +433,7 @@ extern "C"
         } else {
             uWS::HttpResponse<false> *uwsRes =
                 (uWS::HttpResponse<false> *)res;
-            return uwsRes->template upgrade<void *>(
+            uwsRes->template upgrade<void *>(
                 data ? std::move(data) : nullptr,
                 stringViewFromC(sec_web_socket_key,
                                 sec_web_socket_key_length),

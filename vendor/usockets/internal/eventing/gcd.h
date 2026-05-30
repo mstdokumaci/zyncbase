@@ -15,24 +15,26 @@
  * limitations under the License.
  */
 
-#ifndef LOOP_DATA_H
-#define LOOP_DATA_H
+#ifndef GCD_H
+#define GCD_H
 
-struct us_internal_loop_data_t {
-    struct us_timer_t *sweep_timer;
-    struct us_internal_async *wakeup_async;
-    int last_write_failed;
-    struct us_socket_context_t *head;
-    struct us_socket_context_t *iterator;
-    char *recv_buf;
-    void *ssl_data;
-    void (*pre_cb)(struct us_loop_t *);
-    void (*post_cb)(struct us_loop_t *);
-    struct us_socket_t *closed_head;
-    struct us_socket_t *low_prio_head;
-    int low_prio_budget;
-    /* We do not care if this flips or not, it doesn't matter */
-    long long iteration_nr;
+#include "internal/loop_data.h"
+
+#include <dispatch/dispatch.h>
+#define LIBUS_SOCKET_READABLE 1
+#define LIBUS_SOCKET_WRITABLE 2
+
+struct us_loop_t {
+    alignas(LIBUS_EXT_ALIGNMENT) struct us_internal_loop_data_t data;
+
+    dispatch_queue_t gcd_queue;
 };
 
-#endif // LOOP_DATA_H
+struct us_poll_t {
+    int events;
+    dispatch_source_t gcd_read, gcd_write;
+    LIBUS_SOCKET_DESCRIPTOR fd;
+    unsigned char poll_type;
+};
+
+#endif // GCD_H

@@ -206,7 +206,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-fno-exceptions",
         "-fno-rtti",
         "-DUWS_NO_ZLIB",
-        "-DUWS_USE_LIBDEFLATE=0",
         "-DLIBUS_USE_OPENSSL=1",
         "-DLIBUS_USE_BORINGSSL=1",
         "-DWITH_BORINGSSL=1",
@@ -222,9 +221,8 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     const usockets_flags = std.mem.concat(b.allocator, []const u8, &.{
         linux_flags, sanitize_flags, &.{
             "-std=c11",
-            "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in bun-usockets
+            "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in usockets
             "-DUWS_NO_ZLIB",
-            "-DUWS_USE_LIBDEFLATE=0",
             "-DLIBUS_USE_OPENSSL=1",
             "-DLIBUS_USE_BORINGSSL=1",
             "-DWITH_BORINGSSL=1",
@@ -260,15 +258,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
     step.addCSourceFile(.{
         .file = b.path("vendor/usockets/crypto/sni_tree.cpp"),
         .flags = sni_flags,
-    });
-
-    const stubs_flags = std.mem.concat(b.allocator, []const u8, &.{ linux_flags, sanitize_flags, &.{
-        "-std=c11",
-    } }) catch |err| @panic(b.fmt("Failed to concat stubs_flags: {s}", .{@errorName(err)}));
-
-    step.addCSourceFile(.{
-        .file = b.path("src/uws_stubs.c"),
-        .flags = stubs_flags,
     });
 
     step.linkLibC();

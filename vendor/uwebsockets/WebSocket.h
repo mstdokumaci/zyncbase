@@ -18,14 +18,21 @@
 #ifndef UWS_WEBSOCKET_H
 #define UWS_WEBSOCKET_H
 
-#include "AsyncSocket.h"
-#include "WebSocketContextData.h"
 #include "WebSocketData.h"
 #include "WebSocketProtocol.h"
+#include "AsyncSocket.h"
+#include "WebSocketContextData.h"
 
 #include <string_view>
-// clang-format off
+
 namespace uWS {
+
+/* Experimental */
+enum CompressFlags : int {
+    NO_ACTION,
+    COMPRESS,
+    ALREADY_COMPRESSED
+};
 
 template <bool SSL, bool isServer, typename USERDATA>
 struct WebSocket : AsyncSocket<SSL> {
@@ -34,8 +41,8 @@ struct WebSocket : AsyncSocket<SSL> {
 private:
     typedef AsyncSocket<SSL> Super;
 
-    void *init(bool perMessageDeflate, CompressOptions compressOptions, BackPressure &&backpressure, void *socketData, WebSocketData::OnSocketClosedCallback onSocketClosed) {
-        new (us_socket_ext(SSL, (us_socket_t *) this)) WebSocketData(perMessageDeflate, compressOptions, std::move(backpressure), socketData, onSocketClosed);
+    void *init(bool perMessageDeflate, CompressOptions compressOptions, BackPressure &&backpressure) {
+        new (us_socket_ext(SSL, (us_socket_t *) this)) WebSocketData(perMessageDeflate, compressOptions, std::move(backpressure));
         return this;
     }
 public:
@@ -51,6 +58,7 @@ public:
     using Super::getBufferedAmount;
     using Super::getRemoteAddress;
     using Super::getRemoteAddressAsText;
+    using Super::getRemotePort;
     using Super::getNativeHandle;
 
     /* WebSocket close cannot be an alias to AsyncSocket::close since
@@ -73,10 +81,6 @@ public:
         DROPPED
     };
 
-    size_t memoryCost() {
-        return getBufferedAmount() + sizeof(WebSocket);
-    }
-
     /* Sending fragmented messages puts a bit of effort on the user; you must not interleave regular sends
      * with fragmented sends and you must sendFirstFragment, [sendFragment], then finally sendLastFragment. */
     SendStatus sendFirstFragment(std::string_view message, OpCode opCode = OpCode::BINARY, bool compress = false) {
@@ -91,9 +95,23 @@ public:
         return send(message, CONTINUATION, compress, true);
     }
 
+    /* Experimental */
+    bool hasNegotiatedCompression() {
+        WebSocketData *webSocketData = (WebSocketData *) Super::getAsyncSocketData();
+        return webSocketData->compressionStatus == WebSocketData::ENABLED;
+    }
+
+    /* Experimental */
+    SendStatus sendPrepared(PreparedMessage &preparedMessage) {
+        if (preparedMessage.compressed && hasNegotiatedCompression() && preparedMessage.compressedMessage.length() < preparedMessage.originalMessage.length()) {
+            return send({preparedMessage.compressedMessage.data(), preparedMessage.compressedMessage.length()}, (OpCode) preparedMessage.opCode, uWS::CompressFlags::ALREADY_COMPRESSED);
+        }
+        return send({preparedMessage.originalMessage.data(), preparedMessage.originalMessage.length()}, (OpCode) preparedMessage.opCode);
+    }
+
     /* Send or buffer a WebSocket frame, compressed or not. Returns BACKPRESSURE on increased user space backpressure,
      * DROPPED on dropped message (due to backpressure) or SUCCCESS if you are free to send even more now. */
-    SendStatus send(std::string_view message, OpCode opCode = OpCode::BINARY, bool compress = false, bool fin = true) {
+    SendStatus send(std::string_view message, OpCode opCode = OpCode::BINARY, int compress = false, bool fin = true) {
         WebSocketContextData<SSL, USERDATA> *webSocketContextData = (WebSocketContextData<SSL, USERDATA> *) us_socket_context_ext(SSL,
             (us_socket_context_t *) us_socket_context(SSL, (us_socket_t *) this)
         );
@@ -104,6 +122,12 @@ public:
             if (webSocketContextData->closeOnBackpressureLimit) {
                 us_socket_shutdown_read(SSL, (us_socket_t *) this);
             }
+
+            /* It is okay to call send again from within this callback since we immediately return with DROPPED afterwards */
+            if (webSocketContextData->droppedHandler) {
+                webSocketContextData->droppedHandler(this, message, opCode);
+            }
+
             return DROPPED;
         }
 
@@ -111,11 +135,11 @@ public:
         WebSocketData *webSocketData = (WebSocketData *) Super::getAsyncSocketData();
 
         /* Special path for long sends of non-compressed, non-SSL messages */
-        if (message.length() >= 16 * 1024 && !compress && !SSL && !webSocketData->subscriber && getBufferedAmount() == 0 && Super::getLoopData()->getCorkOffset() == 0) {
+        if (message.length() >= 16 * 1024 && !compress && !SSL && !webSocketData->subscriber && getBufferedAmount() == 0 && Super::getLoopData()->corkOffset == 0) {
             char header[10];
             int header_length = (int) protocol::formatMessage<isServer>(header, "", 0, opCode, message.length(), compress, fin);
             int written = us_socket_write2(0, (struct us_socket_t *)this, header, header_length, message.data(), (int) message.length());
-
+        
             if (written != header_length + (int) message.length()) {
                 /* Buffer up backpressure */
                 if (written > header_length) {
@@ -143,12 +167,15 @@ public:
 
                 /* Check and correct the compress hint. It is never valid to compress 0 bytes */
                 if (message.length() && opCode < 3 && webSocketData->compressionStatus == WebSocketData::ENABLED) {
-                    LoopData *loopData = Super::getLoopData();
-                    /* Compress using either shared or dedicated deflationStream */
-                    if (webSocketData->deflationStream) {
-                        message = webSocketData->deflationStream->deflate(loopData->zlibContext, message, false);
-                    } else {
-                        message = loopData->deflationStream->deflate(loopData->zlibContext, message, true);
+                    /* If compress is 2 (IS_PRE_COMPRESSED), skip this step (experimental) */
+                    if (compress != CompressFlags::ALREADY_COMPRESSED) {
+                        LoopData *loopData = Super::getLoopData();
+                        /* Compress using either shared or dedicated deflationStream */
+                        if (webSocketData->deflationStream) {
+                            message = webSocketData->deflationStream->deflate(loopData->zlibContext, message, false);
+                        } else {
+                            message = loopData->deflationStream->deflate(loopData->zlibContext, message, true);
+                        }
                     }
                 } else {
                     compress = false;
@@ -239,6 +266,7 @@ public:
         if (webSocketContextData->closeHandler) {
             webSocketContextData->closeHandler(this, code, message);
         }
+        ((USERDATA *) this->getUserData())->~USERDATA();
     }
 
     /* Corks the response if possible. Leaves already corked socket be. */
@@ -289,7 +317,7 @@ public:
         );
 
         WebSocketData *webSocketData = (WebSocketData *) us_socket_ext(SSL, (us_socket_t *) this);
-
+        
         if (!webSocketData->subscriber) { return false; }
 
         /* Cannot return numSubscribers as this is only for this particular websocket context */
@@ -299,11 +327,7 @@ public:
             webSocketContextData->subscriptionHandler(this, topic, newCount, newCount + 1);
         }
 
-        /* Free us as subscribers if we unsubscribed from our last topic */
-        if (ok && last) {
-            webSocketContextData->topicTree->freeSubscriber(webSocketData->subscriber);
-            webSocketData->subscriber = nullptr;
-        }
+        /* Leave us as subscribers even if we subscribe to nothing (last unsubscribed topic might miss its message otherwise) */
 
         return ok;
     }

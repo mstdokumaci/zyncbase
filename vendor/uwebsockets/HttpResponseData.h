@@ -14,102 +14,104 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// clang-format off
-#pragma once
+
+#ifndef UWS_HTTPRESPONSEDATA_H
+#define UWS_HTTPRESPONSEDATA_H
 
 /* This data belongs to the HttpResponse */
 
 #include "HttpParser.h"
 #include "AsyncSocketData.h"
 #include "ProxyParser.h"
-#include "HttpContext.h"
 
 #include "MoveOnlyFunction.h"
 
 namespace uWS {
 
 template <bool SSL>
-struct HttpContext;
-
-template <bool SSL>
 struct HttpResponseData : AsyncSocketData<SSL>, HttpParser {
     template <bool> friend struct HttpResponse;
     template <bool> friend struct HttpContext;
-    public:
-    using OnWritableCallback = bool (*)(uWS::HttpResponse<SSL>*, uint64_t, void*);
-    using OnAbortedCallback = void (*)(uWS::HttpResponse<SSL>*, void*);
-    using OnTimeoutCallback = void (*)(uWS::HttpResponse<SSL>*, void*);
-    using OnDataCallback = void (*)(uWS::HttpResponse<SSL>* response, const char* chunk, size_t chunk_length, bool, void*);
 
     /* When we are done with a response we mark it like so */
-    void markDone(uWS::HttpResponse<SSL> *uwsRes) {
+    void markDone() {
         onAborted = nullptr;
         /* Also remove onWritable so that we do not emit when draining behind the scenes. */
         onWritable = nullptr;
-        /* Ignore data after this point */
-        inStream = nullptr;
-
-        // Ensure we don't call a timeout callback
-        onTimeout = nullptr;
 
         /* We are done with this request */
-        this->state &= ~HttpResponseData<SSL>::HTTP_RESPONSE_PENDING;
-
-        HttpResponseData<SSL> *httpResponseData = uwsRes->getHttpResponseData();
-        httpResponseData->isIdle = true;
+        state &= ~HttpResponseData<SSL>::HTTP_RESPONSE_PENDING;
     }
 
-    /* Caller of onWritable. It is possible onWritable calls markDone so we need to borrow it. */
-    bool callOnWritable(uWS::HttpResponse<SSL>* response, uint64_t offset) {
-        /* Borrow real onWritable */
-        auto* borrowedOnWritable = std::move(onWritable);
+    /* Caller of onWritable. It is possible onWritable calls markDone so we need to borrow it.
+     * It is also possible user code sets a new onWritable while running user registered onWritable. */
+    bool callOnWritable(uintmax_t offset) {
+        /* 1. Borrow the real callback */
+        MoveOnlyFunction<bool(uintmax_t)> borrowedOnWritable = std::move(onWritable);
+    
+        /* 2. Setup the stack-based detection flag */
+        bool placeholderReplaced = false;
+    
+        struct Sentinel {
+            bool *replacedFlag;
+            Sentinel(bool *f) : replacedFlag(f) {}
 
-        /* Set onWritable to placeholder */
-        onWritable = [](uWS::HttpResponse<SSL>*, uint64_t, void*) {return true;};
-
-        /* Run borrowed onWritable */
-        bool ret = borrowedOnWritable(response, offset, userData);
-
-        /* If we still have onWritable (the placeholder) then move back the real one */
-        if (onWritable) {
-            /* We haven't reset onWritable, so give it back */
+            Sentinel(Sentinel &&other) noexcept : replacedFlag(other.replacedFlag) {
+                other.replacedFlag = nullptr; 
+            }
+            
+            ~Sentinel() {
+                if (replacedFlag) {
+                    *replacedFlag = true;
+                }
+            }
+    
+            /* Delete copy to ensure move-only semantics */
+            Sentinel(const Sentinel&) = delete;
+            Sentinel& operator=(const Sentinel&) = delete;
+        };
+    
+        /* 3. Set placeholder with the captured Sentinel */
+        onWritable = [tracker = Sentinel(&placeholderReplaced)](uintmax_t) {
+            return true;
+        };
+    
+        /* 4. Run the borrowed callback */
+        bool ret = borrowedOnWritable(offset);
+    
+        /* 
+           5. If placeholderReplaced is STILL false, it means the lambda (and its Sentinel) 
+           is still sitting inside 'onWritable'. If it's true, the lambda was destroyed 
+           to make room for a new one.
+        */
+        if (!placeholderReplaced) {
             onWritable = std::move(borrowedOnWritable);
         }
-
+    
         return ret;
     }
+private:
     /* Bits of status */
-    enum  : uint8_t {
+    enum {
         HTTP_STATUS_CALLED = 1, // used
         HTTP_WRITE_CALLED = 2, // used
         HTTP_END_CALLED = 4, // used
         HTTP_RESPONSE_PENDING = 8, // used
-        HTTP_CONNECTION_CLOSE = 16, // used
-        HTTP_WROTE_CONTENT_LENGTH_HEADER = 32, // used
-        HTTP_WROTE_DATE_HEADER = 64, // used
-        HTTP_WROTE_TRANSFER_ENCODING_HEADER = 128, // used
+        HTTP_CONNECTION_CLOSE = 16 // used
     };
 
-    /* Shared context pointer */
-    void* userData = nullptr;
-    void* socketData = nullptr;
-
     /* Per socket event handlers */
-    OnWritableCallback onWritable = nullptr;
-    OnAbortedCallback onAborted = nullptr;
-    OnDataCallback inStream = nullptr;
-    OnTimeoutCallback onTimeout = nullptr;
+    MoveOnlyFunction<bool(uintmax_t)> onWritable;
+    MoveOnlyFunction<void()> onAborted;
+    MoveOnlyFunction<void(std::string_view, uint64_t)> inStream; // onData
     /* Outgoing offset */
-    uint64_t offset = 0;
+    uintmax_t offset = 0;
 
     /* Let's track number of bytes since last timeout reset in data handler */
     unsigned int received_bytes_per_timeout = 0;
 
     /* Current state (content-length sent, status sent, write called, etc */
-    uint8_t state = 0;
-    uint8_t idleTimeout = 10; // default HTTP_TIMEOUT 10 seconds
-    bool fromAncientRequest = false;
-    bool isConnectRequest = false;
+    int state = 0;
 
 #ifdef UWS_WITH_PROXY
     ProxyParser proxyParser;
@@ -117,3 +119,5 @@ struct HttpResponseData : AsyncSocketData<SSL>, HttpParser {
 };
 
 }
+
+#endif // UWS_HTTPRESPONSEDATA_H

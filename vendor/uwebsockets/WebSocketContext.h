@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// clang-format off
+
 #ifndef UWS_WEBSOCKETCONTEXT_H
 #define UWS_WEBSOCKETCONTEXT_H
 
@@ -252,13 +252,8 @@ private:
 
         /* Handle socket disconnections */
         us_socket_context_on_close(SSL, getSocketContext(), [](auto *s, int code, void *reason) {
-            ((AsyncSocket<SSL> *)s)->uncorkWithoutSending();
-
             /* For whatever reason, if we already have emitted close event, do not emit it again */
             WebSocketData *webSocketData = (WebSocketData *) (us_socket_ext(SSL, s));
-            if (webSocketData->socketData && webSocketData->onSocketClosed) {
-                webSocketData->onSocketClosed(webSocketData->socketData, SSL, (us_socket_t *) s);
-            }
             if (!webSocketData->isShuttingDown) {
                 /* Emit close event */
                 auto *webSocketContextData = (WebSocketContextData<SSL, USERDATA> *) us_socket_context_ext(SSL, us_socket_context(SSL, (us_socket_t *) s));
@@ -274,9 +269,11 @@ private:
                 webSocketContextData->topicTree->freeSubscriber(webSocketData->subscriber);
                 webSocketData->subscriber = nullptr;
 
+                auto *ws = (WebSocket<SSL, isServer, USERDATA> *) s;
                 if (webSocketContextData->closeHandler) {
-                    webSocketContextData->closeHandler((WebSocket<SSL, isServer, USERDATA> *) s, 1006, reason != NULL && code > 0 ? std::string_view{(char *) reason, (size_t) code} : std::string_view());
+                    webSocketContextData->closeHandler(ws, 1006, {(char *) reason, (size_t) code});
                 }
+                ((USERDATA *) ws->getUserData())->~USERDATA();
             }
 
             /* Destruct in-placed data struct */
@@ -342,7 +339,7 @@ private:
 
             /* We store old backpressure since it is unclear whether write drained anything,
              * however, in case of coming here with 0 backpressure we still need to emit drain event */
-            size_t backpressure = asyncSocket->getBufferedAmount();
+            unsigned int backpressure = asyncSocket->getBufferedAmount();
 
             /* Drain as much as possible */
             asyncSocket->write(nullptr, 0);
@@ -374,12 +371,11 @@ private:
             return s;
         });
 
-        /* Handle FIN, HTTP does not support half-closed sockets, so simply close */
+        /* Handle FIN, WebSocket does not support half-closed sockets, so simply close */
         us_socket_context_on_end(SSL, getSocketContext(), [](auto *s) {
-            ((AsyncSocket<SSL> *)s)->uncorkWithoutSending();
 
             /* If we get a fin, we just close I guess */
-            us_socket_close(SSL, (us_socket_t *) s, 0, nullptr);
+            us_socket_close(SSL, (us_socket_t *) s, (int) ERR_TCP_FIN.length(), (void *) ERR_TCP_FIN.data());
 
             return s;
         });

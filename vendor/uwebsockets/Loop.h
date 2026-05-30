@@ -1,4 +1,3 @@
-#pragma once
 /*
  * Authored by Alex Hultman, 2018-2020.
  * Intellectual property of third-party.
@@ -24,11 +23,17 @@
 #include "LoopData.h"
 #include <libusockets.h>
 #include <iostream>
-#include "AsyncSocket.h"
-
-extern "C" int bun_is_exiting();
 
 namespace uWS {
+
+/* A prepared message is dependent on the Loop, so it belongs here */
+struct PreparedMessage {
+    /* These should be a single alloation along with the PreparedMessage itself (they are static) */
+    std::string originalMessage, compressedMessage;
+    bool compressed;
+    int opCode;
+};
+
 struct Loop {
 private:
     static void wakeupCb(us_loop_t *loop) {
@@ -53,15 +58,6 @@ private:
         for (auto &p : loopData->preHandlers) {
             p.second((Loop *) loop);
         }
-
-        void *corkedSocket = loopData->getCorkedSocket();
-        if (corkedSocket) {
-            if (loopData->isCorkedSSL()) {
-                ((uWS::AsyncSocket<true> *) corkedSocket)->uncork();
-            } else {
-                ((uWS::AsyncSocket<false> *) corkedSocket)->uncork();
-            }
-        }
     }
 
     static void postCb(us_loop_t *loop) {
@@ -69,6 +65,12 @@ private:
 
         for (auto &p : loopData->postHandlers) {
             p.second((Loop *) loop);
+        }
+
+        /* After every event loop iteration, we must not hold the cork buffer */
+        if (loopData->corkedSocket) {
+            std::cerr << "Error: Cork buffer must not be held across event loop iterations!" << std::endl;
+            std::terminate();
         }
     }
 
@@ -82,17 +84,24 @@ private:
 
     static Loop *create(void *hint) {
         Loop *loop = ((Loop *) us_create_loop(hint, wakeupCb, preCb, postCb, sizeof(LoopData)))->init();
+
+        /* We also need some timers (should live off the one 4 second timer rather) */
+        LoopData *loopData = (LoopData *) us_loop_ext((struct us_loop_t *) loop);
+        loopData->dateTimer = us_create_timer((struct us_loop_t *) loop, 1, sizeof(LoopData *));
+        memcpy(us_timer_ext(loopData->dateTimer), &loopData, sizeof(LoopData *));
+        us_timer_set(loopData->dateTimer, [](struct us_timer_t *t) {
+            LoopData *loopData;
+            memcpy(&loopData, us_timer_ext(t), sizeof(LoopData *));
+            loopData->updateDate();
+        }, 1000, 1000);
+
         return loop;
     }
 
     /* What to do with loops created with existingNativeLoop? */
     struct LoopCleaner {
         ~LoopCleaner() {
-            // There's no need to call this destructor if Bun is in the process of exiting.
-            // This is both a performance thing, and also to prevent freeing some things which are not meant to be freed
-            // such as uv_tty_t
-            if(loop && cleanMe && !bun_is_exiting()) {
-                cleanMe = false;
+            if(loop && cleanMe) {
                 loop->free();
             }
         }
@@ -106,6 +115,31 @@ private:
     }
 
 public:
+
+    /* Preformatted messages need the Loop */
+    PreparedMessage prepareMessage(std::string_view message, int opCode, bool compress = true) {
+        /* The message could be formatted right here, but this optimization is not done yet */
+        PreparedMessage preparedMessage;
+        preparedMessage.compressed = compress;
+        preparedMessage.opCode = opCode;
+        preparedMessage.originalMessage = message;
+
+        LoopData *loopData = (LoopData *) us_loop_ext((us_loop_t *) this);
+
+        if (compress) {
+            /* Initialize loop's deflate inflate streams */
+            if (!loopData->zlibContext) {
+                loopData->zlibContext = new ZlibContext;
+                loopData->inflationStream = new InflationStream(CompressOptions::DEDICATED_DECOMPRESSOR);
+                loopData->deflationStream = new DeflationStream(CompressOptions::DEDICATED_COMPRESSOR);
+            }
+
+            preparedMessage.compressedMessage = loopData->deflationStream->deflate(loopData->zlibContext, {preparedMessage.originalMessage.data(), preparedMessage.originalMessage.length()}, true);
+        }
+
+        return preparedMessage;
+    }
+
     /* Lazily initializes a per-thread loop and returns it.
      * Will automatically free all initialized loops at exit. */
     static Loop *get(void *existingNativeLoop = nullptr) {
@@ -124,26 +158,19 @@ public:
         return getLazyLoop().loop;
     }
 
-    static void clearLoopAtThreadExit() {
-        if (getLazyLoop().cleanMe) {
-            getLazyLoop().loop->free();
-        }
-    }
-
     /* Freeing the default loop should be done once */
     void free() {
         LoopData *loopData = (LoopData *) us_loop_ext((us_loop_t *) this);
-        
+
+        /* Stop and free dateTimer first */
+        us_timer_close(loopData->dateTimer);
+
         loopData->~LoopData();
         /* uSockets will track whether this loop is owned by us or a borrowed alien loop */
         us_loop_free((us_loop_t *) this);
 
         /* Reset lazyLoop */
         getLazyLoop().loop = nullptr;
-    }
-
-    static LoopData* data(struct us_loop_t *loop) {
-        return (LoopData *) us_loop_ext(loop);
     }
 
     void addPostHandler(void *key, MoveOnlyFunction<void(Loop *)> &&handler) {

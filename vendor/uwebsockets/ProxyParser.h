@@ -68,7 +68,7 @@ T _cond_byte_swap(T value) {
 
 struct ProxyParser {
 private:
-    union proxy_addr addr;
+    union proxy_addr addr = {};
 
     /* Default family of 0 signals no proxy address */
     uint8_t family = 0;
@@ -88,6 +88,22 @@ public:
         } else {
             /* Family 2 is INET6 */
             return {(char *) &addr.ipv6_addr.src_addr, 16};
+        }
+    }
+
+    unsigned int getSourcePort() {
+
+        // UNSPEC family and protocol
+        if (family == 0) {
+            return {};
+        }
+
+        if ((family & 0xf0) >> 4 == 1) {
+            /* Family 1 is INET4 */
+            return addr.ipv4_addr.src_port;
+        } else {
+            /* Family 2 is INET6 */
+            return addr.ipv6_addr.src_port;
         }
     }
 
