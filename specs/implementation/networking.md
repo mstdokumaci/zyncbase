@@ -6,7 +6,7 @@
 
 ## Overview
 
-ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig. uWebSockets provides the multi-threaded event loop, TLS via BoringSSL, and zero-copy I/O that the ZyncBase server is built on.
+ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directly with Zig. uWebSockets provides the multi-threaded event loop, TLS via OpenSSL, and zero-copy I/O that the ZyncBase server is built on.
 
 ---
 
@@ -27,7 +27,7 @@ ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directl
 │  │  └─────────────┘  └─────────────┘             │  │
 │  │  ┌─────────────────────────────────┐          │  │
 │  │  │  Cryptography (TLS 1.3)         │          │  │
-│  │  │  (BoringSSL)                    │          │  │
+│  │  │  (OpenSSL)                      │          │  │
 │  │  └─────────────────────────────────┘          │  │
 │  └───────────────────────────────────────────────┘  │
 │                                                     │

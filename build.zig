@@ -149,42 +149,17 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
 
     const is_linux = step.root_module.resolved_target.?.result.os.tag == .linux;
 
-    var b_b_path: []const u8 = "vendor/boringssl/build";
-    var b_b_include: []const u8 = "vendor/boringssl/include";
-    var is_absolute = false;
-
-    if (std.process.getEnvVarOwned(b.allocator, "ZYNCBASE_BORINGSSL_PATH")) |env_path| {
-        b_b_path = env_path;
-        is_absolute = true;
-        // In local builds, we might set an absolute path to a target-specific BoringSSL build.
-        // We assume the include directory is a sibling to the build directory in the submodule structure.
-        b_b_include = b.fmt("{s}/../include", .{b_b_path});
-    } else |_| if (is_linux) {
-        if (std.process.getEnvVarOwned(b.allocator, "ZYNCBASE_LINUX_BORINGSSL_PATH")) |env_path| {
-            b_b_path = env_path;
-            is_absolute = true;
-            b_b_include = b.fmt("{s}/../include", .{b_b_path});
-        } else |_| {}
-    }
-
-    if (is_absolute) {
-        step.addIncludePath(.{ .cwd_relative = b_b_include });
-    } else {
-        step.addIncludePath(b.path(b_b_include));
-    }
     step.addIncludePath(b.path("vendor/uwebsockets"));
     step.addIncludePath(b.path("vendor/usockets"));
     step.addIncludePath(b.path("src"));
 
-    if (is_absolute) {
-        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libdecrepit.a", .{b_b_path}) });
-        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libssl.a", .{b_b_path}) });
-        step.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libcrypto.a", .{b_b_path}) });
-    } else {
-        step.addObjectFile(b.path(b.fmt("{s}/libdecrepit.a", .{b_b_path})));
-        step.addObjectFile(b.path(b.fmt("{s}/libssl.a", .{b_b_path})));
-        step.addObjectFile(b.path(b.fmt("{s}/libcrypto.a", .{b_b_path})));
+    // System OpenSSL
+    if (target.os.tag == .macos) {
+        step.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openssl/include" });
+        step.addIncludePath(.{ .cwd_relative = "/usr/local/opt/openssl/include" });
     }
+    step.linkSystemLibrary("ssl");
+    step.linkSystemLibrary("crypto");
 
     if (is_linux) {
         step.linkSystemLibrary("dl");
@@ -207,10 +182,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-fno-rtti",
         "-DUWS_NO_ZLIB",
         "-DLIBUS_USE_OPENSSL=1",
-        "-DLIBUS_USE_BORINGSSL=1",
-        "-DWITH_BORINGSSL=1",
         "-Wno-nullability-completeness",
-        b.fmt("-I{s}", .{b_b_include}),
     } }) catch |err| @panic(b.fmt("Failed to concat uws_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{
@@ -224,10 +196,7 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
             "-fno-sanitize=undefined", // Avoid trapping on alignment/bitfield issues in usockets
             "-DUWS_NO_ZLIB",
             "-DLIBUS_USE_OPENSSL=1",
-            "-DLIBUS_USE_BORINGSSL=1",
-            "-DWITH_BORINGSSL=1",
             "-Wno-nullability-completeness",
-            b.fmt("-I{s}", .{b_b_include}),
         },
     }) catch |err| @panic(b.fmt("Failed to concat usockets_flags: {s}", .{@errorName(err)}));
 
@@ -250,9 +219,6 @@ fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, s
         "-fno-exceptions",
         "-fno-rtti",
         "-DLIBUS_USE_OPENSSL=1",
-        "-DLIBUS_USE_BORINGSSL=1",
-        "-DWITH_BORINGSSL=1",
-        b.fmt("-I{s}", .{b_b_include}),
     } }) catch |err| @panic(b.fmt("Failed to concat sni_flags: {s}", .{@errorName(err)}));
 
     step.addCSourceFile(.{

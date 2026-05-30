@@ -65,7 +65,7 @@ ZyncBase guarantees compatibility with the directly vendored uWebSockets/µSocke
 |-----------|--------|
 | API surface | Only the functions listed above are called. Any uWebSockets change that does not affect these symbols is safe. |
 | ABI | `libuwsockets.cpp` is compiled from source at build time — no pre-built binary dependency. |
-| SSL | SSL is compiled in (`-DLIBUS_USE_BORINGSSL=1`) but `WebSocketServer.Config.ssl = false` by default. SSL paths are not exercised in current tests. |
+| SSL | SSL is compiled in (`-DLIBUS_USE_OPENSSL=1`) but `WebSocketServer.Config.ssl = false` by default. SSL paths are not exercised in current tests. |
 | Compression | Disabled (`UWS_COMPRESS_DISABLED`). Enabling it requires updating `behavior.compression` and re-testing. |
 
 ### Updating the Pinned Version

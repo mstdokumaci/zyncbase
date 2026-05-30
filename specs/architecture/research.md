@@ -189,7 +189,7 @@ For ZyncBase, the "Zero-Zig" philosophy extends to the build system. The project
 | :---- | :---- | :---- |
 | build.zig | Orchestrates Zig and C++ compilation | 43 |
 | libuv / epoll | Underlies the event loop for I/O | 4 |
-| BoringSSL | Provides TLS 1.3 encryption | 6 |
+| OpenSSL | Provides TLS 1.3 encryption | 6 |
 | libc++ | Required for uWebSockets templates | 4 |
 
 The performance impact of this integration is significant. Benchmarks comparing uWebSockets.js (Node.js bindings) to native implementations suggest that the overhead of the JavaScript bridge accounts for a 10-25% performance drop.7 By removing this bridge and calling the C++ core directly from Zig, ZyncBase is positioned to outperform even Bun’s internal HTTP implementation in raw request-handling scenarios.7

@@ -45,26 +45,12 @@ for ENTRY in "${TARGETS[@]}"; do
     echo -e "\n${BLUE}🏗️  Building for $NAME ($TARGET)...${NC}"
     
     # Define paths
-    BORINGSSL_SRC="$PROJECT_ROOT/vendor/boringssl"
-    BORINGSSL_BUILD="$BORINGSSL_SRC/build-$TARGET"
     ARTIFACT_DIR="$PROJECT_ROOT/releases/$SUFFIX"
     
-    mkdir -p "$BORINGSSL_BUILD"
     mkdir -p "$ARTIFACT_DIR"
     
-    # 2.a Build BoringSSL for target
-    if [ ! -f "$BORINGSSL_BUILD/libssl.a" ]; then
-        echo -e "   ${YELLOW}Compiling BoringSSL for $TARGET...${NC}"
-        "$SCRIPT_DIR/build-boringssl.sh" "$TARGET" "$SUFFIX" "$BORINGSSL_BUILD" "$MACOS_SDK"
-    else
-        echo -e "   ${GREEN}✓ BoringSSL already built for $TARGET${NC}"
-    fi
-    
-    # 2.b Build ZyncBase for target
+    # Build ZyncBase for target
     echo -e "   ${YELLOW}Compiling ZyncBase (ReleaseFast)...${NC}"
-    
-    # Point ZyncBase to our target-specific BoringSSL build
-    export ZYNCBASE_BORINGSSL_PATH="$BORINGSSL_BUILD"
     
     ZIG_FLAGS=(
         "build"
