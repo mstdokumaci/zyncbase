@@ -17,7 +17,7 @@ runs:
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       shell: bash
-      run: brew install openssl
+      run: brew list openssl || HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl
 
     - name: Install OpenSSL (Linux)
       if: runner.os == 'Linux'
