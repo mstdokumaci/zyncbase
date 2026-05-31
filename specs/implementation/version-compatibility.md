@@ -6,7 +6,7 @@ This document describes the actual C binding interface ZyncBase uses to call uWe
 
 ---
 
-## Pinned Version
+## Vendored Version
 
 uWebSockets and µSockets are directly vendored into the repository:
 
@@ -14,44 +14,70 @@ uWebSockets and µSockets are directly vendored into the repository:
 vendor/uwebsockets/            — uWebSockets C++ headers (37 files)
 vendor/usockets/               — µSockets C sources and headers
 src/uws_bridge.cpp             — Purpose-built C++→C bridge (~300 lines)
-src/uws_bridge.h               — Bridge type definitions
+src/uws_wrapper.h              — C ABI imported by Zig
 ```
 
-The vendored files were extracted from Bun's fork of uWebSockets/uSockets, with patches
-permanently baked into `vendor/uwebsockets/` (libdeflate disabled, SIMDUTF disabled,
-include paths fixed).
+The vendored files are tracked in-tree from upstream uWebSockets/µSockets. ZyncBase does
+not depend on an external runtime fork or a prebuilt uWebSockets binary for the server
+binary. TLS is compiled through µSockets' OpenSSL backend.
 
 ---
 
 ## C Binding Interface
 
-ZyncBase calls uWebSockets exclusively through `src/uws_wrapper.h`, which is included via `@cImport` in `src/uwebsockets_wrapper.zig`. The functions used are:
+ZyncBase calls uWebSockets exclusively through `src/uws_wrapper.h`, which is included via `@cImport` in `src/uwebsockets_wrapper.zig`. The C ABI is owned by ZyncBase and implemented by `src/uws_bridge.cpp`.
 
 ```c
 // App lifecycle
-uws_app_t* uws_create_app(int ssl, us_bun_socket_context_options_t options);
-void       uws_app_listen(int ssl, uws_app_t* app, int port, uws_listen_handler handler, void* user_data);
+uws_app_t* uws_create_app(int ssl, struct us_socket_context_options_t options);
+void       uws_destroy_app(int ssl, uws_app_t* app);
 void       uws_app_run(int ssl, uws_app_t* app);
+void       uws_app_close(int ssl, uws_app_t* app);
+struct us_listen_socket_t* uws_app_listen(
+    int ssl,
+    uws_app_t* app,
+    const char* host,
+    size_t host_length,
+    int port,
+    uws_listen_handler handler,
+    void* user_data
+);
 
 // WebSocket route registration
-void uws_ws(int ssl, uws_app_t* app, void* ctx,
+void uws_ws(int ssl, uws_app_t* app, void* upgrade_context,
             const char* pattern, size_t pattern_len,
-            int id, const uws_socket_behavior_t* behavior);
+            size_t id, const uws_socket_behavior_t* behavior);
 
 // WebSocket operations
-int  uws_ws_send(int ssl, uws_websocket_t* ws,
-                 const char* msg, size_t len, uws_opcode_t opcode);
+uws_sendstatus_t uws_ws_send(int ssl, uws_websocket_t* ws,
+                             const char* msg, size_t len, uws_opcode_t opcode);
 void uws_ws_close(int ssl, uws_websocket_t* ws);
 void* uws_ws_get_user_data(int ssl, uws_websocket_t* ws);
+
+// Request and upgrade helpers
+size_t uws_req_get_header(uws_req_t* req, const char* lower_case_header,
+                          size_t lower_case_header_length, const char** dest);
+size_t uws_req_get_query(uws_req_t* req, const char* key,
+                         size_t key_length, const char** dest);
+void uws_res_upgrade(int ssl, uws_res_t* res, void* data,
+                     const char* sec_web_socket_key, size_t sec_web_socket_key_length,
+                     const char* sec_web_socket_protocol, size_t sec_web_socket_protocol_length,
+                     const char* sec_web_socket_extensions, size_t sec_web_socket_extensions_length,
+                     uws_socket_context_t* context);
+
+// Loop helpers
+struct us_loop_t* uws_get_loop(void);
+void uws_loop_addPostHandler(void* loop, void* ctx, void (*cb)(void* ctx, void* loop));
+void uws_loop_removePostHandler(void* loop, void* key);
 ```
 
 ### Behavior Configuration (fixed at init)
 
 ```zig
-behavior.compression          = c.UWS_COMPRESS_DISABLED;
-behavior.maxPayloadLength     = 10 * 1024 * 1024; // 10 MB
-behavior.idleTimeout          = 120;               // seconds
-behavior.maxBackpressure      = 64 * 1024;         // 64 KB
+behavior.compression            = c.UWS_COMPRESS_DISABLED;
+behavior.maxPayloadLength       = config.security.max_message_size;
+behavior.idleTimeout            = 120; // seconds by default
+behavior.maxBackpressure        = 16 * 1024 * 1024;
 behavior.sendPingsAutomatically = true;
 ```
 
@@ -64,24 +90,20 @@ ZyncBase guarantees compatibility with the directly vendored uWebSockets/µSocke
 | Guarantee | Detail |
 |-----------|--------|
 | API surface | Only the functions listed above are called. Any uWebSockets change that does not affect these symbols is safe. |
-| ABI | `libuwsockets.cpp` is compiled from source at build time — no pre-built binary dependency. |
-| SSL | SSL is compiled in (`-DLIBUS_USE_OPENSSL=1`) but `WebSocketServer.Config.ssl = false` by default. SSL paths are not exercised in current tests. |
-| Compression | Disabled (`UWS_COMPRESS_DISABLED`). Enabling it requires updating `behavior.compression` and re-testing. |
+| ABI | `src/uws_bridge.cpp` and vendored µSockets C/C++ files are compiled from source at build time. |
+| TLS | TLS is compiled in (`-DLIBUS_USE_OPENSSL=1`) and uses system OpenSSL. Certificate and key paths are copied to owned NUL-terminated buffers before crossing into C. |
+| Compression | Disabled by `-DUWS_NO_ZLIB` and `UWS_COMPRESS_DISABLED`. Enabling it requires adding zlib/libdeflate linkage and re-testing. |
 
 ### Updating the Pinned Version
 
-To update uWebSockets, update the vendored files in `vendor/uwebsockets/` and `vendor/usockets/`:
+To update uWebSockets, update the vendored files in `vendor/uwebsockets/` and `vendor/usockets/` from upstream uNetworking sources:
 
 ```bash
-# 1. Fetch the latest Bun uWebSockets from the bun repo (if tracking Bun's fork)
-git clone --depth 1 https://github.com/oven-sh/bun.git /tmp/bun-uws-sync
-# 2. Copy updated files
-cp /tmp/bun-uws-sync/packages/bun-uws/src/*.h vendor/uwebsockets/
-cp /tmp/bun-uws-sync/packages/bun-usockets/src/*.c vendor/usockets/
-cp /tmp/bun-uws-sync/packages/bun-usockets/src/*.h vendor/usockets/
-cp -r /tmp/bun-uws-sync/packages/bun-usockets/src/internal vendor/usockets/
-# 3. Re-apply patches (libdeflate, SIMDUTF, AsyncSocket.h include path)
-# 4. Re-slice the bridge if API surface changed
+# 1. Fetch upstream uWebSockets and µSockets into a temporary directory.
+# 2. Copy the uWebSockets headers into vendor/uwebsockets/.
+# 3. Copy µSockets C/C++ sources and headers into vendor/usockets/.
+# 4. Reconcile include paths and compression/TLS build flags.
+# 5. Update src/uws_bridge.cpp and src/uws_wrapper.h if the C++ API changed.
 zig build test   # must pass before committing
 ```
 
@@ -93,14 +115,16 @@ If the update changes any function in the C binding interface above, `src/uws_wr
 
 | Invariant | Description |
 |-----------|-------------|
-| Single app instance | `global_server` in `uwebsockets_wrapper.zig` holds one server pointer. Multiple `WebSocketServer` instances are not supported. |
-| App not destroyed | `uws_app_destroy` is not exposed by the C wrapper; the app lives until process exit. |
-| SSL not validated | SSL certificate paths are accepted by `Config` but not tested in CI. |
+| Owned C strings | Host, certificate, and key paths are copied to NUL-terminated buffers owned by `WebSocketServer`. |
+| Listen failure | `WebSocketServer.listen()` returns `error.ListenFailed` if uWS cannot bind the configured host/port. |
+| App lifecycle | `WebSocketServer.deinit()` destroys the uWS app and releases owned C string buffers. |
+| TLS config | `ssl = true` requires both certificate and key paths; invalid files fail initialization. |
 
 | Error | Cause |
 |-------|-------|
 | `error.FailedToCreateApp` | `uws_create_app` returned null (OOM or invalid SSL options) |
 | `error.ListenFailed` | Port already in use or permission denied |
+| `error.InvalidConfig` | TLS enabled without both certificate and key paths |
 
 ---
 
@@ -110,11 +134,8 @@ If the update changes any function in the C binding interface above, `src/uws_wr
 # Build and link uWebSockets from source
 zig build
 
-# Run wrapper unit tests
-zig test src/uwebsockets_wrapper_test.zig
-
-# Run wrapper property tests
-zig test src/uwebsockets_wrapper_property_test.zig
+# Run wrapper-focused tests
+zig build test -Dtest-filter=WebSocketServer
 ```
 
 ---

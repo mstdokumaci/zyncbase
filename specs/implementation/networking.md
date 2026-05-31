@@ -70,28 +70,53 @@ ZyncBase uses uWebSockets (C++) as its networking foundation, integrated directl
 
 ```zig
 // build.zig - Link uWebSockets
-pub fn build(b: *std.Build) void {
-    const exe = b.addExecutable(.{
-        .name = "ZyncBase-server",
-        .root_source_file = .{ .path = "src/main.zig" },
-        .target = target,
-        .optimize = optimize,
+fn linkUWS(b: *std.Build, step: *std.Build.Step.Compile, sysroot: ?[]const u8, sanitize: ?[]const u8) void {
+    step.linkLibCpp();
+    step.linkLibC();
+    step.linkSystemLibrary("pthread");
+    step.linkSystemLibrary("ssl");
+    step.linkSystemLibrary("crypto");
+
+    step.addIncludePath(b.path("vendor/uwebsockets"));
+    step.addIncludePath(b.path("vendor/usockets"));
+    step.addIncludePath(b.path("src"));
+
+    step.addCSourceFile(.{
+        .file = b.path("src/uws_bridge.cpp"),
+        .flags = &.{
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-DUWS_NO_ZLIB",
+            "-DLIBUS_USE_OPENSSL=1",
+        },
     });
-    
-    // Link C++ standard library
-    exe.linkLibCpp();
-    
-    // Add uWebSockets source files
-    exe.addIncludePath(.{ .path = "vendor/uWebSockets/src" });
-    exe.addCSourceFiles(&.{
-        "vendor/uWebSockets/src/App.h",
-        "vendor/uWebSockets/src/HttpContext.h",
-        "vendor/uWebSockets/src/HttpResponse.h",
-        "vendor/uWebSockets/src/WebSocket.h",
-    }, &.{
-        "-std=c++20",
-        "-fno-exceptions",
-        "-fno-rtti",
+
+    step.addCSourceFiles(.{
+        .files = &.{
+            "vendor/usockets/eventing/epoll_kqueue.c",
+            "vendor/usockets/crypto/openssl.c",
+            "vendor/usockets/context.c",
+            "vendor/usockets/loop.c",
+            "vendor/usockets/socket.c",
+            "vendor/usockets/bsd.c",
+            "vendor/usockets/udp.c",
+        },
+        .flags = &.{
+            "-std=c11",
+            "-DUWS_NO_ZLIB",
+            "-DLIBUS_USE_OPENSSL=1",
+        },
+    });
+
+    step.addCSourceFile(.{
+        .file = b.path("vendor/usockets/crypto/sni_tree.cpp"),
+        .flags = &.{
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-DLIBUS_USE_OPENSSL=1",
+        },
     });
 }
 ```
@@ -99,65 +124,51 @@ pub fn build(b: *std.Build) void {
 ### Server Implementation
 
 ```zig
-// src/websocket.zig
+// src/uwebsockets_wrapper.zig
 const uws = @cImport({
-    @cDefine("UWS_NO_ZLIB", "1"); // Optional: disable compression
-    @cInclude("uWebSockets/App.h");
+    @cInclude("uws_wrapper.h");
 });
 
-pub const Server = struct {
-    app: *uws.uWS_App,
-    core: *CoreEngine,
-    
-    pub fn init(allocator: Allocator, core: *CoreEngine) !*Server {
-        const app = uws.uWS_App_create(0, null);
-        
-        const self = try allocator.create(Server);
+pub const WebSocketServer = struct {
+    app: *uws.uws_app_t,
+    host_z: [:0]u8,
+    port: u16,
+    ssl: bool,
+
+    pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) !void {
+        const host_z = try allocator.dupeZ(u8, config.host);
+        var options = std.mem.zeroes(uws.struct_us_socket_context_options_t);
+        const app = uws.uws_create_app(if (config.ssl) 1 else 0, options) orelse
+            return error.FailedToCreateApp;
+
         self.* = .{
             .app = app,
-            .core = core,
+            .host_z = host_z,
+            .port = config.port,
+            .ssl = config.ssl,
         };
-        
-        // Register WebSocket handlers
-        uws.uWS_App_ws(app, "/*", .{
-            .open = onOpen,
-            .message = onMessage,
-            .close = onClose,
-        }, @ptrCast(self));
-        
-        return self;
     }
-    
-    fn onMessage(
-        ws: *uws.uWS_WebSocket, 
-        message: [*]const u8, 
-        length: usize, 
-        opcode: uws.uWS_OpCode, 
-        user_data: ?*anyopaque
-    ) callconv(.C) void {
-        // Modern ptrCast syntax with alignCast
-        const self: *Server = @as(*Server, @ptrCast(@alignCast(user_data.?)));
-        
-        // Parse MessagePack
-        const msg = msgpack.decode(message[0..length]) catch return;
-        
-        // Atomic shutdown flag
-        if (self.shutdown_requested.load(.acquire)) return;
-        
-        // Process in core engine
-        const response = self.core.handleMessage(msg) catch return;
-        
-        // Send response
-        const bytes = msgpack.encode(response) catch return;
-        uws.uWS_WebSocket_send(ws, bytes.ptr, bytes.len, .BINARY);
+
+    pub fn listen(self: *WebSocketServer) !void {
+        const listen_socket = uws.uws_app_listen(
+            if (self.ssl) 1 else 0,
+            self.app,
+            self.host_z.ptr,
+            self.host_z.len,
+            self.port,
+            listenCallback,
+            self,
+        );
+        if (listen_socket == null) return error.ListenFailed;
     }
-    
-    pub fn listen(self: *Server, port: u16) !void {
-        uws.uWS_App_listen(self.app, port, null);
+
+    pub fn run(self: *WebSocketServer) void {
+        uws.uws_app_run(if (self.ssl) 1 else 0, self.app);
     }
-    
-    pub fn run(self: *Server) void {
-        uws.uWS_App_run(self.app);
+
+    pub fn deinit(self: *WebSocketServer, allocator: Allocator) void {
+        uws.uws_destroy_app(if (self.ssl) 1 else 0, self.app);
+        allocator.free(self.host_z);
     }
 };
 ```

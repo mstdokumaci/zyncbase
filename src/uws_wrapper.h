@@ -1,4 +1,4 @@
-// Wrapper header for Zig to import Bun's uWebSockets C API
+// Wrapper header for Zig to import ZyncBase's uWebSockets C bridge.
 // This header provides C-compatible declarations for the C++ enums
 
 #pragma once
@@ -88,7 +88,7 @@ uws_app_t *uws_create_app(int ssl, struct us_socket_context_options_t options);
 void uws_destroy_app(int ssl, uws_app_t *app);
 void uws_app_run(int ssl, uws_app_t *app);
 void uws_app_close(int ssl, uws_app_t *app);
-void uws_app_listen(int ssl, uws_app_t *app, int port, uws_listen_handler handler, void *user_data);
+struct us_listen_socket_t *uws_app_listen(int ssl, uws_app_t *app, const char *host, size_t host_length, int port, uws_listen_handler handler, void *user_data);
 
 // Loop helpers — us_wakeup_loop, us_listen_socket_close declared in libusockets.h
 struct us_loop_t *uws_get_loop();

@@ -20,24 +20,17 @@
 
 ## Build Steps
 
-### 1. Clone Repository with Submodules
+### 1. Clone Repository
 
 ```bash
-git clone --recursive https://github.com/your-org/zyncbase.git
+git clone https://github.com/your-org/zyncbase.git
 cd zyncbase
-```
-
-If you already cloned without `--recursive`:
-
-```bash
-git submodule update --init --recursive
 ```
 
 ### 2. uWebSockets
 
 uWebSockets and µSockets are directly vendored under `vendor/uwebsockets/` and `vendor/usockets/`.
-
-For detailed technical information about the stubs, see the comments in `src/uws_stubs.c`.
+The Zig server calls them through the purpose-built C bridge in `src/uws_bridge.cpp` and `src/uws_wrapper.h`.
 
 ### 3. Build ZyncBase
 
@@ -79,7 +72,7 @@ zig build -Dsanitize=address
 
 ## Troubleshooting
 
-### Submodule Not Initialized
+### Vendored uWebSockets Missing
 
 ```
 Error: vendor/uwebsockets/App.h not found
@@ -87,7 +80,7 @@ Error: vendor/uwebsockets/App.h not found
 
 **Solution:**
 ```bash
-git submodule update --init --recursive
+git status --short vendor/uwebsockets vendor/usockets
 ```
 
 ## Development Workflow
@@ -96,13 +89,6 @@ git submodule update --init --recursive
 
 ```bash
 rm -rf zig-out zig-cache
-zig build
-```
-
-### Update Submodules
-
-```bash
-git submodule update --remote
 zig build
 ```
 
@@ -127,7 +113,6 @@ For automated builds, ensure your CI environment has:
 1. Zig installed
 2. OpenSSL headers installed
 3. C/C++ compiler available
-4. Git configured to clone submodules
 
 Example GitHub Actions workflow:
 
@@ -137,10 +122,8 @@ Example GitHub Actions workflow:
     brew install openssl  # macOS
     # OR: sudo apt-get install -y libssl-dev  # Linux
 
-- name: Checkout with submodules
+- name: Checkout
   uses: actions/checkout@v3
-  with:
-    submodules: recursive
 
 - name: Build ZyncBase
   run: zig build

@@ -334,7 +334,7 @@ pub const ZyncBaseServer = struct {
         try self.setupSignalHandlers();
 
         // Start listening on configured port
-        try self.websocket_server.listen(self.config.server.port);
+        try self.websocket_server.listen();
 
         std.log.info("Server started successfully", .{});
 
