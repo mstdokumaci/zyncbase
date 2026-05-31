@@ -7,23 +7,16 @@
 
 ### Required Tools
 
-1. **Zig** (0.13.0 or later)
+1. **Zig** (0.15.2 or later)
    - Download from https://ziglang.org/download/
 
-2. **CMake** (3.10 or later)
-   - macOS: `brew install cmake`
-   - Linux: `sudo apt-get install cmake`
-   - Windows: Download from https://cmake.org/download/
+2. **OpenSSL**
+   - macOS: `brew install openssl`
+   - Linux: `sudo apt-get install libssl-dev`
 
-3. **Go** (1.18 or later) - Required by BoringSSL build
-   - macOS: `brew install go`
-   - Linux: `sudo apt-get install golang`
-   - Windows: Download from https://golang.org/dl/
-
-4. **C/C++ Compiler**
+3. **C/C++ Compiler**
    - macOS: Xcode Command Line Tools (`xcode-select --install`)
    - Linux: GCC or Clang (`sudo apt-get install build-essential`)
-   - Windows: Visual Studio or MinGW
 
 ## Build Steps
 
@@ -40,30 +33,11 @@ If you already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### 2. Apply Patches to Bun's uWebSockets
+### 2. uWebSockets
 
-Bun's uWebSockets fork includes several dependencies we don't need (like libdeflate and SIMDUTF). We use minimal patches to disable them and stub functions for Bun-specific runtime hooks.
+uWebSockets and µSockets are directly vendored under `vendor/uwebsockets/` and `vendor/usockets/`.
 
-```bash
-./scripts/apply-patches.sh
-```
-
-For detailed technical information about the patches and stubs, see [patches.md](specs/implementation/patches.md).
-
-### 3. Build BoringSSL
-
-BoringSSL must be built before building ZyncBase:
-
-```bash
-./scripts/build-boringssl.sh
-```
-
-This will:
-- Configure BoringSSL with CMake
-- Build static libraries (`libssl.a` and `libcrypto.a`)
-- Place build artifacts in `vendor/boringssl/build/`
-
-**Note:** This step only needs to be done once, or when updating the BoringSSL submodule.
+For detailed technical information about the stubs, see the comments in `src/uws_stubs.c`.
 
 ### 3. Build ZyncBase
 
@@ -105,40 +79,10 @@ zig build -Dsanitize=address
 
 ## Troubleshooting
 
-### CMake Not Found
-
-```
-Error: cmake is not installed
-```
-
-**Solution:** Install CMake using your package manager (see Prerequisites).
-
-### Go Not Found
-
-```
-Error: Go is required to build BoringSSL
-```
-
-**Solution:** Install Go using your package manager (see Prerequisites).
-
-### BoringSSL Build Fails
-
-```
-Error: BoringSSL build failed
-```
-
-**Solution:**
-1. Ensure all prerequisites are installed
-2. Try cleaning and rebuilding:
-   ```bash
-   rm -rf vendor/boringssl/build
-   ./scripts/build-boringssl.sh
-   ```
-
 ### Submodule Not Initialized
 
 ```
-Error: vendor/bun/packages/bun-uws/src not found
+Error: vendor/uwebsockets/App.h not found
 ```
 
 **Solution:**
@@ -155,18 +99,10 @@ rm -rf zig-out zig-cache
 zig build
 ```
 
-### Rebuild BoringSSL
-
-```bash
-rm -rf vendor/boringssl/build
-./scripts/build-boringssl.sh
-```
-
 ### Update Submodules
 
 ```bash
 git submodule update --remote
-./scripts/build-boringssl.sh  # Rebuild if BoringSSL updated
 zig build
 ```
 
@@ -175,48 +111,40 @@ zig build
 ### macOS
 
 - Requires Xcode Command Line Tools
-- Homebrew recommended for installing dependencies
+- Homebrew recommended for installing dependencies (`brew install zig openssl`)
 - Uses kqueue for event loop
 
 ### Linux
 
 - Requires build-essential package
 - Uses epoll for event loop
-- May need to install OpenSSL development headers (even though we use BoringSSL, some system dependencies may require it)
-
-### Windows
-
-- Not yet fully supported (work in progress)
-- Will require IOCP backend for uSockets
+- `sudo apt-get install libssl-dev` for OpenSSL headers
 
 ## CI/CD Integration
 
 For automated builds, ensure your CI environment has:
 
 1. Zig installed
-2. CMake installed
-3. Go installed
-4. C/C++ compiler available
-5. Git configured to clone submodules
+2. OpenSSL headers installed
+3. C/C++ compiler available
+4. Git configured to clone submodules
 
 Example GitHub Actions workflow:
 
 ```yaml
 - name: Install dependencies
   run: |
-    # Install Zig, CMake, Go
-    
+    brew install openssl  # macOS
+    # OR: sudo apt-get install -y libssl-dev  # Linux
+
 - name: Checkout with submodules
   uses: actions/checkout@v3
   with:
     submodules: recursive
-    
-- name: Build BoringSSL
-  run: ./scripts/build-boringssl.sh
-  
+
 - name: Build ZyncBase
   run: zig build
-  
+
 - name: Run tests
   run: zig build test
 ```

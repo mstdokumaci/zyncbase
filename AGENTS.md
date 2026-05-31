@@ -7,9 +7,9 @@ Important: Project is still in early development stage. Give no consideration to
 ## Tech Stack
 - **Core:** Zig (0.15.2 or later)
 - **Database:** SQLite (integrated with WAL mode)
-- **Networking:** uWebSockets (forked by Bun), BoringSSL
+- **Networking:** uWebSockets, OpenSSL
 - **Serialization:** MessagePack (`zig-msgpack`)
-- **Infrastructure:** CMake (for BoringSSL), Go (for BoringSSL build), Python (for spec compression)
+- **Infrastructure:** Python (for spec compression)
 
 ## Codebase Structure
 - `src/`: Core Zig source code.
@@ -21,7 +21,7 @@ Important: Project is still in early development stage. Give no consideration to
 - `tests/`: End-to-end and integration tests.
 - `specs/`: Human-readable architectural and implementation specifications.
 - `specs_llm/`: Compressed/TXT versions of specs used as the source of truth for architectural decisions.
-- `vendor/`: Third-party dependencies (BoringSSL, Bun's uWebSockets/uSockets).
+- `vendor/`: Third-party dependencies (uWebSockets, µSockets).
 - `scripts/`: Build, patch, and utility scripts.
 - `patches/`: Custom patches applied to vendor code.
 - `sdk/typescript`: Typescript SDK
@@ -57,8 +57,6 @@ Important: Project is still in early development stage. Give no consideration to
 - **SDK Tests:** `bun test sdk`
 
 ## Maintenance & Setup
-- **Build BoringSSL:** `./scripts/build-boringssl.sh` (Required before first build or after submodule update)
-- **Apply Patches:** `./scripts/apply-patches.sh` (Applies patches to vendor dependencies)
 - **Compress Specs:** `npm run specs:compress` (Syncs `specs/` to `specs_llm/`)
 
 ## Linting

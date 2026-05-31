@@ -22,10 +22,9 @@ pub const WebSocketServer = struct {
     handlers: WebSocketHandlers = .{},
     user_data: ?*anyopaque = null,
     listen_socket: ?*c.struct_us_listen_socket_t = null,
-    loop: std.atomic.Value(?*anyopaque) = std.atomic.Value(?*anyopaque).init(null),
+    loop: std.atomic.Value(?*c.struct_us_loop_t) = std.atomic.Value(?*c.struct_us_loop_t).init(null),
     close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     is_closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    is_listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     post_handler: ?*const fn (?*anyopaque) void = null,
     post_handler_ctx: ?*anyopaque = null,
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
@@ -55,7 +54,7 @@ pub const WebSocketServer = struct {
 
     /// Initialize WebSocket server
     pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
-        var ssl_options = std.mem.zeroes(c.us_bun_socket_context_options_t);
+        var ssl_options = std.mem.zeroes(c.struct_us_socket_context_options_t);
         if (config.ssl) {
             if (config.ssl_cert_path) |cert| {
                 ssl_options.cert_file_name = @ptrCast(cert);
@@ -83,10 +82,9 @@ pub const WebSocketServer = struct {
         self.handlers = .{};
         self.user_data = null;
         self.listen_socket = null;
-        self.loop = std.atomic.Value(?*anyopaque).init(null);
+        self.loop = std.atomic.Value(?*c.struct_us_loop_t).init(null);
         self.close_requested = std.atomic.Value(bool).init(false);
         self.is_closing = std.atomic.Value(bool).init(false);
-        self.is_listening = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
         self.drain_handler = null;
@@ -94,10 +92,9 @@ pub const WebSocketServer = struct {
     }
 
     /// Clean up resources after run() exits & server thread is joined.
-    /// NOTE: uws_app_t isn't freed as uws_wrapper.h lacks uws_app_destroy; instead,
-    /// uws_app_close() in postHandler() closes it & releases the listen socket
-    /// during graceful shutdown. No further C API cleanup is possible or required.
-    pub fn deinit(_: *WebSocketServer) void {}
+    pub fn deinit(self: *WebSocketServer) void {
+        c.uws_destroy_app(if (self.ssl) 1 else 0, self.app);
+    }
 
     /// Register WebSocket handlers for a specific pattern
     pub fn registerWebSocketHandlers(self: *WebSocketServer, pattern: []const u8, handlers: WebSocketHandlers, user_data: ?*anyopaque) void {
@@ -153,8 +150,6 @@ pub const WebSocketServer = struct {
     }
 
     /// Close the server gracefully.
-    /// NOTE: This sets a global exit flag (set_bun_is_exiting(1)) which may affect
-    /// other uWebSockets instances in the same process.
     pub fn close(self: *WebSocketServer) void {
         self.close_requested.store(true, .monotonic);
         if (self.loop.load(.acquire)) |loop| {
@@ -222,7 +217,6 @@ pub const WebSocketHandlers = struct {
     on_open: ?*const fn (*WebSocket, ?*anyopaque) void = null,
     on_message: ?*const fn (*WebSocket, []const u8, MessageType, ?*anyopaque) void = null,
     on_close: ?*const fn (*WebSocket, i32, []const u8, ?*anyopaque) void = null,
-    on_error: ?*const fn (*WebSocket, ?*anyopaque) void = null,
 };
 
 fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*anyopaque) callconv(.c) void {
@@ -232,7 +226,6 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
         c.uws_loop_addPostHandler(loop, server, postHandler);
-        server.is_listening.store(true, .release);
     }
 }
 
@@ -246,7 +239,6 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
 
     // Ensure we only perform shutdown once
     if (server.close_requested.load(.monotonic) and !server.is_closing.swap(true, .acquire)) {
-        c.set_bun_is_exiting(1);
         if (server.listen_socket) |ls| {
             c.us_listen_socket_close(if (server.ssl) 1 else 0, ls);
             server.listen_socket = null;
@@ -256,7 +248,11 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
         // Wake up the loop to ensure it runs one more iteration to finalize resource state
         // and exit when num_polls hits zero.
         if (loop_ptr) |loop| {
-            c.us_wakeup_loop(loop);
+            c.us_wakeup_loop(@ptrCast(loop));
+        }
+        // Remove ourselves from the loop's post-handler map
+        if (loop_ptr) |loop| {
+            c.uws_loop_removePostHandler(loop, server);
         }
     }
 }

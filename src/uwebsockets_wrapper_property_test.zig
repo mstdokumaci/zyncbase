@@ -11,7 +11,6 @@ const createMockWebSocket = helpers.createMockWebSocket;
 // - on_open callback is invoked when a connection opens
 // - on_message callback is invoked when a message is received
 // - on_close callback is invoked when a connection closes
-// - on_error callback is invoked when an error occurs (if registered)
 //
 // The test verifies that:
 // 1. Each registered callback is invoked exactly once per event
@@ -29,11 +28,9 @@ test "ws: callbacks invoked for all events" {
         register_open: bool,
         register_message: bool,
         register_close: bool,
-        register_error: bool,
         expected_open_calls: u32,
         expected_message_calls: u32,
         expected_close_calls: u32,
-        expected_error_calls: u32,
     };
 
     const test_cases = [_]TestCase{
@@ -42,44 +39,36 @@ test "ws: callbacks invoked for all events" {
             .register_open = true,
             .register_message = true,
             .register_close = true,
-            .register_error = true,
             .expected_open_calls = 1,
             .expected_message_calls = 1,
             .expected_close_calls = 1,
-            .expected_error_calls = 0, // Error not triggered in normal flow
         },
         .{
             .name = "only open and message callbacks",
             .register_open = true,
             .register_message = true,
             .register_close = false,
-            .register_error = false,
             .expected_open_calls = 1,
             .expected_message_calls = 1,
             .expected_close_calls = 0,
-            .expected_error_calls = 0,
         },
         .{
             .name = "only close callback",
             .register_open = false,
             .register_message = false,
             .register_close = true,
-            .register_error = false,
             .expected_open_calls = 0,
             .expected_message_calls = 0,
             .expected_close_calls = 1,
-            .expected_error_calls = 0,
         },
         .{
             .name = "no callbacks registered",
             .register_open = false,
             .register_message = false,
             .register_close = false,
-            .register_error = false,
             .expected_open_calls = 0,
             .expected_message_calls = 0,
             .expected_close_calls = 0,
-            .expected_error_calls = 0,
         },
     };
 
@@ -91,7 +80,6 @@ test "ws: callbacks invoked for all events" {
             .open_called = 0,
             .message_called = 0,
             .close_called = 0,
-            .error_called = 0,
             .last_message = null,
             .last_message_type = null,
             .last_close_code = null,
@@ -115,7 +103,6 @@ test "ws: callbacks invoked for all events" {
             .on_open = if (tc.register_open) testOnOpenProperty else null,
             .on_message = if (tc.register_message) testOnMessageProperty else null,
             .on_close = if (tc.register_close) testOnCloseProperty else null,
-            .on_error = if (tc.register_error) testOnErrorProperty else null,
         };
 
         // Register handlers with context as user data
@@ -155,7 +142,6 @@ test "ws: callbacks invoked for all events" {
         try testing.expectEqual(tc.expected_open_calls, ctx.open_called);
         try testing.expectEqual(tc.expected_message_calls, ctx.message_called);
         try testing.expectEqual(tc.expected_close_calls, ctx.close_called);
-        try testing.expectEqual(tc.expected_error_calls, ctx.error_called);
 
         // Verify callback parameters were received correctly
         if (tc.register_open) {
@@ -199,7 +185,6 @@ test "ws: message callback content and type" {
             .open_called = 0,
             .message_called = 0,
             .close_called = 0,
-            .error_called = 0,
             .last_message = null,
             .last_message_type = null,
             .last_close_code = null,
@@ -261,7 +246,6 @@ test "ws: close callback code and message" {
             .open_called = 0,
             .message_called = 0,
             .close_called = 0,
-            .error_called = 0,
             .last_message = null,
             .last_message_type = null,
             .last_close_code = null,
@@ -307,7 +291,6 @@ test "ws: callbacks invoked exactly once" {
         .open_called = 0,
         .message_called = 0,
         .close_called = 0,
-        .error_called = 0,
         .last_message = null,
         .last_message_type = null,
         .last_close_code = null,
@@ -360,7 +343,6 @@ test "ws: callbacks invoked exactly once" {
     try testing.expectEqual(@as(u32, 1), ctx.open_called);
     try testing.expectEqual(@as(u32, 3), ctx.message_called);
     try testing.expectEqual(@as(u32, 1), ctx.close_called);
-    try testing.expectEqual(@as(u32, 0), ctx.error_called);
 }
 
 // Helper types and functions
@@ -369,7 +351,6 @@ const CallbackContext = struct {
     open_called: u32,
     message_called: u32,
     close_called: u32,
-    error_called: u32,
     last_message: ?[]const u8,
     last_message_type: ?MessageType,
     last_close_code: ?i32,
@@ -404,15 +385,6 @@ fn testOnCloseProperty(ws: *WebSocket, code: i32, message: []const u8, user_data
         ctx.close_called += 1;
         ctx.last_close_code = code;
         ctx.last_close_message = message;
-        ctx.received_user_data = data;
-    }
-}
-
-fn testOnErrorProperty(ws: *WebSocket, user_data: ?*anyopaque) void {
-    _ = ws;
-    if (user_data) |data| {
-        const ctx: *CallbackContext = @ptrCast(@alignCast(data));
-        ctx.error_called += 1;
         ctx.received_user_data = data;
     }
 }

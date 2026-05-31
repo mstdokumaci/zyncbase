@@ -359,7 +359,6 @@ pub const ZyncBaseServer = struct {
 
         // Set shutdown flag
         self.shutdown_requested.store(true, .release);
-        uws_c.set_bun_is_exiting(1);
 
         // Stop background checkpoint loop
         self.checkpoint_manager.stop();

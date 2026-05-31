@@ -35,9 +35,6 @@ jobs:
 
       - name: Setup project
         uses: ./.github/actions/setup-project
-        with:
-          boringssl-target: ${{ matrix.target }}
-          boringssl-suffix: ${{ matrix.suffix }}
 
       - name: Build ZyncBase
         shell: bash
@@ -54,7 +51,6 @@ jobs:
             ZIG_FLAGS+=("-Dcpu=x86_64_v2")
           fi
           
-          # Handle macOS sysroot if needed (setup-project exports ZYNCBASE_BORINGSSL_PATH)
           if [[ "${{ matrix.target }}" == *"macos"* ]]; then
             MACOS_SDK=$(xcrun --show-sdk-path 2>/dev/null || true)
             if [ -n "$MACOS_SDK" ]; then

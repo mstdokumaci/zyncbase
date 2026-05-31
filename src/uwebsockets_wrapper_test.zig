@@ -14,8 +14,8 @@ const TestSslPaths = struct {
     fn init(allocator: Allocator) !TestSslPaths {
         return .{
             .allocator = allocator,
-            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.pem"),
-            .key_path = try std.fs.cwd().realpathAlloc(allocator, "vendor/bun/test/js/bun/http/fixtures/cert.key"),
+            .cert_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.pem"),
+            .key_path = try std.fs.cwd().realpathAlloc(allocator, "tests/fixtures/cert.key"),
         };
     }
 
@@ -83,7 +83,6 @@ test "WebSocketServer: registerWebSocketHandlers" {
         .on_open = testOnOpen,
         .on_message = testOnMessage,
         .on_close = testOnClose,
-        .on_error = null,
     };
 
     // Register handlers - this should not fail

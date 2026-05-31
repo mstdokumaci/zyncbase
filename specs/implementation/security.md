@@ -11,7 +11,7 @@ This document describes the security mechanisms implemented inside ZyncBase. It 
 ZyncBase enforces security at seven layers, each implemented in a specific component:
 
 ```
-Layer 1: TLS (uWebSockets / BoringSSL)          — encrypts all client traffic
+Layer 1: TLS (uWebSockets / OpenSSL)          — encrypts all client traffic
 Layer 2: Rate Limiting (ConnectionLimiter)       — per-IP connection and message limits
 Layer 3: Input Validation (MessagePack parser)   — enforces size/depth/type limits before any allocation
 Layer 4: Authentication (AuthExchange)           — ticket validation on every new connection

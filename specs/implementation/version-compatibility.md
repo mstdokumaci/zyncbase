@@ -8,20 +8,18 @@ This document describes the actual C binding interface ZyncBase uses to call uWe
 
 ## Pinned Version
 
-uWebSockets is not a direct submodule. ZyncBase uses the copy bundled inside the `vendor/bun` submodule:
+uWebSockets and µSockets are directly vendored into the repository:
 
 ```
-vendor/bun/src/deps/libuwsockets.cpp   — C wrapper compiled into ZyncBase
-vendor/bun/packages/bun-uws/src/       — uWebSockets C++ headers
-vendor/bun/packages/bun-usockets/src/  — µSockets headers
+vendor/uwebsockets/            — uWebSockets C++ headers (37 files)
+vendor/usockets/               — µSockets C sources and headers
+src/uws_bridge.cpp             — Purpose-built C++→C bridge (~300 lines)
+src/uws_bridge.h               — Bridge type definitions
 ```
 
-The `vendor/bun` submodule is pinned to a specific Bun commit in `.gitmodules`. The effective uWebSockets version is whatever Bun's tree contains at that commit. To determine the exact version:
-
-```bash
-git -C vendor/bun log --oneline -1
-grep -r "UWS_VERSION" vendor/bun/packages/bun-uws/src/ 2>/dev/null | head -5
-```
+The vendored files were extracted from Bun's fork of uWebSockets/uSockets, with patches
+permanently baked into `vendor/uwebsockets/` (libdeflate disabled, SIMDUTF disabled,
+include paths fixed).
 
 ---
 
@@ -61,23 +59,29 @@ behavior.sendPingsAutomatically = true;
 
 ## Compatibility Contract
 
-ZyncBase guarantees compatibility with the uWebSockets version embedded in the pinned `vendor/bun` commit. No other version is tested or supported.
+ZyncBase guarantees compatibility with the directly vendored uWebSockets/µSockets code in `vendor/uwebsockets/` and `vendor/usockets/`. No other version is tested or supported.
 
 | Guarantee | Detail |
 |-----------|--------|
 | API surface | Only the functions listed above are called. Any uWebSockets change that does not affect these symbols is safe. |
 | ABI | `libuwsockets.cpp` is compiled from source at build time — no pre-built binary dependency. |
-| SSL | SSL is compiled in (`-DLIBUS_USE_BORINGSSL=1`) but `WebSocketServer.Config.ssl = false` by default. SSL paths are not exercised in current tests. |
+| SSL | SSL is compiled in (`-DLIBUS_USE_OPENSSL=1`) but `WebSocketServer.Config.ssl = false` by default. SSL paths are not exercised in current tests. |
 | Compression | Disabled (`UWS_COMPRESS_DISABLED`). Enabling it requires updating `behavior.compression` and re-testing. |
 
 ### Updating the Pinned Version
 
-To update uWebSockets, update the `vendor/bun` submodule commit:
+To update uWebSockets, update the vendored files in `vendor/uwebsockets/` and `vendor/usockets/`:
 
 ```bash
-git -C vendor/bun fetch origin
-git -C vendor/bun checkout <new-commit>
-git add vendor/bun
+# 1. Fetch the latest Bun uWebSockets from the bun repo (if tracking Bun's fork)
+git clone --depth 1 https://github.com/oven-sh/bun.git /tmp/bun-uws-sync
+# 2. Copy updated files
+cp /tmp/bun-uws-sync/packages/bun-uws/src/*.h vendor/uwebsockets/
+cp /tmp/bun-uws-sync/packages/bun-usockets/src/*.c vendor/usockets/
+cp /tmp/bun-uws-sync/packages/bun-usockets/src/*.h vendor/usockets/
+cp -r /tmp/bun-uws-sync/packages/bun-usockets/src/internal vendor/usockets/
+# 3. Re-apply patches (libdeflate, SIMDUTF, AsyncSocket.h include path)
+# 4. Re-slice the bridge if API surface changed
 zig build test   # must pass before committing
 ```
 
