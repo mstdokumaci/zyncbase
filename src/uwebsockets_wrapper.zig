@@ -254,6 +254,10 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
         if (loop_ptr) |loop| {
             c.us_wakeup_loop(@ptrCast(loop));
         }
+        // Remove ourselves from the loop's post-handler map
+        if (loop_ptr) |loop| {
+            c.uws_loop_removePostHandler(loop, server);
+        }
     }
 }
 

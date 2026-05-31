@@ -467,4 +467,10 @@ extern "C"
             cb(ctx_, (us_loop_t *)uwsLoop_);
         });
     }
+
+    void uws_loop_removePostHandler(us_loop_t *loop, void *key)
+    {
+        uWS::Loop *uwsLoop = (uWS::Loop *)loop;
+        uwsLoop->removePostHandler(key);
+    }
 }
