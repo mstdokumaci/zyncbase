@@ -26,9 +26,19 @@ extern "C"
             uWS::SocketContextOptions socket_context_options;
             memcpy(&socket_context_options, &options,
                    sizeof(uWS::SocketContextOptions));
-            return (uws_app_t *)new uWS::SSLApp(socket_context_options);
+            auto *app = new uWS::SSLApp(socket_context_options);
+            if (app->constructorFailed()) {
+                delete app;
+                return nullptr;
+            }
+            return (uws_app_t *)app;
         }
-        return (uws_app_t *)new uWS::App();
+        auto *app = new uWS::App();
+        if (app->constructorFailed()) {
+            delete app;
+            return nullptr;
+        }
+        return (uws_app_t *)app;
     }
 
     void uws_destroy_app(int ssl, uws_app_t *app)
@@ -62,24 +72,36 @@ extern "C"
         }
     }
 
-    void uws_app_listen(int ssl, uws_app_t *app, int port,
-                        uws_listen_handler handler, void *user_data)
+    struct us_listen_socket_t *uws_app_listen(
+        int ssl, uws_app_t *app, const char *host, size_t host_length, int port,
+        uws_listen_handler handler, void *user_data)
     {
+        struct us_listen_socket_t *listen_socket = nullptr;
+        auto listen_handler = [handler, user_data,
+                               &listen_socket](struct us_listen_socket_t *ls) {
+            listen_socket = ls;
+            handler(ls, user_data);
+        };
+
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
-            uwsApp->listen(
-                port, [handler, user_data](struct us_listen_socket_t *listen_socket) {
-                    handler((struct us_listen_socket_t *)listen_socket,
-                            user_data);
-                });
+            if (host && host_length) {
+                uwsApp->listen(std::string(host, host_length), port,
+                               std::move(listen_handler));
+            } else {
+                uwsApp->listen(port, std::move(listen_handler));
+            }
         } else {
             uWS::App *uwsApp = (uWS::App *)app;
-            uwsApp->listen(
-                port, [handler, user_data](struct us_listen_socket_t *listen_socket) {
-                    handler((struct us_listen_socket_t *)listen_socket,
-                            user_data);
-                });
+            if (host && host_length) {
+                uwsApp->listen(std::string(host, host_length), port,
+                               std::move(listen_handler));
+            } else {
+                uwsApp->listen(port, std::move(listen_handler));
+            }
         }
+
+        return listen_socket;
     }
 
     void uws_ws(int ssl, uws_app_t *app, void *upgradeContext,

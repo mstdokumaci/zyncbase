@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// C imports for Bun's uWebSockets wrapper
+// C imports for ZyncBase's uWebSockets bridge.
 pub const c = @cImport({
     @cInclude("uws_wrapper.h");
 });
@@ -11,11 +11,15 @@ const SocketUserData = struct {
     client_id: ?[]const u8,
 };
 
-/// WebSocket server wrapper using Bun's uWebSockets C API
+/// WebSocket server wrapper using ZyncBase's uWebSockets C bridge.
 pub const WebSocketServer = struct {
     app: *c.uws_app_t,
     allocator: Allocator,
+    host_z: [:0]u8,
+    port: u16,
     ssl: bool,
+    ssl_cert_path_z: ?[:0]u8,
+    ssl_key_path_z: ?[:0]u8,
     max_payload_length: usize,
     max_backpressure: usize,
     idle_timeout: u16,
@@ -54,14 +58,22 @@ pub const WebSocketServer = struct {
 
     /// Initialize WebSocket server
     pub fn init(self: *WebSocketServer, allocator: Allocator, config: Config) Error!void {
+        const host_z = allocator.dupeZ(u8, config.host) catch return error.OutOfMemory;
+        errdefer allocator.free(host_z);
+
+        var ssl_cert_path_z: ?[:0]u8 = null;
+        var ssl_key_path_z: ?[:0]u8 = null;
+        errdefer if (ssl_cert_path_z) |path| allocator.free(path);
+        errdefer if (ssl_key_path_z) |path| allocator.free(path);
+
         var ssl_options = std.mem.zeroes(c.struct_us_socket_context_options_t);
         if (config.ssl) {
-            if (config.ssl_cert_path) |cert| {
-                ssl_options.cert_file_name = @ptrCast(cert);
-            }
-            if (config.ssl_key_path) |key| {
-                ssl_options.key_file_name = @ptrCast(key);
-            }
+            const cert = config.ssl_cert_path orelse return error.InvalidConfig;
+            const key = config.ssl_key_path orelse return error.InvalidConfig;
+            ssl_cert_path_z = allocator.dupeZ(u8, cert) catch return error.OutOfMemory;
+            ssl_key_path_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
+            ssl_options.cert_file_name = (ssl_cert_path_z orelse return error.InvalidConfig).ptr;
+            ssl_options.key_file_name = (ssl_key_path_z orelse return error.InvalidConfig).ptr;
         }
 
         const app = c.uws_create_app(
@@ -75,7 +87,11 @@ pub const WebSocketServer = struct {
 
         self.app = app.?;
         self.allocator = allocator;
+        self.host_z = host_z;
+        self.port = config.port;
         self.ssl = config.ssl;
+        self.ssl_cert_path_z = ssl_cert_path_z;
+        self.ssl_key_path_z = ssl_key_path_z;
         self.max_payload_length = config.max_payload_length;
         self.max_backpressure = config.max_backpressure;
         self.idle_timeout = config.idle_timeout;
@@ -93,7 +109,13 @@ pub const WebSocketServer = struct {
 
     /// Clean up resources after run() exits & server thread is joined.
     pub fn deinit(self: *WebSocketServer) void {
+        if (self.loop.load(.acquire)) |loop| {
+            c.uws_loop_removePostHandler(loop, self);
+        }
         c.uws_destroy_app(if (self.ssl) 1 else 0, self.app);
+        self.allocator.free(self.host_z);
+        if (self.ssl_cert_path_z) |path| self.allocator.free(path);
+        if (self.ssl_key_path_z) |path| self.allocator.free(path);
     }
 
     /// Register WebSocket handlers for a specific pattern
@@ -135,14 +157,17 @@ pub const WebSocketServer = struct {
     }
 
     /// Start listening on specified port
-    pub fn listen(self: *WebSocketServer, port: u16) !void {
-        c.uws_app_listen(
+    pub fn listen(self: *WebSocketServer) !void {
+        const listen_socket = c.uws_app_listen(
             if (self.ssl) 1 else 0,
             self.app,
-            port,
+            self.host_z.ptr,
+            self.host_z.len,
+            self.port,
             listenCallback,
             self,
         );
+        if (listen_socket == null) return error.ListenFailed;
     }
 
     pub fn run(self: *WebSocketServer) void {
@@ -221,6 +246,7 @@ pub const WebSocketHandlers = struct {
 
 fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*anyopaque) callconv(.c) void {
     if (user_data) |ud| {
+        if (listen_socket == null) return;
         const server: *WebSocketServer = @ptrCast(@alignCast(ud));
         server.listen_socket = listen_socket;
         const loop = c.uws_get_loop();

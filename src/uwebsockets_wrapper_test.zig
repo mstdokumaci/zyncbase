@@ -62,6 +62,38 @@ test "WebSocketServer: init with SSL config" {
     defer server.deinit();
 
     try testing.expectEqual(true, server.ssl);
+    try testing.expect(server.ssl_cert_path_z != null);
+    try testing.expect(server.ssl_key_path_z != null);
+    try testing.expectEqual(@as(u8, 0), server.ssl_cert_path_z.?[server.ssl_cert_path_z.?.len]);
+    try testing.expectEqual(@as(u8, 0), server.ssl_key_path_z.?[server.ssl_key_path_z.?.len]);
+}
+
+test "WebSocketServer: SSL config requires cert and key paths" {
+    const allocator = testing.allocator;
+
+    const config = WebSocketServer.Config{
+        .port = 8443,
+        .host = "127.0.0.1",
+        .ssl = true,
+    };
+
+    var server: WebSocketServer = undefined;
+    try testing.expectError(error.InvalidConfig, server.init(allocator, config));
+}
+
+test "WebSocketServer: invalid SSL files fail init" {
+    const allocator = testing.allocator;
+
+    const config = WebSocketServer.Config{
+        .port = 8443,
+        .host = "127.0.0.1",
+        .ssl = true,
+        .ssl_cert_path = "tests/fixtures/missing.pem",
+        .ssl_key_path = "tests/fixtures/cert.key",
+    };
+
+    var server: WebSocketServer = undefined;
+    try testing.expectError(error.FailedToCreateApp, server.init(allocator, config));
 }
 
 test "WebSocketServer: registerWebSocketHandlers" {
@@ -87,6 +119,40 @@ test "WebSocketServer: registerWebSocketHandlers" {
 
     // Register handlers - this should not fail
     server.registerWebSocketHandlers("/*", handlers, null);
+}
+
+test "WebSocketServer: listen binds configured host" {
+    const allocator = testing.allocator;
+
+    const config = WebSocketServer.Config{
+        .port = 0,
+        .host = "127.0.0.1",
+        .ssl = false,
+    };
+
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
+    defer server.deinit();
+
+    try server.listen();
+    try testing.expect(server.listen_socket != null);
+}
+
+test "WebSocketServer: listen reports bind failure" {
+    const allocator = testing.allocator;
+
+    const config = WebSocketServer.Config{
+        .port = 0,
+        .host = "999.999.999.999",
+        .ssl = false,
+    };
+
+    var server: WebSocketServer = undefined;
+    try server.init(allocator, config);
+    defer server.deinit();
+
+    try testing.expectError(error.ListenFailed, server.listen());
+    try testing.expect(server.listen_socket == null);
 }
 
 // Test handler functions
