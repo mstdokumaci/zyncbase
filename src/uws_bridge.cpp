@@ -31,11 +31,20 @@ extern "C"
         return (uws_app_t *)new uWS::App();
     }
 
+    void uws_destroy_app(int ssl, uws_app_t *app)
+    {
+        if (ssl) {
+            delete (uWS::SSLApp *)app;
+        } else {
+            delete (uWS::App *)app;
+        }
+    }
+
     void uws_app_get(int ssl, uws_app_t *app, const char *pattern_ptr,
                      size_t pattern_len, uws_method_handler handler,
                      void *user_data)
     {
-        std::string pattern(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr ? pattern_ptr : "", pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -65,7 +74,7 @@ extern "C"
                       size_t pattern_len, uws_method_handler handler,
                       void *user_data)
     {
-        std::string pattern(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr ? pattern_ptr : "", pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -95,7 +104,7 @@ extern "C"
                          size_t pattern_len, uws_method_handler handler,
                          void *user_data)
     {
-        std::string pattern(pattern_ptr, pattern_len);
+        std::string pattern(pattern_ptr ? pattern_ptr : "", pattern_len);
         if (ssl) {
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
             if (handler == nullptr) {
@@ -220,7 +229,7 @@ extern "C"
                                        message.data(), message.length());
                     };
             uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
-            uwsApp->ws<void *>(std::string(pattern, pattern_length),
+            uwsApp->ws<void *>(std::string(pattern ? pattern : "", pattern_length),
                                std::move(generic_handler));
         } else {
             auto generic_handler = uWS::App::WebSocketBehavior<void *>{
@@ -275,7 +284,7 @@ extern "C"
                                        message.data(), message.length());
                     };
             uWS::App *uwsApp = (uWS::App *)app;
-            uwsApp->ws<void *>(std::string(pattern, pattern_length),
+            uwsApp->ws<void *>(std::string(pattern ? pattern : "", pattern_length),
                                std::move(generic_handler));
         }
     }

@@ -94,10 +94,9 @@ pub const WebSocketServer = struct {
     }
 
     /// Clean up resources after run() exits & server thread is joined.
-    /// NOTE: uws_app_t isn't freed as uws_wrapper.h lacks uws_app_destroy; instead,
-    /// uws_app_close() in postHandler() closes it & releases the listen socket
-    /// during graceful shutdown. No further C API cleanup is possible or required.
-    pub fn deinit(_: *WebSocketServer) void {}
+    pub fn deinit(self: *WebSocketServer) void {
+        c.uws_destroy_app(if (self.ssl) 1 else 0, self.app);
+    }
 
     /// Register WebSocket handlers for a specific pattern
     pub fn registerWebSocketHandlers(self: *WebSocketServer, pattern: []const u8, handlers: WebSocketHandlers, user_data: ?*anyopaque) void {

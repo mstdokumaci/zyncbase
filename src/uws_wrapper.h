@@ -90,6 +90,7 @@ typedef struct {
 
 // Function declarations
 uws_app_t *uws_create_app(int ssl, struct us_socket_context_options_t options);
+void uws_destroy_app(int ssl, uws_app_t *app);
 void uws_app_run(int ssl, uws_app_t *app);
 void uws_app_close(int ssl, uws_app_t *app);
 void uws_app_listen(int ssl, uws_app_t *app, int port, uws_listen_handler handler, void *user_data);
