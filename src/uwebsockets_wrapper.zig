@@ -72,8 +72,10 @@ pub const WebSocketServer = struct {
             const key = config.ssl_key_path orelse return error.InvalidConfig;
             ssl_cert_path_z = allocator.dupeZ(u8, cert) catch return error.OutOfMemory;
             ssl_key_path_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
-            ssl_options.cert_file_name = (ssl_cert_path_z orelse return error.InvalidConfig).ptr;
-            ssl_options.key_file_name = (ssl_key_path_z orelse return error.InvalidConfig).ptr;
+            // zwanzig-disable-next-line: optional-unwrap
+            ssl_options.cert_file_name = ssl_cert_path_z.?.ptr;
+            // zwanzig-disable-next-line: optional-unwrap
+            ssl_options.key_file_name = ssl_key_path_z.?.ptr;
         }
 
         const app = c.uws_create_app(
