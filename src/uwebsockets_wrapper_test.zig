@@ -83,7 +83,6 @@ test "WebSocketServer: registerWebSocketHandlers" {
         .on_open = testOnOpen,
         .on_message = testOnMessage,
         .on_close = testOnClose,
-        .on_error = null,
     };
 
     // Register handlers - this should not fail

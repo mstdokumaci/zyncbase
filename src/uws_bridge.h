@@ -14,23 +14,6 @@ enum uws_compress_options_t : int32_t {
     DISABLED = 0,
     SHARED_COMPRESSOR = 1,
     SHARED_DECOMPRESSOR = 1 << 8,
-    DEDICATED_DECOMPRESSOR_32KB = 15 << 8,
-    DEDICATED_DECOMPRESSOR_16KB = 14 << 8,
-    DEDICATED_DECOMPRESSOR_8KB = 13 << 8,
-    DEDICATED_DECOMPRESSOR_4KB = 12 << 8,
-    DEDICATED_DECOMPRESSOR_2KB = 11 << 8,
-    DEDICATED_DECOMPRESSOR_1KB = 10 << 8,
-    DEDICATED_DECOMPRESSOR_512B = 9 << 8,
-    DEDICATED_DECOMPRESSOR = 15 << 8,
-    DEDICATED_COMPRESSOR_3KB = 9 << 4 | 1,
-    DEDICATED_COMPRESSOR_4KB = 9 << 4 | 2,
-    DEDICATED_COMPRESSOR_8KB = 10 << 4 | 3,
-    DEDICATED_COMPRESSOR_16KB = 11 << 4 | 4,
-    DEDICATED_COMPRESSOR_32KB = 12 << 4 | 5,
-    DEDICATED_COMPRESSOR_64KB = 13 << 4 | 6,
-    DEDICATED_COMPRESSOR_128KB = 14 << 4 | 7,
-    DEDICATED_COMPRESSOR_256KB = 15 << 4 | 8,
-    DEDICATED_COMPRESSOR = 15 << 4 | 8
 };
 
 enum uws_opcode_t : int32_t {
@@ -48,7 +31,6 @@ struct uws_app_s;
 struct uws_req_s;
 struct uws_res_s;
 struct uws_websocket_s;
-struct uws_header_iterator_s;
 typedef struct uws_app_s uws_app_t;
 typedef struct uws_req_s uws_req_t;
 typedef struct uws_res_s uws_res_t;
@@ -89,8 +71,6 @@ typedef struct {
 } uws_socket_behavior_t;
 
 typedef void (*uws_listen_handler)(struct us_listen_socket_t *listen_socket,
-                                   void *user_data);
-typedef void (*uws_method_handler)(uws_res_t *response, uws_req_t *request,
                                    void *user_data);
 
 struct us_loop_t *uws_get_loop();

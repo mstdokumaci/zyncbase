@@ -25,7 +25,6 @@ pub const WebSocketServer = struct {
     loop: std.atomic.Value(?*c.struct_us_loop_t) = std.atomic.Value(?*c.struct_us_loop_t).init(null),
     close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     is_closing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    is_listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     post_handler: ?*const fn (?*anyopaque) void = null,
     post_handler_ctx: ?*anyopaque = null,
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
@@ -86,7 +85,6 @@ pub const WebSocketServer = struct {
         self.loop = std.atomic.Value(?*c.struct_us_loop_t).init(null);
         self.close_requested = std.atomic.Value(bool).init(false);
         self.is_closing = std.atomic.Value(bool).init(false);
-        self.is_listening = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
         self.drain_handler = null;
@@ -219,7 +217,6 @@ pub const WebSocketHandlers = struct {
     on_open: ?*const fn (*WebSocket, ?*anyopaque) void = null,
     on_message: ?*const fn (*WebSocket, []const u8, MessageType, ?*anyopaque) void = null,
     on_close: ?*const fn (*WebSocket, i32, []const u8, ?*anyopaque) void = null,
-    on_error: ?*const fn (*WebSocket, ?*anyopaque) void = null,
 };
 
 fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*anyopaque) callconv(.c) void {
@@ -229,7 +226,6 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
         c.uws_loop_addPostHandler(loop, server, postHandler);
-        server.is_listening.store(true, .release);
     }
 }
 
