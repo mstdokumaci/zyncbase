@@ -66,35 +66,36 @@ const EVENTS_FILTER_B: QueryOptions = {
 };
 
 function createItemData(index: number): Omit<ItemRecord, "id"> {
-	const configs: Array<Omit<ItemRecord, "id">> = [
-		{ name: "item-0", priority: 1, active: false, tags: ["urgent"] },
-		{ name: "item-1", priority: 2, active: false, tags: [] },
-		{ name: "item-2", priority: 3, active: true, tags: [] },
-		{ name: "item-3", priority: 4, active: true, tags: [] },
-		{ name: "item-4", priority: 5, active: true, tags: [] },
-		{ name: "item-5", priority: 6, active: true, tags: [] },
-		{ name: "item-6", priority: 7, active: false, tags: [] },
-		{ name: "item-7", priority: 8, active: true, tags: ["urgent"] },
-		{ name: "item-8", priority: 9, active: true, tags: [] },
-		{ name: "item-9", priority: 10, active: true, tags: [] },
-	];
-	return configs[index];
+	const priority = (index % 10) + 1;
+	const active = index % 10 !== 0 && index % 10 !== 1 && index % 10 !== 6;
+	const tags = index % 10 === 0 || index % 10 === 7 ? ["urgent"] : [];
+	return {
+		name: `item-${index}`,
+		priority,
+		active,
+		tags,
+	};
 }
 
 function createEventData(index: number): Omit<EventRecord, "id"> {
-	const configs: Array<Omit<EventRecord, "id">> = [
-		{ title: "event-0", score: 10, ratings: [2, 3] },
-		{ title: "event-1", score: 15, ratings: [2, 4] },
-		{ title: "event-2", score: 30, ratings: [3, 4] },
-		{ title: "event-3", score: 10, ratings: [1, 2] },
-		{ title: "event-4", score: 50, ratings: [4, 5] },
-		{ title: "event-5", score: 60, ratings: [3, 5] },
-		{ title: "event-6", score: 70, ratings: [2, 3] },
-		{ title: "event-7", score: 15, ratings: [1, 3] },
-		{ title: "event-8", score: 80, ratings: [2, 4] },
-		{ title: "event-9", score: 90, ratings: [5, 6] },
+	const scores = [10, 15, 30, 10, 50, 60, 70, 15, 80, 90];
+	const ratingsList = [
+		[2, 3],
+		[2, 4],
+		[3, 4],
+		[1, 2],
+		[4, 5],
+		[3, 5],
+		[2, 3],
+		[1, 3],
+		[2, 4],
+		[5, 6],
 	];
-	return configs[index];
+	return {
+		title: `event-${index}`,
+		score: scores[index % 10],
+		ratings: ratingsList[index % 10],
+	};
 }
 
 function subscribeClient(state: ClientState) {
@@ -353,24 +354,26 @@ async function createClients(
 
 async function createInitialData(
 	readWriteClients: ClientState[],
-	count: number,
 ): Promise<{ createdItemIds: string[]; createdEventIds: string[] }> {
 	const createdItemIds: string[] = [];
 	const createdEventIds: string[] = [];
 	const createPromises: Promise<void>[] = [];
 
-	for (let i = 0; i < count; i++) {
+	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
-		createPromises.push(
-			rwClient.store
-				.create("items", createItemData(i))
-				.then((id) => createdItemIds.push(id)),
-		);
-		createPromises.push(
-			rwClient.store
-				.create("events", createEventData(i))
-				.then((id) => createdEventIds.push(id)),
-		);
+		for (let j = 0; j < 4; j++) {
+			const index = i * 4 + j;
+			createPromises.push(
+				rwClient.store
+					.create("items", createItemData(index))
+					.then((id) => createdItemIds.push(id)),
+			);
+			createPromises.push(
+				rwClient.store
+					.create("events", createEventData(index))
+					.then((id) => createdEventIds.push(id)),
+			);
+		}
 	}
 
 	await Promise.all(createPromises);
@@ -381,39 +384,40 @@ async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
-	count: number,
 ): Promise<void> {
 	const updatePromises: Promise<void>[] = [];
 
-	for (let i = 0; i < count; i++) {
+	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 
-		const randomItemId =
-			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
-		updatePromises.push(
-			rwClient.store.set(["items", randomItemId], {
-				priority: Math.floor(Math.random() * 10) + 1,
-				active: Math.random() > 0.5,
-				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
-			}),
-		);
+		for (let j = 0; j < 4; j++) {
+			const randomItemId =
+				createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
+			updatePromises.push(
+				rwClient.store.set(["items", randomItemId], {
+					priority: Math.floor(Math.random() * 10) + 1,
+					active: Math.random() > 0.5,
+					tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
+				}),
+			);
 
-		const randomEventId =
-			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
-		updatePromises.push(
-			rwClient.store.set(["events", randomEventId], {
-				score: Math.random() * 100,
-				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
-			}),
-		);
+			const randomEventId =
+				createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
+			updatePromises.push(
+				rwClient.store.set(["events", randomEventId], {
+					score: Math.random() * 100,
+					ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
+				}),
+			);
+		}
 	}
 
 	await Promise.all(updatePromises);
 }
 
 export async function run(port: number = 3000) {
-	const TOTAL_CLIENTS = 100;
-	const READ_WRITE_COUNT = 10;
+	const TOTAL_CLIENTS = 500;
+	const READ_WRITE_COUNT = 50;
 
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
 	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
@@ -426,21 +430,14 @@ export async function run(port: number = 3000) {
 	}
 
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } = await createInitialData(
-		readWriteClients,
-		READ_WRITE_COUNT,
-	);
+	const { createdItemIds, createdEventIds } =
+		await createInitialData(readWriteClients);
 	console.log(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(
-		readWriteClients,
-		createdItemIds,
-		createdEventIds,
-		READ_WRITE_COUNT,
-	);
+	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
 	console.log("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
