@@ -95,7 +95,7 @@ function createEventData(index: number): Omit<EventRecord, "id"> {
 	return {
 		title: `event-${index}`,
 		score: SCORES[index % 10],
-		ratings: RATINGS_LIST[index % 10],
+		ratings: [...RATINGS_LIST[index % 10]],
 	};
 }
 
@@ -355,6 +355,8 @@ async function createClients(
 
 async function createInitialData(
 	readWriteClients: ClientState[],
+	itemIdToName: Map<string, string>,
+	eventIdToTitle: Map<string, string>,
 ): Promise<{ createdItemIds: string[]; createdEventIds: string[] }> {
 	const createdItemIds: string[] = [];
 	const createdEventIds: string[] = [];
@@ -365,14 +367,16 @@ async function createInitialData(
 		for (let j = 0; j < 4; j++) {
 			const index = i * 4 + j;
 			createPromises.push(
-				rwClient.store
-					.create("items", createItemData(index))
-					.then((id) => createdItemIds.push(id)),
+				rwClient.store.create("items", createItemData(index)).then((id) => {
+					createdItemIds.push(id);
+					itemIdToName.set(id, `item-${index}`);
+				}),
 			);
 			createPromises.push(
-				rwClient.store
-					.create("events", createEventData(index))
-					.then((id) => createdEventIds.push(id)),
+				rwClient.store.create("events", createEventData(index)).then((id) => {
+					createdEventIds.push(id);
+					eventIdToTitle.set(id, `event-${index}`);
+				}),
 			);
 		}
 	}
@@ -381,36 +385,61 @@ async function createInitialData(
 	return { createdItemIds, createdEventIds };
 }
 
+async function updateWriterRecords(
+	client: ZyncBaseClient,
+	createdItemIds: string[],
+	createdEventIds: string[],
+	itemIdToName: Map<string, string>,
+	eventIdToTitle: Map<string, string>,
+): Promise<void> {
+	const promises: Promise<void>[] = [];
+	for (let j = 0; j < 4; j++) {
+		const randomItemId =
+			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
+		const originalName = itemIdToName.get(randomItemId) || "";
+		promises.push(
+			client.store.set(["items", randomItemId], {
+				name: originalName,
+				priority: Math.floor(Math.random() * 10) + 1,
+				active: Math.random() > 0.5,
+				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
+			}),
+		);
+
+		const randomEventId =
+			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
+		const originalTitle = eventIdToTitle.get(randomEventId) || "";
+		promises.push(
+			client.store.set(["events", randomEventId], {
+				title: originalTitle,
+				score: Math.random() * 100,
+				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
+			}),
+		);
+	}
+	await Promise.all(promises);
+}
+
 async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
+	itemIdToName: Map<string, string>,
+	eventIdToTitle: Map<string, string>,
 ): Promise<void> {
 	const updatePromises: Promise<void>[] = [];
 
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
-
-		for (let j = 0; j < 4; j++) {
-			const randomItemId =
-				createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
-			updatePromises.push(
-				rwClient.store.set(["items", randomItemId], {
-					priority: Math.floor(Math.random() * 10) + 1,
-					active: Math.random() > 0.5,
-					tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
-				}),
-			);
-
-			const randomEventId =
-				createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
-			updatePromises.push(
-				rwClient.store.set(["events", randomEventId], {
-					score: Math.random() * 100,
-					ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
-				}),
-			);
-		}
+		updatePromises.push(
+			updateWriterRecords(
+				rwClient,
+				createdItemIds,
+				createdEventIds,
+				itemIdToName,
+				eventIdToTitle,
+			),
+		);
 	}
 
 	await Promise.all(updatePromises);
@@ -430,15 +459,27 @@ export async function run(port: number = 3000) {
 		subscribeClient(state);
 	}
 
+	const itemIdToName = new Map<string, string>();
+	const eventIdToTitle = new Map<string, string>();
+
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } =
-		await createInitialData(readWriteClients);
+	const { createdItemIds, createdEventIds } = await createInitialData(
+		readWriteClients,
+		itemIdToName,
+		eventIdToTitle,
+	);
 	console.log(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
+	await updateRandomRecords(
+		readWriteClients,
+		createdItemIds,
+		createdEventIds,
+		itemIdToName,
+		eventIdToTitle,
+	);
 	console.log("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
