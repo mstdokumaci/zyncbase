@@ -77,24 +77,25 @@ function createItemData(index: number): Omit<ItemRecord, "id"> {
 	};
 }
 
+const SCORES = [10, 15, 30, 10, 50, 60, 70, 15, 80, 90];
+const RATINGS_LIST = [
+	[2, 3],
+	[2, 4],
+	[3, 4],
+	[1, 2],
+	[4, 5],
+	[3, 5],
+	[2, 3],
+	[1, 3],
+	[2, 4],
+	[5, 6],
+];
+
 function createEventData(index: number): Omit<EventRecord, "id"> {
-	const scores = [10, 15, 30, 10, 50, 60, 70, 15, 80, 90];
-	const ratingsList = [
-		[2, 3],
-		[2, 4],
-		[3, 4],
-		[1, 2],
-		[4, 5],
-		[3, 5],
-		[2, 3],
-		[1, 3],
-		[2, 4],
-		[5, 6],
-	];
 	return {
 		title: `event-${index}`,
-		score: scores[index % 10],
-		ratings: ratingsList[index % 10],
+		score: SCORES[index % 10],
+		ratings: RATINGS_LIST[index % 10],
 	};
 }
 
