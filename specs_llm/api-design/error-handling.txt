@@ -1,12 +1,18 @@
-Error Handling SDK surfaces errors developers `ZyncBaseError interface propagation model auto-retry behavior optimistic revert semantics document defines SDK consumer contract full internal error catalog server-side retry implementation [Error Taxonomy Table Contents ZyncBaseError Object Propagation Error Codes [Optimistic Revert Behavior-Retry Summary ZyncBaseError Object errors SDK consumers consistent typed object```typescript
+Error Handling SDK surfaces errors developers `ZyncBaseError interface propagation model write failure reporting auto-retry behavior document defines SDK consumer contract full internal error catalog server-side retry implementation [Error Taxonomy Table of Contents ZyncBaseError Object Propagation Error Codes [Write Failure Reporting-Retry Summary ZyncBaseError Object errors SDK use consistent typed object```typescript
 interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
   retryable: boolean;                    // Whether the SDK can/will auto-retry
   retryAfter?: number;                   // ms to wait before retry (server-provided)
-  requestId?: number;                    // ID of the failed request
+  requestId?: number;                    // ID of the failed immediate request
+  writeId?: string;                      // ID of a tracked or confirmed write, if applicable
   path?: string[];                       // Affected data path, if applicable
+  details?: {
+    phase?: 'accept' | 'write';           // Request acceptance or writer-thread outcome
+    batchIndex?: number;                  // Failed batch operation, when known
+    [key: string]: unknown;
+  };
 }
-```Error Propagation reach developer two channels 1. `try/catch async methods Methods return `Promise `query throw `ZyncBaseError````typescript
+```Error Propagation reach developer two channels `try/catch async methods `Promise throw `ZyncBaseError```typescript
 try {
   await client.connect()
 } catch (error: ZyncBaseError) {
@@ -14,13 +20,19 @@ try {
     // Handle authentication error
   }
 }
-````client.on('error fire-and-forget writes `store.set.remove optimistic return `void Promise). server rejects write error emitted global error event```typescript
+```Mutation promises phases server rejected request before writer "write writer failure for confirmed Default mutations `confirm "accepted resolve after acceptance update local subscription receive guaranteed-operation async error delivery after acceptance```typescript
+try {
+  await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
+} catch (error: ZyncBaseError) {
+  if (error.details?.phase === 'write') {
+    // Writer-thread failure for this confirmed write
+  }
+}
+```.on( connection systemic errors global error event surfaces connection-level systemic writer failures write errors not attached mutation```typescript
 client.on('error', (error: ZyncBaseError) => {
-  // error.path contains the affected data path
-  // Optimistic state has already been reverted by the SDK
-  console.error(`Write failed at ${error.path?.join('.')}:`, error.message)
+  console.error(error.code, error.message)
 })
-```3. Async NACKs (Late-arriving errors high-throughput server returns `ok later error background persistence fails `DATABASE_BUSY SDK Match error `requestId original write Revert optimistic state Surface error `client.on('error 4. Framework hooks/Vue populate `error` field hook return```typescript
+```3. WriteError events Asynchronous failures are `WriteError`s not rollback NACKs `writeId tracked writes for user feedback diagnostics imply local rollback SDK apply subscription updates 4. Framework hooks populate `error` field```typescript
 const { data, error } = useStore('tasks.123')
 if (error) { /* render error state */ }
-```Common Error Codes to SDK consumers grouped by category Authentication & Authorization Auto-retry `AUTH_FAILED` Invalid ticket expired JWT new token `TOKEN_EXPIRED` Session expired fires event refresh token `SESSION_NOT_READY` operation sent before namespace user resolution finished wait for `connect() or namespace switch `NAMESPACE_UNAUTHORIZED` Not authorized access namespace `PERMISSION_DENIED` Rule blocked operation `COLLECTION_NOT_FOUND` Path collection not defined schema No — fix path Validation Auto-retry `SCHEMA_VALIDATION_FAILED` Data match schema definition No — fix data `FIELD_NOT_FOUND` Field name not defined in schema No — fix path data `IMMUTABLE_FIELD` modify protected system field `INVALID_FIELD_NAME` forbidden `__` sequence `INVALID_ARRAY_ELEMENT` Array non-literal valuenested object fix data `INVALID_MESSAGE` Malformed message missing `type field `INVALID_MESSAGE_FORMAT` Missing fields type id `INVALID_MESSAGE_ID` Correlation ID negative out of range Rate Limiting Auto-retry `RATE_LIMITED` Message frequency exceeded exponential backoff `retryAfter `MESSAGE_TOO_LARGE` Payload exceeds `maxMessageSize` reduce payload Connection & Server Auto-retry `CONNECTION_FAILED` Transport failure (WebSocket closed reconnect `MAX_CONNECTIONS_REACHED` Server at capacity try later `TIMEOUT` Operation timed out retry backoff `INTERNAL_ERROR` Unexpected server failure retry 3 times Hook Server Auto-retry `HOOK_SERVER_UNAVAILABLE` reach Hook Server `HOOK_DENIED` Developer's hook rejected operation Optimistic Revert Behavior `store.set(.remove() apply changes to local state server rejects write SDK reverts** local state to pre-write value error emitted via `client.('error', ... 3. active subscriptions fire reverted state applies immediate error responses [async NACKs-late-arriving-errors). Auto-Retry Summary Error Category Max Attempts Strategy Connection  Yes Infinite Exponential backoff [Reconnection Rate-Limit Yes (opt-out Infinite Respect `retryAfter` else backoff Server  Yes 3 Exponential backoff Authentication Partial Fire `tokenExpired` wait refresh Authorization  No Surface immediately Validation No immediately Hook Server No immediately See [Connection Management] Client lifecycle events [Store API] Optimistic write methods [Error Taxonomy] internal error catalog retry implementations [Wire Protocol]-format Error envelope wire format
+```Common Error Codes to SDK consumers grouped by category Authentication & Authorization Auto-retry `AUTH_FAILED` Invalid ticket expired JWT new token `TOKEN_EXPIRED` Session expired fires event refresh token `SESSION_NOT_READY` operation sent before namespace user resolution finished wait for `connect() or namespace switch `NAMESPACE_UNAUTHORIZED` Not authorized access namespace `PERMISSION_DENIED` Rule blocked operation `COLLECTION_NOT_FOUND` Path collection not defined schema No — fix path Validation Auto-retry `SCHEMA_VALIDATION_FAILED` Data match schema definition No — fix data `FIELD_NOT_FOUND` Field name not defined in schema No — fix path data `IMMUTABLE_FIELD` modify protected system field `INVALID_FIELD_NAME` forbidden `__` sequence `INVALID_ARRAY_ELEMENT` Array non-literal valuenested object fix data `INVALID_MESSAGE` Malformed missing `type field `INVALID_MESSAGE_FORMAT Missing fields type id `INVALID_MESSAGE_ID Correlation ID negative out of range Rate Limiting Auto-retry `RATE_LIMITED Message frequency exceeded exponential backoff `retryAfter `MESSAGE_TOO_LARGE Payload exceeds `maxMessageSize reduce payload Connection & Server Auto-retry `CONNECTION_FAILED` Transport failure (WebSocket closed reconnect `MAX_CONNECTIONS_REACHED Server at capacity try later `TIMEOUT` Operation timed out retry backoff `INTERNAL_ERROR` Unexpected server failure retry 3 times Hook Server Auto-retry `HOOK_SERVER_UNAVAILABLE` reach Hook Server `HOOK_DENIED` Developer's hook rejected operation Write Failure Reporting separates state delivery write outcome reporting Subscription callbacks authoritative channel committed state Default accepted writes receive guaranteed per-operation async error delivery after acceptanceConfirmed writes reject promise when reports failure Tracked write errors use `writeId` include best-effort `path` metadata Batch write errors include `details.batchIndex` when failing operation known Confirmed write timeouts mean confirmation not received imply write aborted or failed commit After reconnect subscriptions remain source truth for final state Auto-Retry Summary Error Category Max Attempts Strategy Connection Yes Exponential backoff [Reconnection Rate-Limit Yes (opt-out Respect `retryAfter` else backoff Server Yes Exponential backoff Authentication Partial Fire `tokenExpired` wait refresh Authorization No Surface Validation Hook Server See [Connection Management] Client lifecycle events [Store API Accepted/committed mutation methods [Error Taxonomy] internal error catalog retry implementations [Wire Protocol]-format Error envelope wire format

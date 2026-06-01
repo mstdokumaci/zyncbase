@@ -40,7 +40,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     ],
     "allowLocalhost": true,
     "maxMessagesPerSecond": 100,
-    "maxConnectionsPerIP": 10,
+    "maxConnections": 100000,
     "maxMessageSize": 1048576,
     "violationThreshold": 10
   },
@@ -94,7 +94,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     ],
     "allowLocalhost": true,
     "maxMessagesPerSecond": 100,
-    "maxConnectionsPerIP": 10,
+    "maxConnections": 100000,
     "maxMessageSize": 1048576,
     "violationThreshold": 10
   }

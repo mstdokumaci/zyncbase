@@ -1,24 +1,26 @@
-Store API Reference handles synchronized data validated against [Schema persisted to SQLite synchronized across clients methods require ready scope.connect.setStoreNamespace resolve after server resolved namespace `users.id before fails with `SESSION_NOT_READY Table of Contents [Direct Path Access [Query API (Path Filtering [Batch Operations [Path Syntax-strings-vs-arrays Direct Path Access (CRUD) Target items properties using dot-notation arrays strict rules depth path Path Target Depth Allowed Operations Behavior **Collection**'users `1` `create `query `listen `subscribe **Append-only for writes** `set `remove entire collection'users.u1 `2` `get` `set `remove `listen` CRUD** `set` upserts `remove` deletes **Field**'users.u1.name `3+` `get` `set `listen **Updates only** clear field `set to `null` `remove` forbidden `store.create(collection value Creates new document SDK generates UUIDv7 string calls `set hood```typescript
-// ID is generated locally for immediate optimistic UI rendering
-const id = client.store.create('elements', { type: 'rect', x: 10 })
-````string generated ID Custom document IDs supported path match short-ID grammar `[a-z0-9_-]{1,24}` `store.get(path) value state tree```typescript
+Store API Reference handles synchronized data namespace validated against [Schema/configuration.md persisted to SQLite synchronized across clients Store methods require ready store scope.connect(.setStoreNamespace(namespace resolve after server resolved namespace `users.id before fails with `SESSION_NOT_READY` Mutating methods use subscription-first state propagation (ADR-031) `store.set.remove.batch` resolve when server accepts mutation update local subscription state wait for commit unless `confirm: "committed requested Subscription callbacks authoritative committed state Table of Contents [Direct Path Access] [Query API (Path Filtering [Batch Operations [Path Syntax] Direct Path Access (CRUD Target specific items properties using dot-notation or arrays strict rules based depth path Path Target Depth Allowed Operations Behavior **Collection** ('users' `create `query **Append-only for writes** `set `remove entire collection **Document**'usersu1 `2` `get `set `remove CRUD** `set upserts document `remove deletes'users.u1.name `3+` `get `set `listen **Updates clear field `set `null `remove forbidden `store.create(collection value) Creates new document SDK generates UUIDv7 string calls `set````typescript
+const id = await client.store.create('elements', { type: 'rect', x: 10 })
+````Promise generated ID after create accepted `confirm "committed" caller needs-thread confirmation Custom document IDs supported path match short-ID grammar `[a-z0-9_-]{1,24}` `store.get(path) value state tree```typescript
 const element = client.store.get('elements.rect-1')
-```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar specific field `undefined path not found `store.set(path, value) Write value or upsert document **Optimistic applied locally synced Reverted if server rejects **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null triggers schema validation required **Typed Arrays** fields "array values normalized to canonical form before persistence returned canonical form on reads```typescript
+```**Returns** by path depth): **Array of Objects** points to collection.store.get'users `Array<User **Single specific document **Scalar specific field `undefined path not found `store.set(path, value) Write value or upsert document **Path Constraints** target (depth 2) or **Field** (depth 3+) Targeting collection (depth 1) throws error **Clearing Fields** remove field `set to `null` triggers schema validation required **Typed Arrays** schema fields "array values normalized to canonical form before persistence returned canonical form on reads```typescript
 // Upsert a full document. ID is extracted from path if needed.
-client.store.set('users.u1', { name: 'Alice', status: 'active' })
+await client.store.set('users.u1', { name: 'Alice', status: 'active' })
 
 // Update a specific field
-client.store.set('users.u1.status', 'offline')
+await client.store.set('users.u1.status', 'offline')
 
 // Clear an optional field (instead of remove)
-client.store.set('users.u1.address', null)
+await client.store.set('users.u1.address', null)
 
 // Typed array field is canonicalized as sorted set
-client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
+await client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
 // Stored/read as: ['backend', 'urgent']
-```Server-Time Last-Write-Wins (LWW) Path level `set() fire-and-forget errors reported via `client.on('error) [Error Handling `void `store.remove(path) Deletes document target 2) Targeting collection 1) field 3+) throws error remove field use `store.set(path, null)```typescript
-client.store.remove('elements.rect-1')
-````remove() fire-and-forget errors reported via `client.on('error [Error Handling-propagation). `void` `store.listen(path callback)` updates specific path```typescript
+
+// UI-critical write that needs writer-thread confirmation
+await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
+```Server-Time Last-Write-Wins) Path level "accepted resolves server accepts mutation "committed resolves writer commits mutation no-op rejects reports failure Local subscription data changes server emits updates successful mutation promise not substitute for subscription state request errors reject promise write failures reject promise `ZyncBaseError Default accepted writes receive per-operation async error delivery after acceptance [Error Handling `Promise<void>.remove(path) Deletes document target depth 2) Targeting collection 1) field 3+) throws error remove field `store.set(path, null)```typescript
+await client.store.remove('elements.rect-1')
+````store.set Deleting missing document success/no-op Same.set `Promise<void> `store.listen(path callback) Listen real-time updates specific path```typescript
 const unlisten = client.store.listen('elements.rect-1', (element) => {
   render(element)
 })
@@ -46,12 +48,17 @@ const { unsubscribe, loadMore, hasMore } = client.store.subscribe('tasks', {
 
 // Load older history into the live view
 if (hasMore) await loadMore()
-```**Parameters `collection (string Name query `options` (object `query() `callback` (function Called when results change unsubscribe void loadMore Promise<void> hasMore boolean See [Query Language Reference]-language.md operators`eq `gte `contains `in Batch Operations Perform multiple write operations`set `remove atomically `store.batch(operations)` If operation fails batch reverted).```typescript
+```**Parameters `collection (string Name query `options` (object `query() `callback (function Called when results change unsubscribe void loadMore Promise<void hasMore boolean See [Query Language Reference-language.md operators`eq `contains Batch Operations Perform write operations`set `remove atomically `store.batch(operations)` Performs operations atomically```typescript
 await client.store.batch([
   { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
   { op: 'remove', path: 'temporary_locks.123' }
 ])
-```Max 500 operations per batch `set `remove allowed Utilities `client.utils.id() Generates lowercase UUIDv7 string client generating IDs batch operations `store.create` relational keys set```typescript
+```default confirmation promise resolves batch accepted write pipeline "committed promise resolves full batch commits no-op outcomes operation fails batch rejects no partial writes```typescript
+await client.store.batch([
+  { op: 'set', path: 'tasks.123', value: { status: 'assigned' } },
+  { op: 'remove', path: 'temporary_locks.123' }
+], { confirm: 'committed' })
+```Max 500 operations per batch `set `remove allowed Confirmed batch failures include `details.batchIndex` failing operation identified Utilities `client.utils.id() Generates lowercase UUIDv7 string generating IDs batch operations `store.create` relational keys set```typescript
 const userId = client.utils.id();
 const profileId = client.utils.id();
 
@@ -67,4 +74,4 @@ client.store.get(`users.${userId}.name`)
 
 // ✅ Array handles it safely
 client.store.get(['users', userId, 'name'])
-```[Presence API.md user awareness features [Query Language Reference Detailed query syntax [Configuration Schema schema definitions Management Client lifecycle events [Error Handling Error types optimistic revert behavior
+```[Presence API.md user awareness features [Query Language Reference.md Detailed query syntax [Configuration Schema.md schema definitions [Connection Management Client lifecycle events [Error Handling Error types failure reporting

@@ -186,26 +186,30 @@ const StorageLayer = struct {
         try self.write_conn.exec("COMMIT");
     }
 };
-```Asynchronous Completion Tracking support Error Reporting `StorageLayer track origin write operation Proposed Structural Changes`WriteOp Add metadata link operation requester```zig
+```Write Completion Tracking `WriteError `StorageLayer tracks requester metadata writer-thread outcome accepted writes enqueued without completion after acceptance subscriptions remain truth committed state Structural Requirements`WriteOp Add optional metadata link tracked confirmed writes live requester```zig
     pub const WriteOp = struct {
         type: enum { ... },
         // ... existing fields ...
-        client_id: ?u64 = null,    // Unique identifier for the WebSocket connection
-        request_id: ?u64 = null,  // Original id from the client message
+        client_id: ?u64 = null,    // Live WebSocket connection for tracked/confirmed writes
+        write_id: ?[]const u8 = null, // Correlation id for writer-thread outcomes
     };
-    ````StorageLayer callback interface initialization report background processing results```zig
+    ````write_id present `client_id present Operation status retained memory scoped live connection `StorageLayer reports writer-thread outcomes tracked writes```zig
     const StorageLayer = struct {
         // ...
-        on_error: ?*const fn (client_id: u64, request_id: u64, err: anyerror) void = null,
+        on_write_committed: ?*const fn (client_id: u64, write_id: []const u8) void = null,
+        on_write_error: ?*const fn (client_id: u64, write_id: []const u8, err: anyerror) void = null,
 
         fn flushBatch(self: *StorageLayer) !void {
             // ... inside batch execution loop ...
-            if (result == .error and op.client_id != null) {
-                if (self.on_error) |cb| cb(op.client_id.?, op.request_id.?, err);
+            if (op.write_id) |write_id| {
+                switch (result) {
+                    .ok => if (self.on_write_committed) |cb| cb(op.client_id.?, write_id),
+                    .err => |err| if (self.on_write_error) |cb| cb(op.client_id.?, write_id, err),
+                }
             }
         }
     };
-    ```Server Integration `ZyncBaseServer` `on_error callback `client_id connection registry sending late `error message WebSocket Strategy Cache Integration lock-free in-memory cache read-through layer```zig
+    ```Server Integration `ZyncBaseServer implements completion callbacks_id connection registry success sends `WriteCommitted failure sends `WriteError connection gone completion status discarded-status records durable Strategy Cache Integration lock-free-memory cache read-through layer```zig
 const StateManager = struct {
     cache: HashMap([]const u8, *Namespace),
     storage: *StorageLayer,

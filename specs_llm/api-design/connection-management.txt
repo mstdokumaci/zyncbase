@@ -63,7 +63,7 @@ client.on('tokenExpired', async () => {
   const newToken = await refreshAuthToken()
   await client.authRefresh(newToken)
 })
-```Events Callback Signature Description `connected`() => void` WebSocket established scopes ready `disconnected`() => void` Connection closed retries `reconnecting`() => void` reconnect after disconnect `error` ZyncBaseError) => void` Error fire-and-forget write subscription `tokenExpired`() => void` Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
+```Events Callback Signature Description `connected`() => void` WebSocket established scopes ready `disconnected`() => void` Connection closed retries `reconnecting`() => void` reconnect disconnect `error` ZyncBaseError) => void` Connection subscription systemic writer/storage tracked write error `tokenExpired`() => void` Server indicates token expired SDK refresh `statusChange` => void` Fired state transition `statusChange````typescript
 client.on('statusChange', (status, detail) => {
   // status: 'connecting' | 'scoping' | 'connected' | 'reconnecting' | 'disconnected'
   // detail.previousStatus: the state before this transition
