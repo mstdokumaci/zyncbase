@@ -66,35 +66,38 @@ const EVENTS_FILTER_B: QueryOptions = {
 };
 
 function createItemData(index: number): Omit<ItemRecord, "id"> {
-	const configs: Array<Omit<ItemRecord, "id">> = [
-		{ name: "item-0", priority: 1, active: false, tags: ["urgent"] },
-		{ name: "item-1", priority: 2, active: false, tags: [] },
-		{ name: "item-2", priority: 3, active: true, tags: [] },
-		{ name: "item-3", priority: 4, active: true, tags: [] },
-		{ name: "item-4", priority: 5, active: true, tags: [] },
-		{ name: "item-5", priority: 6, active: true, tags: [] },
-		{ name: "item-6", priority: 7, active: false, tags: [] },
-		{ name: "item-7", priority: 8, active: true, tags: ["urgent"] },
-		{ name: "item-8", priority: 9, active: true, tags: [] },
-		{ name: "item-9", priority: 10, active: true, tags: [] },
-	];
-	return configs[index];
+	const mod = index % 10;
+	const priority = mod + 1;
+	const active = ![0, 1, 6].includes(mod);
+	const tags = [0, 7].includes(mod) ? ["urgent"] : [];
+	return {
+		name: `item-${index}`,
+		priority,
+		active,
+		tags,
+	};
 }
 
+const SCORES = [10, 15, 30, 10, 50, 60, 70, 15, 80, 90];
+const RATINGS_LIST = [
+	[2, 3],
+	[2, 4],
+	[3, 4],
+	[1, 2],
+	[4, 5],
+	[3, 5],
+	[2, 3],
+	[1, 3],
+	[2, 4],
+	[5, 6],
+];
+
 function createEventData(index: number): Omit<EventRecord, "id"> {
-	const configs: Array<Omit<EventRecord, "id">> = [
-		{ title: "event-0", score: 10, ratings: [2, 3] },
-		{ title: "event-1", score: 15, ratings: [2, 4] },
-		{ title: "event-2", score: 30, ratings: [3, 4] },
-		{ title: "event-3", score: 10, ratings: [1, 2] },
-		{ title: "event-4", score: 50, ratings: [4, 5] },
-		{ title: "event-5", score: 60, ratings: [3, 5] },
-		{ title: "event-6", score: 70, ratings: [2, 3] },
-		{ title: "event-7", score: 15, ratings: [1, 3] },
-		{ title: "event-8", score: 80, ratings: [2, 4] },
-		{ title: "event-9", score: 90, ratings: [5, 6] },
-	];
-	return configs[index];
+	return {
+		title: `event-${index}`,
+		score: SCORES[index % 10],
+		ratings: [...RATINGS_LIST[index % 10]],
+	};
 }
 
 function subscribeClient(state: ClientState) {
@@ -294,7 +297,7 @@ async function waitForAllFiredAndConverged(
 				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
 			);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 300));
 	}
 
 	while (true) {
@@ -310,7 +313,7 @@ async function waitForAllFiredAndConverged(
 				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
 			);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 300));
 	}
 }
 
@@ -353,45 +356,49 @@ async function createClients(
 
 async function createInitialData(
 	readWriteClients: ClientState[],
-	count: number,
 ): Promise<{ createdItemIds: string[]; createdEventIds: string[] }> {
 	const createdItemIds: string[] = [];
 	const createdEventIds: string[] = [];
 	const createPromises: Promise<void>[] = [];
 
-	for (let i = 0; i < count; i++) {
+	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
-		createPromises.push(
-			rwClient.store
-				.create("items", createItemData(i))
-				.then((id) => createdItemIds.push(id)),
-		);
-		createPromises.push(
-			rwClient.store
-				.create("events", createEventData(i))
-				.then((id) => createdEventIds.push(id)),
-		);
+		for (let j = 0; j < 4; j++) {
+			const index = i * 4 + j;
+			createPromises.push(
+				rwClient.store.create("items", createItemData(index)).then((id) => {
+					createdItemIds.push(id);
+				}),
+			);
+			createPromises.push(
+				rwClient.store.create("events", createEventData(index)).then((id) => {
+					createdEventIds.push(id);
+				}),
+			);
+		}
 	}
 
 	await Promise.all(createPromises);
 	return { createdItemIds, createdEventIds };
 }
 
-async function updateRandomRecords(
-	readWriteClients: ClientState[],
+async function updateWriterRecords(
+	client: ZyncBaseClient,
 	createdItemIds: string[],
 	createdEventIds: string[],
-	count: number,
 ): Promise<void> {
-	const updatePromises: Promise<void>[] = [];
-
-	for (let i = 0; i < count; i++) {
-		const rwClient = readWriteClients[i].client;
-
+	if (createdItemIds.length === 0 || createdEventIds.length === 0) {
+		throw new Error(
+			"Cannot update records: createdItemIds or createdEventIds is empty",
+		);
+	}
+	const promises: Promise<void>[] = [];
+	for (let j = 0; j < 4; j++) {
 		const randomItemId =
 			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
-		updatePromises.push(
-			rwClient.store.set(["items", randomItemId], {
+		promises.push(
+			client.store.set(["items", randomItemId], {
+				name: "updated-item",
 				priority: Math.floor(Math.random() * 10) + 1,
 				active: Math.random() > 0.5,
 				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
@@ -400,11 +407,28 @@ async function updateRandomRecords(
 
 		const randomEventId =
 			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
-		updatePromises.push(
-			rwClient.store.set(["events", randomEventId], {
+		promises.push(
+			client.store.set(["events", randomEventId], {
+				title: "updated-event",
 				score: Math.random() * 100,
 				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
 			}),
+		);
+	}
+	await Promise.all(promises);
+}
+
+async function updateRandomRecords(
+	readWriteClients: ClientState[],
+	createdItemIds: string[],
+	createdEventIds: string[],
+): Promise<void> {
+	const updatePromises: Promise<void>[] = [];
+
+	for (let i = 0; i < readWriteClients.length; i++) {
+		const rwClient = readWriteClients[i].client;
+		updatePromises.push(
+			updateWriterRecords(rwClient, createdItemIds, createdEventIds),
 		);
 	}
 
@@ -412,8 +436,8 @@ async function updateRandomRecords(
 }
 
 export async function run(port: number = 3000) {
-	const TOTAL_CLIENTS = 100;
-	const READ_WRITE_COUNT = 10;
+	const TOTAL_CLIENTS = 500;
+	const READ_WRITE_COUNT = 50;
 
 	console.log(`Creating ${TOTAL_CLIENTS} clients...`);
 	const clients = await createClients(TOTAL_CLIENTS, READ_WRITE_COUNT, port);
@@ -426,21 +450,14 @@ export async function run(port: number = 3000) {
 	}
 
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } = await createInitialData(
-		readWriteClients,
-		READ_WRITE_COUNT,
-	);
+	const { createdItemIds, createdEventIds } =
+		await createInitialData(readWriteClients);
 	console.log(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(
-		readWriteClients,
-		createdItemIds,
-		createdEventIds,
-		READ_WRITE_COUNT,
-	);
+	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
 	console.log("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
