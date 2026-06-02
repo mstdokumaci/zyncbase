@@ -387,6 +387,11 @@ async function updateWriterRecords(
 	createdItemIds: string[],
 	createdEventIds: string[],
 ): Promise<void> {
+	if (createdItemIds.length === 0 || createdEventIds.length === 0) {
+		throw new Error(
+			"Cannot update records: createdItemIds or createdEventIds is empty",
+		);
+	}
 	const promises: Promise<void>[] = [];
 	for (let j = 0; j < 4; j++) {
 		const randomItemId =
