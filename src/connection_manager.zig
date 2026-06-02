@@ -228,4 +228,25 @@ pub const ConnectionManager = struct {
             },
         }
     }
+
+    /// Send ServerDisconnect message to all active connections and initiate socket close
+    pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const msg = wire.encodeServerDisconnect(self.allocator, code, message) catch |err| {
+            std.log.err("Failed to encode ServerDisconnect: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(msg);
+
+        var it = self.map.valueIterator();
+        while (it.next()) |state| {
+            const conn = state.*;
+            conn.send(msg) catch |err| {
+                std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
+            };
+            conn.ws.close();
+        }
+    }
 };

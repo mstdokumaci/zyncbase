@@ -51,6 +51,8 @@ pub const ZyncBaseServer = struct {
     auth_config: authorization.AuthConfig,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
+    shutdown_in_progress: bool = false,
+    shutdown_start_time: i64 = 0,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -303,6 +305,8 @@ pub const ZyncBaseServer = struct {
 
         self.config = config;
         self.shutdown_performed = false;
+        self.shutdown_in_progress = false;
+        self.shutdown_start_time = 0;
         self.shutdown_mutex = .{};
         self.shutdown_requested = std.atomic.Value(bool).init(false);
 
@@ -350,30 +354,52 @@ pub const ZyncBaseServer = struct {
     /// SAFE to call multiple times, but will only perform logic once.
     /// Safe to call from main thread after start() returns.
     pub fn shutdown(self: *ZyncBaseServer) !void {
+        try self.startGracefulShutdown();
+        try self.finishGracefulShutdown();
+    }
+
+    pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
         self.shutdown_mutex.lock();
         defer self.shutdown_mutex.unlock();
-        if (self.shutdown_performed) return;
-        self.shutdown_performed = true;
-
-        std.log.info("Initiating graceful shutdown", .{});
+        if (self.shutdown_in_progress or self.shutdown_performed) return;
+        self.shutdown_in_progress = true;
+        self.shutdown_start_time = std.time.milliTimestamp();
 
         // Set shutdown flag
         self.shutdown_requested.store(true, .release);
 
+        std.log.info("Initiating graceful shutdown", .{});
+
         // Stop background checkpoint loop
         self.checkpoint_manager.stop();
 
-        // Stop accepting new connections
-        self.websocket_server.close();
+        // Stop accepting new connections by closing the listen socket
+        if (self.websocket_server.listen_socket) |ls| {
+            uws_c.us_listen_socket_close(if (self.websocket_server.ssl) 1 else 0, ls);
+            self.websocket_server.listen_socket = null;
+        }
 
-        // Close all active connections
-        self.connection_manager.closeAllConnections();
+        // Send ServerDisconnect to all connections and close them
+        self.connection_manager.sendDisconnectToAll("SHUTDOWN", "Server is shutting down.");
+    }
+
+    pub fn finishGracefulShutdown(self: *ZyncBaseServer) !void {
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
+        if (!self.shutdown_in_progress or self.shutdown_performed) return;
+        self.shutdown_in_progress = false;
+        self.shutdown_performed = true;
+
+        std.log.info("Flushing pending writes and performing final checkpoint", .{});
 
         // Flush pending writes
         try self.storage_engine.flushPendingWrites();
 
         // Perform final checkpoint with retry for transient failures
         _ = try self.checkpoint_manager.performCheckpointWithRetry(.full, 5);
+
+        // Stop the uWebSockets event loop
+        self.websocket_server.close();
 
         std.log.info("Graceful shutdown complete", .{});
     }
@@ -462,6 +488,27 @@ pub const ZyncBaseServer = struct {
     fn notifyPostHandler(ctx: ?*anyopaque) void {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
+
+        // Handle graceful shutdown state machine
+        if (self.shutdown_requested.load(.acquire)) {
+            if (!self.shutdown_in_progress and !self.shutdown_performed) {
+                self.startGracefulShutdown() catch |err| {
+                    std.log.err("Failed to start graceful shutdown: {}", .{err});
+                };
+            } else if (self.shutdown_in_progress) {
+                const count = self.connection_manager.map.count();
+                const elapsed = std.time.milliTimestamp() - self.shutdown_start_time;
+                if (count == 0 or elapsed > 3000) {
+                    self.finishGracefulShutdown() catch |err| {
+                        std.log.err("Failed to finish graceful shutdown: {}", .{err});
+                    };
+                }
+            }
+            if (self.shutdown_performed or self.shutdown_in_progress) {
+                return;
+            }
+        }
+
         self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
         self.write_outcome_dispatcher.poll(&self.connection_manager);
@@ -479,7 +526,9 @@ pub const ZyncBaseServer = struct {
 fn handleSignal(_: c_int) callconv(.c) void {
     if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
-        server.websocket_server.close();
+        if (server.websocket_server.loop.load(.acquire)) |loop| {
+            uws_c.us_wakeup_loop(loop);
+        }
     }
 }
 
