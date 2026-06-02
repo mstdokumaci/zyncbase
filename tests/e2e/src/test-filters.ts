@@ -66,9 +66,10 @@ const EVENTS_FILTER_B: QueryOptions = {
 };
 
 function createItemData(index: number): Omit<ItemRecord, "id"> {
-	const priority = (index % 10) + 1;
-	const active = index % 10 !== 0 && index % 10 !== 1 && index % 10 !== 6;
-	const tags = index % 10 === 0 || index % 10 === 7 ? ["urgent"] : [];
+	const mod = index % 10;
+	const priority = mod + 1;
+	const active = ![0, 1, 6].includes(mod);
+	const tags = [0, 7].includes(mod) ? ["urgent"] : [];
 	return {
 		name: `item-${index}`,
 		priority,
@@ -355,8 +356,6 @@ async function createClients(
 
 async function createInitialData(
 	readWriteClients: ClientState[],
-	itemIdToName: Map<string, string>,
-	eventIdToTitle: Map<string, string>,
 ): Promise<{ createdItemIds: string[]; createdEventIds: string[] }> {
 	const createdItemIds: string[] = [];
 	const createdEventIds: string[] = [];
@@ -369,13 +368,11 @@ async function createInitialData(
 			createPromises.push(
 				rwClient.store.create("items", createItemData(index)).then((id) => {
 					createdItemIds.push(id);
-					itemIdToName.set(id, `item-${index}`);
 				}),
 			);
 			createPromises.push(
 				rwClient.store.create("events", createEventData(index)).then((id) => {
 					createdEventIds.push(id);
-					eventIdToTitle.set(id, `event-${index}`);
 				}),
 			);
 		}
@@ -389,17 +386,14 @@ async function updateWriterRecords(
 	client: ZyncBaseClient,
 	createdItemIds: string[],
 	createdEventIds: string[],
-	itemIdToName: Map<string, string>,
-	eventIdToTitle: Map<string, string>,
 ): Promise<void> {
 	const promises: Promise<void>[] = [];
 	for (let j = 0; j < 4; j++) {
 		const randomItemId =
 			createdItemIds[Math.floor(Math.random() * createdItemIds.length)];
-		const originalName = itemIdToName.get(randomItemId) || "";
 		promises.push(
 			client.store.set(["items", randomItemId], {
-				name: originalName,
+				name: "updated-item",
 				priority: Math.floor(Math.random() * 10) + 1,
 				active: Math.random() > 0.5,
 				tags: Math.random() > 0.5 ? ["urgent", "updated"] : ["updated"],
@@ -408,10 +402,9 @@ async function updateWriterRecords(
 
 		const randomEventId =
 			createdEventIds[Math.floor(Math.random() * createdEventIds.length)];
-		const originalTitle = eventIdToTitle.get(randomEventId) || "";
 		promises.push(
 			client.store.set(["events", randomEventId], {
-				title: originalTitle,
+				title: "updated-event",
 				score: Math.random() * 100,
 				ratings: Math.random() > 0.5 ? [1, 5] : [2, 3],
 			}),
@@ -424,21 +417,13 @@ async function updateRandomRecords(
 	readWriteClients: ClientState[],
 	createdItemIds: string[],
 	createdEventIds: string[],
-	itemIdToName: Map<string, string>,
-	eventIdToTitle: Map<string, string>,
 ): Promise<void> {
 	const updatePromises: Promise<void>[] = [];
 
 	for (let i = 0; i < readWriteClients.length; i++) {
 		const rwClient = readWriteClients[i].client;
 		updatePromises.push(
-			updateWriterRecords(
-				rwClient,
-				createdItemIds,
-				createdEventIds,
-				itemIdToName,
-				eventIdToTitle,
-			),
+			updateWriterRecords(rwClient, createdItemIds, createdEventIds),
 		);
 	}
 
@@ -459,27 +444,15 @@ export async function run(port: number = 3000) {
 		subscribeClient(state);
 	}
 
-	const itemIdToName = new Map<string, string>();
-	const eventIdToTitle = new Map<string, string>();
-
 	console.log("Creating initial data...");
-	const { createdItemIds, createdEventIds } = await createInitialData(
-		readWriteClients,
-		itemIdToName,
-		eventIdToTitle,
-	);
+	const { createdItemIds, createdEventIds } =
+		await createInitialData(readWriteClients);
 	console.log(
 		`Created ${createdItemIds.length} items and ${createdEventIds.length} events.`,
 	);
 
 	console.log("Read-write clients updating random records...");
-	await updateRandomRecords(
-		readWriteClients,
-		createdItemIds,
-		createdEventIds,
-		itemIdToName,
-		eventIdToTitle,
-	);
+	await updateRandomRecords(readWriteClients, createdItemIds, createdEventIds);
 	console.log("All updates complete.");
 
 	console.log("Waiting for all clients to converge...");
