@@ -1,7 +1,7 @@
 # ZyncBase Wire Protocol Specification
 
 **Last Updated**: 2026-03-09  
-**Status**: v1 — Stable  
+**Status**: Active design  
 
 ---
 
@@ -16,8 +16,7 @@
 7. [Connection Lifecycle](#connection-lifecycle)
 8. [Error Format](#error-format)
 9. [Extensibility](#extensibility)
-10. [Internal Messages (Zig ↔ Hook Server)](#internal-messages-zig--hook-server)
-11. [Message Type Summary](#message-type-summary)
+10. [Message Type Summary](#message-type-summary)
 
 ---
 
@@ -722,7 +721,7 @@ All errors follow a consistent envelope:
 | `COLLECTION_NOT_FOUND` | authorization | Table/Collection name in path is not in the schema |
 | `FIELD_NOT_FOUND` | validation | Field name in path or value is not in the schema |
 | `INVALID_FIELD_NAME` | validation | Forbidden `__` sequence in field name |
-| `PERMISSION_DENIED` | authorization | `authorization.json` or Hook Server rejected the operation |
+| `PERMISSION_DENIED` | authorization | `authorization.json` rejected the operation |
 | `SCHEMA_VALIDATION_FAILED` | validation | Data doesn't match the schema definition |
 | `INVALID_MESSAGE` | validation | Malformed MessagePack or missing `type` field |
 | `RATE_LIMITED` | rate-limit | Too many messages; respect `retryAfter` if present |
@@ -733,8 +732,6 @@ All errors follow a consistent envelope:
 | `MAX_CONNECTIONS_REACHED` | connection | Server at capacity |
 | `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
 | `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
-| `HOOK_SERVER_UNAVAILABLE` | hook-server | Zig cannot reach the Bun Hook Server process |
-| `HOOK_DENIED` | hook-server | Developer's TypeScript hook explicitly returned an error |
 | `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
 
 ---
@@ -751,58 +748,7 @@ New fields may be added to existing message types at any time. Implementations *
 
 ### Protocol version
 
-The `Connected` message may include a `protocolVersion` field in future versions. For v1, the protocol version is implicitly `1`. If version negotiation becomes necessary, it will be added to the `Connected` response without changing the handshake.
-
----
-
-## Internal Messages (Zig ↔ Hook Server)
-
-These messages travel over the internal IPC/WebSocket channel between the Zig core and the Bun Hook Server.
-
-### `HookServerOnConnect`
-
-Sent when a ticket is requested or a session is refreshed.
-
-**Request**:
-```json
-{
-  "type":      "HookServerOnConnect",
-  "jwt":       { ...claims... },  // Already verified by Zig
-  "namespace": "tenant:acme"      // Initial namespace context
-}
-```
-
-**Response** (`type: "ok"`):
-```json
-{
-  "type":    "ok",
-  "session": { "role": "admin", "tenant_id": "acme" } // Becomes the $session
-}
-```
-
-### `HookServerAuthCheck`
-
-Sent when `authorization.json` delegates a rule to the hook server.
-
-**Request**:
-```json
-{
-  "type":      "HookServerAuthCheck",
-  "function":  "checkDocumentAccess",
-  "session":   { ... },
-  "namespace": "tenant:acme",
-  "path":      ["docs", "123"],
-  "value":     { ... } // The data being written (if applicable)
-}
-```
-
-**Response** (`type: "ok"`):
-```json
-{
-  "type":    "ok",
-  "allowed": true
-}
-```
+The `Connected` message may include a `protocolVersion` field if explicit version negotiation becomes necessary. Until then, clients and servers use the documented protocol directly.
 
 ---
 
@@ -831,5 +777,3 @@ Sent when `authorization.json` delegates a rule to the hook server.
 | S→C | `WriteError` | — | Push (no `id`) |
 | S→C | `PresenceBroadcast` | — | Push (no `id`) |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |
-| Z↔H | `HookServerOnConnect` | — | Request/Response |
-| Z↔H | `HookServerAuthCheck` | — | Request/Response |

@@ -113,7 +113,7 @@ Error codes relevant to SDK consumers, grouped by category:
 | `TOKEN_EXPIRED` | Session expired; fires `tokenExpired` event | Partial — refresh token |
 | `SESSION_NOT_READY` | Store or presence operation was sent before namespace and user resolution finished | No — wait for `connect()` or namespace switch promise |
 | `NAMESPACE_UNAUTHORIZED` | Not authorized to access this namespace | No |
-| `PERMISSION_DENIED` | Rule blocked the operation (via `authorization.json` or Hook Server) | No |
+| `PERMISSION_DENIED` | Rule blocked the operation via `authorization.json` or a same-row guard matched no row | No |
 | `COLLECTION_NOT_FOUND` | Path refers to a collection not defined in the schema | No — fix path |
 
 ### Validation
@@ -145,15 +145,6 @@ Error codes relevant to SDK consumers, grouped by category:
 | `TIMEOUT` | Operation timed out | Yes — retry with backoff |
 | `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
 
-### Hook Server
-
-| Code | Description | Auto-retry? |
-|------|-------------|-------------|
-| `HOOK_SERVER_UNAVAILABLE` | Zig cannot reach the Bun Hook Server | No |
-| `HOOK_DENIED` | Developer's hook explicitly rejected the operation | No |
-
----
-
 ## Write Failure Reporting
 
 ZyncBase separates state delivery from write outcome reporting:
@@ -178,7 +169,6 @@ Confirmed write timeouts mean confirmation was not received. They do not imply t
 | Authentication | ⚠️ Partial | 1 | Fire `tokenExpired`; wait for refresh |
 | Authorization | ❌ No | 0 | Surface immediately |
 | Validation | ❌ No | 0 | Surface immediately |
-| Hook Server | ❌ No | 0 | Surface immediately |
 
 ---
 

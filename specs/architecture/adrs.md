@@ -250,7 +250,7 @@ For the full philosophy and its impact on architectural decisions, see the [Zero
 
 **Consequences**:
 - ✅ No compilation needed; instant setup.
-- ⚠️ Less flexible than code-based config (mitigated by Hook Server).
+- Less flexible than code-based config by design; application-specific authorization inputs must come from trusted identity claims.
 
 ---
 
@@ -371,7 +371,7 @@ SDK explicitly separates methods into `client.store.*` and `client.presence.*`.
 ## ADR-016: Bun Hook Server
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
+**Status**: Superseded by [ADR-032](#adr-032-config-driven-authentication-and-external-permission-claims)  
 
 **Context**: 
 How to handle complex relational authorization without bloating the Zig core?
@@ -429,7 +429,7 @@ MVP supports specific operators (eq, ne, gt, etc.) but excludes Regex, FTS, and 
 - #9 Secure by Default
 
 **Consequences**:
-- ⚠️ Developers must rely on Computed Properties or Hook Servers for complex search.
+- ⚠️ Developers must rely on computed properties or application-side search for complex search.
 
 ---
 
@@ -512,10 +512,10 @@ Exclusively use fine-grained change detection with in-memory AST evaluation.
 ## ADR-022: Formal Error Taxonomy and Handling Strategy
 
 **Date**: 2026-03-13  
-**Status**: Accepted  
+**Status**: Accepted (Modified by ADR-032)  
 
 **Decision**: 
-Implement a 7-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate-Limit, Server, Hook) that dictates automatic SDK behavior.
+Implement a 6-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate-Limit, Server) that dictates automatic SDK behavior.
 
 **Principles Alignment**: 
 - #5 TypeScript-First
@@ -680,7 +680,7 @@ Implement a hidden internal system table `_zync_namespaces (id INTEGER PRIMARY K
 **Status**: Accepted  
 
 **Context**:  
-Need to provide secure multi-tenancy and object-level ownership authorization out of the box without forcing the developer to immediately write Hook Server code. We also need to draw a hard line on the complexity of JSON-based authorization rules to maintain real-time performance.
+Need to provide secure multi-tenancy and object-level ownership authorization out of the box. We also need to draw a hard line on the complexity of JSON-based authorization rules to maintain real-time performance.
 
 **Decision**:  
 1. Add `owner_id` as a built-in system column to all storage tables, alongside `id`, `namespace_id`, `created_at`, and `updated_at`.
@@ -691,7 +691,7 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 6. Automatically populate `owner_id` with the internal `$session.userId` upon document creation.
 7. Treat `id` as the document identity for a collection. It is expected to be unique across the whole collection/table; `namespace_id` is not part of the primary key and is only a routing/filtering column.
 8. Strictly limit `authorization.json` evaluation in Zig to five variables: `$session` (resolved session context), `$namespace` (parsed active namespace), `$path` (target table/collection), `$doc` (same-row SQLite column predicates via AST injection), and `$value` (incoming mutation).
-9. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON and MUST be delegated to the Hook Server.
+9. `$doc` may only reference columns on the target row being selected, updated, or deleted. Any rule requiring a relational join, relationship traversal, or lookup of another table (e.g., checking a separate `project_members` table) is explicitly forbidden in JSON. Those permissions must be represented in trusted external identity claims or encoded on the same row being authorized.
 
 **Rationale**:
 - `owner_id` enables code-free, object-level security (`$doc.owner_id == $session.userId`).
@@ -746,7 +746,7 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 
 **Decision**:  
 1. Distinguish transport connectivity from scoped session readiness.
-2. Store the external identity string on the connection. For anonymous clients this is the SDK client ID; for authenticated clients this is the JWT subject or Hook Server-resolved identity.
+2. Store the external identity string on the connection. For anonymous clients this is the SDK-generated anonymous subject; for authenticated clients this is the JWT subject.
 3. Resolve every operation-domain scope through SQLite before accepting scoped operations. A scope consists of:
    - the namespace string resolved to `_zync_namespaces.id`
    - the external identity resolved to `users.id`
@@ -1074,3 +1074,70 @@ Rejected. There is no speculative local subscription state to roll back. Writer 
 ### Reuse request id as the writer outcome id
 
 Rejected. Request ids correlate immediate request responses. Writer outcomes need a separate `writeId` for tracked or confirmed writes.
+
+---
+
+## ADR-032: Config-Driven Authentication and External Permission Claims
+
+**Date**: 2026-06-02  
+**Status**: Accepted  
+
+**Supersedes / Modifies**:
+- Supersedes [ADR-016: Bun Hook Server](#adr-016-bun-hook-server).
+- Modifies [ADR-027: The `owner_id` System Column and Stateless Authorization Limits](#adr-027-the-owner_id-system-column-and-stateless-authorization-limits).
+- Modifies [ADR-029: Scoped Session Readiness Gate](#adr-029-scoped-session-readiness-gate).
+
+**Context**:
+ZyncBase needs secure authentication, anonymous access, tenant/project authorization, and object ownership without becoming an identity provider or embedding arbitrary application logic into the database. The previous Bun Hook Server design allowed TypeScript functions to enrich sessions and perform relational permission checks, but it added an extra runtime, an internal protocol, latency, circuit-breaker behavior, and a blurred product boundary.
+
+The clearer boundary is that ZyncBase is a resource server. It validates external identity material and enforces declarative rules. It does not compute the source of truth for user accounts, memberships, billing state, or permission grants.
+
+**Decision**:
+1. Remove Bun Hook Server support from the active design.
+2. Keep the HTTP ticket exchange, but make it fully native and configuration-driven.
+3. ZyncBase validates external JWTs from configured issuers, audiences, algorithms, shared secrets, or JWKS sources.
+4. ZyncBase projects verified JWT claims into `$session` according to configuration. The configuration file defines the mapping of JWT claim names to `$session` variables. Permission claims such as `role`, `permissions`, `read_projects`, `write_projects`, `tenant_id`, and `org_id` are trusted only because the token signature and registered constraints were validated.
+5. Anonymous access uses the same ticket pipeline. The SDK generates a high-entropy anonymous subject, persists it locally, and presents it as an anonymous external identity when anonymous auth is enabled.
+6. The `users` table remains the internal identity mapping and optional profile/display-data table. It maps the external subject to an internal `BLOB(16)` UUIDv7 used by `owner_id`, `$session.userId`, presence identity, and foreign keys. User-row fields are not loaded for authorization and are not part of `$session`.
+7. `authorization.json` remains limited to RAM checks over `$session`, `$namespace`, `$path`, and `$value`, plus same-row `$doc` predicates lowered to the store query predicate model.
+8. Any permission requiring joins, relationship traversal, external API calls, billing lookups, or permission graph computation must be represented before ZyncBase receives the request: in the trusted token, in same-row data, or in application code that mints/refreshed the token.
+9. Token refresh is the revocation and permission-update mechanism. ZyncBase revalidates the replacement JWT and re-resolves active scoped sessions; it does not maintain a server-side revocation list by default. Tokens SHOULD be short-lived (e.g., ≤15 minutes), and the SDK is expected to refresh them before expiry. If a session token expires and no refresh is received within a configurable grace period, the server terminates the connection's active scopes.
+10. Tenant or project switching does not require a new JWT if the active JWT contains compatible scoped grant arrays. For very large or frequently changing permission sets, the application should mint narrower active-context tokens.
+
+**Principles Alignment**:
+- #3 Self-Hosting First: no required Bun process or extra runtime.
+- #5 TypeScript-First: applications can still use any JS/TS identity layer, but ZyncBase does not run it.
+- #7 Declarative Security: all ZyncBase-side authorization remains in JSON.
+- #8 Predictable Performance: authorization has no foreign calls, joins, or hidden database reads.
+
+**Consequences**:
+
+Positive:
+- Removes the Hook Server runtime, internal hook protocol, and circuit-breaker failure mode.
+- Keeps WebSocket authentication safe by avoiding JWTs in URLs.
+- Keeps authorization deterministic and fast.
+- Makes permission ownership explicit: the external identity provider/application owns permission truth; ZyncBase enforces trusted claims.
+- Makes anonymous users low-friction without special database tables.
+
+Negative:
+- ZyncBase cannot answer permission questions that are not present in the token, namespace, target row, or incoming value.
+- Immediate revocation depends on short-lived tokens and refresh behavior unless a future design adds introspection or revocation.
+- Large permission graphs must be compressed into human-manageable claims, groups, roles, or active-context tokens before reaching ZyncBase. To prevent payload and parsing bloat, ZyncBase enforces a maximum limit on claim array elements (e.g., up to 1000 items) when processing JWTs.
+
+**Rejected Alternatives**:
+
+### Keep the Bun Hook Server for advanced authorization
+
+Rejected because it makes ZyncBase depend on a second runtime for correctness, adds latency and availability modes, and encourages applications to hide permission computation inside the database boundary.
+
+### Load `users` row fields into `$session` during authorization
+
+Rejected because it introduces hidden database reads, refresh semantics, and a second permission source. The `users` table is for identity mapping, ownership references, and optional profile data, not authorization input.
+
+### Add richer JSON relationship queries
+
+Rejected because it would turn `authorization.json` into a query engine and undermine the same-row predicate limit that keeps authorization predictable.
+
+### Require a new JWT for every namespace switch
+
+Rejected as too strict. A token may contain scoped grants such as `read_projects` and `write_projects`, and `authorization.json` can check namespace parts or same-row fields against those arrays. Applications can still choose narrower active-context tokens when token size or staleness matters.

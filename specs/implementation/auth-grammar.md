@@ -36,9 +36,8 @@ A store definition governs read and write access to a specific table.
 
 A `Condition` can be:
 1. **Boolean literal**: `true` or `false`
-2. **Hook delegation**: `{ "hook": "functionName" }`
-3. **Logical grouping**: `{ "and": [Condition, Condition] }` or `{ "or": [Condition, Condition] }`
-4. **Comparison object**: `{ "LHS": { "Operator": "RHS" } }`
+2. **Logical grouping**: `{ "and": [Condition, Condition] }` or `{ "or": [Condition, Condition] }`
+3. **Comparison object**: `{ "LHS": { "Operator": "RHS" } }`
 
 ### Comparison Object
 - **LHS (Left-Hand Side)**: MUST be a context variable (e.g., `$session.userId`, `$doc.owner_id`).
@@ -52,6 +51,8 @@ To guarantee strict predictability and sub-microsecond performance, ZyncBase hea
 Variables are evaluated using two execution paths:
 1. **RAM Evaluation**: Instant, stateless check performed in memory.
 2. **Predicate Lowering**: Existing-row `$doc` comparisons are lowered into the same flat `FilterPredicate` shape used by `StoreQuery` and `StoreSubscribe`. The storage layer owns SQL rendering.
+
+`$session` is built during the authentication exchange from a validated JWT or SDK-generated anonymous subject. It does not load fields from the `users` row for authorization.
 
 | Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$doc` |
 | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -77,7 +78,7 @@ The create candidate includes the document id, injected `owner_id = $session.use
 
 For existing-row checks, the `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the authorization layer lowers the condition into a storage-neutral `FilterPredicate`. The storage layer then renders that predicate into a SQL `WHERE` fragment with bound values.
 
-At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Unsupported hooks, unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
+At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Hook rules, unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
 
 The supported `$doc` shape is intentionally no more expressive than StoreQuery: zero or more AND conditions plus at most one OR group. Nested `$doc` groups that would require multiple OR groups or an AND group inside an OR branch are invalid.
 
@@ -119,5 +120,5 @@ If `authorization.json` is missing or not provided in the server configuration, 
 
 **What this default means:**
 1. The only accessible namespace is `public`.
-2. Anyone (including anonymous users via the SDK's auto-generated `anon_id`) can read all data and broadcast presence in the `public` namespace.
+2. Anyone (including anonymous users via the SDK's client-generated anonymous subject) can read all data and broadcast presence in the `public` namespace.
 3. Users can create records owned by their own `$session.userId`, and can strictly only modify or delete records they created. Creates satisfy `$doc.owner_id == $session.userId` through server-side owner injection; updates and deletes enforce the same rule on existing rows through predicate lowering.
