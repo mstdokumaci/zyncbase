@@ -173,16 +173,6 @@ test "evaluateCondition boolean false denies" {
     try testing.expect(result == .deny);
 }
 
-test "evaluateCondition hook denies until hooks are implemented" {
-    const result = authorization.evaluateCondition(.{ .hook = "myHook" }, .{ .allocator = testing.allocator });
-    try testing.expect(result == .deny);
-}
-
-test "evaluateConditionStrict hook denies" {
-    const result = authorization.evaluateConditionStrict(.{ .hook = "myHook" }, .{ .allocator = testing.allocator });
-    try testing.expect(!result);
-}
-
 test "evaluateCondition $doc reference returns needs_doc_predicate" {
     const allocator = testing.allocator;
     const cond = authorization.Condition{ .comparison = .{
@@ -606,14 +596,6 @@ test "buildDocPredicate preserves logical_or predicate" {
     try testing.expectEqual(query_ast.Operator.eq, predicate.or_conditions.?[1].op);
     try testing.expect(predicate.or_conditions.?[1].value.?.scalar == .text);
     try testing.expectEqualStrings("public", predicate.or_conditions.?[1].value.?.scalar.text);
-}
-
-test "AuthConfig rejects unsupported store hook predicates at boot" {
-    const allocator = testing.allocator;
-    const json =
-        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"hook":"authorizeWrite"}}]}
-    ;
-    try testing.expectError(error.UnsupportedAuthorizationPredicate, initTestConfig(allocator, json));
 }
 
 // ─── Test Helpers ───────────────────────────────────────────────────────────

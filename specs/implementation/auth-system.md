@@ -160,7 +160,7 @@ Conditions mirror the store query predicate model where they apply to `$doc`, an
 - **Operators**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `notIn`, `contains`.
 - **Logic**: `and`, `or`.
 
-At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the schema. A rule that cannot be evaluated in RAM or lowered into a valid same-row `FilterPredicate` fails startup. Hook rules, unknown `$doc` fields, invalid operators, and `$doc` expressions requiring nested groups beyond the flat store-query predicate shape are invalid.
+At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the schema. A rule that cannot be evaluated in RAM or lowered into a valid same-row `FilterPredicate` fails startup. Unknown `$doc` fields, invalid operators, and `$doc` expressions requiring nested groups beyond the flat store-query predicate shape are invalid.
 
 Example:
 

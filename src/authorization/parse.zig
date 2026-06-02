@@ -138,12 +138,6 @@ fn parseCondition(allocator: Allocator, value: std.json.Value) !types.Condition 
     switch (value) {
         .bool => |b| return .{ .boolean = b },
         .object => |obj| {
-            if (obj.get("hook")) |hook_val| {
-                if (obj.count() != 1) return error.InvalidCondition;
-                if (hook_val != .string) return error.InvalidHook;
-                const hook_name = try allocator.dupe(u8, hook_val.string);
-                return .{ .hook = hook_name };
-            }
             if (obj.get("and")) |and_val| {
                 if (obj.count() != 1) return error.InvalidCondition;
                 if (and_val != .array) return error.InvalidCondition;

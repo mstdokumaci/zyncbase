@@ -96,7 +96,6 @@ pub const StoreRule = struct {
 
 pub const Condition = union(enum) {
     boolean: bool,
-    hook: []const u8,
     logical_and: []Condition,
     logical_or: []Condition,
     comparison: Comparison,
@@ -104,7 +103,6 @@ pub const Condition = union(enum) {
     pub fn deinit(self: Condition, allocator: Allocator) void {
         var mutable = self;
         switch (mutable) {
-            .hook => |h| allocator.free(h),
             .logical_and => |conds| {
                 for (conds) |*cond| cond.deinit(allocator);
                 allocator.free(conds);

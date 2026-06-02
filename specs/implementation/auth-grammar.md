@@ -78,7 +78,7 @@ The create candidate includes the document id, injected `owner_id = $session.use
 
 For existing-row checks, the `$doc` variable does NOT fetch the document into RAM before authorization. Instead, the authorization layer lowers the condition into a storage-neutral `FilterPredicate`. The storage layer then renders that predicate into a SQL `WHERE` fragment with bound values.
 
-At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Hook rules, unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
+At server boot, `AuthConfig.init(allocator, json, schema)` validates every store rule against the active schema. Unknown `$doc` fields, invalid operators for field types, and `$doc` predicate shapes that cannot fit the flat store-query predicate model fail startup.
 
 The supported `$doc` shape is intentionally no more expressive than StoreQuery: zero or more AND conditions plus at most one OR group. Nested `$doc` groups that would require multiple OR groups or an AND group inside an OR branch are invalid.
 
