@@ -297,7 +297,7 @@ async function waitForAllFiredAndConverged(
 				`Timeout: ${notFired.length} clients never fired: ${notFired.join(",")}`,
 			);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 300));
 	}
 
 	while (true) {
@@ -313,7 +313,7 @@ async function waitForAllFiredAndConverged(
 				`Timeout: not converged — ${errors.slice(0, 6).join("; ")}`,
 			);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		await new Promise((resolve) => setTimeout(resolve, 300));
 	}
 }
 
