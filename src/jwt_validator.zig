@@ -93,7 +93,7 @@ pub const JwksCache = struct {
     fn refreshLocked(self: *JwksCache, url: []const u8) !void {
         std.log.info("Fetching JWKS from {s}", .{url});
         const keys = fetchJwks(self.allocator, url) catch |err| {
-            std.log.err("Failed to fetch JWKS from {s}: {}", .{ url, err });
+            std.log.warn("Failed to fetch JWKS from {s}: {}", .{ url, err });
             return err;
         };
 
@@ -111,9 +111,9 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
     defer client.deinit();
 
     var body_buf = std.ArrayListUnmanaged(u8).empty;
-    defer body_buf.deinit(allocator);
-
     var body_writer = std.Io.Writer.Allocating.fromArrayList(allocator, &body_buf);
+    defer body_writer.deinit();
+
     const result = try client.fetch(.{
         .location = .{ .url = url_str },
         .response_writer = &body_writer.writer,
@@ -124,7 +124,7 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
     const parsed = try std.json.parseFromSlice(
         struct { keys: []Jwk },
         allocator,
-        body_buf.items,
+        body_writer.written(),
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();

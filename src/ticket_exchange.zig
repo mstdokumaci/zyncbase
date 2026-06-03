@@ -149,7 +149,7 @@ pub const TicketExchange = struct {
         const jti_hex = std.fmt.bytesToHex(jti_bytes, .lower);
 
         const payload_json = try std.fmt.allocPrint(allocator,
-            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s}}}}}}}
+            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s}}}}}
         , .{ subject, exp, jti_hex, subject, if (is_anonymous) "true" else "false" });
         defer allocator.free(payload_json);
 
@@ -224,7 +224,7 @@ pub const TicketExchange = struct {
         }
     }
 
-    fn validateAnonymousSubject(self: *TicketExchange, subject: []const u8) !void {
+    pub fn validateAnonymousSubject(self: *TicketExchange, subject: []const u8) !void {
         if (!self.anonymous_enabled) return error.AnonymousDisabled;
         if (!std.mem.startsWith(u8, subject, self.anonymous_prefix)) return error.InvalidAnonymousSubject;
         const hex = subject[self.anonymous_prefix.len..];
