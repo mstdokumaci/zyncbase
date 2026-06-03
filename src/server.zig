@@ -383,6 +383,12 @@ pub const ZyncBaseServer = struct {
 
         // Send ServerDisconnect to all connections and close them
         self.connection_manager.sendDisconnectToAll("SHUTDOWN", "Server is shutting down.");
+
+        // Wake loop to ensure another post-handler iteration fires so
+        // finishGracefulShutdown can be called once all connections drain.
+        if (self.websocket_server.loop.load(.acquire)) |loop| {
+            uws_c.us_wakeup_loop(loop);
+        }
     }
 
     pub fn finishGracefulShutdown(self: *ZyncBaseServer) !void {
@@ -506,25 +512,21 @@ pub const ZyncBaseServer = struct {
 
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
-            std.log.err("DIAG: shutdown_requested=true in_progress={} performed={} count={}", .{ self.shutdown_in_progress, self.shutdown_performed, self.connection_manager.map.count() });
             if (!self.shutdown_in_progress and !self.shutdown_performed) {
-                std.log.err("DIAG: calling startGracefulShutdown() from notifyPostHandler", .{});
                 self.startGracefulShutdown() catch |err| {
                     std.log.err("Failed to start graceful shutdown: {}", .{err});
                 };
-            } else if (self.shutdown_in_progress) {
+            }
+            if (self.shutdown_in_progress) {
                 const count = self.connection_manager.map.count();
                 const elapsed = std.time.milliTimestamp() - self.shutdown_start_time;
-                std.log.err("DIAG: shutdown in progress count={} elapsed={}", .{ count, elapsed });
                 if (count == 0 or elapsed > 3000) {
-                    std.log.err("DIAG: calling finishGracefulShutdown()", .{});
                     self.finishGracefulShutdown() catch |err| {
                         std.log.err("Failed to finish graceful shutdown: {}", .{err});
                     };
                 }
             }
             if (self.shutdown_performed or self.shutdown_in_progress) {
-                std.log.err("DIAG: skipping polls (returning early)", .{});
                 return;
             }
         }
