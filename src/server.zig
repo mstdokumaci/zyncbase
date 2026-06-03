@@ -503,7 +503,9 @@ pub const ZyncBaseServer = struct {
                 };
             }
             if (self.shutdown_in_progress) {
+                self.connection_manager.mutex.lock();
                 const count = self.connection_manager.map.count();
+                self.connection_manager.mutex.unlock();
                 const elapsed = std.time.milliTimestamp() - self.shutdown_start_time;
                 if (count == 0 or elapsed > 3000) {
                     self.finishGracefulShutdown() catch |err| {
