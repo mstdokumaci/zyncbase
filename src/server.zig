@@ -343,9 +343,7 @@ pub const ZyncBaseServer = struct {
         std.log.info("Server started successfully", .{});
 
         // Run event loop (blocks until shutdown signal or close)
-        std.log.err("DIAG: entering run()", .{});
         self.websocket_server.run();
-        std.log.err("DIAG: returned from run()", .{});
 
         // Arrive here after the event loop exits (graceful or forced)
         // Check if we need to perform graceful shutdown
@@ -493,22 +491,9 @@ pub const ZyncBaseServer = struct {
         std.log.debug("self destroyed", .{});
     }
 
-    var post_handler_invocations: u64 = 0;
-    var signal_received_flag: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-
     fn notifyPostHandler(ctx: ?*anyopaque) void {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-
-        post_handler_invocations += 1;
-        if (post_handler_invocations % 1000 == 0) {
-            std.log.err("DIAG: notifyPostHandler #{} connections={}", .{ post_handler_invocations, self.connection_manager.map.count() });
-        }
-
-        // Check if signal handler fired
-        if (signal_received_flag.swap(false, .acq_rel)) {
-            std.log.err("DIAG: handleSignal was invoked (shutdown_requested={})", .{self.shutdown_requested.load(.acquire)});
-        }
 
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
@@ -547,7 +532,6 @@ pub const ZyncBaseServer = struct {
 /// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
 fn handleSignal(_: c_int) callconv(.c) void {
     if (global_server.load(.acquire)) |server| {
-        ZyncBaseServer.signal_received_flag.store(true, .release);
         server.shutdown_requested.store(true, .release);
         if (server.websocket_server.loop.load(.acquire)) |loop| {
             uws_c.us_wakeup_loop(loop);
