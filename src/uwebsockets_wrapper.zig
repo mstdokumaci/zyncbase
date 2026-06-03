@@ -179,6 +179,7 @@ pub const WebSocketServer = struct {
 
     /// Close the server gracefully.
     pub fn close(self: *WebSocketServer) void {
+        std.log.warn("DIAG: WebSocketServer.close() called, setting close_requested=true", .{});
         self.close_requested.store(true, .monotonic);
         if (self.loop.load(.acquire)) |loop| {
             c.us_wakeup_loop(loop);
@@ -274,6 +275,7 @@ fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
 
     // Ensure we only perform shutdown once
     if (server.close_requested.load(.monotonic) and !server.is_closing.swap(true, .acquire)) {
+        std.log.warn("DIAG: uws postHandler closing server (close_requested=true, is_closing was false)", .{});
         if (server.listen_socket) |ls| {
             c.us_listen_socket_close(if (server.ssl) 1 else 0, ls);
             server.listen_socket = null;
