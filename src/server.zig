@@ -23,6 +23,10 @@ const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
+const ticket_exchange_mod = @import("ticket_exchange.zig");
+const TicketExchange = ticket_exchange_mod.TicketExchange;
+const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
+const JwksCache = @import("jwt_validator.zig").JwksCache;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Atomic global server reference for signal handlers (written once before registration,
@@ -49,6 +53,8 @@ pub const ZyncBaseServer = struct {
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
     auth_config: authorization.AuthConfig,
+    ticket_exchange: ?*TicketExchange = null,
+    jwks_cache: ?*JwksCache = null,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
@@ -301,6 +307,41 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.drain_handler = drainHandler;
         self.websocket_server.drain_handler_ctx = self;
 
+        // Initialize TicketExchange for POST /auth/ticket
+        const auth_cfg = &config.authentication;
+        var jwks_cache_ptr: ?*JwksCache = null;
+        if (auth_cfg.jwt_jwks_url) |jwks_url| {
+            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
+            errdefer self.memory_strategy.generalAllocator().destroy(jc);
+            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jwks_cache_ptr = jc;
+        }
+        self.jwks_cache = jwks_cache_ptr;
+
+        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
+            JwtValidationConfig{
+                .secret = auth_cfg.jwt_secret,
+                .algorithm = auth_cfg.jwt_algorithm,
+                .issuer = auth_cfg.jwt_issuer,
+                .audience = auth_cfg.jwt_audience,
+                .subject_claim = auth_cfg.jwt_subject_claim,
+                .jwks_cache = jwks_cache_ptr,
+            }
+        else
+            null;
+
+        self.ticket_exchange = try TicketExchange.init(
+            self.memory_strategy.generalAllocator(),
+            auth_cfg.ticket_secret,
+            auth_cfg.ticket_ttl_seconds,
+            auth_cfg.ticket_single_use,
+            jwt_config,
+            auth_cfg.anonymous_enabled,
+            auth_cfg.anonymous_subject_prefix,
+            self.websocket_server.ssl,
+        );
+        self.websocket_server.verify_ticket_cb = verifyTicketCallback;
+
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
         self.config = config;
@@ -319,6 +360,11 @@ pub const ZyncBaseServer = struct {
             self.config.server.host,
             self.config.server.port,
         });
+
+        // Register HTTP POST /auth/ticket route
+        if (self.ticket_exchange) |te| {
+            self.websocket_server.post("/auth/ticket", te, ticket_exchange_mod.handleAuthTicket);
+        }
 
         // Register WebSocket handlers with server as user data
         self.websocket_server.registerWebSocketHandlers(
@@ -471,6 +517,13 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing violation_tracker", .{});
         self.violation_tracker.deinit();
 
+        // Deinitialize ticket exchange and JWKS cache
+        if (self.ticket_exchange) |te| te.deinit();
+        if (self.jwks_cache) |jc| {
+            jc.deinit();
+            self.memory_strategy.generalAllocator().destroy(jc);
+        }
+
         // Free config - need to use pointer to field
         std.log.debug("About to deinit config", .{});
         var config_ptr = &self.config;
@@ -527,6 +580,15 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
         self.connection_manager.flushOutbox(conn_id);
+    }
+
+    /// Callback wired into WebSocketServer.verify_ticket_cb.
+    /// Called on the uWS event-loop thread during the WebSocket upgrade.
+    fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror![]const u8 {
+        if (user_data == null) return error.AuthFailed;
+        const self: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
+        const te = self.ticket_exchange orelse return error.AuthFailed;
+        return te.verifyTicket(allocator, ticket);
     }
 };
 

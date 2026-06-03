@@ -23,6 +23,13 @@ pub const Config = struct {
         jwt_algorithm: []const u8,
         jwt_issuer: ?[]const u8 = null,
         jwt_audience: ?[]const u8 = null,
+        jwt_jwks_url: ?[]const u8 = null,
+        jwt_subject_claim: []const u8,
+        ticket_secret: ?[]const u8 = null,
+        ticket_ttl_seconds: u32 = 60,
+        ticket_single_use: bool = true,
+        anonymous_enabled: bool = false,
+        anonymous_subject_prefix: []const u8,
     };
 
     pub const SecurityConfig = struct {
@@ -71,6 +78,14 @@ pub const Config = struct {
         if (self.authentication.jwt_audience) |audience| {
             self.allocator.free(audience);
         }
+        if (self.authentication.jwt_jwks_url) |jwks_url| {
+            self.allocator.free(jwks_url);
+        }
+        self.allocator.free(self.authentication.jwt_subject_claim);
+        if (self.authentication.ticket_secret) |secret| {
+            self.allocator.free(secret);
+        }
+        self.allocator.free(self.authentication.anonymous_subject_prefix);
         for (self.security.allowed_origins) |origin| {
             self.allocator.free(origin);
         }
@@ -133,6 +148,8 @@ pub const ConfigLoader = struct {
             },
             .authentication = .{
                 .jwt_algorithm = try allocator.dupe(u8, "HS256"),
+                .jwt_subject_claim = try allocator.dupe(u8, "sub"),
+                .anonymous_subject_prefix = try allocator.dupe(u8, "anon:"),
             },
             .security = .{},
             .logging = .{},
@@ -191,6 +208,8 @@ pub const ConfigLoader = struct {
             },
             .authentication = .{
                 .jwt_algorithm = try allocator.dupe(u8, "HS256"),
+                .jwt_subject_claim = try allocator.dupe(u8, "sub"),
+                .anonymous_subject_prefix = try allocator.dupe(u8, "anon:"),
             },
             .security = .{},
             .logging = .{},
@@ -262,6 +281,62 @@ pub const ConfigLoader = struct {
                         if (jwt_obj.get("audience")) |audience| {
                             if (audience == .string) {
                                 config.authentication.jwt_audience = try allocator.dupe(u8, audience.string);
+                            }
+                        }
+
+                        if (jwt_obj.get("jwksUrl")) |jwks| {
+                            if (jwks == .string) {
+                                config.authentication.jwt_jwks_url = try allocator.dupe(u8, jwks.string);
+                            }
+                        }
+
+                        if (jwt_obj.get("subjectClaim")) |sub| {
+                            if (sub == .string) {
+                                allocator.free(config.authentication.jwt_subject_claim);
+                                config.authentication.jwt_subject_claim = try allocator.dupe(u8, sub.string);
+                            }
+                        }
+                    }
+                }
+
+                if (auth_obj.get("ticket")) |ticket_json| {
+                    if (ticket_json == .object) {
+                        const ticket_obj = ticket_json.object;
+
+                        if (ticket_obj.get("secret")) |secret| {
+                            if (secret == .string) {
+                                config.authentication.ticket_secret = try allocator.dupe(u8, secret.string);
+                            }
+                        }
+
+                        if (ticket_obj.get("ttlSeconds")) |ttl| {
+                            if (ttl == .integer) {
+                                config.authentication.ticket_ttl_seconds = @intCast(ttl.integer);
+                            }
+                        }
+
+                        if (ticket_obj.get("singleUse")) |su| {
+                            if (su == .bool) {
+                                config.authentication.ticket_single_use = su.bool;
+                            }
+                        }
+                    }
+                }
+
+                if (auth_obj.get("anonymous")) |anon_json| {
+                    if (anon_json == .object) {
+                        const anon_obj = anon_json.object;
+
+                        if (anon_obj.get("enabled")) |enabled| {
+                            if (enabled == .bool) {
+                                config.authentication.anonymous_enabled = enabled.bool;
+                            }
+                        }
+
+                        if (anon_obj.get("subjectPrefix")) |prefix| {
+                            if (prefix == .string) {
+                                allocator.free(config.authentication.anonymous_subject_prefix);
+                                config.authentication.anonymous_subject_prefix = try allocator.dupe(u8, prefix.string);
                             }
                         }
                     }

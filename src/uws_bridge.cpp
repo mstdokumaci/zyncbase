@@ -4,6 +4,14 @@
 #include "AsyncSocket.h"
 #include "internal/internal.h"
 #include <string_view>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/ec.h>
+#include <openssl/err.h>
+#include <openssl/param_build.h>
+#include <openssl/core_names.h>
+
 
 #define uws_res_r uws_res_t*
 
@@ -334,4 +342,273 @@ extern "C"
         uWS::Loop *uwsLoop = (uWS::Loop *)loop;
         uwsLoop->removePostHandler(key);
     }
+
+    void uws_app_post(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data)
+    {
+        std::string pat = pattern ? std::string(pattern, pattern_length) : std::string();
+        if (ssl) {
+            uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
+            uwsApp->post(pat, [handler, user_data](auto *res, auto *req) {
+                handler((uws_res_t *)res, (uws_req_t *)req, user_data);
+            });
+        } else {
+            uWS::App *uwsApp = (uWS::App *)app;
+            uwsApp->post(pat, [handler, user_data](auto *res, auto *req) {
+                handler((uws_res_t *)res, (uws_req_t *)req, user_data);
+            });
+        }
+    }
+
+    void uws_res_write_status(int ssl, uws_res_t *res, const char *status, size_t status_length)
+    {
+        if (ssl) {
+            uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+            uwsRes->writeStatus(std::string_view(status, status_length));
+        } else {
+            uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+            uwsRes->writeStatus(std::string_view(status, status_length));
+        }
+    }
+
+    void uws_res_write_header(int ssl, uws_res_t *res, const char *key, size_t key_length, const char *value, size_t value_length)
+    {
+        if (ssl) {
+            uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+            uwsRes->writeHeader(std::string_view(key, key_length), std::string_view(value, value_length));
+        } else {
+            uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+            uwsRes->writeHeader(std::string_view(key, key_length), std::string_view(value, value_length));
+        }
+    }
+
+    void uws_res_end(int ssl, uws_res_t *res, const char *body, size_t body_length, int close_connection)
+    {
+        if (ssl) {
+            uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+            uwsRes->end(std::string_view(body, body_length), close_connection ? true : false);
+        } else {
+            uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+            uwsRes->end(std::string_view(body, body_length), close_connection ? true : false);
+        }
+    }
+
+    void uws_res_on_data(int ssl, uws_res_t *res, uws_res_data_handler handler, void *user_data)
+    {
+        if (ssl) {
+            uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+            uwsRes->onData([handler, res, user_data](std::string_view chunk, bool is_last) {
+                handler(res, chunk.data(), chunk.length(), is_last ? 1 : 0, user_data);
+            });
+        } else {
+            uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+            uwsRes->onData([handler, res, user_data](std::string_view chunk, bool is_last) {
+                handler(res, chunk.data(), chunk.length(), is_last ? 1 : 0, user_data);
+            });
+        }
+    }
+
+    void uws_res_on_aborted(int ssl, uws_res_t *res, uws_res_aborted_handler handler, void *user_data)
+    {
+        if (ssl) {
+            uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+            uwsRes->onAborted([handler, user_data]() {
+                handler(user_data);
+            });
+        } else {
+            uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+            uwsRes->onAborted([handler, user_data]() {
+                handler(user_data);
+            });
+        }
+    }
+
+    int openssl_verify_rsa(
+        const char *hash_alg,
+        const unsigned char *n_bytes, size_t n_len,
+        const unsigned char *e_bytes, size_t e_len,
+        const unsigned char *data, size_t data_len,
+        const unsigned char *sig, size_t sig_len)
+    {
+        OSSL_PARAM_BLD *param_bld = OSSL_PARAM_BLD_new();
+        if (!param_bld) return 0;
+
+        BIGNUM *bn_n = BN_bin2bn(n_bytes, n_len, nullptr);
+        BIGNUM *bn_e = BN_bin2bn(e_bytes, e_len, nullptr);
+        if (!bn_n || !bn_e) {
+            if (bn_n) BN_free(bn_n);
+            if (bn_e) BN_free(bn_e);
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
+
+        OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_N, bn_n);
+        OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_RSA_E, bn_e);
+
+        OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(param_bld);
+        OSSL_PARAM_BLD_free(param_bld);
+        BN_free(bn_n);
+        BN_free(bn_e);
+
+        if (!params) return 0;
+
+        EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+        EVP_PKEY *pkey = nullptr;
+        if (pkey_ctx) {
+            if (EVP_PKEY_fromdata_init(pkey_ctx) == 1) {
+                EVP_PKEY_fromdata(pkey_ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params);
+            }
+            EVP_PKEY_CTX_free(pkey_ctx);
+        }
+        OSSL_PARAM_free(params);
+
+        if (!pkey) return 0;
+
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        if (!ctx) {
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        const EVP_MD *md = EVP_get_digestbyname(hash_alg);
+        if (!md) {
+            EVP_MD_CTX_free(ctx);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        int ret = 0;
+        if (EVP_DigestVerifyInit(ctx, nullptr, md, nullptr, pkey) == 1) {
+            if (EVP_DigestVerifyUpdate(ctx, data, data_len) == 1) {
+                ret = EVP_DigestVerifyFinal(ctx, sig, sig_len);
+            }
+        }
+
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
+        return ret == 1 ? 1 : 0;
+    }
+
+    int openssl_verify_ec(
+        const char *curve_name,
+        const unsigned char *x_bytes, size_t x_len,
+        const unsigned char *y_bytes, size_t y_len,
+        const unsigned char *data, size_t data_len,
+        const unsigned char *sig, size_t sig_len)
+    {
+        OSSL_PARAM_BLD *param_bld = OSSL_PARAM_BLD_new();
+        if (!param_bld) return 0;
+
+        const char *group_name = nullptr;
+        if (strcmp(curve_name, "P-256") == 0 || strcmp(curve_name, "ES256") == 0) {
+            group_name = "P-256";
+        } else if (strcmp(curve_name, "P-384") == 0 || strcmp(curve_name, "ES384") == 0) {
+            group_name = "P-384";
+        } else if (strcmp(curve_name, "P-521") == 0 || strcmp(curve_name, "ES512") == 0) {
+            group_name = "P-521";
+        } else {
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
+
+        OSSL_PARAM_BLD_push_utf8_string(param_bld, OSSL_PKEY_PARAM_GROUP_NAME, group_name, 0);
+
+        size_t pub_key_len = 1 + x_len + y_len;
+        unsigned char *pub_key_oct = (unsigned char *)malloc(pub_key_len);
+        if (!pub_key_oct) {
+            OSSL_PARAM_BLD_free(param_bld);
+            return 0;
+        }
+        pub_key_oct[0] = 0x04; // uncompressed format
+        memcpy(pub_key_oct + 1, x_bytes, x_len);
+        memcpy(pub_key_oct + 1 + x_len, y_bytes, y_len);
+
+        OSSL_PARAM_BLD_push_octet_string(param_bld, OSSL_PKEY_PARAM_PUB_KEY, pub_key_oct, pub_key_len);
+
+        OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(param_bld);
+        OSSL_PARAM_BLD_free(param_bld);
+        free(pub_key_oct);
+
+        if (!params) return 0;
+
+        EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+        EVP_PKEY *pkey = nullptr;
+        if (pkey_ctx) {
+            if (EVP_PKEY_fromdata_init(pkey_ctx) == 1) {
+                EVP_PKEY_fromdata(pkey_ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params);
+            }
+            EVP_PKEY_CTX_free(pkey_ctx);
+        }
+        OSSL_PARAM_free(params);
+
+        if (!pkey) return 0;
+
+        if (sig_len % 2 != 0) {
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        size_t half_len = sig_len / 2;
+        BIGNUM *bn_r = BN_bin2bn(sig, half_len, nullptr);
+        BIGNUM *bn_s = BN_bin2bn(sig + half_len, half_len, nullptr);
+        if (!bn_r || !bn_s) {
+            if (bn_r) BN_free(bn_r);
+            if (bn_s) BN_free(bn_s);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        ECDSA_SIG *ec_sig = ECDSA_SIG_new();
+        if (!ec_sig) {
+            BN_free(bn_r);
+            BN_free(bn_s);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+        ECDSA_SIG_set0(ec_sig, bn_r, bn_s);
+
+        unsigned char *der_sig = nullptr;
+        int der_sig_len = i2d_ECDSA_SIG(ec_sig, &der_sig);
+        ECDSA_SIG_free(ec_sig);
+
+        if (der_sig_len <= 0 || !der_sig) {
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        if (!ctx) {
+            OPENSSL_free(der_sig);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        const EVP_MD *md = nullptr;
+        if (strcmp(group_name, "P-256") == 0) {
+            md = EVP_sha256();
+        } else if (strcmp(group_name, "P-384") == 0) {
+            md = EVP_sha384();
+        } else if (strcmp(group_name, "P-521") == 0) {
+            md = EVP_sha512();
+        }
+
+        if (!md) {
+            EVP_MD_CTX_free(ctx);
+            OPENSSL_free(der_sig);
+            EVP_PKEY_free(pkey);
+            return 0;
+        }
+
+        int ret = 0;
+        if (EVP_DigestVerifyInit(ctx, nullptr, md, nullptr, pkey) == 1) {
+            if (EVP_DigestVerifyUpdate(ctx, data, data_len) == 1) {
+                ret = EVP_DigestVerifyFinal(ctx, der_sig, der_sig_len);
+            }
+        }
+
+        EVP_MD_CTX_free(ctx);
+        OPENSSL_free(der_sig);
+        EVP_PKEY_free(pkey);
+        return ret == 1 ? 1 : 0;
+    }
 }
+
