@@ -343,9 +343,9 @@ pub const ZyncBaseServer = struct {
         std.log.info("Server started successfully", .{});
 
         // Run event loop (blocks until shutdown signal or close)
-        std.log.info("DIAG: entering websocket_server.run()", .{});
+        std.log.err("DIAG: entering run()", .{});
         self.websocket_server.run();
-        std.log.warn("DIAG: returned from websocket_server.run()", .{});
+        std.log.err("DIAG: returned from run()", .{});
 
         // Arrive here after the event loop exits (graceful or forced)
         // Check if we need to perform graceful shutdown
@@ -488,6 +488,7 @@ pub const ZyncBaseServer = struct {
     }
 
     var post_handler_invocations: u64 = 0;
+    var signal_received_flag: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
     fn notifyPostHandler(ctx: ?*anyopaque) void {
         if (ctx == null) return;
@@ -495,27 +496,35 @@ pub const ZyncBaseServer = struct {
 
         post_handler_invocations += 1;
         if (post_handler_invocations % 1000 == 0) {
-            std.log.info("DIAG: notifyPostHandler invoked {} times, connections={}", .{ post_handler_invocations, self.connection_manager.map.count() });
+            std.log.err("DIAG: notifyPostHandler #{} connections={}", .{ post_handler_invocations, self.connection_manager.map.count() });
+        }
+
+        // Check if signal handler fired
+        if (signal_received_flag.swap(false, .acq_rel)) {
+            std.log.err("DIAG: handleSignal was invoked (shutdown_requested={})", .{self.shutdown_requested.load(.acquire)});
         }
 
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
-            std.log.warn("DIAG: shutdown_requested=true in notifyPostHandler, in_progress={}, performed={}, count={}", .{ self.shutdown_in_progress, self.shutdown_performed, self.connection_manager.map.count() });
+            std.log.err("DIAG: shutdown_requested=true in_progress={} performed={} count={}", .{ self.shutdown_in_progress, self.shutdown_performed, self.connection_manager.map.count() });
             if (!self.shutdown_in_progress and !self.shutdown_performed) {
+                std.log.err("DIAG: calling startGracefulShutdown() from notifyPostHandler", .{});
                 self.startGracefulShutdown() catch |err| {
                     std.log.err("Failed to start graceful shutdown: {}", .{err});
                 };
             } else if (self.shutdown_in_progress) {
                 const count = self.connection_manager.map.count();
                 const elapsed = std.time.milliTimestamp() - self.shutdown_start_time;
+                std.log.err("DIAG: shutdown in progress count={} elapsed={}", .{ count, elapsed });
                 if (count == 0 or elapsed > 3000) {
+                    std.log.err("DIAG: calling finishGracefulShutdown()", .{});
                     self.finishGracefulShutdown() catch |err| {
                         std.log.err("Failed to finish graceful shutdown: {}", .{err});
                     };
                 }
             }
             if (self.shutdown_performed or self.shutdown_in_progress) {
-                std.log.warn("DIAG: returning early from notifyPostHandler, skipping polls", .{});
+                std.log.err("DIAG: skipping polls (returning early)", .{});
                 return;
             }
         }
@@ -534,13 +543,9 @@ pub const ZyncBaseServer = struct {
 
 /// Signal handler for SIGTERM and SIGINT
 /// ASYNC-SIGNAL-SAFE: only sets atomic flag and wakes event loop
-fn handleSignal(sig: c_int) callconv(.c) void {
-    // Signal-safe diagnostic: write directly to stderr.
-    const diag_msg = "DIAG: handleSignal\n";
-    _ = std.posix.write(std.posix.STDERR_FILENO, diag_msg) catch {};
-    _ = sig;
-
+fn handleSignal(_: c_int) callconv(.c) void {
     if (global_server.load(.acquire)) |server| {
+        ZyncBaseServer.signal_received_flag.store(true, .release);
         server.shutdown_requested.store(true, .release);
         if (server.websocket_server.loop.load(.acquire)) |loop| {
             uws_c.us_wakeup_loop(loop);

@@ -3,7 +3,7 @@
     "sdk/*"
   ],
   "scripts": {
-    "test:e2e": "bun test tests/e2e/src/e2e.test.ts",
+    "test:e2e": "ZYNCBASE_TEST_VERBOSE=1 bun test tests/e2e/src/e2e.test.ts --verbose",
     "specs:compress": "uv run python scripts/compress_specs.py",
     "test:tsan": "zig build test -Dsanitize=thread --summary all",
     "test:safe": "zig build test -Doptimize=ReleaseSafe --summary all",
