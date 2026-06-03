@@ -105,7 +105,6 @@ pub fn authorizeStoreNamespace(
 fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, strict: bool) EvalResult {
     switch (condition) {
         .boolean => |b| return if (b) .allow else .deny,
-        .hook => return .deny,
         .logical_and => |conds| {
             var has_injection = false;
             for (conds) |cond| {

@@ -15,7 +15,7 @@ This implementation follows the decisions established in:
 
 ## 1. Error Categories
 
-Errors are grouped into 7 functional categories to determine automatic SDK behavior such as retries and user-facing surfacing.
+Errors are grouped into 6 functional categories to determine automatic SDK behavior such as retries and user-facing surfacing.
 
 | Category | Typical Codes | Retryable? | SDK Behavior |
 |----------|---------------|------------|--------------|
@@ -25,7 +25,6 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | **Validation** | `SCHEMA_VALIDATION_FAILED`, `INVALID_MESSAGE` | No | Surface immediately. |
 | **Rate-Limit** | `RATE_LIMITED`, `MESSAGE_TOO_LARGE` | **Yes (Opt-out)** | Auto-retry with backoff if `RATE_LIMITED`. |
 | **Server** | `INTERNAL_ERROR` | **Yes (Bounded)** | Retry up to 3 times with backoff. |
-| **Hook Server** | `HOOK_SERVER_UNAVAILABLE`, `HOOK_DENIED` | No | Surface error; indicates issue in developer's hook logic. |
 
 ---
 
@@ -37,7 +36,7 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `TOKEN_EXPIRED` | Authentication | Session has expired | Connection closed by server; requires re-auth | 401 | Yes - Refresh token |
 | `SESSION_NOT_READY` | Authentication | Scoped session is not ready | Store/presence operation sent before namespace and user resolution completed | 409 | No - Wait for namespace acknowledgement |
 | `NAMESPACE_UNAUTHORIZED` | Authorization | No access to namespace | `setStoreNamespace` to a restricted path | 403 | No - Check permissions |
-| `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` or Hook Server returned `false` | 403 | No - Check permissions |
+| `PERMISSION_DENIED` | Authorization | Rule blocked operation | `authorization.json` returned `false` or a same-row guard matched no row | 403 | No - Check permissions |
 | `SCHEMA_VALIDATION_FAILED` | Validation | Data shape mismatch | `store.set` with invalid fields/types | 400 | No - Fix data |
 | `COLLECTION_NOT_FOUND` | Authorization | Collection missing in schema | Path refers to a table/collection not defined in the schema | 403 | No - Fix schema or path |
 | `FIELD_NOT_FOUND` | Validation | Field missing in schema | Path/value refers to a field not defined in the schema | 400 | No - Fix schema or data |
@@ -50,8 +49,6 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `CONNECTION_FAILED` | Connection | Transport failure | WebSocket closed unexpectedly or DNS failure | - | Yes - Reconnect |
 | `TIMEOUT` | Connection | No server response | Request exceeded `client.timeout` (default: 10s) | 408 | Yes - Retry with backoff |
 | `INTERNAL_ERROR` | Server | Zig core failure | Crash, Disk I/O error, or unhandled exception | 500 | Yes - Retry up to 3 times |
-| `HOOK_SERVER_UNAVAILABLE` | Hook Server | Logic runtime down | Zig cannot reach the Bun Hook Server process | 503 | No - Check Hook Server |
-| `HOOK_DENIED` | Hook Server | Logic rejected write | Developer's TS hook explicitly returned an error | 403 | No - Check hook logic |
 | `MSGPACK_MAX_DEPTH_EXCEEDED` | Validation | MessagePack nesting too deep | Message exceeds max depth of 32 levels | 400 | No - Reduce nesting |
 | `MSGPACK_MAX_SIZE_EXCEEDED` | Validation | MessagePack message too large | Message exceeds 10MB limit | 413 | No - Reduce message size |
 | `MSGPACK_MAX_STRING_LENGTH_EXCEEDED` | Validation | String too long | String exceeds 1MB limit | 400 | No - Reduce string length |
@@ -62,7 +59,6 @@ Errors are grouped into 7 functional categories to determine automatic SDK behav
 | `DATABASE_LOCKED` | Server | Database locked by another process | SQLite database is locked | 503 | Yes - Retry with backoff |
 | `DATABASE_CORRUPT` | Server | Database corruption detected | SQLite integrity check failed | 500 | No - Restore from backup |
 | `CACHE_REF_COUNT_OVERFLOW` | Server | Too many concurrent readers | Cache ref_count exceeded u32 max | 500 | No - Indicates bug |
-| `CIRCUIT_BREAKER_OPEN` | Hook Server | Circuit breaker is open | Too many Hook Server failures | 503 | Yes - Wait for timeout |
 | `SUBSCRIPTION_LIMIT_EXCEEDED` | Rate-Limit | Too many subscriptions | Client exceeded max subscriptions | 429 | No - Reduce subscriptions |
 | `WAL_SIZE_EXCEEDED` | Server | WAL file too large | WAL file exceeded threshold | 500 | Yes - Automatic checkpoint |
 | `MAX_CONNECTIONS_REACHED` | Connection | Server at capacity | Pool exhausted | 503 | No - Try later |
@@ -239,25 +235,6 @@ async function retryServerError(operation: () => Promise<any>) {
 }
 ```
 
-### Hook Server Errors
-
-**Errors**: `HOOK_SERVER_UNAVAILABLE`, `CIRCUIT_BREAKER_OPEN`
-
-**Strategy**: No automatic retry (fail fast)
-```typescript
-// Circuit breaker prevents cascading failures
-if (error.code === 'CIRCUIT_BREAKER_OPEN') {
-  // Don't retry - circuit breaker will auto-recover after timeout
-  throw error
-}
-
-if (error.code === 'HOOK_SERVER_UNAVAILABLE') {
-  // Hook Server is down - don't retry
-  // Operations are denied by default for security
-  throw error
-}
-```
-
 ### Authentication Errors
 
 **Errors**: `TOKEN_EXPIRED`
@@ -300,7 +277,6 @@ if (isValidationError(error)) {
 | Connection | ✅ Yes | Infinite | Exponential | None - automatic |
 | Rate-Limit | ✅ Yes (opt-out) | Infinite | Respect `retryAfter` | None - automatic |
 | Server | ✅ Yes | 3 | Exponential | Alert if persistent |
-| Hook Server | ❌ No | 0 | N/A | Check Hook Server |
 | Authentication | ⚠️ Partial | 1 | None | Refresh token |
 | Authorization | ❌ No | 0 | N/A | Fix permissions |
 | Validation | ❌ No | 0 | N/A | Fix client code |

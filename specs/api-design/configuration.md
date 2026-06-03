@@ -47,6 +47,9 @@ Main server configuration file.
   "authentication": {
     "jwt": {
       "secret": "${JWT_SECRET}"
+    },
+    "ticket": {
+      "secret": "${TICKET_SECRET}"
     }
   },
   "dataDir": "./data"
@@ -66,11 +69,30 @@ Main server configuration file.
   "schema": "./schema.json",
   
   "authentication": {
+    "ticket": {
+      "secret": "${TICKET_SECRET}",
+      "ttlSeconds": 60,
+      "singleUse": true
+    },
     "jwt": {
       "secret": "${JWT_SECRET}",
       "algorithm": "HS256",
       "issuer": "your-app",
       "audience": "zyncbase-server"
+    },
+    "session": {
+      "claims": {
+        "tenant_id": "tenant_id",
+        "role": "role",
+        "permissions": "permissions",
+        "org_id": "org_id",
+        "read_projects": "read_projects",
+        "write_projects": "write_projects"
+      }
+    },
+    "anonymous": {
+      "enabled": true,
+      "subjectPrefix": "anon:"
     }
   },
   
@@ -165,6 +187,68 @@ Path to the `authorization.json` file. If omitted or the file is missing, the se
   "authorization": "./authorization.json"
 }
 ```
+
+#### `authentication`
+
+Authentication source and ticket settings. ZyncBase validates external identity material and issues short-lived tickets for WebSocket connection establishment. It does not manage user accounts or compute permissions.
+
+```json
+{
+  "authentication": {
+    "ticket": {
+      "secret": "${TICKET_SECRET}",
+      "ttlSeconds": 60,
+      "singleUse": true
+    },
+    "jwt": {
+      "secret": "${JWT_SECRET}",
+      "algorithm": "HS256",
+      "issuer": "your-app",
+      "audience": "zyncbase-server",
+      "subjectClaim": "sub"
+    },
+    "session": {
+      "claims": {
+        "tenant_id": "tenant_id",
+        "role": "role",
+        "permissions": "permissions",
+        "org_id": "org_id",
+        "read_projects": "read_projects",
+        "write_projects": "write_projects"
+      }
+    },
+    "anonymous": {
+      "enabled": true,
+      "subjectPrefix": "anon:"
+    }
+  }
+}
+```
+
+**Ticket Settings:**
+
+- `secret` - Signing secret for ZyncBase tickets. If omitted, the server may generate an ephemeral secret, which invalidates outstanding tickets on restart.
+- `ttlSeconds` - Ticket lifetime before WebSocket upgrade. Tickets should be short-lived because they travel in the WebSocket URL.
+- `singleUse` - Whether a ticket can be redeemed only once. Production deployments should keep this enabled.
+
+**JWT Settings:**
+
+- `secret` - Shared secret for symmetric JWT algorithms.
+- `jwksUrl` - URL for public keys when using asymmetric JWT algorithms.
+- `algorithm` - Expected JWT algorithm.
+- `issuer` - Expected `iss` claim.
+- `audience` - Expected `aud` claim.
+- `subjectClaim` - Claim used as the external identity string, defaulting to `sub`.
+
+**Session Claim Projection:**
+
+`session.claims` maps `$session` property names to verified JWT claim names. These projected claims are the only permission inputs ZyncBase receives from the identity provider.
+
+The `users` row is not loaded into `$session` for authorization. The reserved `users` collection maps the external subject to an internal `users.id` for `owner_id`, presence identity, and profile/display data.
+
+**Anonymous Auth:**
+
+When `anonymous.enabled` is true, the SDK may request a ticket using a high-entropy, client-generated anonymous subject. Anonymous subjects use the same `users.id` mapping and authorization flow as authenticated subjects.
 
 ---
 
@@ -312,7 +396,7 @@ Define your data structure using ZyncBase store-based schema format.
 
 ### Example: The Reserved `users` Collection
 
-The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps the external identity string (SDK anonymous client ID or authenticated JWT subject) to an internal `BLOB(16)` UUIDv7 used by `owner_id`, `$session.userId`, presence `userId`, and foreign keys. You can extend it with optional custom fields:
+The `users` collection is a reserved hybrid table that is automatically managed by ZyncBase. It defaults to `"namespaced": false`; its `external_id` column maps the external identity string (SDK-generated anonymous subject or authenticated JWT subject) to an internal `BLOB(16)` UUIDv7 used by `owner_id`, `$session.userId`, presence `userId`, and foreign keys. You can extend it with optional custom fields:
 
 ```json
 {
@@ -948,8 +1032,8 @@ Define authorization rules using the declarative JSON condition grammar document
   "namespaces": [
     {
       "pattern": "tenant:{tenant_id}",
-      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
-      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "storeFilter": { "$session.tenant_id": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenant_id": { "eq": "$namespace.tenant_id" } },
       "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ],
@@ -976,7 +1060,7 @@ Define authorization rules using the declarative JSON condition grammar document
 ### Condition Grammar
 
 **Available variables:**
-- `$session.*` - Resolved session context from JWT and/or hooks (e.g., `$session.userId`, `$session.tenantId`, `$session.role`)
+- `$session.*` - Resolved session context projected from a validated JWT or anonymous identity (e.g., `$session.userId`, `$session.tenant_id`, `$session.role`)
 - `$namespace.*` - Parsed namespace parts (e.g., `$namespace.tenant_id`, `$namespace.room_id`)
 - `$path` - Target table/collection name
 - `$value.*` - Incoming mutation payload, available for writes
@@ -1015,41 +1099,18 @@ Define authorization rules using the declarative JSON condition grammar document
 }
 ```
 
-### Hook Server Functions
+### Permission Claims
 
-Complex authorization logic is handled by TypeScript functions in `zyncbase.auth.ts`, not in the config file. The Hook Server is automatically managed by the ZyncBase CLI.
+Complex permission computation happens before ZyncBase receives a request. The identity provider or application auth layer encodes human-manageable grants into JWT claims, and `authorization.json` enforces those claims natively.
 
-**zyncbase.auth.ts:**
-```typescript
-import { createAdminClient } from '@zyncbase/server';
-
-// Automatically configured to talk to the local Zig core
-const client = createAdminClient();
-
-// Function names match the "hook" rules in authorization.json
-export async function isRoomMember({ session, namespace, path, value }) {
-  const roomId = namespace.split(':')[1];
-  
-  // Use the same Query API as your frontend
-  const memberships = await client.store.query('room_members', {
-    where: { 
-      userId: { eq: session.userId },
-      roomId: { eq: roomId }
-    }
-  });
-
-  return memberships.length > 0;
-}
-
-export async function hasPermission({ session, namespace, path, value }) {
-  const permissions = await client.store.query('permissions', {
-    where: { 
-      userId: { eq: session.userId },
-      permission: { eq: value.permission }
-    }
-  });
-
-  return permissions.length > 0;
+**JWT claims:**
+```json
+{
+  "sub": "user_123",
+  "org_id": "acme",
+  "role": "editor",
+  "read_projects": ["docs", "wiki", "planning"],
+  "write_projects": ["docs"]
 }
 ```
 
@@ -1058,23 +1119,28 @@ export async function hasPermission({ session, namespace, path, value }) {
 {
   "namespaces": [
     {
-      "pattern": "room:{room_id}",
-      "storeFilter": { "hook": "isRoomMember" },
-      "presenceRead": { "hook": "isRoomMember" },
-      "presenceWrite": { "hook": "isRoomMember" }
+      "pattern": "org:{org_id}:project:{project_id}",
+      "storeFilter": {
+        "and": [
+          { "$namespace.org_id": { "eq": "$session.org_id" } },
+          { "$namespace.project_id": { "in": "$session.read_projects" } }
+        ]
+      },
+      "presenceRead": { "$namespace.project_id": { "in": "$session.read_projects" } },
+      "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
     }
   ],
   "store": [
     {
-      "collection": "messages",
-      "read": { "hook": "isRoomMember" },
-      "write": { "hook": "isRoomMember" }
+      "collection": "pages",
+      "read": { "$doc.project_id": { "in": "$session.read_projects" } },
+      "write": { "$doc.project_id": { "in": "$session.write_projects" } }
     }
   ]
 }
 ```
 
-The CLI automatically spins up the Bun Hook Server and manages the IPC/WebSocket connection.
+Rules that require database joins, membership-table lookups, billing checks, or external API calls are outside ZyncBase's authorization boundary. Applications must represent those decisions in trusted token claims or same-row data before ZyncBase evaluates the request.
 
 ---
 
@@ -1091,6 +1157,7 @@ HOST=0.0.0.0
 
 # Authentication
 JWT_SECRET=your-secret-key-here
+TICKET_SECRET=your-ticket-signing-secret-here
 
 # Database
 DATA_DIR=./data
@@ -1108,6 +1175,9 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "host": "${HOST}"
   },
   "authentication": {
+    "ticket": {
+      "secret": "${TICKET_SECRET}"
+    },
     "jwt": {
       "secret": "${JWT_SECRET}"
     }
@@ -1131,7 +1201,9 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
   "server": { "port": 3000 },
   "schema": "./schema.json",
   "authentication": {
-    "jwt": { "secret": "${JWT_SECRET}" }
+    "ticket": { "secret": "${TICKET_SECRET}" },
+    "jwt": { "secret": "${JWT_SECRET}" },
+    "anonymous": { "enabled": true }
   },
   "dataDir": "./data",
   "namespaces": { // [PLANNED]
@@ -1187,6 +1259,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
   "server": { "port": 3000 },
   "schema": "./schema.json",
   "authentication": {
+    "ticket": { "secret": "${TICKET_SECRET}" },
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
@@ -1202,8 +1275,8 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
   "namespaces": [
     {
       "pattern": "tenant:{tenant_id}",
-      "storeFilter": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
-      "presenceRead": { "$session.tenantId": { "eq": "$namespace.tenant_id" } },
+      "storeFilter": { "$session.tenant_id": { "eq": "$namespace.tenant_id" } },
+      "presenceRead": { "$session.tenant_id": { "eq": "$namespace.tenant_id" } },
       "presenceWrite": { "$session.role": { "in": ["admin", "editor"] } }
     }
   ],
@@ -1219,16 +1292,52 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
 
 ---
 
-### Example 3: Complex Authorization with Hook Server
+### Example 3: Project Grants from JWT Claims
 
-If `authorization.json` rules aren't enough (e.g., you need database lookups), use the Hook Server for custom logic. This allows you to delegate complex authorization to a local Bun-powered TypeScript server.
+If an application has Jira- or Confluence-style projects inside an organization, the identity provider can issue project grants as JWT claims:
 
-For a complete guide on writing TypeScript hooks, using the Admin Client, and configuring the `authorization.json` delegation, see the [Authorization Implementation Guide](../implementation/auth-system.md#7-the-bun-hook-server-managing-complexity).
+```json
+{
+  "sub": "user_123",
+  "org_id": "acme",
+  "read_projects": ["docs", "wiki", "planning"],
+  "write_projects": ["docs"]
+}
+```
+
+ZyncBase enforces those grants without database lookups:
+
+```json
+{
+  "namespaces": [
+    {
+      "pattern": "org:{org_id}:project:{project_id}",
+      "storeFilter": {
+        "and": [
+          { "$namespace.org_id": { "eq": "$session.org_id" } },
+          { "$namespace.project_id": { "in": "$session.read_projects" } }
+        ]
+      },
+      "presenceRead": { "$namespace.project_id": { "in": "$session.read_projects" } },
+      "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
+    }
+  ],
+  "store": [
+    {
+      "collection": "pages",
+      "read": { "$doc.project_id": { "in": "$session.read_projects" } },
+      "write": { "$doc.project_id": { "in": "$session.write_projects" } }
+    }
+  ]
+}
+```
+
+For checks that require joins, inherited ACL traversal, billing state, or external API calls, the application must compute the result before minting or refreshing the JWT.
 
 ---
 
 # Server restart is required for config changes.
-# v1: No automatic hot reload is supported.
+# No automatic hot reload is supported.
 ```
 
 **What triggers reload:**

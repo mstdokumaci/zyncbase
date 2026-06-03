@@ -42,6 +42,7 @@ const Values = struct {
     pub const write_committed = comptimeEncodeKey("WriteCommitted");
     pub const write_error = comptimeEncodeKey("WriteError");
     pub const phase_write = comptimeEncodeKey("write");
+    pub const server_disconnect = comptimeEncodeKey("ServerDisconnect");
 };
 
 // === Comptime-encoded hot-path headers ===
@@ -367,6 +368,25 @@ pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireEr
         try list.appendSlice(allocator, Keys.batch_index);
         try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
     }
+
+    return list.toOwnedSlice(allocator);
+}
+
+pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: []const u8) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 3);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.server_disconnect);
+
+    try list.appendSlice(allocator, Keys.code);
+    try msgpack.writeMsgPackStr(writer, code);
+
+    try list.appendSlice(allocator, Keys.message);
+    try msgpack.writeMsgPackStr(writer, message);
 
     return list.toOwnedSlice(allocator);
 }

@@ -9,11 +9,9 @@ pub const AuthError = error{
     InvalidComparisonOperator,
     InvalidContextVariable,
     InvalidPattern,
-    InvalidHook,
     InvalidValue,
     UnknownAuthKey,
     // Runtime evaluation errors
     ForbiddenVariableAccess,
     AccessDenied,
-    HookNotSupported,
 };

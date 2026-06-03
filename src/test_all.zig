@@ -5,7 +5,6 @@ pub const std_options = struct {
 test {
     // Import all test files to ensure they are picked up by the build system
     _ = @import("uwebsockets_wrapper_test.zig");
-    _ = @import("hook_server_client_test.zig");
     _ = @import("storage_engine_test.zig");
     _ = @import("storage_engine_value_codec_test.zig");
     _ = @import("storage_engine_sql_test.zig");
@@ -36,7 +35,6 @@ test {
     // Property tests
     _ = @import("message_handler_property_test.zig");
     _ = @import("connection_manager_property_test.zig");
-    _ = @import("hook_server_client_property_test.zig");
     _ = @import("config_loader_property_test.zig");
     _ = @import("checkpoint_manager_property_test.zig");
     _ = @import("storage_engine_stability_property_test.zig");

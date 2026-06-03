@@ -86,7 +86,6 @@ fn lowerCondition(
 ) DocPredicateError!LowerResult {
     return switch (condition) {
         .boolean => |b| if (b) .allow else .deny,
-        .hook => .deny,
         .logical_and => |conds| try lowerAnd(conds, ctx, table),
         .logical_or => |conds| try lowerOr(conds, ctx, table),
         .comparison => |comp| {
@@ -220,7 +219,6 @@ fn comparisonToQueryCondition(
 fn validateShape(condition: types.Condition, table: *const schema.Table) DocPredicateError!Shape {
     return switch (condition) {
         .boolean => .{},
-        .hook => error.UnsupportedAuthorizationPredicate,
         .logical_and => |conds| validateAndShape(conds, table),
         .logical_or => |conds| validateOrShape(conds, table),
         .comparison => |comp| {

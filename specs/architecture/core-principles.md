@@ -40,7 +40,7 @@ ZyncBase follows a "configuration-first" approach inspired by infrastructure too
 - **schema.json**: Data validation.
 - **authorization.json**: Declarative authorization.
 
-For advanced logic, the **Hook Server** allows extending ZyncBase using full TypeScript. See [ADR-009](./adrs.md#adr-009-configuration-first-zero-zig) and [ADR-016](./adrs.md#adr-016-bun-hook-server).
+For authorization, external identity providers own permission truth and ZyncBase enforces trusted claims through JSON rules. See [ADR-009](./adrs.md#adr-009-configuration-first-zero-zig) and [ADR-032](./adrs.md#adr-032-config-driven-authentication-and-external-permission-claims).
 
 ---
 

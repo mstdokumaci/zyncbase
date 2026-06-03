@@ -28,3 +28,4 @@ pub const encodeSetDeltaSuffix = encode.encodeSetDeltaSuffix;
 pub const encodeRecord = encode.encodeRecord;
 pub const encodeWriteCommitted = encode.encodeWriteCommitted;
 pub const encodeWriteError = encode.encodeWriteError;
+pub const encodeServerDisconnect = encode.encodeServerDisconnect;
