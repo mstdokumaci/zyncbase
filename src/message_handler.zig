@@ -13,6 +13,7 @@ const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
+const typed = @import("typed.zig");
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -225,6 +226,7 @@ pub const MessageHandler = struct {
         namespace: []const u8,
         external_user_id: []const u8,
         namespace_match: authorization.AuthConfig.NamespaceRuleMatch,
+        session_claims: *const std.StringHashMapUnmanaged(typed.Value),
 
         fn deinit(self: *StoreAuthScope, allocator: std.mem.Allocator) void {
             self.namespace_match.deinit(allocator);
@@ -242,6 +244,7 @@ pub const MessageHandler = struct {
                 .allocator = allocator,
                 .session_user_id = self.session.user_doc_id,
                 .session_external_id = self.external_user_id,
+                .session_claims = self.session_claims,
                 .namespace_captures = &self.namespace_match.captures.captures,
                 .path_table = if (table) |t| t.name else null,
                 .value_payload = value,
@@ -264,11 +267,14 @@ pub const MessageHandler = struct {
 
         const namespace_match = (try authorization.matchNamespaceRule(allocator, self.auth_config, namespace)) orelse return error.NamespaceUnauthorized;
 
+        const claims_ptr = conn.getSessionClaimsPtr();
+
         return .{
             .session = session,
             .namespace = namespace,
             .external_user_id = external_user_id,
             .namespace_match = namespace_match,
+            .session_claims = claims_ptr,
         };
     }
 
@@ -287,7 +293,7 @@ pub const MessageHandler = struct {
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetStoreScopeIfSeq(scope_seq);
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
-            try authorization.authorizeStoreNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id);
+            try authorization.authorizeStoreNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr());
             if (conn.setStoreScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id)) {
                 return try wire.encodeSuccess(arena_allocator, msg_id);
             }

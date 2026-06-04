@@ -345,6 +345,7 @@ pub const ZyncBaseServer = struct {
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,
             self.websocket_server.ssl,
+            auth_cfg.session_claims,
         );
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();

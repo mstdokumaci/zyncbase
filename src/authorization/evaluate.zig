@@ -11,6 +11,7 @@ pub const EvalContext = struct {
     allocator: Allocator,
     session_user_id: ?typed.DocId = null,
     session_external_id: ?[]const u8 = null,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
     namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
@@ -89,6 +90,7 @@ pub fn authorizeStoreNamespace(
     namespace: []const u8,
     session_user_id: typed.DocId,
     session_external_id: []const u8,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
 ) !void {
     var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
     defer match.deinit(allocator);
@@ -97,6 +99,7 @@ pub fn authorizeStoreNamespace(
         .allocator = allocator,
         .session_user_id = session_user_id,
         .session_external_id = session_external_id,
+        .session_claims = session_claims,
         .namespace_captures = &match.captures.captures,
     };
     if (!evaluateConditionStrict(match.rule.store_filter, ctx)) return error.NamespaceUnauthorized;
@@ -143,12 +146,20 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
 
 fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
     return switch (var_ctx.scope) {
-        .session => if (std.mem.eql(u8, var_ctx.field, "userId"))
-            if (ctx.session_user_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null
-        else if (std.mem.eql(u8, var_ctx.field, "externalId"))
-            if (ctx.session_external_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } }) else null
-        else
-            null,
+        .session => {
+            if (std.mem.eql(u8, var_ctx.field, "userId")) {
+                return if (ctx.session_user_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
+            }
+            if (std.mem.eql(u8, var_ctx.field, "externalId")) {
+                return if (ctx.session_external_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = id } }) else null;
+            }
+            if (ctx.session_claims) |claims| {
+                if (claims.get(var_ctx.field)) |value| {
+                    return ResolvedAuthValue.fromBorrowed(value);
+                }
+            }
+            return null;
+        },
         .namespace => if (ctx.namespace_captures) |captures| blk: {
             const val = captures.get(var_ctx.field) orelse break :blk null;
             break :blk ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .text = val } });

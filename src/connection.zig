@@ -5,6 +5,8 @@ const uws = @import("uwebsockets_wrapper.zig");
 const Session = @import("session.zig").Session;
 const WebSocket = uws.WebSocket;
 
+const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+
 // Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
 const outbox_capacity = 16;
 
@@ -159,9 +161,11 @@ pub const Connection = struct {
 
         if (self.session) |*old| old.deinit(self.allocator);
         const owned_external_id = try self.allocator.dupe(u8, sess.external_id);
+        const owned_claims = try Session.cloneClaims(sess.claims, self.allocator);
         self.session = Session{
             .external_id = owned_external_id,
             .is_anonymous = sess.is_anonymous,
+            .claims = owned_claims,
         };
         self.resetStoreScopeLocked();
     }
@@ -180,6 +184,14 @@ pub const Connection = struct {
 
         if (self.session) |sess| return sess.external_id;
         return null;
+    }
+
+    pub fn getSessionClaimsPtr(self: *Connection) *const std.StringHashMapUnmanaged(typed.Value) {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.session) |*sess| return &sess.claims;
+        return &empty_claims;
     }
 
     pub fn resetStoreScopeLocked(self: *Connection) void {

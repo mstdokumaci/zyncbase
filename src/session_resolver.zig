@@ -113,7 +113,7 @@ pub const SessionResolver = struct {
             return;
         };
 
-        authorization.authorizeStoreNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id) catch |err| {
+        authorization.authorizeStoreNamespace(arena.allocator(), cm.message_handler.auth_config, pending_namespace, result.user_doc_id, external_user_id, conn.getSessionClaimsPtr()) catch |err| {
             _ = conn.resetStoreScopeIfSeq(result.scope_seq);
             self.sendError(conn, result.msg_id, err);
             return;

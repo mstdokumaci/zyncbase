@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const Session = @import("session.zig").Session;
+const typed = @import("typed.zig");
 const c = @import("uwebsockets_wrapper.zig").c;
 
 pub const TicketExchange = struct {
@@ -14,6 +15,7 @@ pub const TicketExchange = struct {
     anonymous_enabled: bool,
     anonymous_prefix: []const u8,
     ssl: bool,
+    claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{},
 
     redeemed_tickets: std.StringHashMap(i64),
     mutex: std.Thread.Mutex = .{},
@@ -27,6 +29,7 @@ pub const TicketExchange = struct {
         anonymous_enabled: bool,
         anonymous_prefix: ?[]const u8,
         ssl: bool,
+        claims_mapping: std.StringHashMapUnmanaged([]const u8),
     ) !*TicketExchange {
         const self = try allocator.create(TicketExchange);
         errdefer allocator.destroy(self);
@@ -47,6 +50,24 @@ pub const TicketExchange = struct {
         const prefix = if (anonymous_prefix) |p| try allocator.dupe(u8, p) else try allocator.dupe(u8, "anon:");
         errdefer allocator.free(prefix);
 
+        var claims_copy: std.StringHashMapUnmanaged([]const u8) = .{};
+        errdefer {
+            var it = claims_copy.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                allocator.free(entry.value_ptr.*);
+            }
+            claims_copy.deinit(allocator);
+        }
+        var mapping_it = claims_mapping.iterator();
+        while (mapping_it.next()) |entry| {
+            const key = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(key);
+            const val = try allocator.dupe(u8, entry.value_ptr.*);
+            errdefer allocator.free(val);
+            try claims_copy.put(allocator, key, val);
+        }
+
         self.* = .{
             .allocator = allocator,
             .ticket_secret = secret_key,
@@ -56,6 +77,7 @@ pub const TicketExchange = struct {
             .anonymous_enabled = anonymous_enabled,
             .anonymous_prefix = prefix,
             .ssl = ssl,
+            .claims_mapping = claims_copy,
             .redeemed_tickets = std.StringHashMap(i64).init(allocator),
             .mutex = .{},
         };
@@ -65,6 +87,14 @@ pub const TicketExchange = struct {
 
     pub fn deinit(self: *TicketExchange) void {
         self.allocator.free(self.anonymous_prefix);
+        {
+            var it = self.claims_mapping.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            self.claims_mapping.deinit(self.allocator);
+        }
         var it = self.redeemed_tickets.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -96,23 +126,18 @@ pub const TicketExchange = struct {
         const payload_json = try decodeBase64Url(allocator, payload_b64);
         defer allocator.free(payload_json);
 
-        const TicketSession = struct {
-            externalId: []const u8,
-            isAnonymous: bool = false,
-        };
-
-        const TicketPayload = struct {
-            sub: []const u8,
-            exp: i64,
-            jti: []const u8,
-            session: ?TicketSession = null,
-        };
-
-        const parsed = try std.json.parseFromSlice(TicketPayload, allocator, payload_json, .{ .ignore_unknown_fields = true });
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload_json, .{});
         defer parsed.deinit();
 
+        if (parsed.value != .object) return error.InvalidTicket;
+        const payload_obj = parsed.value.object;
+
+        const sub = getJsonString(payload_obj, "sub") orelse return error.InvalidTicket;
+        const exp = getJsonInt(payload_obj, "exp") orelse return error.InvalidTicket;
+        const jti = getJsonString(payload_obj, "jti") orelse return error.InvalidTicket;
+
         const now = std.time.timestamp();
-        if (now >= parsed.value.exp) {
+        if (now >= exp) {
             return error.TokenExpired;
         }
 
@@ -135,40 +160,96 @@ pub const TicketExchange = struct {
                 self.allocator.free(key);
             }
 
-            if (self.redeemed_tickets.contains(parsed.value.jti)) {
+            if (self.redeemed_tickets.contains(jti)) {
                 return error.AuthFailed;
             }
 
-            const jti_owned = try self.allocator.dupe(u8, parsed.value.jti);
+            const jti_owned = try self.allocator.dupe(u8, jti);
             var jti_owned_transferred = false;
             errdefer if (!jti_owned_transferred) self.allocator.free(jti_owned);
-            try self.redeemed_tickets.put(jti_owned, parsed.value.exp);
+            try self.redeemed_tickets.put(jti_owned, exp);
             jti_owned_transferred = true;
         }
 
-        const external_id = if (parsed.value.session) |sess|
-            try allocator.dupe(u8, sess.externalId)
-        else
-            try allocator.dupe(u8, parsed.value.sub);
+        const session_val = payload_obj.get("session");
+        const external_id = if (session_val) |sess| blk: {
+            if (sess != .object) break :blk try allocator.dupe(u8, sub);
+            const eid = getJsonString(sess.object, "externalId") orelse break :blk try allocator.dupe(u8, sub);
+            break :blk try allocator.dupe(u8, eid);
+        } else try allocator.dupe(u8, sub);
 
-        const is_anonymous = if (parsed.value.session) |sess| sess.isAnonymous else false;
+        const is_anonymous = if (session_val) |sess| blk: {
+            if (sess != .object) break :blk false;
+            const anon_val = sess.object.get("isAnonymous") orelse break :blk false;
+            break :blk anon_val == .bool and anon_val.bool;
+        } else false;
+
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        errdefer {
+            allocator.free(external_id);
+            var it = claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            claims.deinit(allocator);
+        }
+
+        if (session_val) |sess| {
+            if (sess == .object) {
+                if (sess.object.get("claims")) |claims_val| {
+                    if (claims_val == .object) {
+                        var claims_it = claims_val.object.iterator();
+                        while (claims_it.next()) |entry| {
+                            const key = try allocator.dupe(u8, entry.key_ptr.*);
+                            errdefer allocator.free(key);
+                            const val = try jsonToTypedValue(allocator, entry.value_ptr.*);
+                            errdefer val.deinit(allocator);
+                            try claims.put(allocator, key, val);
+                        }
+                    }
+                }
+            }
+        }
 
         return Session{
             .external_id = external_id,
             .is_anonymous = is_anonymous,
+            .claims = claims,
         };
     }
 
     /// Generates a signed ticket string.
-    pub fn generateTicket(self: *TicketExchange, allocator: Allocator, subject: []const u8, is_anonymous: bool) ![]const u8 {
+    pub fn generateTicket(
+        self: *TicketExchange,
+        allocator: Allocator,
+        subject: []const u8,
+        is_anonymous: bool,
+        claims: *const std.StringHashMapUnmanaged(typed.Value),
+    ) ![]const u8 {
         const exp = std.time.timestamp() + self.ttl_seconds;
         var jti_bytes: [16]u8 = undefined;
         std.crypto.random.bytes(&jti_bytes);
         const jti_hex = std.fmt.bytesToHex(jti_bytes, .lower);
 
+        var claims_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer claims_buf.deinit(allocator);
+        try claimsBufAppend(allocator, &claims_buf, "{", claims);
+        var first = true;
+        var claims_it = claims.iterator();
+        while (claims_it.next()) |entry| {
+            if (!first) try claimsBufAppend(allocator, &claims_buf, ",", claims);
+            first = false;
+            try claimsBufAppend(allocator, &claims_buf, "\"", claims);
+            try claimsBufAppend(allocator, &claims_buf, entry.key_ptr.*, claims);
+            try claimsBufAppend(allocator, &claims_buf, "\":", claims);
+            try typedValueToJson(allocator, &claims_buf, entry.value_ptr.*);
+        }
+        try claimsBufAppend(allocator, &claims_buf, "}", claims);
+
         const payload_json = try std.fmt.allocPrint(allocator,
-            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s}}}}}
-        , .{ subject, exp, jti_hex, subject, if (is_anonymous) "true" else "false" });
+            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s},"claims":{s}}}}}
+        , .{ subject, exp, jti_hex, subject, if (is_anonymous) "true" else "false", claims_buf.items });
         defer allocator.free(payload_json);
 
         const payload_b64 = try encodeBase64Url(allocator, payload_json);
@@ -188,12 +269,25 @@ pub const TicketExchange = struct {
         // SAFETY: subject is always assigned before use in the if/else branches below
         var subject: []const u8 = undefined;
         var is_anonymous = false;
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        defer {
+            var it = claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            claims.deinit(allocator);
+        }
 
         if (ctx.auth_header) |hdr| {
             if (hdr.len > 7 and std.ascii.eqlIgnoreCase(hdr[0..7], "bearer ")) {
                 const token = hdr[7..];
                 if (self.jwt_validator) |val| {
-                    subject = try val.validate(allocator, token);
+                    const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
+                    var validated_mut = validated;
+                    defer validated_mut.deinit(allocator);
+                    subject = validated_mut.subject;
+                    claims = try Session.cloneClaims(validated_mut.claims, allocator);
                 } else {
                     std.log.warn("JWT authentication attempted but JWT validator not configured", .{});
                     return error.AuthFailed;
@@ -228,7 +322,7 @@ pub const TicketExchange = struct {
         defer allocator.free(subject);
 
         const exp = std.time.timestamp() + self.ttl_seconds;
-        const ticket = try self.generateTicket(allocator, subject, is_anonymous);
+        const ticket = try self.generateTicket(allocator, subject, is_anonymous, &claims);
         defer allocator.free(ticket);
 
         const response_body = try std.fmt.allocPrint(allocator,
@@ -390,4 +484,132 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
 
     c.uws_res_on_aborted(ssl_val, res_nn, onAbortedCallback, ctx);
     c.uws_res_on_data(ssl_val, res_nn, onDataCallback, ctx);
+}
+
+fn getJsonString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    if (v == .string) return v.string;
+    return null;
+}
+
+fn getJsonInt(obj: std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = obj.get(key) orelse return null;
+    if (v == .integer) return v.integer;
+    return null;
+}
+
+fn claimsBufAppend(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), s: []const u8, _: *const std.StringHashMapUnmanaged(typed.Value)) !void {
+    try buf.appendSlice(allocator, s);
+}
+
+fn typedValueToJson(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), val: typed.Value) !void {
+    switch (val) {
+        .scalar => |s| switch (s) {
+            .text => |t| {
+                try buf.append(allocator, '"');
+                for (t) |ch| {
+                    switch (ch) {
+                        '"' => try buf.appendSlice(allocator, "\\\""),
+                        '\\' => try buf.appendSlice(allocator, "\\\\"),
+                        '\n' => try buf.appendSlice(allocator, "\\n"),
+                        '\r' => try buf.appendSlice(allocator, "\\r"),
+                        '\t' => try buf.appendSlice(allocator, "\\t"),
+                        else => try buf.append(allocator, ch),
+                    }
+                }
+                try buf.append(allocator, '"');
+            },
+            .integer => |i| {
+                var num_buf: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch return error.OutOfMemory;
+                try buf.appendSlice(allocator, formatted);
+            },
+            .real => |f| {
+                var num_buf: [64]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{f}) catch return error.OutOfMemory;
+                try buf.appendSlice(allocator, formatted);
+            },
+            .boolean => |b| {
+                try buf.appendSlice(allocator, if (b) "true" else "false");
+            },
+            .doc_id => |_| {
+                try buf.appendSlice(allocator, "null");
+            },
+        },
+        .array => |items| {
+            try buf.append(allocator, '[');
+            for (items, 0..) |item, i| {
+                if (i > 0) try buf.append(allocator, ',');
+                try typedScalarValueToJson(allocator, buf, item);
+            }
+            try buf.append(allocator, ']');
+        },
+        .nil => {
+            try buf.appendSlice(allocator, "null");
+        },
+    }
+}
+
+fn typedScalarValueToJson(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), val: typed.ScalarValue) !void {
+    switch (val) {
+        .text => |t| {
+            try buf.append(allocator, '"');
+            for (t) |ch| {
+                switch (ch) {
+                    '"' => try buf.appendSlice(allocator, "\\\""),
+                    '\\' => try buf.appendSlice(allocator, "\\\\"),
+                    '\n' => try buf.appendSlice(allocator, "\\n"),
+                    '\r' => try buf.appendSlice(allocator, "\\r"),
+                    '\t' => try buf.appendSlice(allocator, "\\t"),
+                    else => try buf.append(allocator, ch),
+                }
+            }
+            try buf.append(allocator, '"');
+        },
+        .integer => |i| {
+            var num_buf: [32]u8 = undefined;
+            const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch return error.OutOfMemory;
+            try buf.appendSlice(allocator, formatted);
+        },
+        .real => |f| {
+            var num_buf: [64]u8 = undefined;
+            const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{f}) catch return error.OutOfMemory;
+            try buf.appendSlice(allocator, formatted);
+        },
+        .boolean => |b| {
+            try buf.appendSlice(allocator, if (b) "true" else "false");
+        },
+        .doc_id => |_| {
+            try buf.appendSlice(allocator, "null");
+        },
+    }
+}
+
+fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
+    return switch (val) {
+        .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
+        .integer => |i| .{ .scalar = .{ .integer = i } },
+        .float => |f| .{ .scalar = .{ .real = f } },
+        .bool => |b| .{ .scalar = .{ .boolean = b } },
+        .array => |arr| blk: {
+            if (arr.items.len > 1000) return error.ClaimArrayTooLarge;
+            const items = try allocator.alloc(typed.ScalarValue, arr.items.len);
+            errdefer {
+                for (items) |*item| item.deinit(allocator);
+                allocator.free(items);
+            }
+            for (arr.items, 0..) |item, i| {
+                const scalar = switch (item) {
+                    .string => |s| typed.ScalarValue{ .text = try allocator.dupe(u8, s) },
+                    .integer => |n| typed.ScalarValue{ .integer = n },
+                    .float => |f| typed.ScalarValue{ .real = f },
+                    .bool => |b| typed.ScalarValue{ .boolean = b },
+                    else => return error.InvalidClaimArrayElement,
+                };
+                items[i] = scalar;
+            }
+            break :blk .{ .array = items };
+        },
+        else => return error.UnsupportedClaimType,
+    };
 }

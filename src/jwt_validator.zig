@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("uwebsockets_wrapper.zig").c;
 const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
+const typed = @import("typed.zig");
 
 pub const Jwk = struct {
     kty: []const u8,
@@ -284,6 +285,139 @@ pub const JwtValidator = struct {
         const sub = getJsonString(payload, self.config.subject_claim) orelse return error.SubjectClaimMissing;
         return try allocator.dupe(u8, sub);
     }
+
+    pub const ValidatedToken = struct {
+        subject: []const u8,
+        claims: std.StringHashMapUnmanaged(typed.Value) = .{},
+
+        pub fn deinit(self: *ValidatedToken, allocator: Allocator) void {
+            allocator.free(self.subject);
+            var it = self.claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            self.claims.deinit(allocator);
+        }
+    };
+
+    pub fn validateWithClaims(
+        self: JwtValidator,
+        allocator: Allocator,
+        token: []const u8,
+        claims_mapping: std.StringHashMapUnmanaged([]const u8),
+    ) !ValidatedToken {
+        var parts_it = std.mem.splitScalar(u8, token, '.');
+        const header_b64 = parts_it.next() orelse return error.InvalidToken;
+        const payload_b64 = parts_it.next() orelse return error.InvalidToken;
+        const sig_b64 = parts_it.next() orelse return error.InvalidToken;
+        if (parts_it.next() != null) return error.InvalidToken;
+
+        const msg = token[0..(header_b64.len + 1 + payload_b64.len)];
+
+        const header_bytes = try decodeBase64Url(allocator, header_b64);
+        defer allocator.free(header_bytes);
+
+        const payload_bytes = try decodeBase64Url(allocator, payload_b64);
+        defer allocator.free(payload_bytes);
+
+        const sig_bytes = try decodeBase64Url(allocator, sig_b64);
+        defer allocator.free(sig_bytes);
+
+        const Header = struct {
+            alg: []const u8,
+            kid: ?[]const u8 = null,
+        };
+        const header = try std.json.parseFromSlice(Header, allocator, header_bytes, .{ .ignore_unknown_fields = true });
+        defer header.deinit();
+
+        const parsed_payload = try std.json.parseFromSlice(std.json.Value, allocator, payload_bytes, .{});
+        defer parsed_payload.deinit();
+        const payload = parsed_payload.value;
+
+        if (!std.mem.eql(u8, header.value.alg, self.config.algorithm)) {
+            return error.AlgorithmMismatch;
+        }
+
+        if (std.mem.startsWith(u8, header.value.alg, "HS")) {
+            const secret = self.config.secret orelse return error.SecretMissing;
+            const verified = blk: {
+                var computed_sig: [64]u8 = undefined;
+                const sig_len = if (std.mem.eql(u8, header.value.alg, "HS256")) len: {
+                    std.crypto.auth.hmac.sha2.HmacSha256.create(computed_sig[0..32], msg, secret);
+                    break :len @as(usize, 32);
+                } else if (std.mem.eql(u8, header.value.alg, "HS384")) len: {
+                    std.crypto.auth.hmac.sha2.HmacSha384.create(computed_sig[0..48], msg, secret);
+                    break :len @as(usize, 48);
+                } else if (std.mem.eql(u8, header.value.alg, "HS512")) len: {
+                    std.crypto.auth.hmac.sha2.HmacSha512.create(computed_sig[0..64], msg, secret);
+                    break :len @as(usize, 64);
+                } else return error.UnsupportedAlgorithm;
+
+                if (sig_bytes.len != sig_len) break :blk false;
+                break :blk std.mem.eql(u8, computed_sig[0..sig_len], sig_bytes);
+            };
+
+            if (!verified) return error.AuthFailed;
+        } else {
+            const kid = header.value.kid orelse return error.KidMissing;
+            const jwks_cache = self.config.jwks_cache orelse return error.JwksNotConfigured;
+            const jwk = try jwks_cache.getJwk(kid);
+            defer jwk.deinit(jwks_cache.allocator);
+
+            const verified = try verifyAsymmetricSignature(allocator, header.value.alg, jwk, msg, sig_bytes);
+            if (!verified) return error.AuthFailed;
+        }
+
+        const now = std.time.timestamp();
+
+        if (!validateTimeClaims(payload, now)) {
+            return error.TokenExpired;
+        }
+
+        if (self.config.issuer) |expected_iss| {
+            const iss = getJsonString(payload, "iss") orelse return error.IssuerMismatch;
+            if (!std.mem.eql(u8, iss, expected_iss)) return error.IssuerMismatch;
+        }
+
+        if (self.config.audience) |expected_aud| {
+            if (!validateAudience(payload, expected_aud)) return error.AudienceMismatch;
+        }
+
+        const sub = getJsonString(payload, self.config.subject_claim) orelse return error.SubjectClaimMissing;
+
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        errdefer {
+            var it = claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            claims.deinit(allocator);
+        }
+
+        var mapping_it = claims_mapping.iterator();
+        while (mapping_it.next()) |entry| {
+            const jwt_claim_name = entry.key_ptr.*;
+            const session_var_name = entry.value_ptr.*;
+
+            if (payload != .object) continue;
+            const claim_value = payload.object.get(jwt_claim_name) orelse continue;
+
+            const typed_val = try jsonToTypedValue(allocator, claim_value);
+            errdefer typed_val.deinit(allocator);
+
+            const key = try allocator.dupe(u8, session_var_name);
+            errdefer allocator.free(key);
+
+            try claims.put(allocator, key, typed_val);
+        }
+
+        return ValidatedToken{
+            .subject = try allocator.dupe(u8, sub),
+            .claims = claims,
+        };
+    }
 };
 
 fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
@@ -432,4 +566,35 @@ fn verifyAsymmetricSignature(
     } else {
         return error.UnsupportedAlgorithm;
     }
+}
+
+const max_claim_array_elements = 1000;
+
+fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
+    return switch (val) {
+        .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
+        .integer => |i| .{ .scalar = .{ .integer = i } },
+        .float => |f| .{ .scalar = .{ .real = f } },
+        .bool => |b| .{ .scalar = .{ .boolean = b } },
+        .array => |arr| blk: {
+            if (arr.items.len > max_claim_array_elements) return error.ClaimArrayTooLarge;
+            const items = try allocator.alloc(typed.ScalarValue, arr.items.len);
+            errdefer {
+                for (items) |*item| item.deinit(allocator);
+                allocator.free(items);
+            }
+            for (arr.items, 0..) |item, i| {
+                const scalar = switch (item) {
+                    .string => |s| typed.ScalarValue{ .text = try allocator.dupe(u8, s) },
+                    .integer => |n| typed.ScalarValue{ .integer = n },
+                    .float => |f| typed.ScalarValue{ .real = f },
+                    .bool => |b| typed.ScalarValue{ .boolean = b },
+                    else => return error.InvalidClaimArrayElement,
+                };
+                items[i] = scalar;
+            }
+            break :blk .{ .array = items };
+        },
+        else => return error.UnsupportedClaimType,
+    };
 }
