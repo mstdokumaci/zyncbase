@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
+const Session = @import("session.zig").Session;
 const c = @import("uwebsockets_wrapper.zig").c;
 
 pub const TicketExchange = struct {
@@ -73,7 +74,7 @@ pub const TicketExchange = struct {
     }
 
     /// Verifies a ticket string. Returns the subject name allocated with `allocator` if valid.
-    pub fn verifyTicket(self: *TicketExchange, allocator: Allocator, ticket: []const u8) ![]const u8 {
+    pub fn verifyTicket(self: *TicketExchange, allocator: Allocator, ticket: []const u8) !Session {
         if (!std.mem.startsWith(u8, ticket, "zyc_tk_")) return error.InvalidTicket;
         const raw_ticket = ticket["zyc_tk_".len..];
 
@@ -95,10 +96,16 @@ pub const TicketExchange = struct {
         const payload_json = try decodeBase64Url(allocator, payload_b64);
         defer allocator.free(payload_json);
 
+        const TicketSession = struct {
+            externalId: []const u8,
+            isAnonymous: bool = false,
+        };
+
         const TicketPayload = struct {
             sub: []const u8,
             exp: i64,
             jti: []const u8,
+            session: ?TicketSession = null,
         };
 
         const parsed = try std.json.parseFromSlice(TicketPayload, allocator, payload_json, .{ .ignore_unknown_fields = true });
@@ -113,7 +120,6 @@ pub const TicketExchange = struct {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            // Collect expired keys first to avoid iterator invalidation
             var expired_keys = std.ArrayListUnmanaged([]const u8).empty;
             defer expired_keys.deinit(self.allocator);
             var cleanup_it = self.redeemed_tickets.iterator();
@@ -140,7 +146,17 @@ pub const TicketExchange = struct {
             jti_owned_transferred = true;
         }
 
-        return try allocator.dupe(u8, parsed.value.sub);
+        const external_id = if (parsed.value.session) |sess|
+            try allocator.dupe(u8, sess.externalId)
+        else
+            try allocator.dupe(u8, parsed.value.sub);
+
+        const is_anonymous = if (parsed.value.session) |sess| sess.isAnonymous else false;
+
+        return Session{
+            .external_id = external_id,
+            .is_anonymous = is_anonymous,
+        };
     }
 
     /// Generates a signed ticket string.

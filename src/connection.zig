@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const typed = @import("typed.zig");
 const uws = @import("uwebsockets_wrapper.zig");
+const Session = @import("session.zig").Session;
 const WebSocket = uws.WebSocket;
 
 // Effective capacity is outbox_capacity - 1 = 15 (one slot reserved as sentinel).
@@ -78,7 +79,7 @@ pub const Connection = struct {
 
     allocator: Allocator,
     id: u64,
-    user_id: ?[]const u8,
+    session: ?Session,
     namespace_id: i64,
     store_namespace: ?[]const u8,
     pending_store_namespace: ?[]const u8,
@@ -89,7 +90,6 @@ pub const Connection = struct {
     next_subscription_id: u64,
     ws: WebSocket,
     outbox: Outbox = Outbox.empty,
-    /// True while uWS backpressure is active. All sends are queued until drain clears it.
     is_backpressured: bool = false,
     ref_count: std.atomic.Value(usize),
     mutex: std.Thread.Mutex,
@@ -97,10 +97,9 @@ pub const Connection = struct {
     request_tokens: f64,
     last_request_time: ?i64,
 
-    /// One-time initialization for a connection object in a pool.
     pub fn initPool(self: *Connection, allocator: Allocator) void {
         self.allocator = allocator;
-        self.user_id = null;
+        self.session = null;
         self.namespace_id = unset_namespace_id;
         self.store_namespace = null;
         self.pending_store_namespace = null;
@@ -144,10 +143,9 @@ pub const Connection = struct {
         self.resetSessionLocked();
     }
 
-    /// Reset session-specific state while the caller already holds mutex.
     pub fn resetSessionLocked(self: *Connection) void {
-        if (self.user_id) |uid| self.allocator.free(uid);
-        self.user_id = null;
+        if (self.session) |*sess| sess.deinit(self.allocator);
+        self.session = null;
         self.resetStoreScopeLocked();
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
@@ -155,18 +153,16 @@ pub const Connection = struct {
         self.is_backpressured = false;
     }
 
-    /// Set the transport external identity. Scoped users.id resolution happens later.
-    pub fn setExternalUserId(self: *Connection, external_user_id: []const u8) !void {
-        if (external_user_id.len == 0) return error.MissingExternalIdentity;
-
-        const owned = try self.allocator.dupe(u8, external_user_id);
-        errdefer self.allocator.free(owned);
-
+    pub fn setSession(self: *Connection, sess: Session) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.user_id) |old| self.allocator.free(old);
-        self.user_id = owned;
+        if (self.session) |*old| old.deinit(self.allocator);
+        const owned_external_id = try self.allocator.dupe(u8, sess.external_id);
+        self.session = Session{
+            .external_id = owned_external_id,
+            .is_anonymous = sess.is_anonymous,
+        };
         self.resetStoreScopeLocked();
     }
 
@@ -174,8 +170,16 @@ pub const Connection = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const external_user_id = self.user_id orelse return error.MissingExternalIdentity;
-        return allocator.dupe(u8, external_user_id);
+        const sess = self.session orelse return error.MissingExternalIdentity;
+        return allocator.dupe(u8, sess.external_id);
+    }
+
+    pub fn getExternalUserId(self: *Connection) ?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.session) |sess| return sess.external_id;
+        return null;
     }
 
     pub fn resetStoreScopeLocked(self: *Connection) void {
@@ -350,7 +354,7 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
-        if (self.user_id) |uid| self.allocator.free(uid);
+        if (self.session) |*sess| sess.deinit(self.allocator);
         self.subscription_ids.deinit(self.allocator);
         self.outbox.deinit(self.allocator);
     }

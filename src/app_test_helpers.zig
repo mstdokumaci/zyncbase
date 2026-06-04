@@ -12,6 +12,7 @@ const SubscriptionEngine = @import("subscription_engine.zig").SubscriptionEngine
 const Connection = @import("connection.zig").Connection;
 const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
+const Session = @import("session.zig").Session;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const schema_helpers = @import("schema_test_helpers.zig");
@@ -30,17 +31,19 @@ var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
 
-/// Helper function to create a mock WebSocket for testing
 pub fn createMockWebSocket() WebSocket {
-    return createMockWebSocketWithClientId(test_external_user_id);
+    return createMockWebSocketWithExternalId(test_external_user_id);
 }
 
-pub fn createMockWebSocketWithClientId(client_id: ?[]const u8) WebSocket {
+pub fn createMockWebSocketWithExternalId(external_id: []const u8) WebSocket {
     return WebSocket{
         .ws = null,
         .ssl = false,
         .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
-        .client_id = client_id,
+        .session = Session{
+            .external_id = external_id,
+            .is_anonymous = false,
+        },
     };
 }
 

@@ -27,6 +27,7 @@ const ticket_exchange_mod = @import("ticket_exchange.zig");
 const TicketExchange = ticket_exchange_mod.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
 const JwksCache = @import("jwt_validator.zig").JwksCache;
+const Session = @import("session.zig").Session;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
 
 // Atomic global server reference for signal handlers (written once before registration,
@@ -591,9 +592,7 @@ pub const ZyncBaseServer = struct {
         self.connection_manager.flushOutbox(conn_id);
     }
 
-    /// Callback wired into WebSocketServer.verify_ticket_cb.
-    /// Called on the uWS event-loop thread during the WebSocket upgrade.
-    fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror![]const u8 {
+    fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror!Session {
         if (user_data == null) return error.AuthFailed;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
         const te = self.ticket_exchange orelse return error.AuthFailed;

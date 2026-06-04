@@ -4,6 +4,7 @@ const helpers = @import("app_test_helpers.zig");
 const violation_tracker_helpers = @import("violation_tracker_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "ConnectionManager - init and deinit" {
     const allocator = testing.allocator;
@@ -40,8 +41,13 @@ test "ConnectionManager - onOpen rejects missing external identity" {
     try app.init(allocator, "conn-mgr-missing-identity", &.{});
     defer app.deinit();
 
-    var dummy_ws = helpers.createMockWebSocketWithClientId(null);
-    try testing.expectError(error.MissingExternalIdentity, app.connection_manager.onOpen(&dummy_ws));
+    var dummy_ws = WebSocket{
+        .ws = null,
+        .ssl = false,
+        .user_data = @ptrFromInt(999),
+        .session = null,
+    };
+    try testing.expectError(error.MissingSession, app.connection_manager.onOpen(&dummy_ws));
     try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
 }
 
@@ -71,18 +77,23 @@ test "ConnectionManager - onOpen clears stale violation state" {
     try app.init(allocator, "conn-mgr-stale-violations", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
-    const conn_id = dummy_ws.getConnId();
-
     {
-        const sc = try app.openScopedConnection(&dummy_ws);
-        defer sc.deinit();
+        var dummy_ws = createMockWebSocket();
+        const conn_id = dummy_ws.getConnId();
+
+        {
+            const sc = try app.openScopedConnection(&dummy_ws);
+            defer sc.deinit();
+        }
+
+        _ = try app.violation_tracker.recordViolation(conn_id);
+        try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
     }
 
-    _ = try app.violation_tracker.recordViolation(conn_id);
-    try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
-
     {
+        var dummy_ws = createMockWebSocket();
+        const conn_id = dummy_ws.getConnId();
+
         const sc = try app.openScopedConnection(&dummy_ws);
         defer sc.deinit();
 

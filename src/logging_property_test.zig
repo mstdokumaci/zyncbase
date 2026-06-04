@@ -223,12 +223,7 @@ test "logging: error details" {
     // Test 1: Message parsing errors are logged
     // We can't easily intercept logs, but we can verify the error path is taken
     {
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-            .client_id = helpers.test_external_user_id,
-        };
+        var ws = createMockWebSocket();
         ws.user_data = &ws;
 
         // Open connection
@@ -246,12 +241,7 @@ test "logging: error details" {
 
     // Test 2: Missing required fields logs error
     {
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-            .client_id = helpers.test_external_user_id,
-        };
+        var ws = createMockWebSocket();
         ws.user_data = &ws;
 
         try manager.onOpen(&ws);
@@ -284,12 +274,7 @@ test "logging: error details" {
 
     // Test 4: Multiple error types are logged
     {
-        var ws = WebSocket{
-            .ws = null,
-            .ssl = false,
-            .user_data = undefined,
-            .client_id = helpers.test_external_user_id,
-        };
+        var ws = createMockWebSocket();
         ws.user_data = &ws;
 
         try manager.onOpen(&ws);
