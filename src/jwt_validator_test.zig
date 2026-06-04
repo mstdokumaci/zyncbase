@@ -167,8 +167,7 @@ test "JwksCache: getJwk looks up populated keys" {
         .n = try allocator.dupe(u8, "modulus"),
         .e = try allocator.dupe(u8, "exponent"),
     };
-    cache.keys = keys;
-    cache.last_fetched = std.time.timestamp();
+    try cache.setKeys(keys, std.time.timestamp());
 
     // Retrieve valid key
     const retrieved = try cache.getJwk("key_1");

@@ -135,6 +135,7 @@ pub const TicketExchange = struct {
             }
 
             const jti_owned = try self.allocator.dupe(u8, parsed.value.jti);
+            errdefer self.allocator.free(jti_owned);
             try self.redeemed_tickets.put(jti_owned, parsed.value.exp);
         }
 
@@ -184,7 +185,9 @@ pub const TicketExchange = struct {
                 return error.InvalidMessage;
             }
         } else {
-            const parsed_body = try std.json.parseFromSlice(std.json.Value, allocator, ctx.body.items, .{});
+            const parsed_body = std.json.parseFromSlice(std.json.Value, allocator, ctx.body.items, .{}) catch {
+                return error.InvalidMessage;
+            };
             defer parsed_body.deinit();
 
             if (parsed_body.value == .object) {
@@ -287,6 +290,9 @@ fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_
         const ssl_val: c_int = if (ctx.ssl) 1 else 0;
         c.uws_res_write_status(ssl_val, ctx.res, "500 Internal Server Error", "500 Internal Server Error".len);
         c.uws_res_end(ssl_val, ctx.res, "Internal Server Error", "Internal Server Error".len, 0);
+        ctx.body.deinit(ctx.allocator);
+        if (ctx.auth_header) |hdr| ctx.allocator.free(hdr);
+        ctx.allocator.destroy(ctx);
         return;
     };
 
@@ -339,7 +345,14 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
     // SAFETY: auth_ptr is written by uws_req_get_header before auth_len is checked
     var auth_ptr: [*c]const u8 = undefined;
     const auth_len = c.uws_req_get_header(@ptrCast(req_nn), "authorization", "authorization".len, &auth_ptr);
-    const auth_header_dup = if (auth_len > 0) allocator.dupe(u8, auth_ptr[0..auth_len]) catch null else null;
+    var auth_header_dup: ?[]const u8 = null;
+    if (auth_len > 0) {
+        auth_header_dup = allocator.dupe(u8, auth_ptr[0..auth_len]) catch {
+            c.uws_res_write_status(ssl_val, res_nn, "500 Internal Server Error", "500 Internal Server Error".len);
+            c.uws_res_end(ssl_val, res_nn, "Internal Server Error", "Internal Server Error".len, 0);
+            return;
+        };
+    }
 
     const ctx = allocator.create(RequestContext) catch {
         if (auth_header_dup) |hdr| allocator.free(hdr);

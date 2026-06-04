@@ -432,6 +432,8 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
         if (client_id_len > 0) {
             client_id = server.allocator.dupe(u8, client_id_ptr[0..client_id_len]) catch |err| {
                 std.log.err("Failed to copy clientId query param: {}", .{err});
+                c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
+                c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
                 return;
             };
         }
@@ -440,6 +442,8 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
     const socket_data = server.allocator.create(SocketUserData) catch |err| {
         std.log.err("Failed to allocate WebSocket user data: {}", .{err});
         if (client_id) |cid| server.allocator.free(cid);
+        c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
+        c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
         return;
     };
 

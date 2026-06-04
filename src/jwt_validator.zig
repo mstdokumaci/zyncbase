@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const c = @import("uwebsockets_wrapper.zig").c;
+const lockFreeCache = @import("lock_free_cache.zig").lockFreeCache;
 
 pub const Jwk = struct {
     kty: []const u8,
@@ -37,72 +38,97 @@ pub const Jwk = struct {
     }
 };
 
+pub const JwksState = struct {
+    keys: []Jwk,
+    last_fetched: i64,
+
+    pub fn deinit(self: JwksState, allocator: Allocator) void {
+        for (self.keys) |key| {
+            key.deinit(allocator);
+        }
+        allocator.free(self.keys);
+    }
+};
+
+const jwks_state_cache_type = lockFreeCache(JwksState, u8);
+
 pub const JwksCache = struct {
-    mutex: std.Thread.Mutex = .{},
     allocator: Allocator,
     jwks_url: ?[]const u8 = null,
-    keys: ?[]Jwk = null,
-    last_fetched: i64 = 0,
+    state_cache: *jwks_state_cache_type,
 
     pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !JwksCache {
+        const state_cache = try allocator.create(jwks_state_cache_type);
+        errdefer allocator.destroy(state_cache);
+        try state_cache.init(allocator, .{});
+
         return JwksCache{
             .allocator = allocator,
             .jwks_url = if (jwks_url) |url| try allocator.dupe(u8, url) else null,
+            .state_cache = state_cache,
         };
     }
 
     pub fn deinit(self: *JwksCache) void {
         if (self.jwks_url) |url| self.allocator.free(url);
-        if (self.keys) |keys| {
-            for (keys) |key| key.deinit(self.allocator);
-            self.allocator.free(keys);
-        }
+        self.state_cache.deinit();
+        self.allocator.destroy(self.state_cache);
     }
 
     pub fn getJwk(self: *JwksCache, kid: []const u8) !Jwk {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         const url = self.jwks_url orelse return error.JwksNotConfigured;
-
         const now = std.time.timestamp();
-        if (self.keys == null or now - self.last_fetched > 3600) {
-            try self.refreshLocked(url);
+
+        // 1. Try to read from the lock-free cache
+        var found_key: ?Jwk = null;
+        if (self.state_cache.get(0)) |handle| {
+            defer handle.release();
+            const state = handle.data();
+            if (now - state.last_fetched <= 3600) {
+                for (state.keys) |key| {
+                    if (std.mem.eql(u8, key.kid, kid)) {
+                        found_key = try key.clone(self.allocator);
+                        break;
+                    }
+                }
+            }
+        } else |_| {}
+
+        if (found_key) |key| {
+            return key;
         }
 
-        if (self.findKeyLocked(kid)) |key| {
-            return try key.clone(self.allocator);
+        // 2. Fetch outside lock-free atomic context
+        const keys = try fetchJwks(self.allocator, url);
+        errdefer {
+            for (keys) |k| k.deinit(self.allocator);
+            self.allocator.free(keys);
         }
 
-        try self.refreshLocked(url);
-        if (self.findKeyLocked(kid)) |key| {
-            return try key.clone(self.allocator);
+        const new_state = JwksState{
+            .keys = keys,
+            .last_fetched = std.time.timestamp(),
+        };
+
+        // 3. Atomically update/swap the cache
+        try self.state_cache.update(0, new_state);
+
+        // 4. Return from locally fetched keys (already validated/stored)
+        for (keys) |key| {
+            if (std.mem.eql(u8, key.kid, kid)) {
+                return try key.clone(self.allocator);
+            }
         }
 
         return error.KeyNotFound;
     }
 
-    fn findKeyLocked(self: *JwksCache, kid: []const u8) ?Jwk {
-        const keys = self.keys orelse return null;
-        for (keys) |key| {
-            if (std.mem.eql(u8, key.kid, kid)) return key;
-        }
-        return null;
-    }
-
-    fn refreshLocked(self: *JwksCache, url: []const u8) !void {
-        std.log.info("Fetching JWKS from {s}", .{url});
-        const keys = fetchJwks(self.allocator, url) catch |err| {
-            std.log.warn("Failed to fetch JWKS from {s}: {}", .{ url, err });
-            return err;
+    pub fn setKeys(self: *JwksCache, keys: []Jwk, timestamp: i64) !void {
+        const state = JwksState{
+            .keys = keys,
+            .last_fetched = timestamp,
         };
-
-        if (self.keys) |old_keys| {
-            for (old_keys) |key| key.deinit(self.allocator);
-            self.allocator.free(old_keys);
-        }
-        self.keys = keys;
-        self.last_fetched = std.time.timestamp();
+        try self.state_cache.update(0, state);
     }
 };
 
