@@ -73,6 +73,10 @@ typedef struct {
 typedef void (*uws_listen_handler)(struct us_listen_socket_t *listen_socket,
                                    void *user_data);
 
+typedef void (*uws_http_handler)(uws_res_t *res, uws_req_t *req, void *user_data);
+typedef void (*uws_res_data_handler)(uws_res_t *res, const char *chunk, size_t chunk_length, int is_last, void *user_data);
+typedef void (*uws_res_aborted_handler)(void *user_data);
+
 struct us_loop_t *uws_get_loop();
 
 #ifdef __cplusplus

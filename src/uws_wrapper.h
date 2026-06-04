@@ -105,6 +105,34 @@ size_t uws_req_get_header(uws_req_t *req, const char *lower_case_header, size_t 
 size_t uws_req_get_query(uws_req_t *req, const char *key, size_t key_length, const char **dest);
 void uws_res_upgrade(int ssl, uws_res_t *res, void *data, const char *sec_web_socket_key, size_t sec_web_socket_key_length, const char *sec_web_socket_protocol, size_t sec_web_socket_protocol_length, const char *sec_web_socket_extensions, size_t sec_web_socket_extensions_length, uws_socket_context_t *context);
 
+// HTTP POST routing and response writing helpers
+typedef void (*uws_http_handler)(uws_res_t *res, uws_req_t *req, void *user_data);
+typedef void (*uws_res_data_handler)(uws_res_t *res, const char *chunk, size_t chunk_length, int is_last, void *user_data);
+typedef void (*uws_res_aborted_handler)(void *user_data);
+
+void uws_app_post(int ssl, uws_app_t *app, const char *pattern, size_t pattern_length, uws_http_handler handler, void *user_data);
+void uws_res_write_status(int ssl, uws_res_t *res, const char *status, size_t status_length);
+void uws_res_write_header(int ssl, uws_res_t *res, const char *key, size_t key_length, const char *value, size_t value_length);
+void uws_res_end(int ssl, uws_res_t *res, const char *body, size_t body_length, int close_connection);
+void uws_res_on_data(int ssl, uws_res_t *res, uws_res_data_handler handler, void *user_data);
+void uws_res_on_aborted(int ssl, uws_res_t *res, uws_res_aborted_handler handler, void *user_data);
+
+// OpenSSL signature verification helpers
+int openssl_verify_rsa(
+    const char *hash_alg,
+    const unsigned char *n_bytes, size_t n_len,
+    const unsigned char *e_bytes, size_t e_len,
+    const unsigned char *data, size_t data_len,
+    const unsigned char *sig, size_t sig_len);
+
+int openssl_verify_ec(
+    const char *curve_name,
+    const unsigned char *x_bytes, size_t x_len,
+    const unsigned char *y_bytes, size_t y_len,
+    const unsigned char *data, size_t data_len,
+    const unsigned char *sig, size_t sig_len);
+
 #ifdef __cplusplus
 }
 #endif
+

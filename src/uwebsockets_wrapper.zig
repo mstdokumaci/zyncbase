@@ -34,6 +34,7 @@ pub const WebSocketServer = struct {
     post_handler_ctx: ?*anyopaque = null,
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
     drain_handler_ctx: ?*anyopaque = null,
+    verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror![]const u8 = null,
 
     pub const Config = struct {
         port: u16,
@@ -108,6 +109,7 @@ pub const WebSocketServer = struct {
         self.post_handler_ctx = null;
         self.drain_handler = null;
         self.drain_handler_ctx = null;
+        self.verify_ticket_cb = null;
     }
 
     /// Clean up resources after run() exits & server thread is joined.
@@ -156,6 +158,18 @@ pub const WebSocketServer = struct {
             pattern.len,
             id,
             &behavior,
+        );
+    }
+
+    /// Register an HTTP POST handler
+    pub fn post(self: *WebSocketServer, pattern: []const u8, user_data: ?*anyopaque, handler: c.uws_http_handler) void {
+        c.uws_app_post(
+            if (self.ssl) 1 else 0,
+            self.app,
+            pattern.ptr,
+            pattern.len,
+            handler,
+            user_data,
         );
     }
 
@@ -382,22 +396,56 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
     var ext: [*c]const u8 = undefined;
     const ext_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-extensions", "sec-websocket-extensions".len, &ext);
 
+    var client_id: ?[]const u8 = null;
+
+    var ticket: ?[]const u8 = null;
+    // SAFETY: ticket_ptr is written by uws_req_get_query before ticket_len is checked
+    var ticket_ptr: [*c]const u8 = undefined;
+    const ticket_len = c.uws_req_get_query(@ptrCast(req), "ticket", "ticket".len, &ticket_ptr);
+    if (ticket_len > 0) {
+        ticket = ticket_ptr[0..ticket_len];
+    }
+
+    if (ticket) |t| {
+        if (server.verify_ticket_cb) |verify_cb| {
+            client_id = verify_cb(server.user_data, t, server.allocator) catch |err| {
+                std.log.warn("Ticket verification failed: {}", .{err});
+                c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
+                c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+                const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Identity verification failed\"}";
+                c.uws_res_end(ssl, res, body.ptr, body.len, 0);
+                return;
+            };
+        } else {
+            std.log.warn("Ticket verification callback is missing, rejecting connection", .{});
+            c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
+            c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+            const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Identity verification failed\"}";
+            c.uws_res_end(ssl, res, body.ptr, body.len, 0);
+            return;
+        }
+    } else {
+        // Fallback to clientId query param
+        // SAFETY: client_id_ptr is written by uws_req_get_query before client_id_len is checked
+        var client_id_ptr: [*c]const u8 = undefined;
+        const client_id_len = c.uws_req_get_query(@ptrCast(req), "clientId", "clientId".len, &client_id_ptr);
+        if (client_id_len > 0) {
+            client_id = server.allocator.dupe(u8, client_id_ptr[0..client_id_len]) catch |err| {
+                std.log.err("Failed to copy clientId query param: {}", .{err});
+                c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
+                c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
+                return;
+            };
+        }
+    }
+
     const socket_data = server.allocator.create(SocketUserData) catch |err| {
         std.log.err("Failed to allocate WebSocket user data: {}", .{err});
+        if (client_id) |cid| server.allocator.free(cid);
+        c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
+        c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
         return;
     };
-
-    var client_id: ?[]const u8 = null;
-    // SAFETY: Populated by uws_req_get_query C API which handles length mapping.
-    var client_id_ptr: [*c]const u8 = undefined;
-    const client_id_len = c.uws_req_get_query(@ptrCast(req), "clientId", "clientId".len, &client_id_ptr);
-    if (client_id_len > 0) {
-        client_id = server.allocator.dupe(u8, client_id_ptr[0..client_id_len]) catch |err| {
-            std.log.err("Failed to copy clientId query param: {}", .{err});
-            server.allocator.destroy(socket_data);
-            return;
-        };
-    }
 
     socket_data.* = .{
         .server = server,
