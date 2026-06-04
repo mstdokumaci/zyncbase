@@ -319,6 +319,15 @@ fn validateAudience(payload: std.json.Value, expected_aud: []const u8) bool {
     }
 }
 
+const min_i64_as_f64: f64 = @floatFromInt(std.math.minInt(i64));
+const max_i64_as_f64: f64 = @floatFromInt(std.math.maxInt(i64));
+
+fn floatToI64(f: f64) ?i64 {
+    if (std.math.isNan(f) or std.math.isInf(f) or f < min_i64_as_f64 or f > max_i64_as_f64)
+        return null;
+    return @intFromFloat(f);
+}
+
 fn validateTimeClaims(payload: std.json.Value, current_time: i64) bool {
     if (payload != .object) return false;
     const obj = payload.object;
@@ -326,7 +335,7 @@ fn validateTimeClaims(payload: std.json.Value, current_time: i64) bool {
     if (obj.get("exp")) |exp_val| {
         const exp = switch (exp_val) {
             .integer => exp_val.integer,
-            .float => @as(i64, @intFromFloat(exp_val.float)),
+            .float => floatToI64(exp_val.float) orelse return false,
             else => return false,
         };
         if (current_time >= exp) return false;
@@ -337,7 +346,7 @@ fn validateTimeClaims(payload: std.json.Value, current_time: i64) bool {
     if (obj.get("nbf")) |nbf_val| {
         const nbf = switch (nbf_val) {
             .integer => nbf_val.integer,
-            .float => @as(i64, @intFromFloat(nbf_val.float)),
+            .float => floatToI64(nbf_val.float) orelse return false,
             else => return false,
         };
         if (current_time < nbf) return false;
