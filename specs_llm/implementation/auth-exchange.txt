@@ -1,15 +1,30 @@
-ZyncBase Authentication Exchange_EXCHANGE.md Draft v1 Principle ZyncBase **Resource Server (Validator not Identity Provider manage accounts passwords OAuth flows trusts external tokens developer Hook resolve identity local `$session` Context unified source truth authorization replaces raw$jwt `authorization.json rules Populated via `onConnect hook Hook Server no Hook Server$session defaults to standard claims validated external JWT$session.userId internal `users.id resolved through SQLite never raw JWT subject SDK client ID Fixed for resolved until auth refresh namespace switching re-resolution Connection Lifecycle (Ticket Exchange security flexibility ZyncBase uses mandatory ticket-based handshake Step Ticket Request (HTTP client SDK sends external JWT to ZyncBase HTTP endpoint```http
+ZyncBase Authentication Exchange Active design not identity provider manage accounts passwords OAuth flows memberships billing permission truth accepts identity from **External JWTs** **Anonymous subjects** SDK authentication server validates identity projects trusted claims into$session issues short connection ticket enforces `authorization.json in Zig$session` unified source truth for authorization Rules inspect raw JWTs Configured claim projection from external JWT **Anonymous SDK-generated high-entropy subject `isAnonymous = true$session.userId internal.id resolved through SQLite never raw JWT anonymous data exist in$session claims namespace parts target row incoming value load user-row fields perform relationship lookups for authorization Fixed for resolved until auth refresh namespace switching re-resolution JWT-backed session:```json
+{
+  "sub": "auth0|123",
+  "tenant_id": "acme",
+  "role": "admin",
+  "read_projects": ["docs", "wiki"],
+  "write_projects": ["docs"]
+}
+```anonymous```json
+{
+  "sub": "anon:6c6f8b0d0f1c4d4c9d61b7fdc4f80f52",
+  "isAnonymous": true,
+  "role": "anonymous"
+}
+```Connection Lifecycle ZyncBase ticket handshake JWTs WebSocket URLs Step Ticket Request authenticated SDK sends JWT ZyncBase HTTP endpoint```http
 POST /auth/ticket
 Authorization: Bearer <external_jwt>
-```Step 2: Enrichment Hook Server validates signature external JWT Hook Server configured Zig sends message```json
-// Zig -> Hook Server
-{ "type": "HookServerOnConnect", "jwt": { ...claims... }, "namespace": "..." }
-```Hook Server session object```json
-// Hook Server -> Zig
-{ "type": "ok", "session": { "tenant_id": "acme", "role": "admin" } }
-```Step 3: Ticket Issuance (Zig generates short-lived single-use signed blob resolved$session```json
-// Response to Client
-{ "ticket": "zyc_tk_8s2k...", "expiresAt": 1741551234 }
-```Step 4: WebSocket SDK connects WebSocket ticket query string```
+```anonymous users SDK sends subject authentication enabled```http
+POST /auth/ticket
+Content-Type: application/json
+
+{ "anonymousSubject": "anon:6c6f8b0d0f1c4d4c9d61b7fdc4f80f52" }
+```anonymous subject bearer credential SDK high-entropy randomness locally Step Identity Validation Session Projection JWT authentication Zig validates signature issuer audience expiration not-before times algorithm key constraints ZyncBase projects claims$session anonymous authentication Zig validates auth subject format entropy creates$session No user-row fields loaded Ticket Issuance Zig generates short single-use ticket signed opaque blob subject base$session issue time expiry replay-prevention identifier```json
+{
+  "ticket": "zyc_tk_8s2k...",
+  "expiresAt": 1741551234
+}
+```Step 4: WebSocket SDK connects WebSocket ticket query```text
 ws://server/ws?ticket=zyc_tk_8s2k...
-```Zig verifies ticket signature extracts external identity base$session hydrates transport state accepts upgrade Store presence operations gated until namespaces selected `users.id values resolved Hook Server call required Step 5 Scoped Readiness SDK sends initial store presence namespace selections Zig resolves namespace string_zync_namespaces.id external identity string `users.id` `$session.userId`( resolves after scopes ready Token Refresh external JWTs ZyncBase tickets short-lived WebSockets long-lived SDK rotate session without disconnecting Sends `AuthRefresh message WebSocket new JWT Re-validates new JWT Calls Hook Server `onConnect for updated enrichment marks scopes not ready updates base$session re-resolves `users.id` Sends `ok` response after scopes ready operations evaluate against updated scoped `$session` Security Performance **Zero-Trust Handshake** Zig accepts WebSocket connection without valid ticket **Microsecond$session baked connection `authorization.json evaluation Zig no foreign calls Hook Server Latency Relational lookups done cached in$session sync loop fastError Conditions HTTP/WS Response Ticket Request JWT signature invalid expired HTTP 401 `AUTH_FAILED` Hook Server unreachable HTTP 503 `HOOK_SERVER_UNAVAILABLE` Hook Server `onConnect error HTTP 403 `HOOK_DENIED` WebSocket Upgrade Ticket expired> 5 min HTTP 401 `AUTH_FAILED` Ticket used Origin not `allowedOrigins` HTTP 403 `AuthRefresh` JWT invalid WS error `AUTH_FAILED` Hook Server `onConnect error WS error `HOOK_DENIED` failure connection not established closed No partial session state retained
+```Zig verifies ticket signature expiry single-use state transport state$session Store presence operations gated until namespaces selected `users.id values resolved Step 5 Scoped Readiness SDK sends initial store presence namespace selections Zig resolves namespace string to_zync_namespaces.id external subject `users.id$session.userId resolves after scopes ready If `users.namespaced false identity resolution uses global namespace ID `0` true uses namespace ID Token Refresh External JWTs tickets short-lived WebSockets long-lived SDK rotate session without disconnecting Sends `AuthRefresh WebSocket new JWT refreshes anonymous subject Re-validates new identity Projects new base$session` marks scopes not ready updates base$session re-resolves `users.id Sends `ok` response after scopes ready operations evaluate against updated scoped `$session` Short-lived tokens plus refresh normal permission-update revocation path ZyncBase maintain server-side permission database revocation list Security Performance-Trust Zig accepts WebSocket connection without valid ticketJWTs in URLs** exchanged over HTTP headers refresh frames not WebSocket query strings **Native Authorization**$session into connection state `authorization.json evaluation in Zig no foreign calls Hidden Auth Reads** `users table resolved for internal identity ownership references Profile fields application data not authorization inputs **Bounded Permissions** Permission claims human-manageable use roles groups scoped grants active-context tokens instead unbounded permission lists Error Conditions HTTP/WS Response JWT signature invalid or expired HTTP 401 `AUTH_FAILED` JWT issuer audience algorithm invalid Anonymous auth disabled subject invalid `INVALID_MESSAGE Ticket expired Ticket used Origin not in `allowedOrigins` `AuthRefresh New JWT invalid `AUTH_FAILED session loses namespace access error `NAMESPACE_UNAUTHORIZED` failure cases connection not established active scopes marked not ready/closed if connected No partial session state retained
