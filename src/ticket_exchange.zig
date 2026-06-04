@@ -64,7 +64,6 @@ pub const TicketExchange = struct {
 
     pub fn deinit(self: *TicketExchange) void {
         self.allocator.free(self.anonymous_prefix);
-        self.mutex.lock();
         var it = self.redeemed_tickets.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -259,8 +258,8 @@ fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
         end -= 1;
     }
     const stripped = input[0..end];
-    const max_len = std.base64.url_safe_no_pad.Decoder.calcSizeUpperBound(stripped.len) catch return error.InvalidBase64;
-    const dest = try allocator.alloc(u8, max_len);
+    const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
+    const dest = try allocator.alloc(u8, exact_len);
     errdefer allocator.free(dest);
     try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
     return dest;

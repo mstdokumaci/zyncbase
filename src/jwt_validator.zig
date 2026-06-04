@@ -59,7 +59,10 @@ pub const JwksCache = struct {
 
     pub fn init(allocator: Allocator, jwks_url: ?[]const u8) !JwksCache {
         const state_cache = try allocator.create(jwks_state_cache_type);
-        errdefer allocator.destroy(state_cache);
+        errdefer {
+            state_cache.deinit();
+            allocator.destroy(state_cache);
+        }
         try state_cache.init(allocator, .{});
 
         return JwksCache{
@@ -139,6 +142,7 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
     defer client.deinit();
 
     var body_buf = std.ArrayListUnmanaged(u8).empty;
+    defer body_buf.deinit(allocator);
     var body_writer = std.Io.Writer.Allocating.fromArrayList(allocator, &body_buf);
     defer body_writer.deinit();
 
@@ -163,7 +167,9 @@ fn fetchJwks(allocator: Allocator, url_str: []const u8) ![]Jwk {
         list.deinit(allocator);
     }
     for (parsed.value.keys) |key| {
-        try list.append(allocator, try key.clone(allocator));
+        const cloned = try key.clone(allocator);
+        errdefer cloned.deinit(allocator);
+        try list.append(allocator, cloned);
     }
     return list.toOwnedSlice(allocator);
 }
@@ -249,7 +255,7 @@ pub const JwtValidator = struct {
             const kid = header.value.kid orelse return error.KidMissing;
             const jwks_cache = self.config.jwks_cache orelse return error.JwksNotConfigured;
             const jwk = try jwks_cache.getJwk(kid);
-            defer jwk.deinit(allocator);
+            defer jwk.deinit(jwks_cache.allocator);
 
             const verified = try verifyAsymmetricSignature(allocator, header.value.alg, jwk, msg, sig_bytes);
             if (!verified) return error.AuthFailed;
@@ -286,8 +292,8 @@ fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
         end -= 1;
     }
     const stripped = input[0..end];
-    const max_len = std.base64.url_safe_no_pad.Decoder.calcSizeUpperBound(stripped.len) catch return error.InvalidBase64;
-    const dest = try allocator.alloc(u8, max_len);
+    const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
+    const dest = try allocator.alloc(u8, exact_len);
     errdefer allocator.free(dest);
     try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
     return dest;
