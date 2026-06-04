@@ -166,7 +166,9 @@ fn insertSlowest(slowest: []TimedResult, slowest_len: *usize, candidate: TimedRe
 }
 
 fn nsToMs(ns: u64) f64 {
-    return @as(f64, @floatFromInt(ns)) / @as(f64, std.time.ns_per_ms);
+    const ns_f: f64 = @floatFromInt(ns);
+    const divisor: f64 = @floatFromInt(std.time.ns_per_ms);
+    return ns_f / divisor;
 }
 
 pub fn log(

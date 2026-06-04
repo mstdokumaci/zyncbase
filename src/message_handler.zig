@@ -80,7 +80,8 @@ pub const MessageHandler = struct {
                     const elapsed_us = now_us - conn.last_request_time.?;
                     // Basic token bucket / leak rate
                     const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
-                    const tokens_to_add: f64 = @as(f64, @floatFromInt(@max(@as(i64, 0), elapsed_us))) * (rate_limit / 1_000_000.0);
+                    const elapsed_f: f64 = @floatFromInt(@max(0, elapsed_us));
+                    const tokens_to_add: f64 = elapsed_f * (rate_limit / 1_000_000.0);
 
                     conn.request_tokens = @min(burst_capacity, conn.request_tokens + tokens_to_add);
                     conn.last_request_time = now_us;

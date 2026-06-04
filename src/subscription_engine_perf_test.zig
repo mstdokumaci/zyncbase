@@ -63,7 +63,9 @@ test "SubscriptionEngine: handleRecordChange performance" {
     }
 
     const elapsed = timer.read();
-    const avg_duration_ms = @as(f64, @floatFromInt(elapsed)) / 1e6 / @as(f64, @floatFromInt(iterations));
+    const elapsed_f: f64 = @floatFromInt(elapsed);
+    const iterations_f: f64 = @floatFromInt(iterations);
+    const avg_duration_ms = elapsed_f / 1e6 / iterations_f;
 
     const builtin = @import("builtin");
     const is_debug = builtin.mode == .Debug;
