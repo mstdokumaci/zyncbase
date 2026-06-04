@@ -135,8 +135,10 @@ pub const TicketExchange = struct {
             }
 
             const jti_owned = try self.allocator.dupe(u8, parsed.value.jti);
-            errdefer self.allocator.free(jti_owned);
+            var jti_owned_transferred = false;
+            errdefer if (!jti_owned_transferred) self.allocator.free(jti_owned);
             try self.redeemed_tickets.put(jti_owned, parsed.value.exp);
+            jti_owned_transferred = true;
         }
 
         return try allocator.dupe(u8, parsed.value.sub);

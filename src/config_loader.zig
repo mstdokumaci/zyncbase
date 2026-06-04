@@ -243,8 +243,9 @@ pub const ConfigLoader = struct {
 
                 if (server_obj.get("host")) |host| {
                     if (host == .string) {
+                        const new_host = try allocator.dupe(u8, host.string);
                         allocator.free(config.server.host);
-                        config.server.host = try allocator.dupe(u8, host.string);
+                        config.server.host = new_host;
                     }
                 }
             }
@@ -267,8 +268,9 @@ pub const ConfigLoader = struct {
 
                         if (jwt_obj.get("algorithm")) |algo| {
                             if (algo == .string) {
+                                const new_algo = try allocator.dupe(u8, algo.string);
                                 allocator.free(config.authentication.jwt_algorithm);
-                                config.authentication.jwt_algorithm = try allocator.dupe(u8, algo.string);
+                                config.authentication.jwt_algorithm = new_algo;
                             }
                         }
 
@@ -292,8 +294,9 @@ pub const ConfigLoader = struct {
 
                         if (jwt_obj.get("subjectClaim")) |sub| {
                             if (sub == .string) {
+                                const new_sub = try allocator.dupe(u8, sub.string);
                                 allocator.free(config.authentication.jwt_subject_claim);
-                                config.authentication.jwt_subject_claim = try allocator.dupe(u8, sub.string);
+                                config.authentication.jwt_subject_claim = new_sub;
                             }
                         }
                     }
@@ -335,8 +338,9 @@ pub const ConfigLoader = struct {
 
                         if (anon_obj.get("subjectPrefix")) |prefix| {
                             if (prefix == .string) {
+                                const new_prefix = try allocator.dupe(u8, prefix.string);
                                 allocator.free(config.authentication.anonymous_subject_prefix);
-                                config.authentication.anonymous_subject_prefix = try allocator.dupe(u8, prefix.string);
+                                config.authentication.anonymous_subject_prefix = new_prefix;
                             }
                         }
                     }
@@ -347,16 +351,18 @@ pub const ConfigLoader = struct {
         // Parse data directory
         if (obj.get("dataDir")) |data_dir| {
             if (data_dir == .string) {
+                const new_data_dir = try allocator.dupe(u8, data_dir.string);
                 allocator.free(config.data_dir);
-                config.data_dir = try allocator.dupe(u8, data_dir.string);
+                config.data_dir = new_data_dir;
             }
         }
 
         // Parse schema file
         if (obj.get("schema")) |schema| {
             if (schema == .string) {
+                const new_schema_file = try allocator.dupe(u8, schema.string);
                 allocator.free(config.schema_file);
-                config.schema_file = try allocator.dupe(u8, schema.string);
+                config.schema_file = new_schema_file;
             } else if (schema == .object) {
                 config.schema_content = try std.json.Stringify.valueAlloc(allocator, schema, .{});
             }

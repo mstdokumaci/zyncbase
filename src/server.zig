@@ -317,6 +317,11 @@ pub const ZyncBaseServer = struct {
             jwks_cache_ptr = jc;
         }
         self.jwks_cache = jwks_cache_ptr;
+        errdefer if (self.jwks_cache) |jc| {
+            jc.deinit();
+            self.memory_strategy.generalAllocator().destroy(jc);
+            self.jwks_cache = null;
+        };
 
         const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
             JwtValidationConfig{
@@ -340,6 +345,10 @@ pub const ZyncBaseServer = struct {
             auth_cfg.anonymous_subject_prefix,
             self.websocket_server.ssl,
         );
+        errdefer if (self.ticket_exchange) |te| {
+            te.deinit();
+            self.ticket_exchange = null;
+        };
         self.websocket_server.verify_ticket_cb = verifyTicketCallback;
 
         std.log.debug("Setting up ZyncBaseServer state", .{});

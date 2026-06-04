@@ -100,10 +100,11 @@ pub const JwksCache = struct {
 
         // 2. Fetch outside lock-free atomic context
         const keys = try fetchJwks(self.allocator, url);
-        errdefer {
+        var cache_owned = false;
+        errdefer if (!cache_owned) {
             for (keys) |k| k.deinit(self.allocator);
             self.allocator.free(keys);
-        }
+        };
 
         const new_state = JwksState{
             .keys = keys,
@@ -112,6 +113,7 @@ pub const JwksCache = struct {
 
         // 3. Atomically update/swap the cache
         try self.state_cache.update(0, new_state);
+        cache_owned = true;
 
         // 4. Return from locally fetched keys (already validated/stored)
         for (keys) |key| {
