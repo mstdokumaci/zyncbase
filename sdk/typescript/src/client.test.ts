@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { encode } from "@msgpack/msgpack";
 import { createClient, ZyncBaseClient } from "./client";
 import {
+	installMockFetchTicket,
 	installMockWs,
 	MockWebSocket,
+	restoreFetch,
 	triggerNamespaceOk,
 	triggerSchemaSync,
 } from "./test-helpers";
@@ -24,8 +26,17 @@ function restoreWebSocket() {
 
 const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
+	auth: { anonymous: true },
 	reconnect: false,
 };
+
+beforeEach(() => {
+	installMockFetchTicket();
+});
+
+afterEach(() => {
+	restoreFetch();
+});
 
 describe("createClient", () => {
 	test("returns a ZyncBaseClient instance without connecting", () => {
@@ -55,6 +66,7 @@ describe("ZyncBaseClient", () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
 		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
 		mockWs.triggerOpen();
 		triggerNamespaceOk(mockWs);
 		triggerSchemaSync(mockWs);
@@ -67,6 +79,7 @@ describe("ZyncBaseClient", () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
 		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
 		mockWs.triggerOpen();
 		triggerNamespaceOk(mockWs);
 		triggerSchemaSync(mockWs);
@@ -82,6 +95,7 @@ describe("ZyncBaseClient", () => {
 		const events: string[] = [];
 		client.on("connected", () => events.push("connected"));
 		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
 		mockWs.triggerOpen();
 		triggerNamespaceOk(mockWs);
 		triggerSchemaSync(mockWs);
@@ -106,6 +120,7 @@ describe("ZyncBaseClient", () => {
 		client.on("error", (err) => errors.push(err));
 
 		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
 		mockWs.triggerOpen();
 		triggerNamespaceOk(mockWs);
 		triggerSchemaSync(mockWs);
@@ -131,6 +146,32 @@ describe("ZyncBaseClient", () => {
 		await setPromise;
 		expect(errors.length).toBeGreaterThan(0);
 		expect((errors[0] as Record<string, unknown>).code).toBe("INTERNAL_ERROR");
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("authRefresh() dispatches AuthRefresh wire message", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const p = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await p;
+
+		const refreshPromise = client.authRefresh("new-jwt-token");
+		const lastMsg = mockWs.sentMessages[mockWs.sentMessages.length - 1];
+		const { decode } = await import("@msgpack/msgpack");
+		const decoded = decode(lastMsg) as Record<string, unknown>;
+		expect(decoded.type).toBe("AuthRefresh");
+		expect(decoded.token).toBe("new-jwt-token");
+
+		mockWs.triggerMessage(
+			encode({ type: "ok", id: decoded.id }) as unknown as ArrayBuffer,
+		);
+		await refreshPromise;
+
 		client.disconnect();
 		restoreWebSocket();
 	});

@@ -83,6 +83,14 @@ export class ZyncBaseClient {
 	}
 
 	/**
+	 * Refresh the session with a new external JWT without disconnecting.
+	 * Active scopes temporarily become not ready and are re-resolved before the promise resolves.
+	 */
+	authRefresh(token: string): Promise<void> {
+		return this.conn.authRefresh(token);
+	}
+
+	/**
 	 * Register a lifecycle event listener.
 	 * 'error' events from fire-and-forget store operations are also routed here.
 	 */

@@ -1,6 +1,6 @@
 import { encode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
-import type { ClientOptions } from "./types";
+import type { AuthConfig, ClientOptions } from "./types";
 
 /** Encode a message to an exact-size ArrayBuffer. */
 export function encodeToBuffer(msg: unknown): ArrayBuffer {
@@ -11,7 +11,7 @@ export function encodeToBuffer(msg: unknown): ArrayBuffer {
 	) as ArrayBuffer;
 }
 
-/** Minimal mock WebSocket for unit testing. */
+/** Mock WebSocket that captures the URL for ticket assertion. */
 export class MockWebSocket {
 	static OPEN = 1;
 	static CLOSING = 2;
@@ -20,11 +20,16 @@ export class MockWebSocket {
 	readyState = MockWebSocket.OPEN;
 	binaryType: string = "";
 	sentMessages: Uint8Array[] = [];
+	url: string;
 
 	onopen: ((event: Record<string, unknown>) => void) | null = null;
 	onclose: ((event: Record<string, unknown>) => void) | null = null;
 	onerror: ((event: Record<string, unknown>) => void) | null = null;
 	onmessage: ((event: Record<string, unknown>) => void) | null = null;
+
+	constructor(url = "") {
+		this.url = url;
+	}
 
 	send(data: Uint8Array | ArrayBuffer) {
 		const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
@@ -61,13 +66,15 @@ export class AutoMockWebSocket {
 	binaryType: string = "arraybuffer";
 	readyState: number = 1;
 	sentMessages: Uint8Array[] = [];
+	url: string;
 
 	onopen: (() => void) | null = null;
 	onclose: ((event: unknown) => void) | null = null;
 	onerror: ((event: unknown) => void) | null = null;
 	onmessage: ((event: unknown) => void) | null = null;
 
-	constructor(_url: string) {
+	constructor(url: string) {
+		this.url = url;
 		Promise.resolve().then(() => {
 			if (this.onopen) this.onopen();
 			this._autoRespondOk(1);
@@ -96,10 +103,12 @@ export class AutoMockWebSocket {
 }
 
 const originalWebSocket = globalThis.WebSocket;
+const originalFetch = globalThis.fetch;
 
 /** Patch global WebSocket to return the given mock instance. */
 export function installMockWs(mockWs: MockWebSocket) {
-	function wsFactory() {
+	function wsFactory(url: string) {
+		mockWs.url = url;
 		return mockWs;
 	}
 	(globalThis as Record<string, unknown>).WebSocket = Object.assign(wsFactory, {
@@ -117,9 +126,44 @@ export function restoreWebSocket() {
 	(globalThis as Record<string, unknown>).WebSocket = originalWebSocket;
 }
 
+export interface FetchTicketOptions {
+	ticket?: string;
+	expiresAt?: number;
+	status?: number;
+	body?: Record<string, unknown>;
+}
+
+/** Install a mock fetch that responds to POST /auth/ticket. */
+export function installMockFetchTicket(options: FetchTicketOptions = {}) {
+	const ticket = options.ticket ?? "zyc_tk_test_ticket_123";
+	const expiresAt = options.expiresAt ?? Math.floor(Date.now() / 1000) + 60;
+	const status = options.status ?? 200;
+	const body = options.body ?? JSON.stringify({ ticket, expiresAt });
+
+	(globalThis as Record<string, unknown>).fetch = async (
+		input: RequestInfo | URL,
+		init?: RequestInit,
+	) => {
+		const url = typeof input === "string" ? input : input.toString();
+		if (url.endsWith("/auth/ticket") && init?.method === "POST") {
+			return new Response(body, {
+				status,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+		return originalFetch(input, init);
+	};
+}
+
+/** Restore the original fetch. */
+export function restoreFetch() {
+	(globalThis as Record<string, unknown>).fetch = originalFetch;
+}
+
 /** Default options for test managers. */
 export const defaultOptions: ClientOptions = {
 	url: "ws://localhost:3000",
+	auth: { anonymous: true } as AuthConfig,
 	reconnect: false,
 };
 
@@ -128,8 +172,9 @@ export function makeManager(options?: Partial<ClientOptions>): {
 	manager: ConnectionManager;
 	mockWs: MockWebSocket;
 } {
-	const mockWs = new MockWebSocket();
+	const mockWs = new MockWebSocket("");
 	installMockWs(mockWs);
+	installMockFetchTicket();
 	const opts: ClientOptions = { ...defaultOptions, ...options };
 	const manager = new ConnectionManager(opts);
 	manager.schemaDictionary.processSchemaSync({
@@ -153,12 +198,13 @@ export function triggerNamespaceOk(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
 }
 
-/** Full connect flow: open + namespace ok. */
+/** Full connect flow: acquire ticket + open + namespace ok. */
 export async function connectManager(
 	manager: ConnectionManager,
 	mockWs: MockWebSocket,
 ): Promise<void> {
 	const p = manager.connect();
+	await new Promise((r) => setTimeout(r, 0));
 	mockWs.triggerOpen();
 	triggerNamespaceOk(mockWs);
 	await p;

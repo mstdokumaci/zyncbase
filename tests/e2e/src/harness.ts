@@ -445,6 +445,10 @@ export async function withServer<T>(
 		server: { port: ctx.port },
 		dataDir: options.dataDir,
 		schema: options.schemaPath,
+		authentication: {
+			anonymous: { enabled: true },
+			ticket: { secret: "e2e-test-ticket-secret-32bytes!" },
+		},
 	};
 	if (options.authPath) {
 		config.authorization = options.authPath;

@@ -22,7 +22,8 @@ export type LifecycleEvent =
 	| "reconnecting"
 	| "error"
 	| "statusChange"
-	| "schemaChange";
+	| "schemaChange"
+	| "tokenExpired";
 
 export interface WriteOptions {
 	confirm?: "accepted" | "committed";
@@ -30,10 +31,19 @@ export interface WriteOptions {
 
 // ─── Client configuration ────────────────────────────────────────────────────
 
+export type AuthConfig =
+	| { token: string }
+	| { tokenProvider: () => Promise<string> }
+	| { anonymous: true };
+
+export interface TicketResponse {
+	ticket: string;
+	expiresAt: number;
+}
+
 export interface ClientOptions {
 	url: string;
-	auth?: { token: string }; // Optional until auth is implemented
-	clientId?: string;
+	auth?: AuthConfig;
 	storeNamespace?: string; // default: 'public'
 	presenceNamespace?: string; // default: same as storeNamespace
 	reconnect?: boolean; // default: true
@@ -111,6 +121,14 @@ export interface Store {
 	): Promise<JsonValue[] & { nextCursor: string | null }>;
 }
 
+// ─── Outbound wire messages: auth ─────────────────────────────────────────────
+
+export interface AuthRefresh {
+	type: "AuthRefresh";
+	id: number;
+	token: string;
+}
+
 // ─── Outbound wire messages: writes ──────────────────────────────────────────
 
 export interface StoreSet {
@@ -186,6 +204,7 @@ export interface StoreLoadMore {
 
 /** Union of all outbound message types. */
 export type OutboundMessage =
+	| AuthRefresh
 	| StoreSet
 	| StoreRemove
 	| StoreBatch

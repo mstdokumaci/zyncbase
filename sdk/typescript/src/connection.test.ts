@@ -1,12 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
 import {
 	connectManager,
 	encodeToBuffer,
+	installMockFetchTicket,
 	MockWebSocket,
 	makeManager,
+	restoreFetch,
 } from "./test-helpers";
+
+beforeEach(() => {
+	installMockFetchTicket();
+});
+
+afterEach(() => {
+	restoreFetch();
+});
 
 describe("ConnectionManager", () => {
 	describe("connect()", () => {
@@ -40,6 +50,7 @@ describe("ConnectionManager", () => {
 		test("rejects when WebSocket errors", async () => {
 			const { manager, mockWs } = makeManager();
 			const connectPromise = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
 			mockWs.triggerError();
 			await expect(connectPromise).rejects.toMatchObject({
 				code: "CONNECTION_FAILED",
@@ -213,6 +224,7 @@ describe("ConnectionManager", () => {
 			manager.on("error", (e: unknown) => errors.push(e));
 
 			const connectPromise = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
 			mockWs.triggerError();
 
 			try {
@@ -301,6 +313,7 @@ describe("ConnectionManager", () => {
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
+				auth: { anonymous: true },
 				reconnect: true,
 				reconnectDelay: 50,
 				maxReconnectDelay: 5000,
@@ -331,6 +344,7 @@ describe("ConnectionManager", () => {
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
+				auth: { anonymous: true },
 				reconnect: false,
 			});
 
@@ -359,6 +373,7 @@ describe("ConnectionManager", () => {
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
+				auth: { anonymous: true },
 				reconnect: true,
 				reconnectDelay: 10,
 				maxReconnectDelay: 100,
@@ -392,6 +407,7 @@ describe("ConnectionManager", () => {
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
+				auth: { anonymous: true },
 				reconnect: true,
 				reconnectDelay: 200,
 				maxReconnectDelay: 5000,
@@ -420,6 +436,7 @@ describe("ConnectionManager", () => {
 
 			const manager = new ConnectionManager({
 				url: "ws://localhost:3000",
+				auth: { anonymous: true },
 				reconnect: true,
 				reconnectDelay: 50,
 			});

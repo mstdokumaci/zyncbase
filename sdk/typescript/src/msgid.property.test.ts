@@ -1,8 +1,12 @@
-import { describe, test } from "bun:test";
+import { afterEach, beforeEach, describe, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import * as fc from "fast-check";
 import { ConnectionManager } from "./connection";
-import { AutoMockWebSocket } from "./test-helpers";
+import {
+	AutoMockWebSocket,
+	installMockFetchTicket,
+	restoreFetch,
+} from "./test-helpers";
 import type { ClientOptions } from "./types";
 
 /**
@@ -13,6 +17,14 @@ import type { ClientOptions } from "./types";
  * SHALL be strictly increasing integers with no duplicates.
  */
 
+beforeEach(() => {
+	installMockFetchTicket();
+});
+
+afterEach(() => {
+	restoreFetch();
+});
+
 async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 	const originalWebSocket = (globalThis as unknown as { WebSocket: unknown })
 		.WebSocket;
@@ -22,6 +34,7 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 	try {
 		const options: ClientOptions = {
 			url: "ws://localhost:9999",
+			auth: { anonymous: true },
 			reconnect: false,
 		};
 

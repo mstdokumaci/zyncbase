@@ -28,7 +28,7 @@ export class ZyncBaseClient {
 	) {
 		const options =
 			typeof urlOrOptions === "string" ? { url: urlOrOptions } : urlOrOptions;
-		this.client = createClient(options);
+		this.client = createClient({ ...options, auth: { anonymous: true } });
 		this.store = this.client.store;
 	}
 
