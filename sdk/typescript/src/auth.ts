@@ -2,13 +2,20 @@ import { getOrCreateAnonymousSubject } from "./anonymous.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import type { AuthConfig, TicketResponse } from "./types.js";
 
+const httpBaseCache = new Map<string, string>();
+
 export function deriveHttpBase(wsUrl: string): string {
+	const cached = httpBaseCache.get(wsUrl);
+	if (cached) return cached;
+
 	const url = new URL(wsUrl);
 	url.protocol = url.protocol === "wss:" ? "https:" : "http:";
 	url.pathname = "";
 	url.search = "";
 	url.hash = "";
-	return url.toString().replace(/\/$/, "");
+	const result = url.toString().replace(/\/$/, "");
+	httpBaseCache.set(wsUrl, result);
+	return result;
 }
 
 async function resolveToken(auth: AuthConfig): Promise<string> {
@@ -31,10 +38,11 @@ function buildFetchRequest(
 ): Promise<Response> {
 	if ("anonymous" in auth && auth.anonymous) {
 		const anonymousSubject = getOrCreateAnonymousSubject();
+		const body = `{"anonymousSubject":"${anonymousSubject}"}`;
 		return fetch(endpoint, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ anonymousSubject }),
+			body,
 		});
 	}
 	return resolveToken(auth).then((token) =>
@@ -63,7 +71,7 @@ async function parseTicketResponse(
 }
 
 async function parseErrorResponse(response: Response): Promise<never> {
-	let code = ErrorCodes.AUTH_FAILED;
+	let code: string = ErrorCodes.AUTH_FAILED;
 	let message = "Ticket exchange failed";
 	try {
 		const body = (await response.json()) as {
