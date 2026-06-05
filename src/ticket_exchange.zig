@@ -761,7 +761,6 @@ fn extractJsonString(json: []const u8, pos: *usize) ?[]const u8 {
 }
 
 fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
-    const start = pos.*;
     var negative = false;
     if (pos.* < json.len and json[pos.*] == '-') {
         negative = true;
@@ -770,11 +769,15 @@ fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
     if (pos.* >= json.len or json[pos.*] < '0' or json[pos.*] > '9') return null;
     var value: i64 = 0;
     while (pos.* < json.len and json[pos.*] >= '0' and json[pos.*] <= '9') {
-        value = value * 10 + (json[pos.*] - '0');
+        const digit: i64 = json[pos.*] - '0';
+        var result = @mulWithOverflow(value, 10);
+        if (result[1] != 0) return null;
+        value = result[0];
+        result = @addWithOverflow(value, if (negative) -digit else digit);
+        if (result[1] != 0) return null;
+        value = result[0];
         pos.* += 1;
     }
-    if (negative) value = -value;
-    _ = start;
     return value;
 }
 
