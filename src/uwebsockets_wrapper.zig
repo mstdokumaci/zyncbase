@@ -347,6 +347,7 @@ fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: 
     var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = socket_data.session };
     const msg_slice = if (message != null) message[0..length] else "";
     if (server.handlers.on_close) |handler| handler(&zig_ws, code, msg_slice, server.user_data);
+    if (socket_data.session) |*sess| sess.deinit(server.allocator);
     server.allocator.destroy(socket_data);
 }
 

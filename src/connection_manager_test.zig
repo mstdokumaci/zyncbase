@@ -21,7 +21,7 @@ test "ConnectionManager - onOpen and onClose" {
     try app.init(allocator, "conn-mgr-open", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
+    var dummy_ws = createMockWebSocket(allocator);
 
     // Test onOpen
     {
@@ -57,7 +57,7 @@ test "ConnectionManager - onClose clears violation state" {
     try app.init(allocator, "conn-mgr-violations", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
+    var dummy_ws = createMockWebSocket(allocator);
     const conn_id = dummy_ws.getConnId();
 
     {
@@ -78,7 +78,7 @@ test "ConnectionManager - onOpen clears stale violation state" {
     defer app.deinit();
 
     {
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         const conn_id = dummy_ws.getConnId();
 
         {
@@ -91,7 +91,7 @@ test "ConnectionManager - onOpen clears stale violation state" {
     }
 
     {
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         const conn_id = dummy_ws.getConnId();
 
         const sc = try app.openScopedConnection(&dummy_ws);
@@ -110,9 +110,9 @@ test "ConnectionManager - max connections" {
     // Set a small limit for testing
     app.connection_manager.max_connections = 2;
 
-    var ws1 = createMockWebSocket();
-    var ws2 = createMockWebSocket();
-    var ws3 = createMockWebSocket();
+    var ws1 = createMockWebSocket(allocator);
+    var ws2 = createMockWebSocket(allocator);
+    var ws3 = createMockWebSocket(allocator);
 
     // Open 2 connections (at the limit)
     const sc1 = try app.openScopedConnection(&ws1);
@@ -137,7 +137,7 @@ test "ConnectionManager - acquire and release" {
     try app.init(allocator, "conn-mgr-id-reuse", &.{});
     defer app.deinit();
 
-    var ws = createMockWebSocket();
+    var ws = createMockWebSocket(allocator);
     const sc = try app.openScopedConnection(&ws);
     defer sc.deinit();
 

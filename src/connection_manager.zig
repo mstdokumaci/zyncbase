@@ -84,11 +84,12 @@ pub const ConnectionManager = struct {
 
         self.message_handler.violation_tracker.clearViolations(conn_id);
 
-        const sess = ws.takeSession() orelse {
+        var sess = ws.takeSession() orelse {
             std.log.warn("Rejecting connection {}: missing session", .{conn_id});
             ws.close();
             return error.MissingSession;
         };
+        defer sess.deinit(self.allocator);
         if (sess.external_id.len == 0) {
             std.log.warn("Rejecting connection {}: empty external identity", .{conn_id});
             ws.close();

@@ -6,6 +6,7 @@ const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocketHandlers = @import("uwebsockets_wrapper.zig").WebSocketHandlers;
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
+const destroyMockWebSocket = helpers.destroyMockWebSocket;
 
 // This property test verifies that WebSocket callbacks are invoked for all connection events:
 // - on_open callback is invoked when a connection opens
@@ -114,28 +115,31 @@ test "ws: callbacks invoked for all events" {
 
         // Simulate open event
         if (tc.register_open) {
-            var mock_ws = createMockWebSocket();
+            var mock_ws = createMockWebSocket(allocator);
             if (handlers.on_open) |handler| {
                 handler(&mock_ws, &ctx);
             }
+            destroyMockWebSocket(allocator, &mock_ws);
         }
 
         // Simulate message event
         if (tc.register_message) {
-            var mock_ws = createMockWebSocket();
+            var mock_ws = createMockWebSocket(allocator);
             const test_message = "test message";
             if (handlers.on_message) |handler| {
                 handler(&mock_ws, test_message, .binary, &ctx);
             }
+            destroyMockWebSocket(allocator, &mock_ws);
         }
 
         // Simulate close event
         if (tc.register_close) {
-            var mock_ws = createMockWebSocket();
+            var mock_ws = createMockWebSocket(allocator);
             const close_message = "connection closed";
             if (handlers.on_close) |handler| {
                 handler(&mock_ws, 1000, close_message, &ctx);
             }
+            destroyMockWebSocket(allocator, &mock_ws);
         }
 
         // Verify callback invocation counts
@@ -209,10 +213,11 @@ test "ws: message callback content and type" {
         server.registerWebSocketHandlers("/*", handlers, &ctx);
 
         // Simulate message event
-        var mock_ws = createMockWebSocket();
+        var mock_ws = createMockWebSocket(allocator);
         if (handlers.on_message) |handler| {
             handler(&mock_ws, mt.content, mt.msg_type, &ctx);
         }
+        destroyMockWebSocket(allocator, &mock_ws);
 
         // Verify message was received correctly
         try testing.expectEqual(@as(u32, 1), ctx.message_called);
@@ -270,10 +275,11 @@ test "ws: close callback code and message" {
         server.registerWebSocketHandlers("/*", handlers, &ctx);
 
         // Simulate close event
-        var mock_ws = createMockWebSocket();
+        var mock_ws = createMockWebSocket(allocator);
         if (handlers.on_close) |handler| {
             handler(&mock_ws, ct.code, ct.message, &ctx);
         }
+        destroyMockWebSocket(allocator, &mock_ws);
 
         // Verify close parameters were received correctly
         try testing.expectEqual(@as(u32, 1), ctx.close_called);
@@ -317,7 +323,7 @@ test "ws: callbacks invoked exactly once" {
     server.registerWebSocketHandlers("/*", handlers, &ctx);
 
     // Simulate multiple events
-    var mock_ws = createMockWebSocket();
+    var mock_ws = createMockWebSocket(allocator);
 
     // Open event
     if (handlers.on_open) |handler| {
@@ -343,6 +349,8 @@ test "ws: callbacks invoked exactly once" {
     try testing.expectEqual(@as(u32, 1), ctx.open_called);
     try testing.expectEqual(@as(u32, 3), ctx.message_called);
     try testing.expectEqual(@as(u32, 1), ctx.close_called);
+
+    destroyMockWebSocket(allocator, &mock_ws);
 }
 
 // Helper types and functions

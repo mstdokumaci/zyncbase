@@ -579,8 +579,9 @@ fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
         .array => |arr| blk: {
             if (arr.items.len > max_claim_array_elements) return error.ClaimArrayTooLarge;
             const items = try allocator.alloc(typed.ScalarValue, arr.items.len);
+            var initialized: usize = 0;
             errdefer {
-                for (items) |*item| item.deinit(allocator);
+                for (items[0..initialized]) |*item| item.deinit(allocator);
                 allocator.free(items);
             }
             for (arr.items, 0..) |item, i| {
@@ -592,6 +593,7 @@ fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
                     else => return error.InvalidClaimArrayElement,
                 };
                 items[i] = scalar;
+                initialized += 1;
             }
             break :blk .{ .array = items };
         },

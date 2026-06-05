@@ -31,20 +31,27 @@ var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
 
-pub fn createMockWebSocket() WebSocket {
-    return createMockWebSocketWithExternalId(test_external_user_id);
+pub fn createMockWebSocket(allocator: Allocator) WebSocket {
+    return createMockWebSocketWithExternalId(allocator, test_external_user_id);
 }
 
-pub fn createMockWebSocketWithExternalId(external_id: []const u8) WebSocket {
+pub fn createMockWebSocketWithExternalId(allocator: Allocator, external_id: []const u8) WebSocket {
     return WebSocket{
         .ws = null,
         .ssl = false,
         .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
         .session = Session{
-            .external_id = external_id,
+            .external_id = allocator.dupe(u8, external_id) catch @panic("OOM creating mock WebSocket"),
             .is_anonymous = false,
         },
     };
+}
+
+pub fn destroyMockWebSocket(allocator: Allocator, ws: *WebSocket) void {
+    if (ws.session) |*sess| {
+        sess.deinit(allocator);
+        ws.session = null;
+    }
 }
 
 /// Helper function to route a message through an arena and return a duped result for testing.
@@ -354,7 +361,7 @@ pub const AppTestContext = struct {
     /// High-level helper to completely create, open, and manage a mock connection for tests.
     pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
         const ws = try self.allocator.create(WebSocket);
-        ws.* = createMockWebSocket();
+        ws.* = createMockWebSocket(self.allocator);
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         const namespace = "public";

@@ -56,7 +56,7 @@ test "MessageHandler: store operations require ready scope" {
 
     const ws = try allocator.create(WebSocket);
     defer allocator.destroy(ws);
-    ws.* = helpers.createMockWebSocket();
+    ws.* = helpers.createMockWebSocket(allocator);
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {

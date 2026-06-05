@@ -88,7 +88,7 @@ test "logging: connection events" {
     {
         // Create a mock WebSocket (we'll use a stub)
         // Create a mock WebSocket
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
 
         // Handle open - this should log "WebSocket connection opened: id={}"
         try manager.onOpen(&ws);
@@ -105,7 +105,7 @@ test "logging: connection events" {
 
     // Test 2: Connection close logs connection ID
     {
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
 
         // Open connection first
         try manager.onOpen(&ws);
@@ -126,7 +126,7 @@ test "logging: connection events" {
 
         // Open all connections
         for (&connections) |*ws| {
-            ws.* = createMockWebSocket();
+            ws.* = createMockWebSocket(allocator);
             try manager.onOpen(ws);
         }
 
@@ -148,7 +148,7 @@ test "logging: connection events" {
 
     // Test 4: Error handling logs connection ID
     {
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
 
         // Open connection
         try manager.onOpen(&ws);
@@ -166,6 +166,7 @@ test "logging: connection events" {
     {
         const ThreadContext = struct {
             manager: *ConnectionManager,
+            allocator: std.mem.Allocator,
             iterations: usize,
         };
 
@@ -173,7 +174,7 @@ test "logging: connection events" {
             fn run(ctx: *ThreadContext) void {
                 var i: usize = 0;
                 while (i < ctx.iterations) : (i += 1) {
-                    var ws = createMockWebSocket();
+                    var ws = createMockWebSocket(ctx.allocator);
 
                     // Open and close connection
                     ctx.manager.onOpen(&ws) catch unreachable; // zwanzig-disable-line: swallowed-error
@@ -188,6 +189,7 @@ test "logging: connection events" {
         for (&contexts, 0..) |*ctx, idx| {
             ctx.* = .{
                 .manager = manager,
+                .allocator = allocator,
                 .iterations = 25,
             };
             threads[idx] = try std.Thread.spawn(.{}, worker, .{ctx});
@@ -223,7 +225,7 @@ test "logging: error details" {
     // Test 1: Message parsing errors are logged
     // We can't easily intercept logs, but we can verify the error path is taken
     {
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
         ws.user_data = &ws;
 
         // Open connection
@@ -241,7 +243,7 @@ test "logging: error details" {
 
     // Test 2: Missing required fields logs error
     {
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
         ws.user_data = &ws;
 
         try manager.onOpen(&ws);
@@ -274,7 +276,7 @@ test "logging: error details" {
 
     // Test 4: Multiple error types are logged
     {
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
         ws.user_data = &ws;
 
         try manager.onOpen(&ws);
@@ -361,7 +363,7 @@ test "logging: level filtering" {
         defer manager.deinit();
 
         // Trigger different log levels
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
 
         // Info level: connection open
         try manager.onOpen(&ws);
@@ -449,7 +451,7 @@ test "logging: message formatting" {
         defer manager.deinit();
 
         // Trigger various log messages
-        var ws = createMockWebSocket();
+        var ws = createMockWebSocket(allocator);
 
         // Connection logging includes connection ID
         try manager.onOpen(&ws);
@@ -525,7 +527,7 @@ test "logging: message formatting" {
         var connections: [num_connections]WebSocket = undefined;
 
         for (&connections) |*ws| {
-            ws.* = createMockWebSocket();
+            ws.* = createMockWebSocket(allocator);
             try manager.onOpen(ws);
         }
 

@@ -3,6 +3,7 @@ const testing = std.testing;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const helpers = @import("app_test_helpers.zig");
 const createMockWebSocket = helpers.createMockWebSocket;
+const destroyMockWebSocket = helpers.destroyMockWebSocket;
 const AppTestContext = helpers.AppTestContext;
 
 test "connection: state deallocation on close" {
@@ -16,7 +17,7 @@ test "connection: state deallocation on close" {
         try app.init(allocator, "state-basic", &.{});
         defer app.deinit();
 
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         const conn_id = dummy_ws.getConnId();
 
         // onOpen handles acquisition, init, and adding to map
@@ -44,7 +45,7 @@ test "connection: state deallocation on close" {
         const num_connections = 24;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
-            ws.* = createMockWebSocket();
+            ws.* = createMockWebSocket(allocator);
             try app.connection_manager.onOpen(ws);
         }
 
@@ -66,7 +67,7 @@ test "connection: state deallocation on close" {
         try app.init(allocator, "state-p3", &.{});
         defer app.deinit();
 
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         const conn_id = dummy_ws.getConnId();
         try app.connection_manager.onOpen(&dummy_ws);
 
@@ -95,7 +96,7 @@ test "connection: state deallocation on close" {
         const num_connections = 12;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets) |*ws| {
-            ws.* = createMockWebSocket();
+            ws.* = createMockWebSocket(allocator);
             try app.connection_manager.onOpen(ws);
         }
 
@@ -118,7 +119,7 @@ test "connection: state deallocation on close" {
         const iterations = 160;
         var iter: usize = 0;
         while (iter < iterations) : (iter += 1) {
-            var dummy_ws = createMockWebSocket();
+            var dummy_ws = createMockWebSocket(allocator);
             const conn_id = dummy_ws.getConnId();
             try app.connection_manager.onOpen(&dummy_ws);
 
@@ -141,10 +142,10 @@ test "connection: state deallocation on close" {
         defer app.deinit();
 
         const worker = struct {
-            fn run(ctx: *AppTestContext, count: u64) void {
+            fn run(ctx: *AppTestContext, alloc: std.mem.Allocator, count: u64) void {
                 var i: u64 = 0;
                 while (i < count) : (i += 1) {
-                    var dummy_ws = createMockWebSocket();
+                    var dummy_ws = createMockWebSocket(alloc);
                     const conn_id = dummy_ws.getConnId();
 
                     ctx.connection_manager.onOpen(&dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
@@ -163,7 +164,7 @@ test "connection: state deallocation on close" {
         // Spawn multiple threads
         var threads: [3]std.Thread = undefined;
         for (&threads) |*t| {
-            t.* = try std.Thread.spawn(.{}, worker, .{ &app, 24 });
+            t.* = try std.Thread.spawn(.{}, worker, .{ &app, allocator, 24 });
         }
         // Wait for all threads
         for (threads) |thread| {
@@ -181,7 +182,7 @@ test "connection: state deallocation on close" {
         const num_connections = 8;
         var websockets: [num_connections]WebSocket = undefined;
         for (&websockets, 0..) |*ws, i| {
-            ws.* = createMockWebSocket();
+            ws.* = createMockWebSocket(allocator);
             try deinit_app.connection_manager.onOpen(ws);
             const state = try deinit_app.connection_manager.acquireConnection(ws.getConnId());
             defer if (state.release()) deinit_app.releaseConnection(state);
@@ -202,8 +203,9 @@ test "connection: state deallocation edge cases" {
         defer app.deinit();
 
         // Try to remove a connection that doesn't exist
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         app.connection_manager.onClose(&dummy_ws);
+        destroyMockWebSocket(allocator, &dummy_ws);
     }
 
     // Test: Connection with empty subscription list
@@ -212,7 +214,7 @@ test "connection: state deallocation edge cases" {
         try app.init(allocator, "state-e2", &.{});
         defer app.deinit();
 
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         try app.connection_manager.onOpen(&dummy_ws);
         // Don't add any subscriptions
         app.connection_manager.onClose(&dummy_ws);
@@ -224,7 +226,7 @@ test "connection: state deallocation edge cases" {
         try app.init(allocator, "state-e3", &.{});
         defer app.deinit();
 
-        var dummy_ws = createMockWebSocket();
+        var dummy_ws = createMockWebSocket(allocator);
         const conn_id = dummy_ws.getConnId();
         try app.connection_manager.onOpen(&dummy_ws);
         const state = try app.connection_manager.acquireConnection(conn_id);

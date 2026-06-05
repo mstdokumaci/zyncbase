@@ -19,6 +19,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
 
     const ThreadContext = struct {
         app: *AppTestContext,
+        allocator: std.mem.Allocator,
         iterations: usize,
         failure: ?anyerror = null,
 
@@ -32,7 +33,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
         fn runInternal(ctx: *@This()) !void {
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                var ws = helpers.createMockWebSocket();
+                var ws = helpers.createMockWebSocket(ctx.allocator);
                 try ctx.app.connection_manager.onOpen(&ws);
 
                 const conn = try ctx.app.connection_manager.acquireConnection(ws.getConnId());
@@ -50,7 +51,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
     var threads: [6]std.Thread = undefined;
 
     for (&contexts, 0..) |*ctx, idx| {
-        ctx.* = .{ .app = &app, .iterations = 24 };
+        ctx.* = .{ .app = &app, .allocator = allocator, .iterations = 24 };
         threads[idx] = try std.Thread.spawn(.{}, ThreadContext.run, .{ctx});
     }
 
@@ -76,7 +77,7 @@ test "ConnectionManager: concurrent reads preserve live set" {
     var ids: [connection_count]u64 = undefined;
 
     for (&websockets, 0..) |*ws, idx| {
-        ws.* = helpers.createMockWebSocket();
+        ws.* = helpers.createMockWebSocket(allocator);
         try app.connection_manager.onOpen(ws);
         ids[idx] = ws.getConnId();
     }
@@ -143,6 +144,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
 
     const ThreadContext = struct {
         app: *AppTestContext,
+        allocator: std.mem.Allocator,
         ids: []u64,
         offset: usize,
         count: usize,
@@ -158,7 +160,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
         fn runInternal(ctx: *@This()) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                var ws = helpers.createMockWebSocket();
+                var ws = helpers.createMockWebSocket(ctx.allocator);
                 try ctx.app.connection_manager.onOpen(&ws);
                 ctx.ids[ctx.offset + i] = ws.getConnId();
                 ctx.app.connection_manager.onClose(&ws);
@@ -172,6 +174,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     for (&contexts, 0..) |*ctx, idx| {
         ctx.* = .{
             .app = &app,
+            .allocator = allocator,
             .ids = ids[0..],
             .offset = idx * opens_per_thread,
             .count = opens_per_thread,
