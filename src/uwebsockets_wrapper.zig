@@ -328,6 +328,7 @@ fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     const session = socket_data.session;
     socket_data.session = null;
     var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = session };
+    defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
 }
 

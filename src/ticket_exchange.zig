@@ -210,17 +210,9 @@ pub const TicketExchange = struct {
         std.crypto.random.bytes(&jti_bytes);
         const jti_hex = std.fmt.bytesToHex(jti_bytes, .lower);
 
-        var stack_buf: [512]u8 = undefined;
-        var payload_buf: std.ArrayListUnmanaged(u8) = .{
-            .items = stack_buf[0..0],
-            .capacity = stack_buf.len,
-        };
+        var payload_buf = std.ArrayListUnmanaged(u8).empty;
+        defer payload_buf.deinit(allocator);
         const writer = payload_buf.writer(allocator);
-        defer {
-            if (payload_buf.items.ptr != stack_buf[0..0].ptr) {
-                payload_buf.deinit(allocator);
-            }
-        }
 
         try writer.print(
             \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s},"claims":
@@ -284,7 +276,7 @@ pub const TicketExchange = struct {
                     const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
                     var validated_mut = validated;
                     defer validated_mut.deinit(allocator);
-                    subject = validated_mut.subject;
+                    subject = try allocator.dupe(u8, validated_mut.subject);
                     claims = try Session.cloneClaims(validated_mut.claims, allocator);
                 } else {
                     std.log.warn("JWT authentication attempted but JWT validator not configured", .{});

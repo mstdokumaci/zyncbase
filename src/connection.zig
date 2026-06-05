@@ -159,7 +159,10 @@ pub const Connection = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.session) |*old| old.deinit(self.allocator);
+        if (self.session) |*old| {
+            old.deinit(self.allocator);
+            self.session = null;
+        }
         const owned_external_id = try self.allocator.dupe(u8, sess.external_id);
         errdefer self.allocator.free(owned_external_id);
         const owned_claims = try Session.cloneClaims(sess.claims, self.allocator);
