@@ -109,6 +109,9 @@ export class ConnectionManager {
 						);
 			this.setStatus("disconnected", { error });
 			this.emit("error", error);
+			if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
+				this.scheduleReconnect();
+			}
 			throw error;
 		}
 

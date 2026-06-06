@@ -214,11 +214,13 @@ pub const TicketExchange = struct {
         defer payload_buf.deinit(allocator);
         const writer = payload_buf.writer(allocator);
 
-        try writer.print(
-            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s},"claims":
-        ,
-            .{ subject, exp, jti_hex, subject, if (is_anonymous) "true" else "false" },
-        );
+        try writer.writeAll("{\"sub\":");
+        const subject_json = try std.json.Stringify.valueAlloc(allocator, subject, .{});
+        defer allocator.free(subject_json);
+        try writer.writeAll(subject_json);
+        try writer.print(",\"exp\":{d},\"jti\":\"{s}\",\"session\":{{\"externalId\":", .{ exp, jti_hex });
+        try writer.writeAll(subject_json);
+        try writer.print(",\"isAnonymous\":{s},\"claims\":", .{if (is_anonymous) "true" else "false"});
 
         if (claims.count() == 0) {
             try writer.writeAll("{}");

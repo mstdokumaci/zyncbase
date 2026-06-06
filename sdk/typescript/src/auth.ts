@@ -25,11 +25,14 @@ async function resolveToken(auth: AuthConfig): Promise<string> {
 	if ("token" in auth) {
 		return auth.token;
 	}
-	throw new ZyncBaseError("Cannot resolve token for anonymous auth", {
-		code: ErrorCodes.AUTH_FAILED,
-		category: "auth",
-		retryable: false,
-	});
+	throw new ZyncBaseError(
+		"Invalid auth configuration: missing token or tokenProvider",
+		{
+			code: ErrorCodes.AUTH_FAILED,
+			category: "auth",
+			retryable: false,
+		},
+	);
 }
 
 function buildFetchRequest(
@@ -38,7 +41,7 @@ function buildFetchRequest(
 ): Promise<Response> {
 	if ("anonymous" in auth && auth.anonymous) {
 		const anonymousSubject = getOrCreateAnonymousSubject();
-		const body = `{"anonymousSubject":"${anonymousSubject}"}`;
+		const body = JSON.stringify({ anonymousSubject });
 		return fetch(endpoint, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
