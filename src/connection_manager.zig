@@ -89,7 +89,8 @@ pub const ConnectionManager = struct {
             ws.close();
             return error.MissingSession;
         };
-        errdefer sess.deinit(self.allocator);
+        var sess_transferred = false;
+        errdefer if (!sess_transferred) sess.deinit(self.allocator);
         if (sess.external_id.len == 0) {
             std.log.warn("Rejecting connection {}: empty external identity", .{conn_id});
             ws.close();
@@ -116,6 +117,7 @@ pub const ConnectionManager = struct {
 
         conn.activate(ws.getConnId(), ws.*);
         conn.setSession(sess);
+        sess_transferred = true;
 
         const connected_msg = try wire.encodeConnected(self.allocator, conn.getExternalUserId());
         defer self.allocator.free(connected_msg);
