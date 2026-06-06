@@ -53,7 +53,6 @@ pub fn destroyMockWebSocket(allocator: Allocator, ws: *WebSocket) void {
         ws.session = null;
     }
 }
-
 /// Helper function to route a message through an arena and return a duped result for testing.
 /// The caller is responsible for freeing the returned []u8.
 pub fn routeWithArena(handler: *MessageHandler, allocator: Allocator, conn: *Connection, bytes: []const u8) ![]u8 {
@@ -145,42 +144,44 @@ pub const AppTestContext = struct {
         try self.memory_strategy.init(allocator);
         errdefer self.memory_strategy.deinit();
 
+        const gpa = self.memory_strategy.generalAllocator();
+
         // 2. Initialize Violation Tracker
-        self.violation_tracker.init(allocator, 10);
+        self.violation_tracker.init(gpa, 10);
         errdefer self.violation_tracker.deinit();
 
         // 3. Initialize Schema Helpers TestContext
         self.test_context = if (options.in_memory)
-            try schema_helpers.TestContext.initInMemory(allocator)
+            try schema_helpers.TestContext.initInMemory(gpa)
         else
-            try schema_helpers.TestContext.init(allocator, prefix);
+            try schema_helpers.TestContext.init(gpa, prefix);
         errdefer self.test_context.deinit();
 
         // 4. Initialize Storage Engine
-        try schema_helpers.setupTestEngine(&self.storage_engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, options);
+        try schema_helpers.setupTestEngine(&self.storage_engine, gpa, &self.memory_strategy, &self.test_context, &self.schema, options);
         errdefer self.storage_engine.deinit();
 
         // 5. Initialize Subscription Engine
-        self.subscription_engine = SubscriptionEngine.init(allocator);
+        self.subscription_engine = SubscriptionEngine.init(gpa);
         errdefer self.subscription_engine.deinit();
 
         // 6. Initialize Auth Config
-        self.auth_config = try authorization.implicitConfig(allocator, &self.schema);
+        self.auth_config = try authorization.implicitConfig(gpa, &self.schema);
         errdefer self.auth_config.deinit();
 
         // 7. Initialize Store Service
-        self.store_service = StoreService.init(allocator, &self.storage_engine, &self.schema, &self.auth_config);
+        self.store_service = StoreService.init(gpa, &self.storage_engine, &self.schema, &self.auth_config);
 
         // 8. Initialize Handler and Manager
-        self.handler.init(allocator, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema);
+        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
-        try self.connection_manager.init(allocator, &self.memory_strategy, &self.handler, &self.schema, 100_000);
+        try self.connection_manager.init(gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000);
         errdefer self.connection_manager.deinit();
 
         // 10. Initialize Session Resolver
-        self.session_resolver.init(allocator, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
+        self.session_resolver.init(gpa, self.storage_engine.sessionResolutionBuffer(), &self.memory_strategy);
         errdefer self.session_resolver.deinit();
     }
 
@@ -353,15 +354,16 @@ pub const AppTestContext = struct {
 
             // 3. Free ws if we own it
             if (self.owns_ws) {
-                self.app.allocator.destroy(self.ws);
+                self.app.memory_strategy.generalAllocator().destroy(self.ws);
             }
         }
     };
 
     /// High-level helper to completely create, open, and manage a mock connection for tests.
     pub fn setupMockConnection(self: *AppTestContext) !ScopedConnection {
-        const ws = try self.allocator.create(WebSocket);
-        ws.* = createMockWebSocket(self.allocator);
+        const gpa = self.memory_strategy.generalAllocator();
+        const ws = try gpa.create(WebSocket);
+        ws.* = createMockWebSocket(gpa);
         try self.connection_manager.onOpen(ws);
         const conn = try self.connection_manager.acquireConnection(ws.getConnId());
         const namespace = "public";

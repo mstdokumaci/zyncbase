@@ -20,7 +20,7 @@ test "Verification: WebSocket connection lifecycle" {
     try app.init(allocator, "verify-mixed", &table_defs);
     defer app.deinit();
 
-    var ws = createMockWebSocket(allocator);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
     try app.connection_manager.onOpen(&ws);
     var closed = false;
     defer if (!closed) app.connection_manager.onClose(&ws);
@@ -102,7 +102,7 @@ test "Verification: Error handling for invalid messages" {
     }
 
     {
-        var ws = createMockWebSocket(allocator);
+        var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
         try app.connection_manager.onOpen(&ws);
         defer app.connection_manager.onClose(&ws);
 

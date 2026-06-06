@@ -54,9 +54,10 @@ test "MessageHandler: store operations require ready scope" {
     });
     defer app.deinit();
 
-    const ws = try allocator.create(WebSocket);
-    defer allocator.destroy(ws);
-    ws.* = helpers.createMockWebSocket(allocator);
+    const gpa = app.memory_strategy.generalAllocator();
+    const ws = try gpa.create(WebSocket);
+    defer gpa.destroy(ws);
+    ws.* = helpers.createMockWebSocket(gpa);
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {

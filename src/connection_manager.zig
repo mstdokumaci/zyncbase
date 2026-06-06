@@ -89,7 +89,7 @@ pub const ConnectionManager = struct {
             ws.close();
             return error.MissingSession;
         };
-        defer sess.deinit(self.allocator);
+        errdefer sess.deinit(self.allocator);
         if (sess.external_id.len == 0) {
             std.log.warn("Rejecting connection {}: empty external identity", .{conn_id});
             ws.close();
@@ -101,6 +101,7 @@ pub const ConnectionManager = struct {
 
         if (self.map.count() >= self.max_connections) {
             std.log.warn("Rejecting connection {}: limit reached", .{conn_id});
+            sess.deinit(self.allocator);
             ws.close();
             return;
         }
@@ -114,7 +115,7 @@ pub const ConnectionManager = struct {
         };
 
         conn.activate(ws.getConnId(), ws.*);
-        try conn.setSession(sess);
+        conn.setSession(sess);
 
         const connected_msg = try wire.encodeConnected(self.allocator, conn.getExternalUserId());
         defer self.allocator.free(connected_msg);

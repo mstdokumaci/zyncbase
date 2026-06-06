@@ -17,6 +17,8 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
     try app.init(allocator, "conn-property-lifecycle", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
+
     const ThreadContext = struct {
         app: *AppTestContext,
         allocator: std.mem.Allocator,
@@ -51,7 +53,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
     var threads: [6]std.Thread = undefined;
 
     for (&contexts, 0..) |*ctx, idx| {
-        ctx.* = .{ .app = &app, .allocator = allocator, .iterations = 24 };
+        ctx.* = .{ .app = &app, .allocator = gpa, .iterations = 24 };
         threads[idx] = try std.Thread.spawn(.{}, ThreadContext.run, .{ctx});
     }
 
@@ -72,12 +74,13 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try app.init(allocator, "conn-property-reads", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
     const connection_count = 32;
     var websockets: [connection_count]WebSocket = undefined;
     var ids: [connection_count]u64 = undefined;
 
     for (&websockets, 0..) |*ws, idx| {
-        ws.* = helpers.createMockWebSocket(allocator);
+        ws.* = helpers.createMockWebSocket(gpa);
         try app.connection_manager.onOpen(ws);
         ids[idx] = ws.getConnId();
     }
@@ -137,6 +140,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     try app.init(allocator, "conn-property-unique-ids", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
     const num_threads = 6;
     const opens_per_thread = 20;
     const expected_count = num_threads * opens_per_thread;
@@ -174,7 +178,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     for (&contexts, 0..) |*ctx, idx| {
         ctx.* = .{
             .app = &app,
-            .allocator = allocator,
+            .allocator = gpa,
             .ids = ids[0..],
             .offset = idx * opens_per_thread,
             .count = opens_per_thread,
