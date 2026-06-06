@@ -277,10 +277,8 @@ pub const TicketExchange = struct {
                 const token = hdr[7..];
                 if (self.jwt_validator) |val| {
                     const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
-                    var validated_mut = validated;
-                    defer validated_mut.deinit(allocator);
-                    subject = try allocator.dupe(u8, validated_mut.subject);
-                    claims = try Session.cloneClaims(validated_mut.claims, allocator);
+                    subject = validated.subject;
+                    claims = validated.claims;
                 } else {
                     std.log.warn("JWT authentication attempted but JWT validator not configured", .{});
                     return error.AuthFailed;
