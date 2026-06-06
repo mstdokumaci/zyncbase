@@ -64,12 +64,9 @@ pub const MessageHandler = struct {
         const ws = &conn.ws;
         const conn_id = conn.id;
 
-        // 1. Enforce rate limiting under isolated lock
+        // 1. Enforce rate limiting
         if (self.security_config.max_messages_per_second > 0) {
             const is_rate_limited = blk: {
-                conn.mutex.lock();
-                defer conn.mutex.unlock();
-
                 const now_us = std.time.microTimestamp();
                 const burst_capacity: f64 = @floatFromInt(self.security_config.max_messages_per_second * 2);
 
@@ -173,10 +170,8 @@ pub const MessageHandler = struct {
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         self.violation_tracker.clearViolations(conn.id);
 
-        conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
-        conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
     }
 
@@ -185,12 +180,10 @@ pub const MessageHandler = struct {
         var transferred = false;
         errdefer if (!transferred) conn.allocator.free(namespace_owned);
 
-        conn.mutex.lock();
         const detached = conn.detachSubscriptionsLocked();
         conn.beginStoreScopeResolutionLocked(namespace_owned);
         transferred = true;
         const scope_seq = conn.scope_seq;
-        conn.mutex.unlock();
         self.unsubscribeDetached(conn, detached);
         return scope_seq;
     }

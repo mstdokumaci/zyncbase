@@ -83,37 +83,43 @@ export class ConnectionManager {
 		this.presenceNamespace = ns;
 	}
 
+	private handleTicketError(err: unknown): never {
+		const error =
+			err instanceof ZyncBaseError
+				? err
+				: new ZyncBaseError(
+						err instanceof Error ? err.message : "Ticket acquisition failed",
+						{
+							code: ErrorCodes.CONNECTION_FAILED,
+							category: "network",
+							retryable: true,
+						},
+					);
+		this.setStatus("disconnected", { error });
+		this.emit("error", error);
+		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
+			this.scheduleReconnect();
+		}
+		throw error;
+	}
+
+	private async acquireTicket(): Promise<string> {
+		const auth = this.options.auth ?? { anonymous: true as const };
+		try {
+			const ticketResponse = await acquireTicket(this.options.url, auth);
+			return ticketResponse.ticket;
+		} catch (err) {
+			return this.handleTicketError(err);
+		}
+	}
+
 	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
 		this.resetSchemaSyncPromise();
 
-		const auth = this.options.auth ?? { anonymous: true as const };
-
-		let ticket: string;
-		try {
-			const ticketResponse = await acquireTicket(this.options.url, auth);
-			ticket = ticketResponse.ticket;
-		} catch (err) {
-			const error =
-				err instanceof ZyncBaseError
-					? err
-					: new ZyncBaseError(
-							err instanceof Error ? err.message : "Ticket acquisition failed",
-							{
-								code: ErrorCodes.CONNECTION_FAILED,
-								category: "network",
-								retryable: true,
-							},
-						);
-			this.setStatus("disconnected", { error });
-			this.emit("error", error);
-			if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
-				this.scheduleReconnect();
-			}
-			throw error;
-		}
+		const ticket = await this.acquireTicket();
 
 		return new Promise((resolve, reject) => {
 			const url = new URL(this.options.url);

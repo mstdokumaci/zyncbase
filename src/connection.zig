@@ -94,7 +94,6 @@ pub const Connection = struct {
     outbox: Outbox = Outbox.empty,
     is_backpressured: bool = false,
     ref_count: std.atomic.Value(usize),
-    mutex: std.Thread.Mutex,
     created_at: i64,
     request_tokens: f64,
     last_request_time: ?i64,
@@ -110,7 +109,6 @@ pub const Connection = struct {
         self.scope_seq = 0;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
-        self.mutex = .{};
         self.ref_count = std.atomic.Value(usize).init(0);
         self.outbox = Outbox.empty;
         self.is_backpressured = false;
@@ -139,9 +137,6 @@ pub const Connection = struct {
 
     /// Reset session-specific state and free dynamic memory.
     pub fn resetSession(self: *Connection) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         self.resetSessionLocked();
     }
 
@@ -156,9 +151,6 @@ pub const Connection = struct {
     }
 
     pub fn setSession(self: *Connection, sess: Session) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.session) |*old| {
             old.deinit(self.allocator);
         }
@@ -167,25 +159,16 @@ pub const Connection = struct {
     }
 
     pub fn dupeExternalUserId(self: *Connection, allocator: Allocator) ![]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         const sess = self.session orelse return error.MissingExternalIdentity;
         return allocator.dupe(u8, sess.external_id);
     }
 
     pub fn getExternalUserId(self: *Connection) ?[]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.session) |sess| return sess.external_id;
         return null;
     }
 
     pub fn getSessionClaimsPtr(self: *Connection) *const std.StringHashMapUnmanaged(typed.Value) {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.session) |*sess| return &sess.claims;
         return &empty_claims;
     }
@@ -207,17 +190,11 @@ pub const Connection = struct {
     }
 
     pub fn resetStoreScope(self: *Connection) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         self.resetStoreScopeLocked();
     }
 
     /// Replace the active store scope after namespace and users.id resolution.
     pub fn setStoreScope(self: *Connection, namespace_id: i64, user_doc_id: typed.DocId) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         self.namespace_id = namespace_id;
         self.user_doc_id = user_doc_id;
         self.store_ready = true;
@@ -226,9 +203,6 @@ pub const Connection = struct {
     pub fn setStoreScopeForNamespace(self: *Connection, namespace: []const u8, namespace_id: i64, user_doc_id: typed.DocId) !void {
         const namespace_owned = try self.allocator.dupe(u8, namespace);
         errdefer self.allocator.free(namespace_owned);
-
-        self.mutex.lock();
-        defer self.mutex.unlock();
 
         if (self.store_namespace) |ns| self.allocator.free(ns);
         if (self.pending_store_namespace) |ns| self.allocator.free(ns);
@@ -240,9 +214,6 @@ pub const Connection = struct {
     }
 
     pub fn setStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64, namespace_id: i64, user_doc_id: typed.DocId) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.scope_seq != expected_scope_seq) return false;
         if (self.store_namespace) |ns| self.allocator.free(ns);
         self.store_namespace = self.pending_store_namespace;
@@ -254,42 +225,27 @@ pub const Connection = struct {
     }
 
     pub fn resetStoreScopeIfSeq(self: *Connection, expected_scope_seq: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.scope_seq != expected_scope_seq) return false;
         self.resetStoreScopeLocked();
         return true;
     }
 
     pub fn isScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         return self.scope_seq == expected_scope_seq;
     }
 
     pub fn dupeStoreNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         const namespace = self.store_namespace orelse return null;
         return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 
     pub fn dupePendingStoreNamespaceIfSeq(self: *Connection, allocator: Allocator, expected_scope_seq: u64) !?[]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.scope_seq != expected_scope_seq) return null;
         const namespace = self.pending_store_namespace orelse return null;
         return @as(?[]const u8, try allocator.dupe(u8, namespace));
     }
 
     pub fn getStoreSession(self: *Connection) StoreSession {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         return .{
             .namespace_id = self.namespace_id,
             .user_doc_id = self.user_doc_id,
@@ -297,11 +253,8 @@ pub const Connection = struct {
         };
     }
 
-    /// Allocate the next subscription ID in O(1) time. Caller must hold no locks.
+    /// Allocate the next subscription ID in O(1) time.
     pub fn allocateSubscriptionId(self: *Connection) !u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         if (self.next_subscription_id == 0) return error.SubscriptionIdExhausted;
 
         const id = self.next_subscription_id;
@@ -309,17 +262,13 @@ pub const Connection = struct {
         return id;
     }
 
-    /// Thread-safe: Acquires connection's internal mutex to append a subscription ID.
+    /// Append a subscription ID.
     pub fn addSubscription(self: *Connection, sub_id: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         try self.subscription_ids.append(self.allocator, sub_id);
     }
 
-    /// Thread-safe: Acquires connection's internal mutex to remove a subscription ID.
+    /// Remove a subscription ID.
     pub fn removeSubscription(self: *Connection, sub_id: u64) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         for (self.subscription_ids.items, 0..) |tracked_id, i| {
             if (tracked_id == sub_id) {
                 _ = self.subscription_ids.swapRemove(i);
