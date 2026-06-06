@@ -428,7 +428,10 @@ export class ConnectionManager {
 
 	private handleTokenExpired(): void {
 		const auth = this.options.auth;
-		if (auth && "tokenProvider" in auth && !this._refreshInFlight) {
+		if (auth && "tokenProvider" in auth) {
+			if (this._refreshInFlight) {
+				return;
+			}
 			this._refreshInFlight = auth
 				.tokenProvider()
 				.then((newToken) => this.authRefresh(newToken))

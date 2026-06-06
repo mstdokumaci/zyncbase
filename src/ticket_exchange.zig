@@ -516,12 +516,10 @@ const TicketPayload = struct {
 };
 
 fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
-    // SAFETY: sub, exp, jti are undefined initially but guaranteed to be set before return
-    // because we check found_sub, found_exp, found_jti and return null if any is false.
     var result: TicketPayload = .{
-        .sub = undefined,
-        .exp = undefined,
-        .jti = undefined,
+        .sub = "",
+        .exp = 0,
+        .jti = "",
         .external_id = null,
         .is_anonymous = false,
         .claims_json = null,
