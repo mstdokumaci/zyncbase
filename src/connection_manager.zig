@@ -60,7 +60,7 @@ pub const ConnectionManager = struct {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
-        self.map.deinit(self.memory_strategy.generalAllocator());
+        self.map.deinit(self.allocator);
         self.mutex.unlock();
 
         self.allocator.free(self.schema_sync_msg);
@@ -119,7 +119,7 @@ pub const ConnectionManager = struct {
         const connected_msg = try wire.encodeConnected(self.allocator, conn.getExternalUserId());
         defer self.allocator.free(connected_msg);
 
-        try self.map.put(self.memory_strategy.generalAllocator(), conn_id, conn);
+        try self.map.put(self.allocator, conn_id, conn);
         inserted = true;
         std.log.info("Client connected: id={}", .{conn_id});
 
