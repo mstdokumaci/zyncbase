@@ -110,6 +110,9 @@ export async function acquireTicket(
 	try {
 		response = await buildFetchRequest(endpoint, auth);
 	} catch (err) {
+		if (err instanceof ZyncBaseError) {
+			throw err;
+		}
 		throw new ZyncBaseError(
 			err instanceof Error ? err.message : "Ticket request failed",
 			{
