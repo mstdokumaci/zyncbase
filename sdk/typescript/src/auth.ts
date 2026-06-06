@@ -59,7 +59,16 @@ async function parseTicketResponse(
 	if (!response.ok) {
 		return parseErrorResponse(response);
 	}
-	const body = (await response.json()) as TicketResponse;
+	let body: TicketResponse;
+	try {
+		body = (await response.json()) as TicketResponse;
+	} catch {
+		throw new ZyncBaseError("Failed to parse ticket response as JSON", {
+			code: ErrorCodes.AUTH_FAILED,
+			category: "auth",
+			retryable: false,
+		});
+	}
 	if (!body.ticket) {
 		throw new ZyncBaseError("Ticket response missing ticket field", {
 			code: ErrorCodes.AUTH_FAILED,

@@ -130,6 +130,37 @@ pub fn fromJson(allocator: Allocator, ft: schema.FieldType, items_type: ?schema.
     };
 }
 
+pub fn fromDynamicJson(allocator: Allocator, value: std.json.Value) !Value {
+    return switch (value) {
+        .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
+        .integer => |i| .{ .scalar = .{ .integer = i } },
+        .float => |f| .{ .scalar = .{ .real = f } },
+        .bool => |b| .{ .scalar = .{ .boolean = b } },
+        .array => |arr| blk: {
+            if (arr.items.len > 1000) return error.ClaimArrayTooLarge;
+            const items = try allocator.alloc(ScalarValue, arr.items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (items[0..initialized]) |*item| item.deinit(allocator);
+                allocator.free(items);
+            }
+            for (arr.items, 0..) |item, i| {
+                const scalar = switch (item) {
+                    .string => |s| ScalarValue{ .text = try allocator.dupe(u8, s) },
+                    .integer => |n| ScalarValue{ .integer = n },
+                    .float => |f| ScalarValue{ .real = f },
+                    .bool => |b| ScalarValue{ .boolean = b },
+                    else => return error.InvalidClaimArrayElement,
+                };
+                items[i] = scalar;
+                initialized += 1;
+            }
+            break :blk .{ .array = items };
+        },
+        else => return error.UnsupportedClaimType,
+    };
+}
+
 fn scalarFromPayload(allocator: Allocator, ft: schema.FieldType, value: msgpack.Payload) !ScalarValue {
     return switch (ft) {
         .doc_id => switch (value) {

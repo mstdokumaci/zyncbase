@@ -404,7 +404,7 @@ pub const JwtValidator = struct {
             if (payload != .object) continue;
             const claim_value = payload.object.get(jwt_claim_name) orelse continue;
 
-            const typed_val = try jsonToTypedValue(allocator, claim_value);
+            const typed_val = try typed.valueFromDynamicJson(allocator, claim_value);
             errdefer typed_val.deinit(allocator);
 
             const key = try allocator.dupe(u8, session_var_name);
@@ -566,37 +566,4 @@ fn verifyAsymmetricSignature(
     } else {
         return error.UnsupportedAlgorithm;
     }
-}
-
-const max_claim_array_elements = 1000;
-
-fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
-    return switch (val) {
-        .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
-        .integer => |i| .{ .scalar = .{ .integer = i } },
-        .float => |f| .{ .scalar = .{ .real = f } },
-        .bool => |b| .{ .scalar = .{ .boolean = b } },
-        .array => |arr| blk: {
-            if (arr.items.len > max_claim_array_elements) return error.ClaimArrayTooLarge;
-            const items = try allocator.alloc(typed.ScalarValue, arr.items.len);
-            var initialized: usize = 0;
-            errdefer {
-                for (items[0..initialized]) |*item| item.deinit(allocator);
-                allocator.free(items);
-            }
-            for (arr.items, 0..) |item, i| {
-                const scalar = switch (item) {
-                    .string => |s| typed.ScalarValue{ .text = try allocator.dupe(u8, s) },
-                    .integer => |n| typed.ScalarValue{ .integer = n },
-                    .float => |f| typed.ScalarValue{ .real = f },
-                    .bool => |b| typed.ScalarValue{ .boolean = b },
-                    else => return error.InvalidClaimArrayElement,
-                };
-                items[i] = scalar;
-                initialized += 1;
-            }
-            break :blk .{ .array = items };
-        },
-        else => return error.UnsupportedClaimType,
-    };
 }

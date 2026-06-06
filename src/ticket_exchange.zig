@@ -183,7 +183,7 @@ pub const TicketExchange = struct {
                 while (claims_it.next()) |entry| {
                     const key = try allocator.dupe(u8, entry.key_ptr.*);
                     errdefer allocator.free(key);
-                    const val = try jsonToTypedValue(allocator, entry.value_ptr.*);
+                    const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
                     errdefer val.deinit(allocator);
                     try claims.put(allocator, key, val);
                 }
@@ -229,10 +229,13 @@ pub const TicketExchange = struct {
             while (claims_it.next()) |entry| {
                 if (!first) try writer.writeByte(',');
                 first = false;
-                try writer.writeByte('"');
-                try writer.writeAll(entry.key_ptr.*);
-                try writer.writeAll("\":");
-                try typedValueToJson(allocator, &payload_buf, entry.value_ptr.*);
+                const key_json = try std.json.Stringify.valueAlloc(allocator, entry.key_ptr.*, .{});
+                defer allocator.free(key_json);
+                try writer.writeAll(key_json);
+                try writer.writeByte(':');
+                const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
+                defer allocator.free(value_json);
+                try writer.writeAll(value_json);
             }
             try writer.writeByte('}');
         }
@@ -481,120 +484,6 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
     c.uws_res_on_data(ssl_val, res_nn, onDataCallback, ctx);
 }
 
-fn typedValueToJson(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), val: typed.Value) !void {
-    switch (val) {
-        .scalar => |s| switch (s) {
-            .text => |t| {
-                try buf.append(allocator, '"');
-                for (t) |ch| {
-                    switch (ch) {
-                        '"' => try buf.appendSlice(allocator, "\\\""),
-                        '\\' => try buf.appendSlice(allocator, "\\\\"),
-                        '\n' => try buf.appendSlice(allocator, "\\n"),
-                        '\r' => try buf.appendSlice(allocator, "\\r"),
-                        '\t' => try buf.appendSlice(allocator, "\\t"),
-                        else => try buf.append(allocator, ch),
-                    }
-                }
-                try buf.append(allocator, '"');
-            },
-            .integer => |i| {
-                var num_buf: [32]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch return error.OutOfMemory;
-                try buf.appendSlice(allocator, formatted);
-            },
-            .real => |f| {
-                var num_buf: [64]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{f}) catch return error.OutOfMemory;
-                try buf.appendSlice(allocator, formatted);
-            },
-            .boolean => |b| {
-                try buf.appendSlice(allocator, if (b) "true" else "false");
-            },
-            .doc_id => |_| {
-                try buf.appendSlice(allocator, "null");
-            },
-        },
-        .array => |items| {
-            try buf.append(allocator, '[');
-            for (items, 0..) |item, i| {
-                if (i > 0) try buf.append(allocator, ',');
-                try typedScalarValueToJson(allocator, buf, item);
-            }
-            try buf.append(allocator, ']');
-        },
-        .nil => {
-            try buf.appendSlice(allocator, "null");
-        },
-    }
-}
-
-fn typedScalarValueToJson(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), val: typed.ScalarValue) !void {
-    switch (val) {
-        .text => |t| {
-            try buf.append(allocator, '"');
-            for (t) |ch| {
-                switch (ch) {
-                    '"' => try buf.appendSlice(allocator, "\\\""),
-                    '\\' => try buf.appendSlice(allocator, "\\\\"),
-                    '\n' => try buf.appendSlice(allocator, "\\n"),
-                    '\r' => try buf.appendSlice(allocator, "\\r"),
-                    '\t' => try buf.appendSlice(allocator, "\\t"),
-                    else => try buf.append(allocator, ch),
-                }
-            }
-            try buf.append(allocator, '"');
-        },
-        .integer => |i| {
-            var num_buf: [32]u8 = undefined;
-            const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch return error.OutOfMemory;
-            try buf.appendSlice(allocator, formatted);
-        },
-        .real => |f| {
-            var num_buf: [64]u8 = undefined;
-            const formatted = std.fmt.bufPrint(&num_buf, "{d}", .{f}) catch return error.OutOfMemory;
-            try buf.appendSlice(allocator, formatted);
-        },
-        .boolean => |b| {
-            try buf.appendSlice(allocator, if (b) "true" else "false");
-        },
-        .doc_id => |_| {
-            try buf.appendSlice(allocator, "null");
-        },
-    }
-}
-
-fn jsonToTypedValue(allocator: Allocator, val: std.json.Value) !typed.Value {
-    return switch (val) {
-        .string => |s| .{ .scalar = .{ .text = try allocator.dupe(u8, s) } },
-        .integer => |i| .{ .scalar = .{ .integer = i } },
-        .float => |f| .{ .scalar = .{ .real = f } },
-        .bool => |b| .{ .scalar = .{ .boolean = b } },
-        .array => |arr| blk: {
-            if (arr.items.len > 1000) return error.ClaimArrayTooLarge;
-            const items = try allocator.alloc(typed.ScalarValue, arr.items.len);
-            var initialized: usize = 0;
-            errdefer {
-                for (items[0..initialized]) |*item| item.deinit(allocator);
-                allocator.free(items);
-            }
-            for (arr.items, 0..) |item, i| {
-                const scalar = switch (item) {
-                    .string => |s| typed.ScalarValue{ .text = try allocator.dupe(u8, s) },
-                    .integer => |n| typed.ScalarValue{ .integer = n },
-                    .float => |f| typed.ScalarValue{ .real = f },
-                    .bool => |b| typed.ScalarValue{ .boolean = b },
-                    else => return error.InvalidClaimArrayElement,
-                };
-                items[i] = scalar;
-                initialized += 1;
-            }
-            break :blk .{ .array = items };
-        },
-        else => return error.UnsupportedClaimType,
-    };
-}
-
 fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
     const key = "\"anonymousSubject\"";
     const key_pos = std.mem.indexOf(u8, json_body, key) orelse return null;
@@ -770,12 +659,12 @@ fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
     var value: i64 = 0;
     while (pos.* < json.len and json[pos.*] >= '0' and json[pos.*] <= '9') {
         const digit: i64 = json[pos.*] - '0';
-        var result = @mulWithOverflow(value, 10);
-        if (result[1] != 0) return null;
-        value = result[0];
-        result = @addWithOverflow(value, if (negative) -digit else digit);
-        if (result[1] != 0) return null;
-        value = result[0];
+        const mul_result = @mulWithOverflow(value, 10);
+        if (mul_result[1] != 0) return null;
+        value = mul_result[0];
+        const add_result = @addWithOverflow(value, if (negative) -digit else digit);
+        if (add_result[1] != 0) return null;
+        value = add_result[0];
         pos.* += 1;
     }
     return value;
