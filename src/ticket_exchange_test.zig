@@ -1,6 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
 const TicketExchange = @import("ticket_exchange.zig").TicketExchange;
+const typed = @import("typed.zig");
+
+const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+const empty_claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{};
 
 test "TicketExchange: generate and verify single-use ticket" {
     const allocator = testing.allocator;
@@ -14,20 +18,20 @@ test "TicketExchange: generate and verify single-use ticket" {
         false,
         null,
         false,
+        empty_claims_mapping,
     );
     defer exchange.deinit();
 
     const subject = "user_alice";
-    const ticket = try exchange.generateTicket(allocator, subject, false);
+    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
     defer allocator.free(ticket);
 
-    // First verification should succeed
-    const verified_sub = try exchange.verifyTicket(allocator, ticket);
-    defer allocator.free(verified_sub);
+    var verified_session = try exchange.verifyTicket(allocator, ticket);
+    defer verified_session.deinit(allocator);
 
-    try testing.expectEqualStrings(subject, verified_sub);
+    try testing.expectEqualStrings(subject, verified_session.external_id);
+    try testing.expect(!verified_session.is_anonymous);
 
-    // Second verification of the same single-use ticket should fail
     try testing.expectError(error.AuthFailed, exchange.verifyTicket(allocator, ticket));
 }
 
@@ -43,22 +47,21 @@ test "TicketExchange: generate and verify multi-use ticket" {
         false,
         null,
         false,
+        empty_claims_mapping,
     );
     defer exchange.deinit();
 
     const subject = "user_bob";
-    const ticket = try exchange.generateTicket(allocator, subject, false);
+    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
     defer allocator.free(ticket);
 
-    // First verification
-    const verified_sub = try exchange.verifyTicket(allocator, ticket);
-    defer allocator.free(verified_sub);
-    try testing.expectEqualStrings(subject, verified_sub);
+    var verified_session = try exchange.verifyTicket(allocator, ticket);
+    defer verified_session.deinit(allocator);
+    try testing.expectEqualStrings(subject, verified_session.external_id);
 
-    // Second verification should also succeed since single_use = false
-    const verified_sub_2 = try exchange.verifyTicket(allocator, ticket);
-    defer allocator.free(verified_sub_2);
-    try testing.expectEqualStrings(subject, verified_sub_2);
+    var verified_session_2 = try exchange.verifyTicket(allocator, ticket);
+    defer verified_session_2.deinit(allocator);
+    try testing.expectEqualStrings(subject, verified_session_2.external_id);
 }
 
 test "TicketExchange: expired ticket verification fails" {
@@ -73,11 +76,12 @@ test "TicketExchange: expired ticket verification fails" {
         false,
         null,
         false,
+        empty_claims_mapping,
     );
     defer exchange.deinit();
 
     const subject = "user_charlie";
-    const ticket = try exchange.generateTicket(allocator, subject, false);
+    const ticket = try exchange.generateTicket(allocator, subject, false, &empty_claims);
     defer allocator.free(ticket);
 
     // Sleep for 1.1s to guarantee expiration
@@ -99,6 +103,7 @@ test "TicketExchange: validate anonymous subject" {
         true, // anonymous_enabled = true
         "anon:",
         false,
+        empty_claims_mapping,
     );
     defer exchange_enabled.deinit();
 
@@ -120,6 +125,7 @@ test "TicketExchange: validate anonymous subject" {
         false, // anonymous_enabled = false
         "anon:",
         false,
+        empty_claims_mapping,
     );
     defer exchange_disabled.deinit();
 

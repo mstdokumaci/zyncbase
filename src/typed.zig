@@ -22,6 +22,7 @@ pub const Cursor = types.Cursor;
 
 pub const valueFromPayload = codec.fromPayload;
 pub const valueFromJson = codec.fromJson;
+pub const valueFromDynamicJson = codec.fromDynamicJson;
 pub const jsonAlloc = codec.jsonAlloc;
 pub const validateValue = codec.validateValue;
 pub const writeMsgPack = codec.writeMsgPack;

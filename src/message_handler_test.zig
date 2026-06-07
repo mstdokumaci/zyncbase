@@ -20,7 +20,7 @@ test "Connection - init and deinit" {
     const state = sc.conn;
 
     try testing.expectEqual(sc.ws.getConnId(), state.id);
-    try testing.expectEqualStrings(helpers.test_external_user_id, state.user_id orelse return error.TestExpectedValue);
+    try testing.expectEqualStrings(helpers.test_external_user_id, state.getExternalUserId() orelse return error.TestExpectedValue);
     try testing.expectEqual(@as(i64, 1), state.namespace_id);
     try testing.expect(state.store_ready);
     try testing.expectEqual(@as(usize, 0), state.subscription_ids.items.len);
@@ -54,9 +54,10 @@ test "MessageHandler: store operations require ready scope" {
     });
     defer app.deinit();
 
-    const ws = try allocator.create(WebSocket);
-    defer allocator.destroy(ws);
-    ws.* = helpers.createMockWebSocket();
+    const gpa = app.memory_strategy.generalAllocator();
+    const ws = try gpa.create(WebSocket);
+    defer gpa.destroy(ws);
+    ws.* = helpers.createMockWebSocket(gpa);
     try app.connection_manager.onOpen(ws);
     const conn = try app.connection_manager.acquireConnection(ws.getConnId());
     defer {

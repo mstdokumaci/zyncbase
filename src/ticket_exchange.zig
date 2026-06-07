@@ -2,6 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
+const Session = @import("session.zig").Session;
+const typed = @import("typed.zig");
 const c = @import("uwebsockets_wrapper.zig").c;
 
 pub const TicketExchange = struct {
@@ -13,9 +15,12 @@ pub const TicketExchange = struct {
     anonymous_enabled: bool,
     anonymous_prefix: []const u8,
     ssl: bool,
+    claims_mapping: std.StringHashMapUnmanaged([]const u8) = .{},
 
     redeemed_tickets: std.StringHashMap(i64),
     mutex: std.Thread.Mutex = .{},
+    verifications_since_cleanup: u32 = 0,
+    cleanup_interval: u32 = 100,
 
     pub fn init(
         allocator: Allocator,
@@ -26,6 +31,7 @@ pub const TicketExchange = struct {
         anonymous_enabled: bool,
         anonymous_prefix: ?[]const u8,
         ssl: bool,
+        claims_mapping: std.StringHashMapUnmanaged([]const u8),
     ) !*TicketExchange {
         const self = try allocator.create(TicketExchange);
         errdefer allocator.destroy(self);
@@ -46,6 +52,24 @@ pub const TicketExchange = struct {
         const prefix = if (anonymous_prefix) |p| try allocator.dupe(u8, p) else try allocator.dupe(u8, "anon:");
         errdefer allocator.free(prefix);
 
+        var claims_copy: std.StringHashMapUnmanaged([]const u8) = .{};
+        errdefer {
+            var it = claims_copy.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                allocator.free(entry.value_ptr.*);
+            }
+            claims_copy.deinit(allocator);
+        }
+        var mapping_it = claims_mapping.iterator();
+        while (mapping_it.next()) |entry| {
+            const key = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(key);
+            const val = try allocator.dupe(u8, entry.value_ptr.*);
+            errdefer allocator.free(val);
+            try claims_copy.put(allocator, key, val);
+        }
+
         self.* = .{
             .allocator = allocator,
             .ticket_secret = secret_key,
@@ -55,6 +79,7 @@ pub const TicketExchange = struct {
             .anonymous_enabled = anonymous_enabled,
             .anonymous_prefix = prefix,
             .ssl = ssl,
+            .claims_mapping = claims_copy,
             .redeemed_tickets = std.StringHashMap(i64).init(allocator),
             .mutex = .{},
         };
@@ -64,6 +89,14 @@ pub const TicketExchange = struct {
 
     pub fn deinit(self: *TicketExchange) void {
         self.allocator.free(self.anonymous_prefix);
+        {
+            var it = self.claims_mapping.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            self.claims_mapping.deinit(self.allocator);
+        }
         var it = self.redeemed_tickets.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -73,7 +106,7 @@ pub const TicketExchange = struct {
     }
 
     /// Verifies a ticket string. Returns the subject name allocated with `allocator` if valid.
-    pub fn verifyTicket(self: *TicketExchange, allocator: Allocator, ticket: []const u8) ![]const u8 {
+    pub fn verifyTicket(self: *TicketExchange, allocator: Allocator, ticket: []const u8) !Session {
         if (!std.mem.startsWith(u8, ticket, "zyc_tk_")) return error.InvalidTicket;
         const raw_ticket = ticket["zyc_tk_".len..];
 
@@ -85,27 +118,24 @@ pub const TicketExchange = struct {
         var computed_sig: [32]u8 = undefined;
         std.crypto.auth.hmac.sha2.HmacSha256.create(&computed_sig, payload_b64, &self.ticket_secret);
 
-        const sig_bytes = try decodeBase64Url(allocator, sig_b64);
-        defer allocator.free(sig_bytes);
+        var sig_bytes_stack: [48]u8 = undefined;
+        const sig_stripped = stripBase64Padding(sig_b64);
+        const sig_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(sig_stripped) catch return error.InvalidBase64;
+        if (sig_len != 32) return error.InvalidBase64;
+        const sig_bytes = sig_bytes_stack[0..sig_len];
+        std.base64.url_safe_no_pad.Decoder.decode(sig_bytes, sig_stripped) catch return error.InvalidBase64;
 
-        if (sig_bytes.len != 32 or !std.crypto.timing_safe.eql([32]u8, computed_sig, sig_bytes[0..32].*)) {
+        if (!std.crypto.timing_safe.eql([32]u8, computed_sig, sig_bytes_stack[0..32].*)) {
             return error.AuthFailed;
         }
 
         const payload_json = try decodeBase64Url(allocator, payload_b64);
         defer allocator.free(payload_json);
 
-        const TicketPayload = struct {
-            sub: []const u8,
-            exp: i64,
-            jti: []const u8,
-        };
-
-        const parsed = try std.json.parseFromSlice(TicketPayload, allocator, payload_json, .{ .ignore_unknown_fields = true });
-        defer parsed.deinit();
+        const extracted = extractTicketPayloadFast(payload_json) orelse return error.InvalidTicket;
 
         const now = std.time.timestamp();
-        if (now >= parsed.value.exp) {
+        if (now >= extracted.exp) {
             return error.TokenExpired;
         }
 
@@ -113,55 +143,123 @@ pub const TicketExchange = struct {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            // Collect expired keys first to avoid iterator invalidation
-            var expired_keys = std.ArrayListUnmanaged([]const u8).empty;
-            defer expired_keys.deinit(self.allocator);
-            var cleanup_it = self.redeemed_tickets.iterator();
-            while (cleanup_it.next()) |entry| {
-                if (now >= entry.value_ptr.*) {
-                    expired_keys.append(self.allocator, entry.key_ptr.*) catch |err| {
-                        std.log.warn("Failed to collect expired ticket key: {}", .{err});
-                    };
-                }
-            }
-            for (expired_keys.items) |key| {
-                _ = self.redeemed_tickets.remove(key);
-                self.allocator.free(key);
+            self.verifications_since_cleanup += 1;
+            if (self.verifications_since_cleanup >= self.cleanup_interval) {
+                self.cleanupExpiredTicketsLocked(now);
+                self.verifications_since_cleanup = 0;
             }
 
-            if (self.redeemed_tickets.contains(parsed.value.jti)) {
+            if (self.redeemed_tickets.contains(extracted.jti)) {
                 return error.AuthFailed;
             }
 
-            const jti_owned = try self.allocator.dupe(u8, parsed.value.jti);
+            const jti_owned = try self.allocator.dupe(u8, extracted.jti);
             var jti_owned_transferred = false;
             errdefer if (!jti_owned_transferred) self.allocator.free(jti_owned);
-            try self.redeemed_tickets.put(jti_owned, parsed.value.exp);
+            try self.redeemed_tickets.put(jti_owned, extracted.exp);
             jti_owned_transferred = true;
         }
 
-        return try allocator.dupe(u8, parsed.value.sub);
+        const external_id_slice = extracted.external_id orelse extracted.sub;
+        const external_id = try allocator.dupe(u8, external_id_slice);
+
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        errdefer {
+            allocator.free(external_id);
+            var it = claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            claims.deinit(allocator);
+        }
+
+        if (extracted.claims_json) |claims_json| {
+            const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch return error.InvalidTicket;
+            defer parsed_claims.deinit();
+
+            if (parsed_claims.value == .object) {
+                var claims_it = parsed_claims.value.object.iterator();
+                while (claims_it.next()) |entry| {
+                    const key = try allocator.dupe(u8, entry.key_ptr.*);
+                    errdefer allocator.free(key);
+                    const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
+                    errdefer val.deinit(allocator);
+
+                    const gop = try claims.getOrPut(allocator, key);
+                    if (gop.found_existing) {
+                        allocator.free(key);
+                        gop.value_ptr.deinit(allocator);
+                    }
+                    gop.value_ptr.* = val;
+                }
+            }
+        }
+
+        return Session{
+            .external_id = external_id,
+            .is_anonymous = extracted.is_anonymous,
+            .claims = claims,
+        };
     }
 
     /// Generates a signed ticket string.
-    pub fn generateTicket(self: *TicketExchange, allocator: Allocator, subject: []const u8, is_anonymous: bool) ![]const u8 {
+    pub fn generateTicket(
+        self: *TicketExchange,
+        allocator: Allocator,
+        subject: []const u8,
+        is_anonymous: bool,
+        claims: *const std.StringHashMapUnmanaged(typed.Value),
+    ) ![]const u8 {
         const exp = std.time.timestamp() + self.ttl_seconds;
         var jti_bytes: [16]u8 = undefined;
         std.crypto.random.bytes(&jti_bytes);
         const jti_hex = std.fmt.bytesToHex(jti_bytes, .lower);
 
-        const payload_json = try std.fmt.allocPrint(allocator,
-            \\{{"sub":"{s}","exp":{d},"jti":"{s}","session":{{"externalId":"{s}","isAnonymous":{s}}}}}
-        , .{ subject, exp, jti_hex, subject, if (is_anonymous) "true" else "false" });
-        defer allocator.free(payload_json);
+        var payload_buf = std.ArrayListUnmanaged(u8).empty;
+        defer payload_buf.deinit(allocator);
+        const writer = payload_buf.writer(allocator);
 
-        const payload_b64 = try encodeBase64Url(allocator, payload_json);
+        try writer.writeAll("{\"sub\":");
+        const subject_json = try std.json.Stringify.valueAlloc(allocator, subject, .{});
+        defer allocator.free(subject_json);
+        try writer.writeAll(subject_json);
+        try writer.print(",\"exp\":{d},\"jti\":\"{s}\",\"session\":{{\"externalId\":", .{ exp, jti_hex });
+        try writer.writeAll(subject_json);
+        try writer.print(",\"isAnonymous\":{s},\"claims\":", .{if (is_anonymous) "true" else "false"});
+
+        if (claims.count() == 0) {
+            try writer.writeAll("{}");
+        } else {
+            try writer.writeByte('{');
+            var first = true;
+            var claims_it = claims.iterator();
+            while (claims_it.next()) |entry| {
+                if (!first) try writer.writeByte(',');
+                first = false;
+                const key_json = try std.json.Stringify.valueAlloc(allocator, entry.key_ptr.*, .{});
+                defer allocator.free(key_json);
+                try writer.writeAll(key_json);
+                try writer.writeByte(':');
+                const value_json = try typed.jsonAlloc(allocator, entry.value_ptr.*);
+                defer allocator.free(value_json);
+                try writer.writeAll(value_json);
+            }
+            try writer.writeByte('}');
+        }
+
+        try writer.writeAll("}}");
+
+        const payload_b64 = try encodeBase64Url(allocator, payload_buf.items);
         defer allocator.free(payload_b64);
 
         var sig_bytes: [32]u8 = undefined;
         std.crypto.auth.hmac.sha2.HmacSha256.create(&sig_bytes, payload_b64, &self.ticket_secret);
-        const sig_b64 = try encodeBase64Url(allocator, &sig_bytes);
-        defer allocator.free(sig_b64);
+
+        var sig_b64_buf: [48]u8 = undefined;
+        const sig_b64_len = std.base64.url_safe_no_pad.Encoder.calcSize(32);
+        const sig_b64 = sig_b64_buf[0..sig_b64_len];
+        _ = std.base64.url_safe_no_pad.Encoder.encode(sig_b64, &sig_bytes);
 
         return try std.fmt.allocPrint(allocator, "zyc_tk_{s}.{s}", .{ payload_b64, sig_b64 });
     }
@@ -172,12 +270,23 @@ pub const TicketExchange = struct {
         // SAFETY: subject is always assigned before use in the if/else branches below
         var subject: []const u8 = undefined;
         var is_anonymous = false;
+        var claims: std.StringHashMapUnmanaged(typed.Value) = .{};
+        defer {
+            var it = claims.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(allocator);
+            }
+            claims.deinit(allocator);
+        }
 
         if (ctx.auth_header) |hdr| {
             if (hdr.len > 7 and std.ascii.eqlIgnoreCase(hdr[0..7], "bearer ")) {
                 const token = hdr[7..];
                 if (self.jwt_validator) |val| {
-                    subject = try val.validate(allocator, token);
+                    const validated = try val.validateWithClaims(allocator, token, self.claims_mapping);
+                    subject = validated.subject;
+                    claims = validated.claims;
                 } else {
                     std.log.warn("JWT authentication attempted but JWT validator not configured", .{});
                     return error.AuthFailed;
@@ -186,33 +295,17 @@ pub const TicketExchange = struct {
                 return error.InvalidMessage;
             }
         } else {
-            const parsed_body = std.json.parseFromSlice(std.json.Value, allocator, ctx.body.items, .{}) catch {
-                return error.InvalidMessage;
-            };
-            defer parsed_body.deinit();
-
-            if (parsed_body.value == .object) {
-                if (parsed_body.value.object.get("anonymousSubject")) |anon_sub_val| {
-                    if (anon_sub_val == .string) {
-                        const sub = anon_sub_val.string;
-                        try self.validateAnonymousSubject(sub);
-                        subject = try allocator.dupe(u8, sub);
-                        is_anonymous = true;
-                    } else {
-                        return error.InvalidMessage;
-                    }
-                } else {
-                    return error.InvalidMessage;
-                }
-            } else {
-                return error.InvalidMessage;
-            }
+            const body = ctx.body.items;
+            const anon_sub = extractAnonymousSubject(body) orelse return error.InvalidMessage;
+            try self.validateAnonymousSubject(anon_sub);
+            subject = try allocator.dupe(u8, anon_sub);
+            is_anonymous = true;
         }
 
         defer allocator.free(subject);
 
         const exp = std.time.timestamp() + self.ttl_seconds;
-        const ticket = try self.generateTicket(allocator, subject, is_anonymous);
+        const ticket = try self.generateTicket(allocator, subject, is_anonymous, &claims);
         defer allocator.free(ticket);
 
         const response_body = try std.fmt.allocPrint(allocator,
@@ -240,6 +333,23 @@ pub const TicketExchange = struct {
             }
         }
     }
+
+    fn cleanupExpiredTicketsLocked(self: *TicketExchange, now: i64) void {
+        var expired_keys = std.ArrayListUnmanaged([]const u8).empty;
+        defer expired_keys.deinit(self.allocator);
+        var cleanup_it = self.redeemed_tickets.iterator();
+        while (cleanup_it.next()) |entry| {
+            if (now >= entry.value_ptr.*) {
+                expired_keys.append(self.allocator, entry.key_ptr.*) catch |err| {
+                    std.log.warn("Failed to collect expired ticket key: {}", .{err});
+                };
+            }
+        }
+        for (expired_keys.items) |key| {
+            _ = self.redeemed_tickets.remove(key);
+            self.allocator.free(key);
+        }
+    }
 };
 
 pub const RequestContext = struct {
@@ -253,16 +363,20 @@ pub const RequestContext = struct {
 };
 
 fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
-    var end = input.len;
-    while (end > 0 and input[end - 1] == '=') {
-        end -= 1;
-    }
-    const stripped = input[0..end];
+    const stripped = stripBase64Padding(input);
     const exact_len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(stripped) catch return error.InvalidBase64;
     const dest = try allocator.alloc(u8, exact_len);
     errdefer allocator.free(dest);
     try std.base64.url_safe_no_pad.Decoder.decode(dest, stripped);
     return dest;
+}
+
+fn stripBase64Padding(input: []const u8) []const u8 {
+    var end = input.len;
+    while (end > 0 and input[end - 1] == '=') {
+        end -= 1;
+    }
+    return input[0..end];
 }
 
 fn encodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
@@ -374,4 +488,253 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
 
     c.uws_res_on_aborted(ssl_val, res_nn, onAbortedCallback, ctx);
     c.uws_res_on_data(ssl_val, res_nn, onDataCallback, ctx);
+}
+
+fn extractAnonymousSubject(json_body: []const u8) ?[]const u8 {
+    const key = "\"anonymousSubject\"";
+    const key_pos = std.mem.indexOf(u8, json_body, key) orelse return null;
+    const after_key = json_body[key_pos + key.len ..];
+
+    var i: usize = 0;
+    while (i < after_key.len and (after_key[i] == ' ' or after_key[i] == ':' or after_key[i] == '\t' or after_key[i] == '\n' or after_key[i] == '\r')) {
+        i += 1;
+    }
+    if (i >= after_key.len or after_key[i] != '"') return null;
+    i += 1;
+
+    const value_start = i;
+    while (i < after_key.len and after_key[i] != '"') {
+        if (after_key[i] == '\\') i += 1;
+        i += 1;
+    }
+    if (i >= after_key.len) return null;
+
+    return after_key[value_start..i];
+}
+
+const TicketPayload = struct {
+    sub: []const u8,
+    exp: i64,
+    jti: []const u8,
+    external_id: ?[]const u8,
+    is_anonymous: bool,
+    claims_json: ?[]const u8,
+};
+
+fn extractTicketPayloadFast(json: []const u8) ?TicketPayload {
+    var result: TicketPayload = .{
+        .sub = "",
+        .exp = 0,
+        .jti = "",
+        .external_id = null,
+        .is_anonymous = false,
+        .claims_json = null,
+    };
+
+    var found_sub = false;
+    var found_exp = false;
+    var found_jti = false;
+
+    var pos: usize = 0;
+    if (pos >= json.len or json[pos] != '{') return null;
+    pos += 1;
+
+    while (pos < json.len) {
+        skipWhitespace(json, &pos);
+        if (pos >= json.len) return null;
+        if (json[pos] == '}') break;
+        if (json[pos] == ',') {
+            pos += 1;
+            continue;
+        }
+
+        const key = extractJsonKey(json, &pos) orelse return null;
+        skipWhitespace(json, &pos);
+        if (pos >= json.len or json[pos] != ':') return null;
+        pos += 1;
+        skipWhitespace(json, &pos);
+
+        if (std.mem.eql(u8, key, "sub")) {
+            result.sub = extractJsonString(json, &pos) orelse return null;
+            found_sub = true;
+        } else if (std.mem.eql(u8, key, "exp")) {
+            result.exp = extractJsonInt(json, &pos) orelse return null;
+            found_exp = true;
+        } else if (std.mem.eql(u8, key, "jti")) {
+            result.jti = extractJsonString(json, &pos) orelse return null;
+            found_jti = true;
+        } else if (std.mem.eql(u8, key, "session")) {
+            const session_start = pos;
+            skipJsonValue(json, &pos) orelse return null;
+            const session_json = json[session_start..pos];
+            extractSessionFields(session_json, &result);
+        } else {
+            skipJsonValue(json, &pos) orelse return null;
+        }
+    }
+
+    if (!found_sub or !found_exp or !found_jti) return null;
+    return result;
+}
+
+fn extractSessionFields(session_json: []const u8, result: *TicketPayload) void {
+    var pos: usize = 0;
+    if (pos >= session_json.len or session_json[pos] != '{') return;
+    pos += 1;
+
+    while (pos < session_json.len) {
+        skipWhitespace(session_json, &pos);
+        if (pos >= session_json.len) return;
+        if (session_json[pos] == '}') break;
+        if (session_json[pos] == ',') {
+            pos += 1;
+            continue;
+        }
+
+        const key = extractJsonKey(session_json, &pos) orelse return;
+        skipWhitespace(session_json, &pos);
+        if (pos >= session_json.len or session_json[pos] != ':') return;
+        pos += 1;
+        skipWhitespace(session_json, &pos);
+
+        if (std.mem.eql(u8, key, "externalId")) {
+            result.external_id = extractJsonString(session_json, &pos);
+        } else if (std.mem.eql(u8, key, "isAnonymous")) {
+            if (pos + 4 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..4], "true")) {
+                result.is_anonymous = true;
+                pos += 4;
+            } else if (pos + 5 <= session_json.len and std.mem.eql(u8, session_json[pos..][0..5], "false")) {
+                result.is_anonymous = false;
+                pos += 5;
+            } else {
+                return;
+            }
+        } else if (std.mem.eql(u8, key, "claims")) {
+            const claims_start = pos;
+            if (skipJsonValue(session_json, &pos) == null) return;
+            const claims_json = session_json[claims_start..pos];
+            if (claims_json.len > 2 and claims_json[0] == '{' and claims_json[1] != '}') {
+                result.claims_json = claims_json;
+            }
+        } else {
+            if (skipJsonValue(session_json, &pos) == null) return;
+        }
+    }
+}
+
+fn skipWhitespace(json: []const u8, pos: *usize) void {
+    while (pos.* < json.len) {
+        switch (json[pos.*]) {
+            ' ', '\t', '\n', '\r' => pos.* += 1,
+            else => break,
+        }
+    }
+}
+
+fn extractJsonKey(json: []const u8, pos: *usize) ?[]const u8 {
+    return extractJsonString(json, pos);
+}
+
+fn extractJsonString(json: []const u8, pos: *usize) ?[]const u8 {
+    if (pos.* >= json.len or json[pos.*] != '"') return null;
+    pos.* += 1;
+    const start = pos.*;
+    while (pos.* < json.len) {
+        if (json[pos.*] == '"') {
+            const result = json[start..pos.*];
+            pos.* += 1;
+            return result;
+        }
+        if (json[pos.*] == '\\') {
+            pos.* += 1;
+        }
+        pos.* += 1;
+    }
+    return null;
+}
+
+fn extractJsonInt(json: []const u8, pos: *usize) ?i64 {
+    var negative = false;
+    if (pos.* < json.len and json[pos.*] == '-') {
+        negative = true;
+        pos.* += 1;
+    }
+    if (pos.* >= json.len or json[pos.*] < '0' or json[pos.*] > '9') return null;
+    var value: i64 = 0;
+    while (pos.* < json.len and json[pos.*] >= '0' and json[pos.*] <= '9') {
+        const digit: i64 = json[pos.*] - '0';
+        const mul_result = @mulWithOverflow(value, 10);
+        if (mul_result[1] != 0) return null;
+        value = mul_result[0];
+        const add_result = @addWithOverflow(value, if (negative) -digit else digit);
+        if (add_result[1] != 0) return null;
+        value = add_result[0];
+        pos.* += 1;
+    }
+    return value;
+}
+
+fn skipJsonValue(json: []const u8, pos: *usize) ?void {
+    if (pos.* >= json.len) return null;
+    switch (json[pos.*]) {
+        '"' => {
+            _ = extractJsonString(json, pos) orelse return null;
+        },
+        '{' => {
+            var depth: usize = 1;
+            pos.* += 1;
+            while (pos.* < json.len and depth > 0) {
+                if (json[pos.*] == '{') {
+                    depth += 1;
+                } else if (json[pos.*] == '}') {
+                    depth -= 1;
+                } else if (json[pos.*] == '"') {
+                    pos.* += 1;
+                    while (pos.* < json.len and json[pos.*] != '"') {
+                        if (json[pos.*] == '\\') pos.* += 1;
+                        pos.* += 1;
+                    }
+                }
+                pos.* += 1;
+            }
+            if (depth != 0) return null;
+        },
+        '[' => {
+            var depth: usize = 1;
+            pos.* += 1;
+            while (pos.* < json.len and depth > 0) {
+                if (json[pos.*] == '[') {
+                    depth += 1;
+                } else if (json[pos.*] == ']') {
+                    depth -= 1;
+                } else if (json[pos.*] == '"') {
+                    pos.* += 1;
+                    while (pos.* < json.len and json[pos.*] != '"') {
+                        if (json[pos.*] == '\\') pos.* += 1;
+                        pos.* += 1;
+                    }
+                }
+                pos.* += 1;
+            }
+            if (depth != 0) return null;
+        },
+        't' => {
+            if (pos.* + 4 > json.len or !std.mem.eql(u8, json[pos.*..][0..4], "true")) return null;
+            pos.* += 4;
+        },
+        'f' => {
+            if (pos.* + 5 > json.len or !std.mem.eql(u8, json[pos.*..][0..5], "false")) return null;
+            pos.* += 5;
+        },
+        'n' => {
+            if (pos.* + 4 > json.len or !std.mem.eql(u8, json[pos.*..][0..4], "null")) return null;
+            pos.* += 4;
+        },
+        '-', '0'...'9' => {
+            while (pos.* < json.len and (json[pos.*] >= '0' and json[pos.*] <= '9' or json[pos.*] == '.' or json[pos.*] == '-' or json[pos.*] == '+' or json[pos.*] == 'e' or json[pos.*] == 'E')) {
+                pos.* += 1;
+            }
+        },
+        else => return null,
+    }
 }

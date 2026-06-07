@@ -30,6 +30,7 @@ pub const Config = struct {
         ticket_single_use: bool = true,
         anonymous_enabled: bool = false,
         anonymous_subject_prefix: []const u8,
+        session_claims: std.StringHashMapUnmanaged([]const u8) = .{},
     };
 
     pub const SecurityConfig = struct {
@@ -86,6 +87,14 @@ pub const Config = struct {
             self.allocator.free(secret);
         }
         self.allocator.free(self.authentication.anonymous_subject_prefix);
+        {
+            var it = self.authentication.session_claims.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            self.authentication.session_claims.deinit(self.allocator);
+        }
         for (self.security.allowed_origins) |origin| {
             self.allocator.free(origin);
         }
@@ -341,6 +350,28 @@ pub const ConfigLoader = struct {
                                 const new_prefix = try allocator.dupe(u8, prefix.string);
                                 allocator.free(config.authentication.anonymous_subject_prefix);
                                 config.authentication.anonymous_subject_prefix = new_prefix;
+                            }
+                        }
+                    }
+                }
+
+                if (auth_obj.get("session")) |session_json| {
+                    if (session_json == .object) {
+                        const session_obj = session_json.object;
+
+                        if (session_obj.get("claims")) |claims_json| {
+                            if (claims_json == .object) {
+                                const claims_obj = claims_json.object;
+                                var it = claims_obj.iterator();
+                                while (it.next()) |entry| {
+                                    if (entry.value_ptr.* == .string) {
+                                        const jwt_claim = try allocator.dupe(u8, entry.key_ptr.*);
+                                        errdefer allocator.free(jwt_claim);
+                                        const session_var = try allocator.dupe(u8, entry.value_ptr.*.string);
+                                        errdefer allocator.free(session_var);
+                                        try config.authentication.session_claims.put(allocator, jwt_claim, session_var);
+                                    }
+                                }
                             }
                         }
                     }

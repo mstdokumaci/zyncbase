@@ -4,6 +4,7 @@ const helpers = @import("app_test_helpers.zig");
 const violation_tracker_helpers = @import("violation_tracker_test_helpers.zig");
 const AppTestContext = helpers.AppTestContext;
 const createMockWebSocket = helpers.createMockWebSocket;
+const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 
 test "ConnectionManager - init and deinit" {
     const allocator = testing.allocator;
@@ -20,7 +21,7 @@ test "ConnectionManager - onOpen and onClose" {
     try app.init(allocator, "conn-mgr-open", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
+    var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
 
     // Test onOpen
     {
@@ -40,8 +41,13 @@ test "ConnectionManager - onOpen rejects missing external identity" {
     try app.init(allocator, "conn-mgr-missing-identity", &.{});
     defer app.deinit();
 
-    var dummy_ws = helpers.createMockWebSocketWithClientId(null);
-    try testing.expectError(error.MissingExternalIdentity, app.connection_manager.onOpen(&dummy_ws));
+    var dummy_ws = WebSocket{
+        .ws = null,
+        .ssl = false,
+        .user_data = @ptrFromInt(999),
+        .session = null,
+    };
+    try testing.expectError(error.MissingSession, app.connection_manager.onOpen(&dummy_ws));
     try testing.expectEqual(@as(usize, 0), app.connection_manager.map.count());
 }
 
@@ -51,7 +57,7 @@ test "ConnectionManager - onClose clears violation state" {
     try app.init(allocator, "conn-mgr-violations", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
+    var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
     const conn_id = dummy_ws.getConnId();
 
     {
@@ -71,18 +77,23 @@ test "ConnectionManager - onOpen clears stale violation state" {
     try app.init(allocator, "conn-mgr-stale-violations", &.{});
     defer app.deinit();
 
-    var dummy_ws = createMockWebSocket();
-    const conn_id = dummy_ws.getConnId();
-
     {
-        const sc = try app.openScopedConnection(&dummy_ws);
-        defer sc.deinit();
+        var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+        const conn_id = dummy_ws.getConnId();
+
+        {
+            const sc = try app.openScopedConnection(&dummy_ws);
+            defer sc.deinit();
+        }
+
+        _ = try app.violation_tracker.recordViolation(conn_id);
+        try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
     }
 
-    _ = try app.violation_tracker.recordViolation(conn_id);
-    try testing.expectEqual(@as(u32, 1), violation_tracker_helpers.getViolationCount(&app.violation_tracker, conn_id));
-
     {
+        var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+        const conn_id = dummy_ws.getConnId();
+
         const sc = try app.openScopedConnection(&dummy_ws);
         defer sc.deinit();
 
@@ -99,9 +110,9 @@ test "ConnectionManager - max connections" {
     // Set a small limit for testing
     app.connection_manager.max_connections = 2;
 
-    var ws1 = createMockWebSocket();
-    var ws2 = createMockWebSocket();
-    var ws3 = createMockWebSocket();
+    var ws1 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    var ws2 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    var ws3 = createMockWebSocket(app.memory_strategy.generalAllocator());
 
     // Open 2 connections (at the limit)
     const sc1 = try app.openScopedConnection(&ws1);
@@ -126,7 +137,7 @@ test "ConnectionManager - acquire and release" {
     try app.init(allocator, "conn-mgr-id-reuse", &.{});
     defer app.deinit();
 
-    var ws = createMockWebSocket();
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
     const sc = try app.openScopedConnection(&ws);
     defer sc.deinit();
 

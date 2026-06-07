@@ -1,4 +1,5 @@
 // Connection Manager
+import { acquireTicket } from "./auth.js";
 import {
 	ConnectionWireCodec,
 	errorResponseToError,
@@ -17,21 +18,6 @@ import type {
 	StatusDetail,
 	StoreDelta,
 } from "./types.js";
-import { generateUUIDv7 } from "./uuid.js";
-
-const CLIENT_ID_STORAGE_KEY = "zyncbase_client_id";
-
-function getOrCreateClientId(explicit?: string): string {
-	if (explicit) return explicit;
-	if (typeof localStorage !== "undefined") {
-		const stored = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-		if (stored) return stored;
-		const id = generateUUIDv7();
-		localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
-		return id;
-	}
-	return generateUUIDv7();
-}
 
 type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
@@ -65,7 +51,6 @@ export class ConnectionManager {
 
 	private storeNamespace: string;
 	private presenceNamespace: string;
-	private readonly clientId: string;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -73,11 +58,12 @@ export class ConnectionManager {
 	private schemaSyncReject: ((reason?: unknown) => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
+	private _refreshInFlight: Promise<void> | null = null;
+
 	constructor(options: ClientOptions) {
 		this.options = options;
 		this.storeNamespace = options.storeNamespace ?? "public";
 		this.presenceNamespace = options.presenceNamespace ?? this.storeNamespace;
-		this.clientId = getOrCreateClientId(options.clientId);
 	}
 
 	getStoreNamespace(): string {
@@ -97,15 +83,48 @@ export class ConnectionManager {
 		this.presenceNamespace = ns;
 	}
 
-	connect(): Promise<void> {
+	private handleTicketError(err: unknown): never {
+		const error =
+			err instanceof ZyncBaseError
+				? err
+				: new ZyncBaseError(
+						err instanceof Error ? err.message : "Ticket acquisition failed",
+						{
+							code: ErrorCodes.CONNECTION_FAILED,
+							category: "network",
+							retryable: true,
+						},
+					);
+		this.rejectSchemaSync(error);
+		this.setStatus("disconnected", { error });
+		this.emit("error", error);
+		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {
+			this.scheduleReconnect();
+		}
+		throw error;
+	}
+
+	private async acquireTicket(): Promise<string> {
+		const auth = this.options.auth ?? { anonymous: true as const };
+		try {
+			const ticketResponse = await acquireTicket(this.options.url, auth);
+			return ticketResponse.ticket;
+		} catch (err) {
+			return this.handleTicketError(err);
+		}
+	}
+
+	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
 		this.resetSchemaSyncPromise();
 
+		const ticket = await this.acquireTicket();
+
 		return new Promise((resolve, reject) => {
 			const url = new URL(this.options.url);
-			url.searchParams.set("clientId", this.clientId);
+			url.searchParams.set("ticket", ticket);
 			const ws = new WebSocket(url.toString());
 			ws.binaryType = "arraybuffer";
 			this.ws = ws;
@@ -171,6 +190,12 @@ export class ConnectionManager {
 			this.pending.reject(id, err);
 		}
 		return result;
+	}
+
+	authRefresh(token: string): Promise<void> {
+		return this.dispatch({ type: "AuthRefresh" as const, token }).then(
+			() => {},
+		);
 	}
 
 	onMessage(handler: MessageHandler): void {
@@ -338,6 +363,9 @@ export class ConnectionManager {
 				break;
 			case "error":
 				this.handleErrorResponse(msg);
+				if (msg.code === ErrorCodes.TOKEN_EXPIRED) {
+					this.handleTokenExpired();
+				}
 				break;
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
@@ -403,6 +431,29 @@ export class ConnectionManager {
 
 	private handleDeltaPush(delta: StoreDelta): void {
 		this.deltaHandler?.(delta);
+	}
+
+	private handleTokenExpired(): void {
+		const auth = this.options.auth;
+		if (auth && "tokenProvider" in auth) {
+			if (this._refreshInFlight) {
+				return;
+			}
+			this._refreshInFlight = auth
+				.tokenProvider()
+				.then((newToken) => this.authRefresh(newToken))
+				.catch((err) => {
+					if (this.options.debug) {
+						console.error("[SDK] Auto-refresh failed:", err);
+					}
+					this.emit("tokenExpired");
+				})
+				.finally(() => {
+					this._refreshInFlight = null;
+				});
+		} else {
+			this.emit("tokenExpired");
+		}
 	}
 
 	private resolveSchemaSync(): void {

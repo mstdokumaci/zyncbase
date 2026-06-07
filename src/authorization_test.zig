@@ -315,9 +315,9 @@ test "authorizeStoreNamespace enforces storeFilter" {
     defer config.deinit();
 
     const user_id = typed.generateUuidV7();
-    try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1");
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1"));
-    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1"));
+    try authorization.authorizeStoreNamespace(allocator, &config, "tenant:acme", user_id, "external-1", null);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "tenant:globex", user_id, "external-1", null));
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1", null));
 }
 
 // ─── Doc Predicate Tests ────────────────────────────────────────────────────

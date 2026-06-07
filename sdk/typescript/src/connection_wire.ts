@@ -2,6 +2,7 @@ import { decode, encode } from "@msgpack/msgpack";
 import { ErrorCodes, SchemaError, ZyncBaseError } from "./errors.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import type {
+	AuthRefresh,
 	ErrorResponse,
 	InboundMessage,
 	JsonValue,
@@ -22,6 +23,7 @@ import type {
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
 export type OutboundRequest =
+	| WithoutId<AuthRefresh>
 	| WithoutId<StoreSet>
 	| WithoutId<StoreRemove>
 	| WithoutId<StoreBatch>

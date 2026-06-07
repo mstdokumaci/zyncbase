@@ -332,24 +332,37 @@ async function createClients(
 ): Promise<ClientState[]> {
 	const clients: ClientState[] = [];
 	const step = Math.floor(totalClients / readWriteCount);
-	for (let i = 0; i < totalClients; i++) {
-		const client = new ZyncBaseClient({
-			url: `ws://127.0.0.1:${port}`,
-			debug: false,
-		});
-		await client.connect();
-		clients.push({
-			client,
-			filterSet: i < totalClients / 2 ? "A" : "B",
-			itemsSub: null,
-			eventsSub: null,
-			itemsRecords: new Map(),
-			eventsRecords: new Map(),
-			isReadWrite: i % step === 0,
-			itemsFired: false,
-			eventsFired: false,
-			debugId: i,
-		});
+	const BATCH_SIZE = 50;
+
+	for (
+		let batchStart = 0;
+		batchStart < totalClients;
+		batchStart += BATCH_SIZE
+	) {
+		const batchEnd = Math.min(batchStart + BATCH_SIZE, totalClients);
+		const batch = await Promise.all(
+			Array.from({ length: batchEnd - batchStart }, async (_, offset) => {
+				const i = batchStart + offset;
+				const client = new ZyncBaseClient({
+					url: `ws://127.0.0.1:${port}`,
+					debug: false,
+				});
+				await client.connect();
+				return {
+					client,
+					filterSet: i < totalClients / 2 ? ("A" as const) : ("B" as const),
+					itemsSub: null,
+					eventsSub: null,
+					itemsRecords: new Map(),
+					eventsRecords: new Map(),
+					isReadWrite: i % step === 0,
+					itemsFired: false,
+					eventsFired: false,
+					debugId: i,
+				} satisfies ClientState;
+			}),
+		);
+		clients.push(...batch);
 	}
 	return clients;
 }

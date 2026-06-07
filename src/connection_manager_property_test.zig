@@ -17,8 +17,11 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
     try app.init(allocator, "conn-property-lifecycle", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
+
     const ThreadContext = struct {
         app: *AppTestContext,
+        allocator: std.mem.Allocator,
         iterations: usize,
         failure: ?anyerror = null,
 
@@ -32,7 +35,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
         fn runInternal(ctx: *@This()) !void {
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
-                var ws = helpers.createMockWebSocket();
+                var ws = helpers.createMockWebSocket(ctx.allocator);
                 try ctx.app.connection_manager.onOpen(&ws);
 
                 const conn = try ctx.app.connection_manager.acquireConnection(ws.getConnId());
@@ -50,7 +53,7 @@ test "ConnectionManager: concurrent lifecycle drains to empty" {
     var threads: [6]std.Thread = undefined;
 
     for (&contexts, 0..) |*ctx, idx| {
-        ctx.* = .{ .app = &app, .iterations = 24 };
+        ctx.* = .{ .app = &app, .allocator = gpa, .iterations = 24 };
         threads[idx] = try std.Thread.spawn(.{}, ThreadContext.run, .{ctx});
     }
 
@@ -71,12 +74,13 @@ test "ConnectionManager: concurrent reads preserve live set" {
     try app.init(allocator, "conn-property-reads", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
     const connection_count = 32;
     var websockets: [connection_count]WebSocket = undefined;
     var ids: [connection_count]u64 = undefined;
 
     for (&websockets, 0..) |*ws, idx| {
-        ws.* = helpers.createMockWebSocket();
+        ws.* = helpers.createMockWebSocket(gpa);
         try app.connection_manager.onOpen(ws);
         ids[idx] = ws.getConnId();
     }
@@ -136,6 +140,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     try app.init(allocator, "conn-property-unique-ids", &.{});
     defer app.deinit();
 
+    const gpa = app.memory_strategy.generalAllocator();
     const num_threads = 6;
     const opens_per_thread = 20;
     const expected_count = num_threads * opens_per_thread;
@@ -143,6 +148,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
 
     const ThreadContext = struct {
         app: *AppTestContext,
+        allocator: std.mem.Allocator,
         ids: []u64,
         offset: usize,
         count: usize,
@@ -158,7 +164,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
         fn runInternal(ctx: *@This()) !void {
             var i: usize = 0;
             while (i < ctx.count) : (i += 1) {
-                var ws = helpers.createMockWebSocket();
+                var ws = helpers.createMockWebSocket(ctx.allocator);
                 try ctx.app.connection_manager.onOpen(&ws);
                 ctx.ids[ctx.offset + i] = ws.getConnId();
                 ctx.app.connection_manager.onClose(&ws);
@@ -172,6 +178,7 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     for (&contexts, 0..) |*ctx, idx| {
         ctx.* = .{
             .app = &app,
+            .allocator = gpa,
             .ids = ids[0..],
             .offset = idx * opens_per_thread,
             .count = opens_per_thread,

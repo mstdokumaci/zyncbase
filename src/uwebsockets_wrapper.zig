@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const Session = @import("session.zig").Session;
 
 // C imports for ZyncBase's uWebSockets bridge.
 pub const c = @cImport({
@@ -9,7 +10,7 @@ pub const c = @cImport({
 
 const SocketUserData = struct {
     server: *WebSocketServer,
-    client_id: ?[]const u8,
+    session: ?Session,
 };
 
 /// WebSocket server wrapper using ZyncBase's uWebSockets C bridge.
@@ -34,7 +35,7 @@ pub const WebSocketServer = struct {
     post_handler_ctx: ?*anyopaque = null,
     drain_handler: ?*const fn (?*anyopaque, u64) void = null,
     drain_handler_ctx: ?*anyopaque = null,
-    verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror![]const u8 = null,
+    verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror!Session = null,
 
     pub const Config = struct {
         port: u16,
@@ -216,8 +217,8 @@ pub const SendStatus = enum(c_uint) {
 pub const WebSocket = struct {
     ws: ?*c.uws_websocket_t,
     ssl: bool,
-    user_data: ?*anyopaque = null, // Mock data for testing
-    client_id: ?[]const u8 = null,
+    user_data: ?*anyopaque = null,
+    session: ?Session = null,
 
     /// Send a message and return the delivery status.
     /// Callers must inspect the result — never discard it silently.
@@ -241,8 +242,14 @@ pub const WebSocket = struct {
         c.uws_ws_close(if (self.ssl) 1 else 0, self.ws.?);
     }
 
-    pub fn getClientId(self: WebSocket) ?[]const u8 {
-        return self.client_id;
+    pub fn getSession(self: WebSocket) ?Session {
+        return self.session;
+    }
+
+    pub fn takeSession(self: *WebSocket) ?Session {
+        const sess = self.session;
+        self.session = null;
+        return sess;
     }
 
     /// Returns a unique identifier for the connection.
@@ -318,7 +325,10 @@ fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     if (ws == null) return;
     const socket_data = getSocketUserData(ws, is_ssl) orelse return;
     const server = socket_data.server;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
+    const session = socket_data.session;
+    socket_data.session = null;
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = session };
+    defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
 }
 
@@ -326,7 +336,7 @@ fn onMessage(ws: ?*c.uws_websocket_t, message: [*c]const u8, length: usize, opco
     if (ws == null or message == null) return;
     const socket_data = getSocketUserData(ws, is_ssl) orelse return;
     const server = socket_data.server;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = socket_data.session };
     const msg_type: MessageType = if (opcode == c.UWS_OPCODE_TEXT) .text else .binary;
     if (server.handlers.on_message) |handler| handler(&zig_ws, message[0..length], msg_type, server.user_data);
 }
@@ -335,10 +345,12 @@ fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: 
     if (ws == null) return;
     const socket_data = getSocketUserData(ws, is_ssl) orelse return;
     const server = socket_data.server;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .client_id = socket_data.client_id };
+    const session = socket_data.session;
+    socket_data.session = null;
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = session };
+    defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     const msg_slice = if (message != null) message[0..length] else "";
     if (server.handlers.on_close) |handler| handler(&zig_ws, code, msg_slice, server.user_data);
-    if (socket_data.client_id) |client_id| server.allocator.free(client_id);
     server.allocator.destroy(socket_data);
 }
 
@@ -396,52 +408,42 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
     var ext: [*c]const u8 = undefined;
     const ext_len = c.uws_req_get_header(@ptrCast(req), "sec-websocket-extensions", "sec-websocket-extensions".len, &ext);
 
-    var client_id: ?[]const u8 = null;
+    var session: ?Session = null;
 
-    var ticket: ?[]const u8 = null;
     // SAFETY: ticket_ptr is written by uws_req_get_query before ticket_len is checked
     var ticket_ptr: [*c]const u8 = undefined;
     const ticket_len = c.uws_req_get_query(@ptrCast(req), "ticket", "ticket".len, &ticket_ptr);
-    if (ticket_len > 0) {
-        ticket = ticket_ptr[0..ticket_len];
+    if (ticket_len == 0) {
+        std.log.warn("Rejecting connection: missing ticket", .{});
+        c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
+        c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+        const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Ticket required\"}";
+        c.uws_res_end(ssl, res, body.ptr, body.len, 0);
+        return;
     }
+    const ticket = ticket_ptr[0..ticket_len];
 
-    if (ticket) |t| {
-        if (server.verify_ticket_cb) |verify_cb| {
-            client_id = verify_cb(server.user_data, t, server.allocator) catch |err| {
-                std.log.warn("Ticket verification failed: {}", .{err});
-                c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
-                c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
-                const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Identity verification failed\"}";
-                c.uws_res_end(ssl, res, body.ptr, body.len, 0);
-                return;
-            };
-        } else {
-            std.log.warn("Ticket verification callback is missing, rejecting connection", .{});
+    if (server.verify_ticket_cb) |verify_cb| {
+        session = verify_cb(server.user_data, ticket, server.allocator) catch |err| {
+            std.log.warn("Ticket verification failed: {}", .{err});
             c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
             c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
             const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Identity verification failed\"}";
             c.uws_res_end(ssl, res, body.ptr, body.len, 0);
             return;
-        }
+        };
     } else {
-        // Fallback to clientId query param
-        // SAFETY: client_id_ptr is written by uws_req_get_query before client_id_len is checked
-        var client_id_ptr: [*c]const u8 = undefined;
-        const client_id_len = c.uws_req_get_query(@ptrCast(req), "clientId", "clientId".len, &client_id_ptr);
-        if (client_id_len > 0) {
-            client_id = server.allocator.dupe(u8, client_id_ptr[0..client_id_len]) catch |err| {
-                std.log.err("Failed to copy clientId query param: {}", .{err});
-                c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
-                c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
-                return;
-            };
-        }
+        std.log.warn("Ticket verification callback is missing, rejecting connection", .{});
+        c.uws_res_write_status(ssl, res, "401 Unauthorized", "401 Unauthorized".len);
+        c.uws_res_write_header(ssl, res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+        const body = "{\"code\":\"AUTH_FAILED\",\"message\":\"Identity verification failed\"}";
+        c.uws_res_end(ssl, res, body.ptr, body.len, 0);
+        return;
     }
 
     const socket_data = server.allocator.create(SocketUserData) catch |err| {
         std.log.err("Failed to allocate WebSocket user data: {}", .{err});
-        if (client_id) |cid| server.allocator.free(cid);
+        if (session) |*sess| sess.deinit(server.allocator);
         c.uws_res_write_status(ssl, res, "500 Internal Server Error", "500 Internal Server Error".len);
         c.uws_res_end(ssl, res, "Internal Server Error", "Internal Server Error".len, 0);
         return;
@@ -449,7 +451,7 @@ fn onUpgradeCallback(upgrade_context: ?*anyopaque, res: ?*c.uws_res_t, req: ?*c.
 
     socket_data.* = .{
         .server = server,
-        .client_id = client_id,
+        .session = session,
     };
 
     _ = c.uws_res_upgrade(ssl, res, socket_data, key, key_len, proto, proto_len, ext, ext_len, context);

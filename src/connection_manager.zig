@@ -60,7 +60,7 @@ pub const ConnectionManager = struct {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
-        self.map.deinit(self.memory_strategy.generalAllocator());
+        self.map.deinit(self.allocator);
         self.mutex.unlock();
 
         self.allocator.free(self.schema_sync_msg);
@@ -79,21 +79,22 @@ pub const ConnectionManager = struct {
         }
     }
 
-    /// Entry point for WebSocket open events
     pub fn onOpen(self: *ConnectionManager, ws: *WebSocket) !void {
         const conn_id = ws.getConnId();
 
         self.message_handler.violation_tracker.clearViolations(conn_id);
 
-        const external_user_id = ws.getClientId() orelse {
-            std.log.warn("Rejecting connection {}: missing external identity", .{conn_id});
+        var sess = ws.takeSession() orelse {
+            std.log.warn("Rejecting connection {}: missing session", .{conn_id});
             ws.close();
-            return error.MissingExternalIdentity;
+            return error.MissingSession;
         };
-        if (external_user_id.len == 0) {
+        var sess_transferred = false;
+        errdefer if (!sess_transferred) sess.deinit(self.allocator);
+        if (sess.external_id.len == 0) {
             std.log.warn("Rejecting connection {}: empty external identity", .{conn_id});
             ws.close();
-            return error.MissingExternalIdentity;
+            return error.MissingSession;
         }
 
         self.mutex.lock();
@@ -101,11 +102,11 @@ pub const ConnectionManager = struct {
 
         if (self.map.count() >= self.max_connections) {
             std.log.warn("Rejecting connection {}: limit reached", .{conn_id});
+            sess.deinit(self.allocator);
             ws.close();
             return;
         }
 
-        // Acquire from pool and activate
         const conn = try self.memory_strategy.acquireConnection();
         var inserted = false;
         errdefer if (!inserted) {
@@ -115,17 +116,16 @@ pub const ConnectionManager = struct {
         };
 
         conn.activate(ws.getConnId(), ws.*);
-        try conn.setExternalUserId(external_user_id);
+        conn.setSession(sess);
+        sess_transferred = true;
 
-        const connected_msg = try wire.encodeConnected(self.allocator, conn.user_id);
+        const connected_msg = try wire.encodeConnected(self.allocator, conn.getExternalUserId());
         defer self.allocator.free(connected_msg);
 
-        try self.map.put(self.memory_strategy.generalAllocator(), conn_id, conn);
+        try self.map.put(self.allocator, conn_id, conn);
         inserted = true;
         std.log.info("Client connected: id={}", .{conn_id});
 
-        // Handshake messages are critical — a dropped send means the connection
-        // is already dead. Close it so the client reconnects cleanly.
         conn.send(connected_msg) catch {
             std.log.warn("Connection {}: dropped on connected message, closing", .{conn_id});
             conn.ws.close();
