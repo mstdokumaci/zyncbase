@@ -95,6 +95,7 @@ export class ConnectionManager {
 							retryable: true,
 						},
 					);
+		this.rejectSchemaSync(error);
 		this.setStatus("disconnected", { error });
 		this.emit("error", error);
 		if (!this.intentionalDisconnect && (this.options.reconnect ?? true)) {

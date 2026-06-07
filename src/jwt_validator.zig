@@ -410,7 +410,12 @@ pub const JwtValidator = struct {
             const key = try allocator.dupe(u8, session_var_name);
             errdefer allocator.free(key);
 
-            try claims.put(allocator, key, typed_val);
+            const gop = try claims.getOrPut(allocator, key);
+            if (gop.found_existing) {
+                allocator.free(key);
+                gop.value_ptr.deinit(allocator);
+            }
+            gop.value_ptr.* = typed_val;
         }
 
         return ValidatedToken{

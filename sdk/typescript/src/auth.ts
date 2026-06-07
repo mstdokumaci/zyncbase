@@ -72,7 +72,7 @@ async function parseTicketResponse(
 			retryable: false,
 		});
 	}
-	if (!body.ticket) {
+	if (!body || typeof body !== "object" || !body.ticket) {
 		throw new ZyncBaseError("Ticket response missing ticket field", {
 			code: ErrorCodes.AUTH_FAILED,
 			category: "auth",

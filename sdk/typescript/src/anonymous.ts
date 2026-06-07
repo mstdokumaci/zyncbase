@@ -37,10 +37,13 @@ function writeToStorage(subject: string): void {
 }
 
 export function getOrCreateAnonymousSubject(): string {
-	const stored = readFromStorage();
-	if (stored) return stored;
-
 	if (inMemorySubject) return inMemorySubject;
+
+	const stored = readFromStorage();
+	if (stored) {
+		inMemorySubject = stored;
+		return stored;
+	}
 
 	const subject = generateAnonymousSubject();
 	inMemorySubject = subject;

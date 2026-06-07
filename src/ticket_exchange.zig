@@ -185,7 +185,13 @@ pub const TicketExchange = struct {
                     errdefer allocator.free(key);
                     const val = try typed.valueFromDynamicJson(allocator, entry.value_ptr.*);
                     errdefer val.deinit(allocator);
-                    try claims.put(allocator, key, val);
+
+                    const gop = try claims.getOrPut(allocator, key);
+                    if (gop.found_existing) {
+                        allocator.free(key);
+                        gop.value_ptr.deinit(allocator);
+                    }
+                    gop.value_ptr.* = val;
                 }
             }
         }
