@@ -51,6 +51,9 @@ export interface ClientOptions {
 	maxReconnectDelay?: number; // ms, default: 30_000
 	maxReconnectAttempts?: number; // default: Infinity
 	reconnectJitter?: boolean; // default: true
+	retryRateLimits?: boolean; // default: true — auto-retry RATE_LIMITED
+	retryServerErrors?: boolean; // default: true — auto-retry INTERNAL_ERROR, ENGINE_UNHEALTHY
+	maxServerRetries?: number; // default: 3 — max attempts for server errors
 	debug?: boolean; // default: false
 }
 

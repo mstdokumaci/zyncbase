@@ -3,6 +3,7 @@ const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 pub const WireError = struct {
     code: []const u8,
     message: []const u8,
+    retry_after_ms: ?u64 = null,
 };
 
 fn wireError(comptime code: []const u8, comptime message: []const u8) WireError {

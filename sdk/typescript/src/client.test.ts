@@ -138,14 +138,16 @@ describe("ZyncBaseClient", () => {
 		const errorResponse = encode({
 			type: "error",
 			id: decoded.id,
-			code: "INTERNAL_ERROR",
+			code: "SCHEMA_VALIDATION_FAILED",
 			message: "oops",
 		});
 		mockWs.triggerMessage(errorResponse as unknown as ArrayBuffer);
 
 		await setPromise;
 		expect(errors.length).toBeGreaterThan(0);
-		expect((errors[0] as Record<string, unknown>).code).toBe("INTERNAL_ERROR");
+		expect((errors[0] as Record<string, unknown>).code).toBe(
+			"SCHEMA_VALIDATION_FAILED",
+		);
 		client.disconnect();
 		restoreWebSocket();
 	});

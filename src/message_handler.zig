@@ -97,7 +97,11 @@ pub const MessageHandler = struct {
                     self.security_config.max_messages_per_second,
                     self.security_config.max_messages_per_second * 2,
                 });
-                try self.sendError(self.allocator, conn, null, wire.getWireError(error.RateLimited));
+                const rate_limit: f64 = @floatFromInt(self.security_config.max_messages_per_second);
+                const ms_until_token: u64 = @intFromFloat(@ceil((1.0 - conn.request_tokens) / rate_limit * 1000.0));
+                var err = wire.getWireError(error.RateLimited);
+                err.retry_after_ms = ms_until_token;
+                try self.sendError(self.allocator, conn, null, err);
                 return;
             }
         }
