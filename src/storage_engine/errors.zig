@@ -47,6 +47,8 @@ pub const StorageError = error{
     MissingConditionValue,
     /// Low-level SQLite error that doesn't match specific classified types
     SQLiteError,
+    /// Engine marked unhealthy due to writer thread failure
+    EngineUnhealthy,
 };
 
 pub fn classifyError(err: anyerror) anyerror {

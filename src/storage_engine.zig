@@ -228,6 +228,7 @@ pub const StorageEngine = struct {
                 .schema = schema,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_ready = std.atomic.Value(bool).init(false),
+                .is_healthy = std.atomic.Value(bool).init(true),
                 // SAFETY: Initialized below via .write_queue.init().
                 .queue = undefined,
                 .performance_config = performance_config,
@@ -337,6 +338,16 @@ pub const StorageEngine = struct {
     pub fn ensureRunning(self: *StorageEngine) !void {
         if (self.state.load(.acquire) != .running) {
             return error.InvalidState;
+        }
+    }
+
+    pub fn isHealthy(self: *const StorageEngine) bool {
+        return self.state.load(.acquire) == .running and self.writer.isHealthy();
+    }
+
+    pub fn ensureHealthy(self: *const StorageEngine) !void {
+        if (!self.isHealthy()) {
+            return StorageError.EngineUnhealthy;
         }
     }
 
@@ -465,6 +476,7 @@ pub const StorageEngine = struct {
         write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
@@ -522,6 +534,7 @@ pub const StorageEngine = struct {
         };
 
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
 
         for (entries) |entry| {
@@ -770,6 +783,7 @@ pub const StorageEngine = struct {
         write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         if (guard_predicate) |predicate| {

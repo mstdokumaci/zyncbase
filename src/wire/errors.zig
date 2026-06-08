@@ -49,6 +49,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.RequestSuperseded => wireError("REQUEST_SUPERSEDED", "Scope superseded by newer request"),
         error.BatchTooLarge => wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations"),
         error.InvalidWriteAck => wireError("INVALID_MESSAGE", "writeId requires confirm: committed"),
+        error.EngineUnhealthy => wireError("ENGINE_UNHEALTHY", "Write engine is in a degraded state"),
         else => wireError("INTERNAL_ERROR", "Zig core failure"),
     };
 }

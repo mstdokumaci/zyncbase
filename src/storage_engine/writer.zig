@@ -47,6 +47,7 @@ pub const Writer = struct {
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
+    is_healthy: std.atomic.Value(bool),
     queue: WriteQueue,
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
@@ -62,6 +63,9 @@ pub const Writer = struct {
     }
 
     pub fn enqueueOp(self: *Writer, op: WriteOp) !void {
+        if (!self.is_healthy.load(.acquire)) {
+            return StorageError.EngineUnhealthy;
+        }
         self.beginOp();
         self.queue.push(op) catch |err| {
             self.endOp(1);
@@ -70,6 +74,10 @@ pub const Writer = struct {
         self.mutex.lock();
         self.work_cond.signal();
         self.mutex.unlock();
+    }
+
+    pub fn isHealthy(self: *const Writer) bool {
+        return self.is_healthy.load(.acquire);
     }
 
     pub fn pendingOpCount(self: *const Writer) usize {
@@ -430,6 +438,27 @@ pub const Writer = struct {
     fn writeThreadLoop(self: *Writer) void {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
+            self.is_healthy.store(false, .release);
+
+            while (self.queue.pop()) |op| {
+                if (op.getCompletionSignal()) |sig| {
+                    sig.signal(StorageError.EngineUnhealthy);
+                }
+                if (op.getWriteAckInfo()) |info| {
+                    self.write_outcome_buffer.push(.{
+                        .conn_id = info.conn_id,
+                        .write_id = info.write_id,
+                        .err = StorageError.EngineUnhealthy,
+                    }) catch |push_err| {
+                        std.log.err("Failed to push write outcome during crash drain: {}", .{push_err});
+                    };
+                }
+                op.deinit(self.allocator);
+                self.endOp(1);
+            }
+
+            self.wakeFlushWaiters();
+            self.notifyChanges();
         };
     }
 

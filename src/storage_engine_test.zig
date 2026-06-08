@@ -514,3 +514,50 @@ test "StorageEngine: client writes blocked during migration" {
     const err3 = (try ctx.table("items")).deleteDocument(1, 1);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
+test "StorageEngine: engine healthy after start" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-healthy-start", table);
+    defer ctx.deinit();
+
+    try testing.expect(ctx.engine.isHealthy());
+    try testing.expect(ctx.engine.writer.isHealthy());
+}
+test "StorageEngine: writes rejected when engine unhealthy" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-unhealthy-reject", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    engine.writer.is_healthy.store(false, .release);
+    defer engine.writer.is_healthy.store(true, .release);
+
+    try testing.expect(!engine.isHealthy());
+
+    const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
+    try testing.expectError(sth.StorageError.EngineUnhealthy, err1);
+
+    const err2 = (try ctx.table("items")).deleteDocument(1, 1);
+    try testing.expectError(sth.StorageError.EngineUnhealthy, err2);
+}
+test "StorageEngine: ensureHealthy returns error when unhealthy" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-ensure-healthy", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    try engine.ensureHealthy();
+
+    engine.writer.is_healthy.store(false, .release);
+    defer engine.writer.is_healthy.store(true, .release);
+
+    try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
+}

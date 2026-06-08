@@ -18,6 +18,7 @@ export const ErrorCodes = {
 	CONNECTION_FAILED: "CONNECTION_FAILED",
 	TIMEOUT: "TIMEOUT",
 	INTERNAL_ERROR: "INTERNAL_ERROR",
+	ENGINE_UNHEALTHY: "ENGINE_UNHEALTHY",
 	INVALID_PATH: "INVALID_PATH",
 	BATCH_TOO_LARGE: "BATCH_TOO_LARGE",
 	REQUEST_SUPERSEDED: "REQUEST_SUPERSEDED",
@@ -52,6 +53,9 @@ function deriveCategory(code: string): {
 			return { category: "rate_limit", retryable: true };
 
 		case ErrorCodes.INTERNAL_ERROR:
+			return { category: "server", retryable: true };
+
+		case ErrorCodes.ENGINE_UNHEALTHY:
 			return { category: "server", retryable: true };
 
 		case ErrorCodes.SCHEMA_VALIDATION_FAILED:
