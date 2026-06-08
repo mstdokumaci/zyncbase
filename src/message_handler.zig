@@ -214,65 +214,10 @@ pub const MessageHandler = struct {
         return session;
     }
 
-    fn requireStoreNamespace(conn: *Connection) !i64 {
-        return (try requireStoreSession(conn)).namespace_id;
-    }
-
-    const StoreAuthScope = struct {
-        session: Connection.StoreSession,
-        namespace: []const u8,
-        external_user_id: []const u8,
-        namespace_match: authorization.AuthConfig.NamespaceRuleMatch,
-        session_claims: *const std.StringHashMapUnmanaged(typed.Value),
-
-        fn deinit(self: *StoreAuthScope, allocator: std.mem.Allocator) void {
-            self.namespace_match.deinit(allocator);
-            allocator.free(self.external_user_id);
-            allocator.free(self.namespace);
-        }
-
-        fn evalContext(
-            self: *const StoreAuthScope,
-            allocator: std.mem.Allocator,
-            table: ?*const schema_mod.Table,
-            value: ?*const msgpack.Payload,
-        ) authorization.EvalContext {
-            return .{
-                .allocator = allocator,
-                .session_user_id = self.session.user_doc_id,
-                .session_external_id = self.external_user_id,
-                .session_claims = self.session_claims,
-                .namespace_captures = &self.namespace_match.captures.captures,
-                .path_table = if (table) |t| t.name else null,
-                .value_payload = value,
-                .value_table = table,
-            };
-        }
-    };
-
-    fn makeStoreAuthScope(
-        self: *MessageHandler,
-        allocator: std.mem.Allocator,
-        conn: *Connection,
-        session: Connection.StoreSession,
-    ) !StoreAuthScope {
-        const namespace = (try conn.dupeStoreNamespace(allocator)) orelse return error.SessionNotReady;
-        errdefer allocator.free(namespace);
-
-        const external_user_id = try conn.dupeExternalUserId(allocator);
-        errdefer allocator.free(external_user_id);
-
-        const namespace_match = (try authorization.matchNamespaceRule(allocator, self.auth_config, namespace)) orelse return error.NamespaceUnauthorized;
-
-        const claims_ptr = conn.getSessionClaimsPtr();
-
-        return .{
-            .session = session,
-            .namespace = namespace,
-            .external_user_id = external_user_id,
-            .namespace_match = namespace_match,
-            .session_claims = claims_ptr,
-        };
+    fn extractDocIdFromPath(path: msgpack.Payload) !typed.DocId {
+        if (path != .arr or path.arr.len < 2) return error.InvalidMessageFormat;
+        if (path.arr[1] != .bin) return error.InvalidMessageFormat;
+        return try typed.docIdFromBytes(path.arr[1].bin.value());
     }
 
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
@@ -334,7 +279,17 @@ pub const MessageHandler = struct {
         defer sub_query.deinit(arena_allocator);
 
         const table = self.schema.getTableByIndex(sub_query.table_index) orelse return error.UnknownTable;
-        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+        const session = try requireStoreSession(conn);
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+
+        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .namespace = namespace,
+        });
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
         var page = try self.store_service.queryMore(arena_allocator, sub_query.table_index, sub_query.namespace_id, &sub_query.filter, req.nextCursor, read_auth_ptr);
@@ -356,37 +311,6 @@ pub const MessageHandler = struct {
         return msgpack.extractPayloadUint(path.arr[0]) orelse return error.InvalidMessageFormat;
     }
 
-    fn evaluateStoreWriteAuth(
-        self: *MessageHandler,
-        arena: std.mem.Allocator,
-        conn: *Connection,
-        table: *const schema_mod.Table,
-        value: ?*const msgpack.Payload,
-    ) !?query_ast.FilterPredicate {
-        const session = try requireStoreSession(conn);
-        const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
-        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
-        defer auth_scope.deinit(arena);
-
-        const eval_ctx = auth_scope.evalContext(arena, table, value);
-        return try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
-    }
-
-    fn evaluateStoreReadAuth(
-        self: *MessageHandler,
-        arena: std.mem.Allocator,
-        conn: *Connection,
-        table: *const schema_mod.Table,
-    ) !?query_ast.FilterPredicate {
-        const session = try requireStoreSession(conn);
-        const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
-        var auth_scope = try self.makeStoreAuthScope(arena, conn, session);
-        defer auth_scope.deinit(arena);
-
-        const eval_ctx = auth_scope.evalContext(arena, table, null);
-        return try authorization.buildDocPredicate(store_rule.read, eval_ctx, table);
-    }
-
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
@@ -400,8 +324,20 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, &value);
-        const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
+        const doc_id = try extractDocIdFromPath(payloads.path);
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+
+        var auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .namespace = namespace,
+            .doc_id = doc_id,
+            .value = &value,
+        });
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*predicate| predicate else null;
 
         // Parse write acknowledgment metadata
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
@@ -433,8 +369,20 @@ pub const MessageHandler = struct {
 
         const table_index = try extractTableIndexFromPath(payloads.path);
         const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        var auth_predicate = try self.evaluateStoreWriteAuth(arena_allocator, conn, table, null);
-        const auth_predicate_ptr = if (auth_predicate) |*predicate| predicate else null;
+        const doc_id = try extractDocIdFromPath(payloads.path);
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
+
+        const auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .namespace = namespace,
+            .doc_id = doc_id,
+            .value = null,
+        });
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*predicate| predicate else null;
 
         // Parse write acknowledgment metadata
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
@@ -462,8 +410,7 @@ pub const MessageHandler = struct {
     ) ![]const u8 {
         const payloads = try wire.extractStoreBatchPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
-        var auth_scope = try self.makeStoreAuthScope(arena_allocator, conn, session);
-        defer auth_scope.deinit(arena_allocator);
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
         var auth_predicates: ?[]?query_ast.FilterPredicate = null;
         if (payloads.ops == .arr and payloads.ops.arr.len > 0) {
@@ -476,11 +423,20 @@ pub const MessageHandler = struct {
                 const path = op_payload.arr[1];
                 const table_index = try extractTableIndexFromPath(path);
                 const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-
-                const store_rule = self.auth_config.storeRuleFor(table.name) orelse return error.AccessDenied;
+                const doc_id = try extractDocIdFromPath(path);
                 const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
-                const eval_ctx = auth_scope.evalContext(arena_allocator, table, value_ptr);
-                predicates[i] = try authorization.buildDocPredicate(store_rule.write, eval_ctx, table);
+
+                const auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
+                    .config = self.auth_config,
+                    .table = table,
+                    .session_user_id = session.user_doc_id,
+                    .session_external_id = conn.getExternalUserId(),
+                    .session_claims = conn.getSessionClaimsPtr(),
+                    .namespace = namespace,
+                    .doc_id = doc_id,
+                    .value = value_ptr,
+                });
+                predicates[i] = auth_result.update_predicate;
             }
         }
 
@@ -517,10 +473,20 @@ pub const MessageHandler = struct {
         };
 
         const sub_id = generateSubscriptionId(conn) catch return error.SubscriptionIdGenerationFailed;
-        const namespace_id = try requireStoreNamespace(conn);
+        const session = try requireStoreSession(conn);
+        const namespace_id = session.namespace_id;
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
         const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+
+        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .namespace = namespace,
+        });
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
         var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);
@@ -553,10 +519,20 @@ pub const MessageHandler = struct {
             return err;
         };
 
-        const namespace_id = try requireStoreNamespace(conn);
+        const session = try requireStoreSession(conn);
+        const namespace_id = session.namespace_id;
+        const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
         const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        var read_auth = try self.evaluateStoreReadAuth(arena_allocator, conn, table);
+
+        var read_auth = try authorization.authorizeStoreRead(arena_allocator, .{
+            .config = self.auth_config,
+            .table = table,
+            .session_user_id = session.user_doc_id,
+            .session_external_id = conn.getExternalUserId(),
+            .session_claims = conn.getSessionClaimsPtr(),
+            .namespace = namespace,
+        });
         const read_auth_ptr = if (read_auth) |*predicate| predicate else null;
 
         var qr = try self.store_service.queryCollection(arena_allocator, namespace_id, msgpack.Payload.uintToPayload(table_index), parsed, read_auth_ptr);

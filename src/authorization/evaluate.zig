@@ -16,6 +16,8 @@ pub const EvalContext = struct {
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
     value_table: ?*const @import("../schema.zig").Table = null,
+    doc_id: ?typed.DocId = null,
+    owner_doc_id: ?typed.DocId = null,
 };
 
 pub const EvalResult = enum {
@@ -82,6 +84,64 @@ pub fn evaluateCondition(condition: types.Condition, ctx: EvalContext) EvalResul
 /// Strict evaluation — $doc references cause .deny (for commands where $doc is forbidden).
 pub fn evaluateConditionStrict(condition: types.Condition, ctx: EvalContext) bool {
     return evaluateConditionInternal(condition, ctx, true) == .allow;
+}
+
+/// Evaluate a condition with $doc references resolved against a candidate document.
+/// The candidate is composed from doc_id, owner_doc_id (injected), and incoming value_payload fields.
+/// Returns true if the condition passes, false if it fails or references an absent field.
+/// Zero-allocation: resolves $doc.field by looking up the incoming payload directly.
+pub fn evaluateConditionWithDoc(condition: types.Condition, ctx: EvalContext) bool {
+    return evaluateConditionWithDocInternal(condition, ctx);
+}
+
+fn evaluateConditionWithDocInternal(condition: types.Condition, ctx: EvalContext) bool {
+    switch (condition) {
+        .boolean => |b| return b,
+        .logical_and => |conds| {
+            for (conds) |cond| {
+                if (!evaluateConditionWithDocInternal(cond, ctx)) return false;
+            }
+            return true;
+        },
+        .logical_or => |conds| {
+            for (conds) |cond| {
+                if (evaluateConditionWithDocInternal(cond, ctx)) return true;
+            }
+            return false;
+        },
+        .comparison => |comp| return evaluateComparisonWithDoc(comp, ctx),
+    }
+}
+
+fn evaluateComparisonWithDoc(comp: types.Comparison, ctx: EvalContext) bool {
+    var lhs = resolveDocOperand(comp.lhs, ctx) orelse return false;
+    defer lhs.deinit(ctx.allocator);
+
+    var rhs = resolveOperand(comp.rhs, ctx) orelse return false;
+    defer rhs.deinit(ctx.allocator);
+
+    return compareValues(lhs.valueView(), comp.op, rhs.valueView());
+}
+
+fn resolveDocOperand(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
+    if (var_ctx.scope != .doc) {
+        return resolveContextVar(var_ctx, ctx);
+    }
+
+    if (std.mem.eql(u8, var_ctx.field, "id")) {
+        return if (ctx.doc_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
+    }
+    if (std.mem.eql(u8, var_ctx.field, "owner_id")) {
+        return if (ctx.owner_doc_id) |id| ResolvedAuthValue.fromBorrowed(.{ .scalar = .{ .doc_id = id } }) else null;
+    }
+
+    const table = ctx.value_table orelse return null;
+    const field_index = table.fieldIndex(var_ctx.field) orelse return null;
+    const field_meta = table.fields[field_index];
+
+    if (field_meta.kind == .system) return null;
+
+    return resolveIncomingValueField(var_ctx.field, ctx);
 }
 
 pub fn authorizeStoreNamespace(

@@ -234,6 +234,10 @@ pub const Connection = struct {
         return self.scope_seq == expected_scope_seq;
     }
 
+    pub fn getStoreNamespace(self: *Connection) ?[]const u8 {
+        return self.store_namespace;
+    }
+
     pub fn dupeStoreNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {
         const namespace = self.store_namespace orelse return null;
         return @as(?[]const u8, try allocator.dupe(u8, namespace));
