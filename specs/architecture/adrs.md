@@ -773,7 +773,7 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 ## ADR-030: Async Session Resolution (Non-Blocking Reactor Handoff)
 
 **Date**: 2026-05-06  
-**Status**: Proposed  
+**Status**: Accepted  
 
 **Context**:  
 ADR-029 established the scoped session readiness gate, where `StoreSetNamespace` triggers namespace and user identity resolution through the writer thread. The initial implementation uses `CompletionSignal.wait()` — a Mutex+Condition blocking call — on the uWS event loop thread to synchronously wait for the writer thread's result. This blocks the entire reactor for 500μs–2ms per resolution, stalling all concurrent WebSocket connections and violating the p50 < 1ms latency target (ADR-020).
@@ -800,11 +800,12 @@ Replace blocking `CompletionSignal.wait()` resolution with a two-tier strategy: 
 
 6. **`scope_seq` monotonic counter**: A per-connection counter incremented on each store scope reset (under `Connection.mutex`). Carried in the `resolve_session` WriteOp and checked at delivery time. If the connection's current `scope_seq` doesn't match the result's `scope_seq`, the result is stale (client sent another `StoreSetNamespace` in the meantime) and is discarded.
 
-7. **Buffer capacity rationale (256)**:
+7. **Buffer capacity rationale (256 + 512 overflow)**:
    - `StoreSetNamespace` is a lifecycle message sent ~1x per connection session, not in hot data paths.
    - The writer thread processes ~5,000–10,000 resolutions/second; the post_handler drains every uWS loop iteration (~1ms).
    - Worst-case thundering herd (100k reconnections): the buffer accumulates at most ~10–50 results between drain cycles.
-   - 256 provides 25x headroom over the realistic worst case. On overflow, the writer logs an error and the client retries via SDK timeout.
+   - 256 provides 25x headroom over the realistic worst case. When the ring buffer is full, results spill into a bounded overflow ArrayList (capacity 512).
+   - When both the ring buffer (256) and overflow (512) are exhausted (combined 768 slots), the writer logs an error and drops the result. The client retries via SDK timeout. This is acceptable because the combined capacity provides >150x headroom over realistic worst-case load.
 
 **Rationale**:
 - **Tier 1 eliminates I/O for the common case**: After the first resolution of a given (namespace, user) pair, all subsequent connections with the same pair resolve in ~1μs from the lock-free cache — no reader pool mutex, no SQLite, no writer thread.
