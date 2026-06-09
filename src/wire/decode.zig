@@ -33,6 +33,7 @@ const Key = struct {
     pub const ops = comptimeKeyPayload("ops");
     pub const confirm = comptimeKeyPayload("confirm");
     pub const write_id = comptimeKeyPayload("writeId");
+    pub const token = comptimeKeyPayload("token");
 };
 
 // === Low-Level MessagePack Parser Primitives ===
@@ -439,6 +440,24 @@ pub fn extractStoreBatchPayloads(
         .confirm = confirm,
         .write_id = write_id,
     };
+}
+
+pub fn extractAuthRefreshFast(bytes: []const u8) ![]const u8 {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var token: ?[]const u8 = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.token)) {
+            token = try readStr(bytes, &pos);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return token orelse return error.MissingRequiredFields;
 }
 
 fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Payload {

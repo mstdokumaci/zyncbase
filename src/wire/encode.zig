@@ -30,6 +30,8 @@ const Keys = struct {
     pub const details = comptimeEncodeKey("details");
     pub const phase = comptimeEncodeKey("phase");
     pub const batch_index = comptimeEncodeKey("batchIndex");
+    pub const session = comptimeEncodeKey("session");
+    pub const token = comptimeEncodeKey("token");
 };
 
 const Values = struct {
@@ -107,6 +109,35 @@ pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     try list.appendSlice(msgpack_allocator, &success_header);
     try writer.writeByte(0xcf);
     try writer.writeInt(u64, msg_id, .big);
+
+    return list.toOwnedSlice(msgpack_allocator);
+}
+
+pub fn encodeOkWithSession(
+    msgpack_allocator: Allocator,
+    msg_id: u64,
+    session_claims: *const std.StringHashMapUnmanaged(typed.Value),
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(msgpack_allocator);
+    const writer = list.writer(msgpack_allocator);
+
+    try msgpack.encodeMapHeader(writer, 3);
+
+    try list.appendSlice(msgpack_allocator, Keys.type);
+    try list.appendSlice(msgpack_allocator, Values.ok);
+
+    try list.appendSlice(msgpack_allocator, Keys.id);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, msg_id, .big);
+
+    try list.appendSlice(msgpack_allocator, Keys.session);
+    try msgpack.encodeMapHeader(writer, session_claims.count());
+    var it = session_claims.iterator();
+    while (it.next()) |entry| {
+        try msgpack.writeMsgPackStr(writer, entry.key_ptr.*);
+        try typed.writeMsgPack(entry.value_ptr.*, writer);
+    }
 
     return list.toOwnedSlice(msgpack_allocator);
 }

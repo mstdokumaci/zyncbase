@@ -199,6 +199,7 @@ pub const TicketExchange = struct {
         return Session{
             .external_id = external_id,
             .is_anonymous = extracted.is_anonymous,
+            .token_expires_at = extracted.exp,
             .claims = claims,
         };
     }

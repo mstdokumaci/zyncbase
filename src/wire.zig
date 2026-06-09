@@ -13,12 +13,14 @@ pub const extractStorePathPayloads = decode.extractStorePathPayloads;
 pub const StorePathPayloads = decode.StorePathPayloads;
 pub const extractStoreBatchPayloads = decode.extractStoreBatchPayloads;
 pub const StoreBatchPayloads = decode.StoreBatchPayloads;
+pub const extractAuthRefreshFast = decode.extractAuthRefreshFast;
 pub const WireError = errors.WireError;
 pub const getWireError = errors.getWireError;
 
 pub const store_delta_header = encode.store_delta_header;
 pub const QueryResponse = encode.QueryResponse;
 pub const encodeSuccess = encode.encodeSuccess;
+pub const encodeOkWithSession = encode.encodeOkWithSession;
 pub const encodeConnected = encode.encodeConnected;
 pub const encodeError = encode.encodeError;
 pub const encodeQuery = encode.encodeQuery;

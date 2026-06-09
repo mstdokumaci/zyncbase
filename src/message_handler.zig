@@ -14,6 +14,7 @@ const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
 const query_ast = @import("query_ast.zig");
 const typed = @import("typed.zig");
+const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
 /// Manages connection lifecycle, message parsing, routing, and response handling
@@ -26,6 +27,8 @@ pub const MessageHandler = struct {
     security_config: SecurityConfig,
     auth_config: *const authorization.AuthConfig,
     schema: *const schema_mod.Schema,
+    jwt_validator: ?*JwtValidator,
+    session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
 
     /// Initialize message handler with all required components
     pub fn init(
@@ -38,6 +41,8 @@ pub const MessageHandler = struct {
         security_config: SecurityConfig,
         auth_config: *const authorization.AuthConfig,
         schema: *const schema_mod.Schema,
+        jwt_validator: ?*JwtValidator,
+        session_claims_mapping: *const std.StringHashMapUnmanaged([]const u8),
     ) void {
         self.* = .{
             .allocator = allocator,
@@ -48,6 +53,8 @@ pub const MessageHandler = struct {
             .security_config = security_config,
             .auth_config = auth_config,
             .schema = schema,
+            .jwt_validator = jwt_validator,
+            .session_claims_mapping = session_claims_mapping,
         };
     }
 
@@ -168,6 +175,7 @@ pub const MessageHandler = struct {
             .store_load_more => try self.handleStoreLoadMore(arena_allocator, conn, envelope.id, message),
             .store_remove => try self.handleStoreRemove(arena_allocator, conn, envelope.id, message),
             .store_batch => try self.handleStoreBatch(arena_allocator, conn, envelope.id, message),
+            .auth_refresh => try self.handleAuthRefresh(arena_allocator, conn, envelope.id, message),
         };
     }
 
@@ -545,6 +553,52 @@ pub const MessageHandler = struct {
         });
     }
 
+    fn handleAuthRefresh(
+        self: *MessageHandler,
+        arena_allocator: std.mem.Allocator,
+        conn: *Connection,
+        msg_id: u64,
+        message: []const u8,
+    ) ![]const u8 {
+        const token = wire.extractAuthRefreshFast(message) catch {
+            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
+            return error.AuthFailed;
+        };
+
+        const validator = self.jwt_validator orelse {
+            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured");
+            return error.AuthFailed;
+        };
+
+        const validated = validator.validateWithClaims(arena_allocator, token, self.session_claims_mapping.*) catch {
+            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
+            return error.AuthFailed;
+        };
+
+        const sess = conn.session orelse {
+            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
+            return error.AuthFailed;
+        };
+
+        if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
+            try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
+            return error.AuthFailed;
+        }
+
+        conn.updateSessionClaims(validated.claims, validated.expires_at);
+
+        return try wire.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
+    }
+
+    fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8) !void {
+        const disconnect_msg = wire.encodeServerDisconnect(self.allocator, code, msg) catch return;
+        defer self.allocator.free(disconnect_msg);
+        conn.send(disconnect_msg) catch |err| {
+            std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
+        };
+        conn.ws.close();
+    }
+
     fn generateSubscriptionId(conn: *Connection) !u64 {
         return conn.allocateSubscriptionId();
     }
@@ -559,6 +613,7 @@ const MsgType = enum {
     store_load_more,
     store_remove,
     store_batch,
+    auth_refresh,
 };
 
 fn classifyMsgType(t: []const u8) ?MsgType {
@@ -575,7 +630,7 @@ fn classifyMsgType(t: []const u8) ?MsgType {
         'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
         'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
         'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
-        else => null,
+        else => if (std.mem.eql(u8, t, "AuthRefresh")) return .auth_refresh else null,
     };
 }
 

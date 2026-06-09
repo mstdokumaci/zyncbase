@@ -418,7 +418,9 @@ Update the connection's base session context with a new external JWT.
 }
 ```
 
-Active store and presence scopes are marked not ready while `AuthRefresh` is processed. The server re-resolves `users.id` for each active scope before returning `ok`; scoped operations sent during this window receive `SESSION_NOT_READY`.
+The session's `$session` claims and token expiry are updated in-place. Active store and presence scopes continue without interruption.
+
+**Failure**: If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED` and closes the WebSocket connection.
 
 ---
 

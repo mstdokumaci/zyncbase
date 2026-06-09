@@ -26,6 +26,7 @@ const StoreService = @import("store_service.zig").StoreService;
 const ticket_exchange_mod = @import("ticket_exchange.zig");
 const TicketExchange = ticket_exchange_mod.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
+const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 const JwksCache = @import("jwt_validator.zig").JwksCache;
 const Session = @import("session.zig").Session;
 pub const uws_c = @import("uwebsockets_wrapper.zig").c;
@@ -56,10 +57,12 @@ pub const ZyncBaseServer = struct {
     auth_config: authorization.AuthConfig,
     ticket_exchange: ?*TicketExchange = null,
     jwks_cache: ?*JwksCache = null,
+    jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Thread.Mutex = .{},
     shutdown_performed: bool = false,
     shutdown_in_progress: bool = false,
     shutdown_start_time: i64 = 0,
+    last_token_sweep_ms: i64 = 0,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -255,6 +258,37 @@ pub const ZyncBaseServer = struct {
             &self.auth_config,
         );
 
+        const auth_cfg = &config.authentication;
+        var jwks_cache_ptr: ?*JwksCache = null;
+        if (auth_cfg.jwt_jwks_url) |jwks_url| {
+            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
+            errdefer self.memory_strategy.generalAllocator().destroy(jc);
+            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
+            jwks_cache_ptr = jc;
+        }
+        self.jwks_cache = jwks_cache_ptr;
+        errdefer if (self.jwks_cache) |jc| {
+            jc.deinit();
+            self.memory_strategy.generalAllocator().destroy(jc);
+            self.jwks_cache = null;
+        };
+
+        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
+            JwtValidationConfig{
+                .secret = auth_cfg.jwt_secret,
+                .algorithm = auth_cfg.jwt_algorithm,
+                .issuer = auth_cfg.jwt_issuer,
+                .audience = auth_cfg.jwt_audience,
+                .subject_claim = auth_cfg.jwt_subject_claim,
+                .jwks_cache = jwks_cache_ptr,
+            }
+        else
+            null;
+
+        if (jwt_config) |cfg| {
+            self.jwt_validator = JwtValidator.init(cfg);
+        }
+
         self.message_handler.init(
             self.memory_strategy.generalAllocator(),
             &self.memory_strategy,
@@ -264,6 +298,8 @@ pub const ZyncBaseServer = struct {
             config.security,
             &self.auth_config,
             &self.schema,
+            if (self.jwt_validator) |*jv| jv else null,
+            &auth_cfg.session.claims,
         );
         errdefer self.message_handler.deinit();
 
@@ -309,33 +345,6 @@ pub const ZyncBaseServer = struct {
         self.websocket_server.drain_handler_ctx = self;
 
         // Initialize TicketExchange for POST /auth/ticket
-        const auth_cfg = &config.authentication;
-        var jwks_cache_ptr: ?*JwksCache = null;
-        if (auth_cfg.jwt_jwks_url) |jwks_url| {
-            const jc = try self.memory_strategy.generalAllocator().create(JwksCache);
-            errdefer self.memory_strategy.generalAllocator().destroy(jc);
-            jc.* = try JwksCache.init(self.memory_strategy.generalAllocator(), jwks_url);
-            jwks_cache_ptr = jc;
-        }
-        self.jwks_cache = jwks_cache_ptr;
-        errdefer if (self.jwks_cache) |jc| {
-            jc.deinit();
-            self.memory_strategy.generalAllocator().destroy(jc);
-            self.jwks_cache = null;
-        };
-
-        const jwt_config: ?JwtValidationConfig = if (auth_cfg.jwt_secret != null or jwks_cache_ptr != null)
-            JwtValidationConfig{
-                .secret = auth_cfg.jwt_secret,
-                .algorithm = auth_cfg.jwt_algorithm,
-                .issuer = auth_cfg.jwt_issuer,
-                .audience = auth_cfg.jwt_audience,
-                .subject_claim = auth_cfg.jwt_subject_claim,
-                .jwks_cache = jwks_cache_ptr,
-            }
-        else
-            null;
-
         self.ticket_exchange = try TicketExchange.init(
             self.memory_strategy.generalAllocator(),
             auth_cfg.ticket_secret,
@@ -345,7 +354,7 @@ pub const ZyncBaseServer = struct {
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,
             self.websocket_server.ssl,
-            auth_cfg.session_claims,
+            auth_cfg.session.claims,
         );
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
@@ -585,6 +594,12 @@ pub const ZyncBaseServer = struct {
         self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
         self.write_outcome_dispatcher.poll(&self.connection_manager);
+
+        const now_ms = std.time.milliTimestamp();
+        if (now_ms - self.last_token_sweep_ms >= 15_000) {
+            self.last_token_sweep_ms = now_ms;
+            self.connection_manager.sweepExpiredTokens(self.config.authentication.session.token_grace_period_seconds);
+        }
     }
 
     fn drainHandler(ctx: ?*anyopaque, conn_id: u64) void {

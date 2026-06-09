@@ -124,11 +124,12 @@ If `users.namespaced = false`, identity resolution uses reserved global namespac
 
 External JWTs and tickets are short-lived, while WebSockets may be long-lived. The SDK can rotate the session without disconnecting.
 
-1. **Client**: Sends `AuthRefresh` over the existing WebSocket with a new external JWT, or refreshes the anonymous subject if anonymous auth semantics require it.
-2. **Zig**: Re-validates the new identity material.
-3. **Zig**: Projects a new base `$session`.
-4. **Zig**: Temporarily marks active scopes not ready, updates the base `$session`, and re-resolves `users.id` for each active scope.
-5. **Zig**: Sends an `ok` response after active scopes are ready again.
+1. **Client**: Sends `AuthRefresh` over the existing WebSocket with a new external JWT.
+2. **Zig**: Re-validates the new JWT (signature, expiry, issuer, audience).
+3. **Zig**: Projects a new `$session` from the validated JWT claims and updates the connection's token expiry.
+4. **Zig**: Sends an `ok` response with the updated `$session`. Active scopes continue without interruption.
+
+If validation fails, the server sends `ServerDisconnect` with code `AUTH_FAILED` and closes the connection.
 
 Subsequent operations on the same connection evaluate against the updated scoped `$session`.
 
@@ -153,7 +154,7 @@ Short-lived tokens plus refresh are the normal permission-update and revocation 
 | WebSocket Upgrade | Ticket expired | HTTP 401 `AUTH_FAILED` |
 | WebSocket Upgrade | Ticket already used | HTTP 401 `AUTH_FAILED` |
 | WebSocket Upgrade | Origin not in `allowedOrigins` | HTTP 403 |
-| `AuthRefresh` | New JWT invalid | WS error `AUTH_FAILED` |
-| `AuthRefresh` | New projected session loses active namespace access | WS error `NAMESPACE_UNAUTHORIZED` |
+| `AuthRefresh` | New JWT invalid or expired | `ServerDisconnect` `AUTH_FAILED`, connection closed |
+| `AuthRefresh` | Subject mismatch (different user) | `ServerDisconnect` `AUTH_FAILED`, connection closed |
 
-In all failure cases, the connection is not established, or active scopes are marked not ready/closed if already connected. No partial session state is retained.
+In all failure cases, the connection is not established, or the connection is terminated if already connected. No partial session state is retained.

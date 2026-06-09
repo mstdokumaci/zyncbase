@@ -46,6 +46,7 @@ This document defines the formal grammar and property specification for `zyncbas
 | `jwt.algorithm` | `string` | `"HS256"` | Supported: `HS256`, `HS384`, `HS512`, `RS256`. |
 | `jwt.issuer` | `string` | `null` | Validates `iss` claim if present. |
 | `jwt.audience` | `string` | `null` | Validates `aud` claim if present. |
+| `session.tokenGracePeriodSeconds` | `number` | `30` | Seconds after JWT expiry before connection termination. |
 
 ---
 
