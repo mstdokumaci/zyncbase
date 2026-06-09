@@ -226,6 +226,7 @@ pub const Writer = struct {
         self: *Writer,
         ops: []const WriteOp,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        guard_rejected: *std.ArrayListUnmanaged(usize),
     ) !void {
         execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
             const classified_err = errors.classifyError(err);
@@ -245,7 +246,7 @@ pub const Writer = struct {
             sql_cache.deinit();
         }
 
-        for (ops) |op| {
+        for (ops, 0..) |op, op_idx| {
             switch (op) {
                 .upsert => |iop| {
                     const table_metadata = self.schema.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
@@ -276,13 +277,15 @@ pub const Writer = struct {
                             return classified_err;
                         };
                     } else {
-                        // The upsert is guarded by namespace_id. A missing RETURNING row means
-                        // the id already exists in another namespace, which we surface as a
-                        // dropped write rather than silently mutating hidden data.
-                        var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, typed.docIdHexSlice(iop.id, &id_hex_buf) });
+                        if (old_record != null and iop.guard_values != null and op.getWriteAckInfo() != null) {
+                            guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                std.log.err("Failed to track guard rejection: {}", .{err});
+                            };
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, typed.docIdHexSlice(iop.id, &id_hex_buf) });
+                        }
                         if (old_record) |r| r.deinit(self.allocator);
-                        continue;
                     }
                 },
                 .delete => |dop| {
@@ -304,10 +307,21 @@ pub const Writer = struct {
                             return classified_err;
                         };
                     } else {
-                        // If RETURNING * is empty, the row did not exist or was already deleted.
-                        // This is a valid no-op state; we skip notifications for non-existent documents.
-                        var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, typed.docIdHexSlice(dop.id, &id_hex_buf) });
+                        if (dop.guard_values != null and op.getWriteAckInfo() != null) {
+                            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id, &sql_cache) catch |err| blk: {
+                                std.log.err("Delete guard post-check failed: {}", .{err});
+                                break :blk null;
+                            };
+                            if (exists != null) {
+                                exists.?.deinit(self.allocator);
+                                guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                    std.log.err("Failed to track guard rejection: {}", .{err});
+                                };
+                            }
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, typed.docIdHexSlice(dop.id, &id_hex_buf) });
+                        }
                     }
                 },
                 else => unreachable,
@@ -379,7 +393,10 @@ pub const Writer = struct {
             pending_changes.deinit(self.allocator);
         }
 
-        const result = executeBatch(self, batch.items, &pending_changes);
+        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
+        defer guard_rejected.deinit(self.allocator);
+
+        const result = executeBatch(self, batch.items, &pending_changes, &guard_rejected);
         if (result) |_| {
             self.bumpVersion();
 
@@ -388,12 +405,18 @@ pub const Writer = struct {
             }
 
             var pushed_outcome = false;
-            for (batch.items) |op| {
+            for (batch.items, 0..) |op, op_idx| {
                 if (op.getWriteAckInfo()) |info| {
+                    const is_guard_rejected = for (guard_rejected.items) |idx| {
+                        if (idx == op_idx) break true;
+                    } else false;
+
+                    const outcome_err: ?anyerror = if (is_guard_rejected) error.PermissionDenied else null;
+
                     self.write_outcome_buffer.push(.{
                         .conn_id = info.conn_id,
                         .write_id = info.write_id,
-                        .err = null,
+                        .err = outcome_err,
                     }) catch |push_err| {
                         std.log.err("Failed to push write outcome: {}", .{push_err});
                     };
@@ -642,6 +665,11 @@ pub const Writer = struct {
         };
         tx_started = true;
 
+        const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
+            bop.conn_id != null and bop.write_id != null
+        else
+            false;
+
         var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
         defer {
             var it = sql_cache.valueIterator();
@@ -684,6 +712,12 @@ pub const Writer = struct {
                                 break;
                             }
                         } else {
+                            if (old_record != null and entry.guard_values != null and is_confirmed) {
+                                if (old_record) |r| r.deinit(self.allocator);
+                                final_err = error.PermissionDenied;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
                             var id_hex_buf: [32]u8 = undefined;
                             std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
                             if (old_record) |r| r.deinit(self.allocator);
@@ -712,8 +746,21 @@ pub const Writer = struct {
                                 break;
                             }
                         } else {
-                            var id_hex_buf: [32]u8 = undefined;
-                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            if (entry.guard_values != null and is_confirmed) {
+                                const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache) catch |err| blk: {
+                                    std.log.err("Delete guard post-check failed: {}", .{err});
+                                    break :blk null;
+                                };
+                                if (exists != null) {
+                                    exists.?.deinit(self.allocator);
+                                    final_err = error.PermissionDenied;
+                                    failed_batch_index = entry_idx;
+                                    break;
+                                }
+                            } else {
+                                var id_hex_buf: [32]u8 = undefined;
+                                std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            }
                         }
                     } else |err| {
                         const classified_err = errors.classifyError(err);
