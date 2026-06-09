@@ -559,30 +559,30 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const token = wire.extractAuthRefreshFast(message) catch {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Invalid AuthRefresh message");
-            return error.AuthFailed;
+            return null;
         };
 
         const validator = self.jwt_validator orelse {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation not configured");
-            return error.AuthFailed;
+            return null;
         };
 
         const validated = validator.validateWithClaims(arena_allocator, token, self.session_claims_mapping.*) catch {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
-            return error.AuthFailed;
+            return null;
         };
 
         const sess = conn.session orelse {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
-            return error.AuthFailed;
+            return null;
         };
 
         if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
-            return error.AuthFailed;
+            return null;
         }
 
         conn.updateSessionClaims(validated.claims, validated.expires_at);
