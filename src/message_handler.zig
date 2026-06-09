@@ -570,22 +570,25 @@ pub const MessageHandler = struct {
             return null;
         };
 
-        const validated = validator.validateWithClaims(arena_allocator, token, self.session_claims_mapping.*) catch {
+        var validated = validator.validateWithClaims(conn.allocator, token, self.session_claims_mapping.*) catch {
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "JWT validation failed");
             return null;
         };
 
         const sess = conn.session orelse {
+            validated.deinit(conn.allocator);
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "No active session");
             return null;
         };
 
         if (!std.mem.eql(u8, validated.subject, sess.external_id)) {
+            validated.deinit(conn.allocator);
             try self.sendServerDisconnectAndClose(conn, "AUTH_FAILED", "Subject mismatch");
             return null;
         }
 
         conn.updateSessionClaims(validated.claims, validated.expires_at);
+        conn.allocator.free(validated.subject);
 
         return try wire.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }

@@ -32,7 +32,8 @@ export class RetryPolicy {
 
 		const base = this.options.reconnectDelay ?? 1000;
 		const maxDelay = this.options.maxReconnectDelay ?? 30_000;
-		const preCap = base * 2 ** attempt;
+		const cappedAttempt = Math.min(attempt, 30);
+		const preCap = base * 2 ** cappedAttempt;
 		const jitter = preCap * 0.1 * (Math.random() * 2 - 1);
 		return Math.min(preCap + jitter, maxDelay);
 	}
