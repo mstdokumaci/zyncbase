@@ -587,8 +587,11 @@ pub const MessageHandler = struct {
             return null;
         }
 
-        conn.updateSessionClaims(validated.claims, validated.expires_at);
-        conn.allocator.free(validated.subject);
+        const claims = validated.claims;
+        const expires_at = validated.expires_at;
+        validated.claims = .{};
+        validated.deinit(conn.allocator);
+        conn.updateSessionClaims(claims, expires_at);
 
         return try wire.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
     }

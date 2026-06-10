@@ -249,7 +249,9 @@ pub const ConnectionManager = struct {
                 conn.acquire();
                 connections.append(self.allocator, conn) catch |err| {
                     std.log.err("Failed to add connection to disconnect list: {}", .{err});
-                    _ = conn.release();
+                    if (conn.release()) {
+                        self.memory_strategy.releaseConnection(conn);
+                    }
                 };
             }
         }
@@ -280,7 +282,9 @@ pub const ConnectionManager = struct {
                     conn.acquire();
                     to_close.append(self.allocator, conn) catch |err| {
                         std.log.err("Failed to add expired connection to close list: {}", .{err});
-                        _ = conn.release();
+                        if (conn.release()) {
+                            self.memory_strategy.releaseConnection(conn);
+                        }
                     };
                 }
             }
