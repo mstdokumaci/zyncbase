@@ -14,7 +14,9 @@ const typed = @import("typed.zig");
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .namespace_id = namespace_id,
+        .namespace = "public",
         .owner_doc_id = typed.zeroDocId,
+        .session_user_id = typed.zeroDocId,
     };
 }
 
@@ -688,7 +690,7 @@ test "StoreService: batchWrite - multi-set inserts documents atomically" {
     ops_arr[1] = t2;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload, null);
+    try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Verify both documents exist
@@ -747,7 +749,7 @@ test "StoreService: batchWrite - mixed set and remove" {
     ops_arr[1] = set_op;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload, null);
+    try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Doc 1 should be gone
@@ -774,7 +776,7 @@ test "StoreService: batchWrite - empty ops is a no-op" {
     const ops_payload = msgpack.Payload{ .arr = empty_arr };
 
     // Should succeed silently
-    try app.store_service.batchWrite(writeCtx(1), ops_payload, null);
+    try app.store_service.batchWrite(writeCtx(1), ops_payload);
 }
 
 test "StoreService: batchWrite - rejects invalid kind" {
@@ -802,7 +804,7 @@ test "StoreService: batchWrite - rejects invalid kind" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects set with missing value" {
@@ -830,7 +832,7 @@ test "StoreService: batchWrite - rejects set with missing value" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects unknown table" {
@@ -854,7 +856,7 @@ test "StoreService: batchWrite - rejects unknown table" {
     ops_arr[0] = t;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects non-array payload" {
@@ -865,7 +867,7 @@ test "StoreService: batchWrite - rejects non-array payload" {
     });
     defer app.deinit();
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil, null));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil));
 }
 
 test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
@@ -882,7 +884,7 @@ test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
     @memset(ops_arr, .nil);
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: resolveStoreScope uses global users table by default" {
@@ -935,4 +937,68 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id, null);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 1), managed.records.len);
+}
+
+test "StoreService: create requires all required fields" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "items": {
+        \\      "required": ["name", "status"],
+        \\      "fields": {
+        \\        "name": { "type": "string" },
+        \\        "status": { "type": "string" },
+        \\        "description": { "type": "string" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "store-service-required-fields", schema_json);
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const items = try app.table("items");
+    const doc_id: typed.DocId = 1;
+
+    // 1. Create without required field 'status' should fail
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "name", "Test Item" },
+            .{ "description", "Some description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        const result = service.setPath(writeCtx(1), path, val);
+        try testing.expectError(StorageError.MissingRequiredField, result);
+    }
+
+    // 2. Create with all required fields should succeed
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "name", "Test Item" },
+            .{ "status", "active" },
+            .{ "description", "Some description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        // Verify the document was created
+        var doc = try items.getOne(allocator, 1, doc_id);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("name", "Test Item");
+        _ = try doc.expectFieldString("status", "active");
+        _ = try doc.expectFieldString("description", "Some description");
+    }
 }

@@ -18,6 +18,7 @@ pub const WriteAuthInput = struct {
     namespace: []const u8,
     doc_id: typed.DocId,
     value: ?*const msgpack.Payload = null,
+    is_create: bool,
 };
 
 pub const WriteAuthResult = struct {
@@ -46,7 +47,7 @@ pub fn authorizeStoreWrite(
         .owner_doc_id = input.session_user_id,
     };
 
-    const update_predicate = try doc_predicate_mod.authorizeWriteCondition(store_rule.write, ctx, input.table);
+    const update_predicate = try doc_predicate_mod.authorizeWriteCondition(store_rule.write, ctx, input.table, input.is_create);
 
     return .{
         .update_predicate = update_predicate,

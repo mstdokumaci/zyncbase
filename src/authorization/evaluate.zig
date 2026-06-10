@@ -265,7 +265,7 @@ fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthV
         }
     }
 
-    return null;
+    return ResolvedAuthValue.fromBorrowed(.nil);
 }
 
 fn compareValues(lhs: Value, op: types.ComparisonOp, rhs: Value) bool {

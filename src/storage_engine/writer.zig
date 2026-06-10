@@ -44,6 +44,7 @@ pub const Writer = struct {
     metadata_cache: *storage_cache.metadata_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
+    pk_sets: []@import("pk_set.zig").PkSet,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
@@ -246,6 +247,11 @@ pub const Writer = struct {
             sql_cache.deinit();
         }
 
+        var pk_inserts = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_inserts.deinit(self.allocator);
+        var pk_deletes = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_deletes.deinit(self.allocator);
+
         for (ops, 0..) |op, op_idx| {
             switch (op) {
                 .upsert => |iop| {
@@ -268,6 +274,11 @@ pub const Writer = struct {
 
                     if (maybe_new_record) |new_record| {
                         const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                        if (old_record == null) {
+                            pk_inserts.append(self.allocator, .{ .table_index = iop.table_index, .id = iop.id }) catch |err| {
+                                std.log.warn("Failed to track pk_insert for table {d}: {}", .{ iop.table_index, err });
+                            };
+                        }
                         pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_record, new_record) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
@@ -299,6 +310,9 @@ pub const Writer = struct {
 
                     // For DELETE, the RETURNING * result IS the old record.
                     if (maybe_old_record) |old_record| {
+                        pk_deletes.append(self.allocator, .{ .table_index = dop.table_index, .id = dop.id }) catch |err| {
+                            std.log.warn("Failed to track pk_delete for table {d}: {}", .{ dop.table_index, err });
+                        };
                         pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_record, null) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
@@ -333,6 +347,17 @@ pub const Writer = struct {
             errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
             return classified_err;
         };
+
+        for (pk_inserts.items) |item| {
+            if (item.table_index < self.pk_sets.len) {
+                self.pk_sets[item.table_index].insert(self.allocator, item.id);
+            }
+        }
+        for (pk_deletes.items) |item| {
+            if (item.table_index < self.pk_sets.len) {
+                self.pk_sets[item.table_index].remove(item.id);
+            }
+        }
     }
 
     pub fn flushBatch(
@@ -677,6 +702,11 @@ pub const Writer = struct {
             sql_cache.deinit();
         }
 
+        var pk_inserts = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_inserts.deinit(self.allocator);
+        var pk_deletes = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_deletes.deinit(self.allocator);
+
         for (entries, 0..) |entry, entry_idx| {
             const table_metadata = self.schema.getTableByIndex(entry.table_index) orelse {
                 final_err = StorageError.UnknownTable;
@@ -699,6 +729,11 @@ pub const Writer = struct {
                     if (executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata)) |maybe_new_record| {
                         if (maybe_new_record) |new_record| {
                             const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                            if (old_record == null) {
+                                pk_inserts.append(self.allocator, .{ .table_index = entry.table_index, .id = entry.id }) catch |err| {
+                                    std.log.warn("Failed to track pk_insert for table {d}: {}", .{ entry.table_index, err });
+                                };
+                            }
                             if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_record, new_record)) |_| {
                                 // success
                             } else |err| {
@@ -734,6 +769,9 @@ pub const Writer = struct {
                 .delete => {
                     if (executeDelete(self, entry, namespace_id, table_metadata)) |maybe_old_record| {
                         if (maybe_old_record) |old_record| {
+                            pk_deletes.append(self.allocator, .{ .table_index = entry.table_index, .id = entry.id }) catch |err| {
+                                std.log.warn("Failed to track pk_delete for table {d}: {}", .{ entry.table_index, err });
+                            };
                             if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_record, null)) |_| {
                                 // success
                             } else |err| {
@@ -780,6 +818,17 @@ pub const Writer = struct {
 
                 if (eviction_keys.items.len > 0) {
                     self.metadata_cache.bulkEvict(eviction_keys.items);
+                }
+
+                for (pk_inserts.items) |item| {
+                    if (item.table_index < self.pk_sets.len) {
+                        self.pk_sets[item.table_index].insert(self.allocator, item.id);
+                    }
+                }
+                for (pk_deletes.items) |item| {
+                    if (item.table_index < self.pk_sets.len) {
+                        self.pk_sets[item.table_index].remove(item.id);
+                    }
                 }
 
                 flushPendingChanges(self, &pending_changes);

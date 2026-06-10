@@ -766,7 +766,7 @@ test "authorizeWriteCondition denies create when $doc rule fails" {
         .value_table = &table,
     };
 
-    const result = authorization.authorizeWriteCondition(condition, ctx, &table);
+    const result = authorization.authorizeWriteCondition(condition, ctx, &table, true);
     try testing.expectError(error.AccessDenied, result);
 }
 
@@ -792,7 +792,7 @@ test "authorizeWriteCondition allows create and returns predicate when $doc rule
         .value_table = &table,
     };
 
-    var predicate = try authorization.authorizeWriteCondition(config.store_rules[0].write, ctx, &table);
+    var predicate = try authorization.authorizeWriteCondition(config.store_rules[0].write, ctx, &table, true);
     if (predicate) |*p| {
         defer p.deinit(allocator);
     }

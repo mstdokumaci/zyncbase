@@ -63,6 +63,20 @@ pub fn validateFieldWrite(
     return field;
 }
 
+fn validateRequiredFieldsForCreate(
+    table: *const schema_mod.Table,
+    columns: []const storage_mod.ColumnValue,
+) !void {
+    const user_fields = table.fields[schema_mod.first_user_field_index .. table.fields.len - schema_mod.trailing_system_field_count];
+    for (user_fields, schema_mod.first_user_field_index..) |f, f_idx| {
+        if (!f.required) continue;
+        const present = for (columns) |col| {
+            if (col.index == f_idx) break true;
+        } else false;
+        if (!present) return StorageError.MissingRequiredField;
+    }
+}
+
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and ColumnValue construction.
 pub const StoreService = struct {
@@ -84,8 +98,11 @@ pub const StoreService = struct {
 
     pub const WriteContext = struct {
         namespace_id: i64,
+        namespace: []const u8,
         owner_doc_id: DocId,
-        auth_predicate: ?*const query_ast.FilterPredicate = null,
+        session_user_id: DocId,
+        session_external_id: ?[]const u8 = null,
+        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     };
@@ -151,22 +168,33 @@ pub const StoreService = struct {
         path: msgpack.Payload,
     ) !void {
         const parsed = try self.parseStorePath(path, .document_only);
-        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = parsed.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = parsed.doc_id,
+            .value = null,
+            .is_create = false,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
     }
 
     pub fn batchWrite(
         self: *StoreService,
         ctx: WriteContext,
         ops_payload: msgpack.Payload,
-        auth_predicates: ?[]const ?query_ast.FilterPredicate,
     ) !void {
         if (ops_payload != .arr) return error.InvalidMessageFormat;
         const ops = ops_payload.arr;
         if (ops.len == 0) return; // no-op, success
         if (ops.len > 500) return error.BatchTooLarge;
-        if (auth_predicates) |predicates| {
-            if (predicates.len != ops.len) return error.InvalidMessageFormat;
-        }
 
         var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
         var initialized: usize = 0;
@@ -179,21 +207,17 @@ pub const StoreService = struct {
         const timestamp = std.time.timestamp();
 
         for (ops, 0..) |op_payload, i| {
+            _ = i;
             if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
             const tuple = op_payload.arr;
             if (tuple[0] != .str) return error.InvalidMessageFormat;
             const kind_str = tuple[0].str.value();
 
-            const auth_predicate = if (auth_predicates) |predicates|
-                if (predicates[i]) |*predicate| predicate else null
-            else
-                null;
-
             if (std.mem.eql(u8, kind_str, "s")) {
                 if (tuple.len < 3) return error.MissingRequiredFields;
-                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, auth_predicate);
+                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp);
             } else if (std.mem.eql(u8, kind_str, "r")) {
-                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, auth_predicate);
+                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp);
             } else {
                 return error.InvalidMessageFormat;
             }
@@ -340,7 +364,25 @@ pub const StoreService = struct {
                 });
             }
 
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
+            const is_create = !self.storage_engine.docExists(path.table_index, path.doc_id);
+
+            if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
+
+            var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+                .config = self.auth_config,
+                .table = path.table,
+                .session_user_id = ctx.session_user_id,
+                .session_external_id = ctx.session_external_id,
+                .session_claims = ctx.session_claims,
+                .namespace = ctx.namespace,
+                .doc_id = path.doc_id,
+                .value = &value,
+                .is_create = is_create,
+            });
+            defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+            const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
@@ -351,7 +393,22 @@ pub const StoreService = struct {
                 .index = f_index,
                 .value = typed_value,
             }};
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
+
+            var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+                .config = self.auth_config,
+                .table = path.table,
+                .session_user_id = ctx.session_user_id,
+                .session_external_id = ctx.session_external_id,
+                .session_claims = ctx.session_claims,
+                .namespace = ctx.namespace,
+                .doc_id = path.doc_id,
+                .value = &value,
+                .is_create = false,
+            });
+            defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+            const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
         } else {
             return StorageError.InvalidPath;
         }
@@ -363,7 +420,6 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_or_field);
 
@@ -372,6 +428,8 @@ pub const StoreService = struct {
             for (columns.items) |col| col.value.deinit(self.allocator);
             columns.deinit(self.allocator);
         }
+
+        var is_create = false;
 
         if (path.segments_len == 2) {
             if (value != .map) return error.InvalidPayload;
@@ -395,6 +453,10 @@ pub const StoreService = struct {
                     .value = typed_value,
                 });
             }
+
+            is_create = !self.storage_engine.docExists(path.table_index, path.doc_id);
+
+            if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
@@ -408,13 +470,27 @@ pub const StoreService = struct {
             return StorageError.InvalidPath;
         }
 
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = path.doc_id,
+            .value = &value,
+            .is_create = is_create,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
         return try self.storage_engine.prepareBatchUpsert(
             path.table_index,
             path.doc_id,
             ctx.namespace_id,
             ctx.owner_doc_id,
             columns.items,
-            auth_predicate,
+            auth_predicate_ptr,
             timestamp,
         );
     }
@@ -424,16 +500,29 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
         const path = try self.parseStorePath(path_payload, .document_only);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = path.doc_id,
+            .value = null,
+            .is_create = false,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
         return try self.storage_engine.prepareBatchDelete(
             path.table_index,
             path.doc_id,
             ctx.namespace_id,
             ctx.owner_doc_id,
-            auth_predicate,
+            auth_predicate_ptr,
             timestamp,
         );
     }

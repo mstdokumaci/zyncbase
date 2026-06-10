@@ -49,6 +49,8 @@ pub const StorageError = error{
     SQLiteError,
     /// Engine marked unhealthy due to writer thread failure
     EngineUnhealthy,
+    /// Required field missing during document creation
+    MissingRequiredField,
 };
 
 pub fn classifyError(err: anyerror) anyerror {

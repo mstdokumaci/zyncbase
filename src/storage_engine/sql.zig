@@ -237,6 +237,18 @@ pub fn buildSelectDocumentSql(
     return sql_buf.toOwnedSlice(allocator);
 }
 
+pub fn buildSelectAllIdsSql(allocator: Allocator, table_name_quoted: []const u8) ![]const u8 {
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+
+    try sql_buf.appendSlice(allocator, "SELECT ");
+    try sql_buf.appendSlice(allocator, schema.quoted_id);
+    try sql_buf.appendSlice(allocator, " FROM ");
+    try sql_buf.appendSlice(allocator, table_name_quoted);
+
+    return sql_buf.toOwnedSlice(allocator);
+}
+
 /// Safe bind helpers to avoid alignment errors with TSAN on ARM.
 pub fn bindTextTransient(stmt: ?*sqlite.c.sqlite3_stmt, index: c_int, value: []const u8) c_int {
     return sqlite.c.sqlite3_bind_text(stmt, index, value.ptr, @intCast(value.len), sqlite.c.sqliteTransientAsDestructor());

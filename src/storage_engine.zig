@@ -15,6 +15,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed = @import("typed.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
+const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
@@ -24,6 +25,7 @@ const SessionResolutionBuffer = @import("session_resolution_buffer.zig").Session
 const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
 
 pub const StorageError = storage_errors.StorageError;
+pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
 pub const TableMetadata = schema_mod.Table;
 pub const CheckpointMode = write_queue.CheckpointMode;
@@ -102,6 +104,7 @@ pub const StorageEngine = struct {
     identity_cache: identity_cache_type,
     options: Options,
     writer: Writer,
+    pk_sets: []PkSet,
 
     pub fn init(
         self: *StorageEngine,
@@ -225,6 +228,8 @@ pub const StorageEngine = struct {
                 .namespace_cache = undefined,
                 // SAFETY: Set after cache init below
                 .identity_cache = undefined,
+                // SAFETY: Set after pk_sets init below
+                .pk_sets = undefined,
                 .schema = schema,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_ready = std.atomic.Value(bool).init(false),
@@ -237,6 +242,8 @@ pub const StorageEngine = struct {
                 .write_thread = null,
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
+            // SAFETY: Initialized below
+            .pk_sets = undefined,
         };
 
         self.writer.stmt_cache.init(allocator, self.writer.performance_config.statement_cache_size);
@@ -259,6 +266,15 @@ pub const StorageEngine = struct {
 
         try self.writer.queue.init(allocator, &self.node_pool);
         errdefer self.writer.queue.deinit();
+
+        const num_tables = schema.tables.len;
+        self.pk_sets = try allocator.alloc(PkSet, num_tables);
+        errdefer allocator.free(self.pk_sets);
+        for (self.pk_sets) |*pk_set| {
+            pk_set.* = PkSet.empty;
+        }
+
+        self.writer.pk_sets = self.pk_sets;
     }
 
     pub fn deinit(self: *StorageEngine) void {
@@ -279,14 +295,20 @@ pub const StorageEngine = struct {
         self.namespace_cache.deinit();
         self.identity_cache.deinit();
 
-        // 4. Clean up readers
+        // 4. Deinit pk_sets
+        for (self.pk_sets) |*pk_set| {
+            pk_set.deinit(gpa);
+        }
+        gpa.free(self.pk_sets);
+
+        // 5. Clean up readers
         for (self.reader_pool) |*node| {
             node.stmt_cache.deinit(self.allocator);
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
 
-        // 5. Clean up the writer and queue
+        // 6. Clean up the writer and queue
         self.writer.deinit();
         self.node_pool.deinit();
     }
@@ -351,6 +373,11 @@ pub const StorageEngine = struct {
         }
     }
 
+    pub fn docExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
+        if (table_index >= self.pk_sets.len) return false;
+        return self.pk_sets[table_index].contains(id);
+    }
+
     /// Execute setup SQL (DDL/Migrations) before the engine starts.
     /// This method is only allowed when the engine is in the 'setup' state.
     pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
@@ -378,6 +405,27 @@ pub const StorageEngine = struct {
     pub fn start(self: *StorageEngine) !void {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
+        }
+
+        for (self.schema.tables, 0..) |table, table_index| {
+            const sql_str = try sql.buildSelectAllIdsSql(self.allocator, table.name_quoted);
+            defer self.allocator.free(sql_str);
+
+            var mstmt = try self.writer.stmt_cache.acquire(self.allocator, &self.writer.conn, sql_str);
+            defer mstmt.release();
+
+            while (true) {
+                const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+                if (rc == sqlite.c.SQLITE_DONE) break;
+                if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.writer.conn);
+
+                const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
+                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+                const doc_id = try typed.docIdFromBytes(bytes);
+
+                self.pk_sets[table_index].insert(self.allocator, doc_id);
+            }
         }
 
         // Spawn the write thread

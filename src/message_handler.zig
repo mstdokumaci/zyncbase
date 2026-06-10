@@ -12,8 +12,6 @@ const StoreService = @import("store_service.zig").StoreService;
 const wire = @import("wire.zig");
 const authorization = @import("authorization.zig");
 const schema_mod = @import("schema.zig");
-const query_ast = @import("query_ast.zig");
-const typed = @import("typed.zig");
 const JwtValidator = @import("jwt_validator.zig").JwtValidator;
 
 /// Message handler for WebSocket events
@@ -222,12 +220,6 @@ pub const MessageHandler = struct {
         return session;
     }
 
-    fn extractDocIdFromPath(path: msgpack.Payload) !typed.DocId {
-        if (path != .arr or path.arr.len < 2) return error.InvalidMessageFormat;
-        if (path.arr[1] != .bin) return error.InvalidMessageFormat;
-        return try typed.docIdFromBytes(path.arr[1].bin.value());
-    }
-
     // ---- Group A: Scalar-only fast decoders (no Payload tree) ----
 
     fn handleStoreSetNamespace(
@@ -314,11 +306,6 @@ pub const MessageHandler = struct {
 
     // ---- Group B: Payload-dependent handlers (keep Payload tree) ----
 
-    fn extractTableIndexFromPath(path: msgpack.Payload) !usize {
-        if (path != .arr or path.arr.len == 0) return error.InvalidMessageFormat;
-        return msgpack.extractPayloadUint(path.arr[0]) orelse return error.InvalidMessageFormat;
-    }
-
     fn handleStoreSet(
         self: *MessageHandler,
         arena_allocator: std.mem.Allocator,
@@ -330,22 +317,7 @@ pub const MessageHandler = struct {
         const value = payloads.value orelse return error.MissingRequiredFields;
         const session = try requireStoreSession(conn);
 
-        const table_index = try extractTableIndexFromPath(payloads.path);
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const doc_id = try extractDocIdFromPath(payloads.path);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
-
-        var auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
-            .config = self.auth_config,
-            .table = table,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .namespace = namespace,
-            .doc_id = doc_id,
-            .value = &value,
-        });
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*predicate| predicate else null;
 
         // Parse write acknowledgment metadata
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
@@ -353,8 +325,11 @@ pub const MessageHandler = struct {
         try self.store_service.setPath(
             .{
                 .namespace_id = session.namespace_id,
+                .namespace = namespace,
                 .owner_doc_id = session.user_doc_id,
-                .auth_predicate = auth_predicate_ptr,
+                .session_user_id = session.user_doc_id,
+                .session_external_id = conn.getExternalUserId(),
+                .session_claims = conn.getSessionClaimsPtr(),
                 .conn_id = if (write_ack != null) conn.id else null,
                 .write_id = if (write_ack) |ack| ack.write_id else null,
             },
@@ -375,22 +350,7 @@ pub const MessageHandler = struct {
         const payloads = try wire.extractStorePathPayloads(message, arena_allocator);
         const session = try requireStoreSession(conn);
 
-        const table_index = try extractTableIndexFromPath(payloads.path);
-        const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-        const doc_id = try extractDocIdFromPath(payloads.path);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
-
-        const auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
-            .config = self.auth_config,
-            .table = table,
-            .session_user_id = session.user_doc_id,
-            .session_external_id = conn.getExternalUserId(),
-            .session_claims = conn.getSessionClaimsPtr(),
-            .namespace = namespace,
-            .doc_id = doc_id,
-            .value = null,
-        });
-        const auth_predicate_ptr = if (auth_result.update_predicate) |*predicate| predicate else null;
 
         // Parse write acknowledgment metadata
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
@@ -398,8 +358,11 @@ pub const MessageHandler = struct {
         try self.store_service.removePath(
             .{
                 .namespace_id = session.namespace_id,
+                .namespace = namespace,
                 .owner_doc_id = session.user_doc_id,
-                .auth_predicate = auth_predicate_ptr,
+                .session_user_id = session.user_doc_id,
+                .session_external_id = conn.getExternalUserId(),
+                .session_claims = conn.getSessionClaimsPtr(),
                 .conn_id = if (write_ack != null) conn.id else null,
                 .write_id = if (write_ack) |ack| ack.write_id else null,
             },
@@ -420,46 +383,21 @@ pub const MessageHandler = struct {
         const session = try requireStoreSession(conn);
         const namespace = conn.getStoreNamespace() orelse return error.SessionNotReady;
 
-        var auth_predicates: ?[]?query_ast.FilterPredicate = null;
-        if (payloads.ops == .arr and payloads.ops.arr.len > 0) {
-            const predicates = try arena_allocator.alloc(?query_ast.FilterPredicate, payloads.ops.arr.len);
-            @memset(predicates, null);
-            auth_predicates = predicates;
-
-            for (payloads.ops.arr, 0..) |op_payload, i| {
-                if (op_payload != .arr or op_payload.arr.len < 2) continue;
-                const path = op_payload.arr[1];
-                const table_index = try extractTableIndexFromPath(path);
-                const table = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
-                const doc_id = try extractDocIdFromPath(path);
-                const value_ptr = if (op_payload.arr.len >= 3) &op_payload.arr[2] else null;
-
-                const auth_result = try authorization.authorizeStoreWrite(arena_allocator, .{
-                    .config = self.auth_config,
-                    .table = table,
-                    .session_user_id = session.user_doc_id,
-                    .session_external_id = conn.getExternalUserId(),
-                    .session_claims = conn.getSessionClaimsPtr(),
-                    .namespace = namespace,
-                    .doc_id = doc_id,
-                    .value = value_ptr,
-                });
-                predicates[i] = auth_result.update_predicate;
-            }
-        }
-
         // Parse write acknowledgment metadata
         const write_ack = try parseWriteAck(payloads.confirm, payloads.write_id);
 
         try self.store_service.batchWrite(
             .{
                 .namespace_id = session.namespace_id,
+                .namespace = namespace,
                 .owner_doc_id = session.user_doc_id,
+                .session_user_id = session.user_doc_id,
+                .session_external_id = conn.getExternalUserId(),
+                .session_claims = conn.getSessionClaimsPtr(),
                 .conn_id = if (write_ack != null) conn.id else null,
                 .write_id = if (write_ack) |ack| ack.write_id else null,
             },
             payloads.ops,
-            auth_predicates,
         );
 
         return try wire.encodeSuccess(arena_allocator, msg_id);
