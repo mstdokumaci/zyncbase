@@ -100,22 +100,6 @@ export class StoreImpl {
 		return id;
 	}
 
-	async push(
-		collection: string,
-		value: JsonValue,
-		options?: WriteOptions,
-	): Promise<string> {
-		return this.create(collection, value, options);
-	}
-
-	async update(
-		path: Path,
-		value: JsonValue,
-		options?: WriteOptions,
-	): Promise<void> {
-		return this.set(path, value, options);
-	}
-
 	async get(path: Path): Promise<JsonValue | null | undefined> {
 		const command = buildGet(path);
 		try {
