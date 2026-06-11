@@ -127,7 +127,8 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
         "org_id": "org_id",
         "read_projects": "read_projects",
         "write_projects": "write_projects"
-      }
+      },
+      "tokenGracePeriodSeconds": 30
     },
     "anonymous": {
       "enabled": true,
@@ -135,7 +136,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     }
   }
 }
-```Settings `secret` Signing secret ZyncBase tickets omitted ephemeral secret invalidates tickets restart `ttlSeconds` Ticket lifetime before WebSocket upgrade Tickets short-lived travel WebSocket URL `singleUse` ticket redeemed once Production enabled Settings `secret` Shared secret JWT algorithms `jwksUrl public keys asymmetric JWT algorithms `algorithm` Expected JWT algorithm `issuer `iss claim `audience `aud` claim `subjectClaim` external identity string `sub` Claim Projection `session.claims maps$session property names verified JWT claim names permission inputs ZyncBase identity `users` row not loaded$session authorization reserved `users` collection maps external subject internal `users.id` `owner_id presence identity profile/display data **Anonymous Auth `anonymous.enabled SDK request ticket high client-generated anonymous subject Anonymous subjects same `users.id` mapping authorization flow authenticated subjects [README] API overview API Reference [Presence API configuration `dataDir Directory SQLite database data files```json
+```Settings `secret Signing ZyncBase tickets omitted ephemeral secret invalidates tickets restart `ttlSeconds Ticket lifetime before WebSocket upgrade Tickets short-lived WebSocket URL `singleUse` ticket redeemed once enabled Settings `secret Shared secret JWT algorithms `jwksUrl public keys asymmetric JWT algorithms `algorithm Expected JWT algorithm `issuer `iss claim `audience `aud claim `subjectClaim external identity string `sub` Claim Projection `session.claims maps$session names verified JWT claim names permission inputs ZyncBase `users` row not loaded$session authorization reserved `users` collection maps external subject internal `users.id` `owner_id presence identity profile/display data `session.tokenGracePeriodSeconds Grace period after JWT expiry before connection SDK tokens before expiry safety slow refreshes Default 30 seconds **Anonymous Auth.enabled SDK request ticket high-entropy client-generated anonymous subject Anonymous subjects use same `users.id mapping authorization flow authenticated [README API overview [Store API Reference-api.md use store configured API Reference-api.md presence configuration context `dataDir Directory SQLite database data files```json
 {
   "dataDir": "./data"
 }

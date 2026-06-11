@@ -188,7 +188,7 @@ ZyncBase Wire Protocol Specification 2026-03-09 Active design Table of Contents 
   "id":      11,
   "session": { ... } // The newly resolved base $session context
 }
-```Active store presence scopes not ready `AuthRefresh processed server re-resolves `users.id `ok operations receive `SESSION_NOT_READY Namespace operations `StoreSetNamespace Switch store namespace resolve scope```
+```session claims token expiry updated Active store presence scopes continue JWT invalid server sends `ServerDisconnect_FAILED closes WebSocket connection Namespace operations `StoreSetNamespace Switch active store namespace resolve store scope```
 {
   "type":      "StoreSetNamespace",
   "id":        12,
