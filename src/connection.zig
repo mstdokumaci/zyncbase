@@ -159,24 +159,16 @@ pub const Connection = struct {
     }
 
     pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed.Value), token_expires_at: i64) void {
-        if (self.session) |*sess| {
-            var it = sess.claims.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.deinit(self.allocator);
-            }
-            sess.claims.deinit(self.allocator);
-            sess.claims = new_claims;
-            sess.token_expires_at = token_expires_at;
-        } else {
-            var mutable_claims = new_claims;
-            var it = mutable_claims.iterator();
-            while (it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                entry.value_ptr.deinit(self.allocator);
-            }
-            mutable_claims.deinit(self.allocator);
+        std.debug.assert(self.session != null);
+        const sess = &self.session.?;
+        var it = sess.claims.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
         }
+        sess.claims.deinit(self.allocator);
+        sess.claims = new_claims;
+        sess.token_expires_at = token_expires_at;
     }
 
     pub fn dupeExternalUserId(self: *Connection, allocator: Allocator) ![]const u8 {
