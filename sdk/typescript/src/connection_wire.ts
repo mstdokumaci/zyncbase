@@ -160,7 +160,6 @@ export class ConnectionWireCodec {
 			const tableIndex = encodedPath[0] as number;
 			if (
 				type === "StoreSet" &&
-				logicalPath.length === 2 &&
 				wire.value !== null &&
 				typeof wire.value === "object" &&
 				!Array.isArray(wire.value)
@@ -168,16 +167,6 @@ export class ConnectionWireCodec {
 				wire.value = this.schema.encodeValue(
 					tableIndex,
 					wire.value as Record<string, unknown>,
-				);
-			} else if (
-				type === "StoreSet" &&
-				logicalPath.length >= 3 &&
-				encodedPath.length === 3
-			) {
-				wire.value = this.schema.encodeFieldValue(
-					tableIndex,
-					encodedPath[2] as number,
-					wire.value,
 				);
 			}
 		}
@@ -209,7 +198,6 @@ export class ConnectionWireCodec {
 		if (kind === "r") return ["r", encodedPath];
 		if (
 			kind === "s" &&
-			(rawPath as string[]).length === 2 &&
 			op[2] !== null &&
 			typeof op[2] === "object" &&
 			!Array.isArray(op[2])
@@ -219,17 +207,6 @@ export class ConnectionWireCodec {
 				"s",
 				encodedPath,
 				this.schema.encodeValue(tableIndex, op[2] as Record<string, unknown>),
-			];
-		}
-		if (kind === "s" && encodedPath.length === 3) {
-			return [
-				"s",
-				encodedPath,
-				this.schema.encodeFieldValue(
-					encodedPath[0] as number,
-					encodedPath[2] as number,
-					op[2],
-				),
 			];
 		}
 		return ["s", encodedPath, op[2]];

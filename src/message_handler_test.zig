@@ -67,7 +67,11 @@ test "MessageHandler: store operations require ready scope" {
 
     const table = try app.tableMetadata("items");
     const field_index = table.fieldIndex("value") orelse return error.UnknownField;
-    const message = try store_helpers.createStoreSetFieldMessage(allocator, 1, 1, table.index, 1, field_index, "blocked");
+    const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+        .{ field_index, "blocked" },
+    });
+    defer val.free(allocator);
+    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, val);
     defer allocator.free(message);
 
     const response = try routeWithArena(&app.handler, allocator, conn, message);
@@ -107,7 +111,7 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
     });
     defer doc_value.free(allocator);
 
-    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, null, doc_value);
+    const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, doc_value);
     defer allocator.free(message);
 
     const response = try routeWithArena(&app.handler, allocator, conn, message);
@@ -148,16 +152,20 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
     defer sc.deinit();
     const conn = sc.conn;
     const table = try app.tableMetadata("items");
-    const field_index = table.fieldIndex("tags") orelse return error.UnknownField;
 
     {
         const tags = try allocator.alloc(msgpack.Payload, 2);
         tags[0] = msgpack.Payload.uintToPayload(1);
         tags[1] = msgpack.Payload.uintToPayload(2);
-        const value = msgpack.Payload{ .arr = tags };
-        defer value.free(allocator);
+        const tags_val = msgpack.Payload{ .arr = tags };
+        defer tags_val.free(allocator);
 
-        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, field_index, value);
+        const doc_val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+            .{ "tags", tags_val },
+        });
+        defer doc_val.free(allocator);
+
+        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, doc_val);
         defer allocator.free(message);
 
         const response = try routeWithArena(&app.handler, allocator, conn, message);
@@ -174,10 +182,15 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const items = try allocator.alloc(msgpack.Payload, 1);
         items[0] = inner_map;
         inner_map = .nil;
-        const value = msgpack.Payload{ .arr = items };
-        defer value.free(allocator);
+        const tags_val = msgpack.Payload{ .arr = items };
+        defer tags_val.free(allocator);
 
-        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, 1, table.index, 1, field_index, value);
+        const doc_val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+            .{ "tags", tags_val },
+        });
+        defer doc_val.free(allocator);
+
+        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 2, 1, table.index, 1, doc_val);
         defer allocator.free(message);
 
         const response = try routeWithArena(&app.handler, allocator, conn, message);

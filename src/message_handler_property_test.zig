@@ -7,6 +7,7 @@ const routeWithArena = helpers.routeWithArena;
 const msgpack = @import("msgpack_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
 const typed = @import("typed.zig");
+const schema = @import("schema.zig");
 
 const table_defs = [_]helpers.TableDef{
     .{ .name = "items", .fields = &.{ "value", "tags" } },
@@ -58,10 +59,13 @@ test "message: representative frames route at protocol boundary" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     {
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 11, 1, table.index, 1, field_index, "value-a");
+        const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+            .{ "value", "value-a" },
+        });
+        defer val.free(allocator);
+        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 11, 1, table.index, 1, val);
         defer allocator.free(message);
 
         const response = try routeBytes(&app, sc.conn, allocator, message);
@@ -103,10 +107,13 @@ test "message: response id is preserved across routed requests" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     {
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, 101, 1, table.index, 1, field_index, "value-b");
+        const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+            .{ "value", "value-b" },
+        });
+        defer val.free(allocator);
+        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 101, 1, table.index, 1, val);
         defer allocator.free(message);
 
         const response = try routeBytes(&app, sc.conn, allocator, message);
@@ -157,13 +164,16 @@ test "message: repeated routed requests release per-message allocations" {
     const sc = try app.setupMockConnection();
     defer sc.deinit();
     const table = try app.tableMetadata("items");
-    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     var i: usize = 0;
     while (i < 32) : (i += 1) {
         const msg_id: u64 = @intCast(i + 1);
         const doc_id: typed.DocId = @intCast(i + 1);
-        const message = try store_helpers.createStoreSetFieldMessage(allocator, msg_id, 1, table.index, doc_id, field_index, "value-c");
+        const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
+            .{ "value", "value-c" },
+        });
+        defer val.free(allocator);
+        const message = try store_helpers.createStoreSetMessageWithPayload(allocator, msg_id, 1, table.index, doc_id, val);
         defer allocator.free(message);
 
         const response = try routeBytes(&app, sc.conn, allocator, message);
@@ -181,12 +191,11 @@ test "message: concurrent routed requests release response allocations" {
     defer app.deinit();
 
     const table = try app.tableMetadata("items");
-    const field_index = table.fieldIndex("value") orelse return error.UnknownField;
 
     const ThreadContext = struct {
         app: *AppTestContext,
         table_index: usize,
-        field_index: usize,
+        table: *const schema.Table,
         thread_index: usize,
         iterations: usize,
         failure: ?anyerror = null,
@@ -209,14 +218,17 @@ test "message: concurrent routed requests release response allocations" {
                 const msg_id: u64 = @intCast(raw_id);
                 const doc_id: typed.DocId = @intCast(raw_id);
 
-                const message = try store_helpers.createStoreSetFieldMessage(
+                const val = try store_helpers.createDocumentMapPayload(thread_allocator, ctx.table, .{
+                    .{ "value", "value-d" },
+                });
+                defer val.free(thread_allocator);
+                const message = try store_helpers.createStoreSetMessageWithPayload(
                     thread_allocator,
                     msg_id,
                     1,
                     ctx.table_index,
                     doc_id,
-                    ctx.field_index,
-                    "value-d",
+                    val,
                 );
                 defer thread_allocator.free(message);
 
@@ -236,7 +248,7 @@ test "message: concurrent routed requests release response allocations" {
         ctx.* = .{
             .app = &app,
             .table_index = table.index,
-            .field_index = field_index,
+            .table = table,
             .thread_index = idx,
             .iterations = 8,
         };
