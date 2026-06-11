@@ -382,7 +382,11 @@ pub const StoreService = struct {
             defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
             const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
+            if (is_create) {
+                try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
+            } else {
+                try self.storage_engine.updateDocument(path.table_index, path.doc_id, ctx.namespace_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
+            }
         } else if (path.segments_len == 3) {
             const f_index = path.field_index orelse return StorageError.InvalidPath;
             const field = try validateFieldWrite(path.table, f_index, value);
@@ -484,15 +488,26 @@ pub const StoreService = struct {
         defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
         const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
-        return try self.storage_engine.prepareBatchUpsert(
-            path.table_index,
-            path.doc_id,
-            ctx.namespace_id,
-            ctx.owner_doc_id,
-            columns.items,
-            auth_predicate_ptr,
-            timestamp,
-        );
+        if (is_create) {
+            return try self.storage_engine.prepareBatchUpsert(
+                path.table_index,
+                path.doc_id,
+                ctx.namespace_id,
+                ctx.owner_doc_id,
+                columns.items,
+                auth_predicate_ptr,
+                timestamp,
+            );
+        } else {
+            return try self.storage_engine.prepareBatchUpdate(
+                path.table_index,
+                path.doc_id,
+                ctx.namespace_id,
+                columns.items,
+                auth_predicate_ptr,
+                timestamp,
+            );
+        }
     }
 
     fn buildBatchRemoveEntry(

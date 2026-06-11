@@ -299,6 +299,44 @@ pub const Writer = struct {
                         if (old_record) |r| r.deinit(self.allocator);
                     }
                 },
+                .update => |uop| {
+                    const table_metadata = self.schema.getTableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
+                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
+                    var old_record: ?Record = null;
+                    const capture_res = getDocumentHelper(self, uop.table_index, namespace_id, uop.id, &sql_cache);
+                    if (capture_res) |record| {
+                        old_record = record;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ uop.table_index, err });
+                    }
+                    const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
+                        if (old_record) |r| r.deinit(self.allocator);
+                        const classified_err = errors.classifyError(err);
+                        errors.logDatabaseError("executeBatch UPDATE", classified_err, table_metadata.name);
+                        return classified_err;
+                    };
+
+                    if (maybe_new_record) |new_record| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, uop.table_index, .update, old_record, new_record) catch |err| {
+                            const classified_err = errors.classifyError(err);
+                            std.log.err("Failed to capture row change: {}", .{classified_err});
+                            if (old_record) |r| r.deinit(self.allocator);
+                            var r = new_record;
+                            r.deinit(self.allocator);
+                            return classified_err;
+                        };
+                    } else {
+                        if (old_record != null and uop.guard_values != null and op.getWriteAckInfo() != null) {
+                            guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                std.log.err("Failed to track guard rejection: {}", .{err});
+                            };
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPDATE for table index {d}/{s} had no matching row", .{ uop.table_index, typed.docIdHexSlice(uop.id, &id_hex_buf) });
+                        }
+                        if (old_record) |r| r.deinit(self.allocator);
+                    }
+                },
                 .delete => |dop| {
                     const table_metadata = self.schema.getTableByIndex(dop.table_index) orelse return StorageError.UnknownTable;
                     const namespace_id = if (table_metadata.namespaced) dop.namespace_id else schema.global_namespace_id;
@@ -392,6 +430,12 @@ pub const Writer = struct {
             var namespace_id: i64 = undefined;
             const has_affected = switch (op) {
                 .upsert => |o| blk: {
+                    table_index = o.table_index;
+                    id = o.id;
+                    namespace_id = o.namespace_id;
+                    break :blk true;
+                },
+                .update => |o| blk: {
                     table_index = o.table_index;
                     id = o.id;
                     namespace_id = o.namespace_id;
@@ -561,7 +605,7 @@ pub const Writer = struct {
             while (batch.items.len < batch_size) {
                 if (self.queue.pop()) |op| {
                     switch (op) {
-                        .upsert, .delete => {
+                        .upsert, .update, .delete => {
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
@@ -599,7 +643,7 @@ pub const Writer = struct {
         // Drain
         while (self.queue.pop()) |op| {
             switch (op) {
-                .upsert, .delete => {
+                .upsert, .update, .delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         self.endOp(1);
@@ -761,6 +805,48 @@ pub const Writer = struct {
                         if (old_record) |r| r.deinit(self.allocator);
                         const classified_err = errors.classifyError(err);
                         errors.logDatabaseError("executeBatchOp UPSERT", classified_err, table_metadata.name);
+                        final_err = classified_err;
+                        failed_batch_index = entry_idx;
+                        break;
+                    }
+                },
+                .update => {
+                    var old_record: ?Record = null;
+                    if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache)) |record| {
+                        old_record = record;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ entry.table_index, err });
+                    }
+
+                    if (executeUpdate(self, entry, namespace_id, table_metadata)) |maybe_new_record| {
+                        if (maybe_new_record) |new_record| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .update, old_record, new_record)) |_| {
+                                // success
+                            } else |err| {
+                                const classified_err = errors.classifyError(err);
+                                std.log.err("Failed to capture row change: {}", .{classified_err});
+                                if (old_record) |r| r.deinit(self.allocator);
+                                var r = new_record;
+                                r.deinit(self.allocator);
+                                final_err = classified_err;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
+                        } else {
+                            if (old_record != null and entry.guard_values != null and is_confirmed) {
+                                if (old_record) |r| r.deinit(self.allocator);
+                                final_err = error.PermissionDenied;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPDATE for table index {d}/{s} had no matching row", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            if (old_record) |r| r.deinit(self.allocator);
+                        }
+                    } else |err| {
+                        if (old_record) |r| r.deinit(self.allocator);
+                        const classified_err = errors.classifyError(err);
+                        errors.logDatabaseError("executeBatchOp UPDATE", classified_err, table_metadata.name);
                         final_err = classified_err;
                         failed_batch_index = entry_idx;
                         break;
@@ -930,7 +1016,7 @@ pub const Writer = struct {
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },
-            .upsert, .delete => unreachable,
+            .upsert, .update, .delete => unreachable,
         }
     }
 
@@ -979,6 +1065,58 @@ pub const Writer = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        if (op.guard_values) |guard_vals| {
+            for (guard_vals) |val| {
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
+
+        const rc = sqlite.c.sqlite3_step(stmt);
+        if (rc == sqlite.c.SQLITE_ROW) {
+            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
+        }
+        if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
+        return null;
+    }
+
+    fn executeUpdate(
+        self: *Writer,
+        op: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema.Table,
+    ) !?Record {
+        const sql_str = op.sql;
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+
+        var bind_idx: c_int = 1;
+
+        if (@typeInfo(@TypeOf(op.values)) == .optional) {
+            if (op.values) |vals| {
+                for (vals) |val| {
+                    try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                    bind_idx += 1;
+                }
+            }
+        } else {
+            for (op.values) |val| {
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
+
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        const id_bytes = typed.docIdToBytes(op.id);
+        if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
         if (op.guard_values) |guard_vals| {

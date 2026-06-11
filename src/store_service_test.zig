@@ -939,7 +939,7 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     try testing.expectEqual(@as(usize, 1), managed.records.len);
 }
 
-test "StoreService: create requires all required fields" {
+test "StoreService: create requires all required fields but update does not" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
     const schema_json =
@@ -1000,5 +1000,27 @@ test "StoreService: create requires all required fields" {
         _ = try doc.expectFieldString("name", "Test Item");
         _ = try doc.expectFieldString("status", "active");
         _ = try doc.expectFieldString("description", "Some description");
+    }
+
+    // 3. Full document update without required field should succeed
+    // because it's an update, not a create
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "status", "archived" },
+            .{ "description", "Updated description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        // Verify the update succeeded
+        var doc = try items.getOne(allocator, 1, doc_id);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("status", "archived");
+        _ = try doc.expectFieldString("description", "Updated description");
     }
 }

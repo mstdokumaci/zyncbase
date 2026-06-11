@@ -517,3 +517,45 @@ pub fn buildDeleteDocumentSql(
     try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
     return sql_buf.toOwnedSlice(allocator);
 }
+
+pub fn buildUpdateDocumentSql(
+    allocator: Allocator,
+    table_metadata: *const schema.Table,
+    columns: []const ColumnValue,
+    guard_sql: ?[]const u8,
+) ![]const u8 {
+    var sql_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer sql_buf.deinit(allocator);
+
+    try sql_buf.appendSlice(allocator, "UPDATE ");
+    try sql_buf.appendSlice(allocator, table_metadata.name_quoted);
+    try sql_buf.appendSlice(allocator, " SET ");
+
+    for (columns, 0..) |col, i| {
+        const field = try getColumnField(table_metadata, col);
+        if (i > 0) try sql_buf.appendSlice(allocator, ", ");
+        try sql_buf.appendSlice(allocator, field.name_quoted);
+        try sql_buf.appendSlice(allocator, " = ");
+        if (field.storage_type == .array) {
+            try sql_buf.appendSlice(allocator, "jsonb(?)");
+        } else {
+            try sql_buf.appendSlice(allocator, "?");
+        }
+    }
+    try sql_buf.appendSlice(allocator, ", ");
+    try sql_buf.appendSlice(allocator, schema.quoted_updated_at);
+    try sql_buf.appendSlice(allocator, " = ?");
+
+    try sql_buf.appendSlice(allocator, " WHERE ");
+    try sql_buf.appendSlice(allocator, schema.quoted_id);
+    try sql_buf.appendSlice(allocator, "=? AND ");
+    try sql_buf.appendSlice(allocator, schema.quoted_namespace_id);
+    try sql_buf.appendSlice(allocator, "=?");
+    if (guard_sql) |fragment| {
+        try sql_buf.appendSlice(allocator, fragment);
+    }
+    try sql_buf.appendSlice(allocator, " RETURNING ");
+    try appendProjectedColumnsSql(allocator, &sql_buf, table_metadata);
+
+    return sql_buf.toOwnedSlice(allocator);
+}

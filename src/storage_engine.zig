@@ -506,9 +506,6 @@ pub const StorageEngine = struct {
         self.writer.flushPendingWrites();
     }
 
-    /// Converts a msgpack.Payload to a Value based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the Value.
-
     // ─── Storage methods ──────────────────────────────────────────────────
 
     /// INSERT OR REPLACE a document into a table.
@@ -553,6 +550,60 @@ pub const StorageEngine = struct {
                 .id = id,
                 .namespace_id = effective_namespace_id,
                 .owner_doc_id = owner_doc_id,
+                .sql = sql_string,
+                .values = values,
+                .guard_values = guard_values,
+                .timestamp = std.time.timestamp(),
+                .completion_signal = null,
+                .conn_id = conn_id,
+                .write_id = write_id,
+            },
+        };
+
+        try self.writer.enqueueOp(op);
+        queued = true;
+    }
+
+    /// UPDATE an existing document in a table.
+    pub fn updateDocument(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        columns: []const ColumnValue,
+        guard_predicate: ?*const query_ast.FilterPredicate,
+        conn_id: ?u64,
+        write_id: ?[16]u8,
+    ) !void {
+        try self.ensureRunning();
+        try self.ensureHealthy();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+        var queued = false;
+
+        var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
+
+        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        errdefer if (!queued) self.allocator.free(sql_string);
+
+        const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
+        errdefer if (!queued) {
+            if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+        };
+
+        const values = try self.cloneColumnValues(columns);
+        errdefer if (!queued) {
+            for (values) |v| v.deinit(self.allocator);
+            self.allocator.free(values);
+        };
+
+        const op = WriteOp{
+            .update = .{
+                .table_index = table_index,
+                .id = id,
+                .namespace_id = effective_namespace_id,
                 .sql = sql_string,
                 .values = values,
                 .guard_values = guard_values,
@@ -639,6 +690,46 @@ pub const StorageEngine = struct {
             .id = id,
             .namespace_id = effective_namespace_id,
             .owner_doc_id = owner_doc_id,
+            .sql = sql_string,
+            .values = values,
+            .guard_values = guard_values,
+            .timestamp = timestamp,
+        };
+    }
+
+    pub fn prepareBatchUpdate(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        columns: []const ColumnValue,
+        guard_predicate: ?*const query_ast.FilterPredicate,
+        timestamp: i64,
+    ) !BatchEntry {
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+
+        var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
+
+        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        errdefer self.allocator.free(sql_string);
+
+        const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
+        errdefer if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+
+        const values = try self.cloneColumnValues(columns);
+        errdefer {
+            for (values) |value| value.deinit(self.allocator);
+            self.allocator.free(values);
+        }
+
+        return .{
+            .kind = .update,
+            .table_index = table_index,
+            .id = id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = typed.zeroDocId,
             .sql = sql_string,
             .values = values,
             .guard_values = guard_values,
