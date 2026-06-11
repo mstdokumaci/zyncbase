@@ -74,6 +74,7 @@ Before submitting a task or notifying the user, ensure the following steps are p
 2. **Run relevant tests:**
    - If core logic was changed, run `zig build test`.
    - If specific modules were touched, run the corresponding unit test (e.g., `zig build -Doptimize=Debug test-unit -Dtest-filter="module_name"`).
+   - **Important:** If SDK code was changed, rebuild it first with `bun run --filter @zyncbase/client build` before running E2E tests.
    - If protocol-level changes were made, run `npm run test:e2e`.
    - **SDK Tests:** If SDK code was changed, run `bun test sdk`.
 
