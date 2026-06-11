@@ -168,6 +168,14 @@ pub const Connection = struct {
             sess.claims.deinit(self.allocator);
             sess.claims = new_claims;
             sess.token_expires_at = token_expires_at;
+        } else {
+            var mutable_claims = new_claims;
+            var it = mutable_claims.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit(self.allocator);
+            }
+            mutable_claims.deinit(self.allocator);
         }
     }
 

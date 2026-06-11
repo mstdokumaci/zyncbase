@@ -295,7 +295,10 @@ pub const ConnectionManager = struct {
         for (to_close.items) |conn| {
             const msg = wire.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {
                 std.log.err("Failed to encode TOKEN_EXPIRED: {}", .{err});
-                _ = conn.release();
+                conn.ws.close();
+                if (conn.release()) {
+                    self.memory_strategy.releaseConnection(conn);
+                }
                 continue;
             };
             conn.send(msg) catch |err| {
