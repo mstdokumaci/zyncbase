@@ -64,6 +64,8 @@ pub const Writer = struct {
     }
 
     pub fn enqueueOp(self: *Writer, op: WriteOp) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (!self.is_healthy.load(.acquire)) {
             return StorageError.EngineUnhealthy;
         }
@@ -72,9 +74,7 @@ pub const Writer = struct {
             self.endOp(1);
             return err;
         };
-        self.mutex.lock();
         self.work_cond.signal();
-        self.mutex.unlock();
     }
 
     pub fn isHealthy(self: *const Writer) bool {
@@ -530,7 +530,11 @@ pub const Writer = struct {
     fn writeThreadLoop(self: *Writer) void {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
-            self.is_healthy.store(false, .release);
+            {
+                self.mutex.lock();
+                self.is_healthy.store(false, .release);
+                self.mutex.unlock();
+            }
 
             while (self.queue.pop()) |op| {
                 if (op.getCompletionSignal()) |sig| {
