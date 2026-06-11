@@ -1,15 +1,11 @@
 # ZyncBase Error Taxonomy & Handling Strategy
 
-**Status**: Finalized  
-
-This document defines the formal error taxonomy for ZyncBase, covering error categories, retry semantics, and SDK-level handling.
-
 ---
 
 ## Drivers
 
 This implementation follows the decisions established in:
-- [ADR-019: Formal Error Taxonomy](../architecture/adrs.md#adr-019-formal-error-taxonomy-and-handling-strategy)
+- [ADR-022: Formal Error Taxonomy](../architecture/adrs.md#adr-022-formal-error-taxonomy-and-handling-strategy)
 
 ---
 
@@ -60,6 +56,7 @@ Errors are grouped into 6 functional categories to determine automatic SDK behav
 | `DATABASE_CORRUPT` | Server | Database corruption detected | SQLite integrity check failed | 500 | No - Restore from backup |
 | `CACHE_REF_COUNT_OVERFLOW` | Server | Too many concurrent readers | Cache ref_count exceeded u32 max | 500 | No - Indicates bug |
 | `SUBSCRIPTION_LIMIT_EXCEEDED` | Rate-Limit | Too many subscriptions | Client exceeded max subscriptions | 429 | No - Reduce subscriptions |
+| `RESOURCE_EXHAUSTED` | Rate-Limit | Subscription engine memory budget reached | New subscription rejected because `subscriptionEngine.maxMemoryMB` approached | 429 | No - Reduce active subscriptions |
 | `WAL_SIZE_EXCEEDED` | Server | WAL file too large | WAL file exceeded threshold | 500 | Yes - Automatic checkpoint |
 | `MAX_CONNECTIONS_REACHED` | Connection | Server at capacity | Pool exhausted | 503 | No - Try later |
 | `INVALID_MESSAGE_FORMAT` | Validation | Missing fields | Message missing `type` or `id` | 400 | No - Fix payload |

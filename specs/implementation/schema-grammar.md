@@ -6,8 +6,9 @@ This document defines the formal grammar and property specification for `schema.
 
 | Key | Type | Description |
 |:---|:---:|:---|
-| `version` | `string` | Semver version of the schema (`MAJOR.MINOR.PATCH`). `[PLANNED]` migration logic. |
+| `version` | `string` | Semver version of the schema (`MAJOR.MINOR.PATCH`). |
 | `store` | `object` | Map of table names to table definitions. |
+| `presence` | `object` | Optional. Typed ephemeral presence field definitions. When absent, the server synthesizes an implicit minimal schema (see [Implicit Presence Schema](#implicit-presence-schema)). Contains `user` and/or `shared` keys. |
 
 ---
 
@@ -110,7 +111,7 @@ ZyncBase uses a **flat relational storage engine**. Nested objects are logically
 
 - **Separator**: `__` (double underscore).
 - **Naming Restriction**: Field names must match `[A-Za-z][A-Za-z0-9_]*`, cannot contain `__`, and cannot use reserved system field names.
-- **Recursion**: Unlimited depth is supported for `object` types with their own `fields` property.
+- **Recursion**: Unlimited depth is supported for `object` types within `store` field definitions. For `presence` field definitions, **only one level of nesting is permitted** (e.g., `cursor: { x, y }` is valid; `cursor: { pos: { x, y } }` is rejected at startup).
 
 Example:
 ```json
@@ -133,9 +134,98 @@ Flattens to SQLite column: `profile__userId TEXT`.
 
 ---
 
-## Validation Constraints (`[PLANNED]`)
+## Presence Grammar (`presence`)
 
-The following properties are part of the north star spec but are currently **ignored** by the implementation:
+The optional `presence` top-level key defines typed ephemeral presence fields. When present, it MUST contain at least a `user` key. The `shared` key is optional.
+
+### Presence Root
+
+| Key | Type | Description |
+|:---|:---:|:---|
+| `user` | `object` | Map of presence field names to presence field definitions. Fields owned per connected user. |
+| `shared` | `object` | Optional. Map of shared field names to presence field definitions. Namespace-level state. |
+
+### Presence Field Definition
+
+Presence fields support a subset of the store field grammar:
+
+| Property | Applicable Types | Description |
+|:---|:---:|:---|
+| `type` | all | **Required.** One of: `string`, `integer`, `number`, `boolean`, `object`. |
+| `fields` | `object` | **Required for `object` type.** Map of sub-field names to scalar field definitions. Max one level of nesting. |
+| `enum` | `string`, `integer` | List of allowed values. |
+| `pattern` | `string` | Regex pattern validation. |
+| `minLength` | `string` | Minimum character length. |
+| `maxLength` | `string` | Maximum character length. |
+| `minimum` | `integer`, `number` | Minimum numeric value. |
+| `maximum` | `integer`, `number` | Maximum numeric value. |
+
+Presence fields do NOT support: `indexed`, `references`, `onDelete`, `items` (no array fields), or `required` (presence is always a merge — no field is mandatory).
+
+### Presence Definition
+
+| Key | Type | Description |
+|:---|:---:|:---|
+| `user` | `object` | Required when `presence` is explicitly defined. Map of user-owned ephemeral field definitions. One record per connected user per namespace. |
+| `shared` | `object` | Optional. Map of namespace-level ephemeral field definitions. One record for the entire namespace. |
+
+#### Presence Field Name Constraints
+
+- Must match the SQL-safe identifier pattern `[A-Za-z][A-Za-z0-9_]*`.
+- Must not contain `__`; this separator is reserved for flattened nested object paths.
+- Must not use reserved system field names: `id`, `namespace_id`, `created_at`, `updated_at`.
+
+#### Presence Nesting
+
+One level of `object` nesting is supported. Sub-fields within an `object` are flattened using the `__` separator for wire encoding (`cursor: { x, y }` → `cursor__x`, `cursor__y`). Deeper nesting (an `object` containing another `object`) is rejected at server startup.
+
+### Implicit Presence Schema
+
+When the `presence` key is absent from `schema.json`, the server synthesizes a minimal implicit schema:
+
+```json
+{
+  "presence": {
+    "user": {
+      "status": { "type": "string", "enum": ["active", "idle", "away"] }
+    },
+    "shared": {}
+  }
+}
+```
+
+This produces `presenceUserFields: ["status"]` and `presenceSharedFields: []` in the `SchemaSync` message. Presence is always usable — developers can call `presence.set({ status: "active" })` immediately without defining any schema. The implicit schema provides a useful default for the most common presence use case (online/offline status).
+
+Defining an explicit `presence` section in `schema.json` replaces the implicit schema entirely. Explicit schemas are recommended for applications with custom presence fields (cursor positions, typing indicators, etc.).
+
+### Wire Index Derivation
+
+At server startup, the server flattens `presence.user` and `presence.shared` into index arrays:
+
+1. Iterate `presence.user` keys in definition order.
+2. For each `object` field, expand its sub-fields in definition order using `parentName__subFieldName`.
+3. For each scalar field, emit its name directly.
+4. The resulting flat array is `presenceUserFields[]`. Array position = wire integer index.
+5. Repeat for `presence.shared` → `presenceSharedFields[]`.
+
+These arrays are emitted in the `SchemaSync` message on every new connection.
+
+### Presence Error Catalog
+
+| Error | Condition |
+|:---|:---|
+| `InvalidPresence` | `presence` key is present but not an object. |
+| `MissingPresenceUser` | `presence` is present but `user` key is missing. |
+| `InvalidPresenceUser` | `presence.user` is not an object. |
+| `InvalidPresenceShared` | `presence.shared` is present but not an object. |
+| `InvalidPresenceFieldName` | Presence field name violates naming constraints. |
+| `InvalidPresenceFieldType` | Presence field `type` is missing, not a string, or not one of the supported types. |
+| `PresenceNestingTooDeep` | A presence `object` field contains another `object` field (max one level). |
+| `InvalidPresenceObjectField` | A presence `object` field is missing `fields`, or `fields` is not an object. |
+
+---
+
+## Validation Constraints
 
 | Key | Applicable Types | Description |
 |:---|:---:|:---|

@@ -1,226 +1,459 @@
 # Presence Internals
 
-**Drivers**: [Presence API Design](../api-design/presence-api.md) - Formal requirements for user awareness and ephemeral state.
+**Drivers**: [Presence API Design](../api-design/presence-api.md) — Formal requirements for user awareness and ephemeral state. [ADR-033](../architecture/adrs.md#adr-033-typed-two-tier-presence-system) — Typed two-tier presence architecture.
 
-This document covers the architectural details, performance optimizations, and internal implementation of ZyncBase's presence system.
+This document covers the architectural details, performance strategy, and internal implementation of ZyncBase's presence system.
 
 ---
 
 ## Logical Architecture
 
-Presence is strictly scoped to `presenceNamespace`. The server manages a hash map of namespaces, each containing a map of active resolved users. This ensures that a user's presence updates only affect others in the same logical context.
+Presence is strictly scoped to `presenceNamespace`. The server maintains two in-memory structures per namespace: a user state map (one record per connected user) and a shared state map (one record for the entire namespace). All data is ephemeral — no SQLite involvement.
 
-Presence operations require a ready presence scope: the namespace string has been resolved to `_zync_namespaces.id`, and the external identity has been resolved to a persisted `users.id`. If `users.namespaced = true`, that identity resolution uses the presence namespace ID.
+Presence operations require a ready presence scope: the namespace string has been resolved to `_zync_namespaces.id`, and the external identity has been resolved to a persisted `users.id`. If `users.namespaced = true`, identity resolution uses the presence namespace ID. See ADR-029.
 
 ```
-[WebSocket Client] -> [PresenceManager (In-Memory)]
-                           |
-            +--------------+--------------+
-            |                             |
-      [State Map]                 [History Buffer]
-  (User -> Presence)             (Last 5 Seconds)
+[WebSocket Client] ──▶ [PresenceManager (In-Memory)]
+                                │
+               ┌────────────────┼────────────────┐
+               │                │                │
+         [UserStateMap]  [SharedStateMap]  [HistoryBuffer]
+     (userId → FieldMap)  (FieldMap)      (Last 5 Seconds)
 ```
+
+---
+
+## Schema and Wire Encoding
+
+### Presence schema parsing (server startup)
+
+At startup, the server loads the `presence` section of `schema.json` and produces two flat field arrays (one for `user`, one for `shared`) by flattening nested objects with `__`. Max one level of nesting is enforced; deeper nesting causes startup failure.
+
+```
+presence.user:
+  cursor.x  → cursor__x  → index 0
+  cursor.y  → cursor__y  → index 1
+  status    → status     → index 2
+  typing    → typing     → index 3
+  name      → name       → index 4
+
+presence.shared:
+  slide     → slide      → index 0
+  playing   → playing    → index 1
+```
+
+These arrays are stored on `PresenceManager` as `user_fields: []const []const u8` and `shared_fields: []const []const u8`.
+
+### SchemaSync payload extension
+
+The `SchemaSync` message sent to every connecting client is extended with two flat arrays:
+
+```
+{
+  "type":               "SchemaSync",
+  "tables":             [...],
+  "fields":             [...],
+  "fieldFlags":         [...],
+  "presenceUserFields": ["cursor__x", "cursor__y", "status", "typing", "name"],
+  "presenceSharedFields": ["slide", "playing"]
+}
+```
+
+No flags arrays accompany presence fields. Presence fields have no system-column or doc_id semantics — all indices map to plain typed values.
+
+### SDK dictionary extension
+
+The `SchemaDictionary` in the TypeScript SDK extends its existing index maps to include:
+- `presenceUserFieldToIndex: Map<string, number>` — `"cursor__x"` → 0, etc.
+- `presenceSharedFieldToIndex: Map<string, number>` — `"slide"` → 0, etc.
+- `presenceUserFieldNames: string[]` — reverse map for decoding
+- `presenceSharedFieldNames: string[]` — reverse map for decoding
+
+Encode path: `{ cursor: { x: 100, y: 200 } }` → flatten → `{ "cursor__x": 100, "cursor__y": 200 }` → index → `{ 0: 100.0, 1: 200.0 }`.
+
+Decode path: `{ 0: 101.0, 1: 201.0 }` → unflatten via index → `{ cursor__x: 101.0, cursor__y: 201.0 }` → nest → `{ cursor: { x: 101.0, y: 201.0 } }`.
+
+### SchemaSync integration
+
+The presence field arrays are produced at server startup during schema parsing and stored on the `Schema` struct alongside the store table/field arrays. The `encodeSchemaSync()` function in `wire/encode.zig` is extended to conditionally include presence arrays:
+
+1. Schema parser (`schema/parse.zig`) reads `presence.user` / `presence.shared` from `schema.json` (or synthesizes the implicit default if absent), flattens nested objects with `__`, and produces `presence_user_fields: [][]const u8` and `presence_shared_fields: [][]const u8`.
+2. `encodeSchemaSync()` dynamically computes the MessagePack map size (4 for store-only, 5 or 6 when presence arrays are present) and conditionally encodes `presenceUserFields` and `presenceSharedFields`.
+3. The encoded message is pre-computed once at startup and stored on `ConnectionManager`, then sent verbatim to each connecting client — identical to the store SchemaSync pattern.
+
+When the implicit schema is active, `SchemaSync` carries `presenceUserFields: ["status"]` and `presenceSharedFields: []` (empty array, not omitted).
+
+---
 
 ## Implementation Artifacts
 
-### Presence Manager
-The core state management is handled by `PresenceManager`, which keeps all data in RAM for sub-100ms latency.
+### PresenceManager
+
+Core state management. All data lives in RAM for sub-100ms latency. Runs on a dedicated background thread for periodic flush, with a mutex protecting internal state from concurrent uWS message handler access.
 
 ```zig
 const PresenceManager = struct {
     allocator: Allocator,
-    
-    // In-memory only (ephemeral)
-    // namespace -> resolved users.id -> presence_data
-    presence: HashMap([]const u8, HashMap([]const u8, PresenceData)),
-    
-    // History buffer (last 5 seconds) for late joiners
-    // namespace -> RingBuffer of presence snapshots
-    history: HashMap([]const u8, RingBuffer(PresenceSnapshot)),
-    
-    // Batching for efficiency (50ms intervals)
-    batch_timer: std.time.Timer,
-    pending_updates: ArrayList(PresenceUpdate),
-    
-    pub fn set(self: *PresenceManager, namespace: []const u8, user_id: []const u8, data: json.Value) !void {
-        // Store in memory
-        var ns = try self.presence.getOrPut(namespace);
-        try ns.value_ptr.put(user_id, .{ .data = data, .joined_at = std.time.milliTimestamp() });
-        
-        // Add to history buffer (last 5 seconds)
-        var ns_history = try self.history.getOrPut(namespace);
-        try ns_history.value_ptr.push(.{
-            .user_id = user_id,
-            .data = data,
-            .timestamp = std.time.milliTimestamp(),
+
+    // --- Thread management (modeled on CheckpointManager) ---
+    background_thread: ?std.Thread,
+    shutdown_requested: std.atomic.Value(bool),
+    shutdown_mutex: std.Thread.Mutex,
+    shutdown_cond: std.Thread.Condition,
+
+    // --- Data protection ---
+    // Guards all mutable state below. Acquired by uWS message handler threads
+    // on setUser/setShared/onSubscribeUser/onSubscribeShared/removeUser.
+    // Also acquired by the flush loop thread during flushBatch.
+    data_mutex: std.Thread.Mutex,
+
+    // Typed schema built at startup
+    user_fields:   []const []const u8,  // flattened user field names
+    shared_fields: []const []const u8,  // flattened shared field names
+
+    // User state: namespace_id → (users.id → FieldMap)
+    // FieldMap is []?Value indexed by field index
+    user_state: HashMap(i64, HashMap(DocId, FieldMap)),
+
+    // Shared state: namespace_id → FieldMap
+    shared_state: HashMap(i64, FieldMap),
+
+    // Grace period tracking: namespace_id → timestamp_ms when it became empty
+    // Entries cleared when a user joins; evicted by flush loop after grace_ms
+    namespace_empty_at: HashMap(i64, i64),
+
+    // Batch pending: user presence updates queued for the 50ms flush
+    pending_user_updates:   ArrayList(PendingUserUpdate),
+    pending_shared_updates: ArrayList(PendingSharedUpdate),
+
+    // Subscription tracking: namespace_id → []ConnectionId
+    user_subscribers:   HashMap(i64, ArrayList(ConnectionId)),
+    shared_subscribers: HashMap(i64, ArrayList(ConnectionId)),
+
+    pub fn setUser(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: DocId,
+        field_map: FieldMap,  // integer-keyed merge delta from wire
+    ) !void {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
+        // Validate field indices against user_fields.len
+        // Validate value types against schema
+        // Merge into existing record (patch, not replace)
+        var ns = try self.user_state.getOrPut(namespace_id);
+        var user_record = try ns.value_ptr.getOrPut(user_id);
+        try mergeFieldMap(user_record.value_ptr, field_map);
+
+        // Queue for 50ms batch broadcast
+        try self.pending_user_updates.append(.{
+            .namespace_id = namespace_id,
+            .user_id      = user_id,
+            .field_map    = field_map,
         });
-        
-        // Queue for batched broadcast (50ms intervals)
-        try self.pending_updates.append(.{
-            .namespace = namespace,
-            .user_id = user_id,
-            .data = data,
+    }
+
+    pub fn setShared(
+        self: *PresenceManager,
+        namespace_id: i64,
+        field_map: FieldMap,
+        conn_id: ConnectionId,
+    ) !void {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
+        // Validate field indices against shared_fields.len
+        // Validate value types against schema
+        // Merge into shared record (patch, not replace)
+        var record = try self.shared_state.getOrPut(namespace_id);
+        try mergeFieldMap(record.value_ptr, field_map);
+
+        // Queue for broadcast to shared_subscribers
+        try self.pending_shared_updates.append(.{
+            .namespace_id = namespace_id,
+            .field_map    = field_map,
+            .source_conn  = conn_id,
         });
     }
-    
-    pub fn get(self: *PresenceManager, namespace: []const u8, user_id: []const u8) ?json.Value {
-        const ns = self.presence.get(namespace) orelse return null;
-        return ns.get(user_id);
+
+    pub fn onSubscribeUser(
+        self: *PresenceManager,
+        namespace_id: i64,
+        conn_id: ConnectionId,
+    ) !PresenceSnapshot {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
+        // Register subscriber
+        var subs = try self.user_subscribers.getOrPut(namespace_id);
+        try subs.value_ptr.append(conn_id);
+
+        // Return current user records
+        const users = self.user_state.get(namespace_id);
+        return .{ .users = users };
     }
-    
-    pub fn getAll(self: *PresenceManager, namespace: []const u8) ![]PresenceEntry {
-        const ns = self.presence.get(namespace) orelse return &.{};
-        
-        var result = ArrayList(PresenceEntry).init(self.allocator);
-        var iter = ns.iterator();
-        while (iter.next()) |entry| {
-            try result.append(.{
-                .user_id = entry.key_ptr.*,
-                .data = entry.value_ptr.data,
-                .joined_at = entry.value_ptr.joined_at,
-            });
+
+    pub fn onSubscribeShared(
+        self: *PresenceManager,
+        namespace_id: i64,
+        conn_id: ConnectionId,
+    ) !?FieldMap {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
+        // Register subscriber
+        var subs = try self.shared_subscribers.getOrPut(namespace_id);
+        try subs.value_ptr.append(conn_id);
+
+        // Return current shared state (may be null if no user has called setShared)
+        return self.shared_state.get(namespace_id);
+    }
+
+    pub fn removeUser(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: DocId,
+    ) !void {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
+        const ns = self.user_state.getPtr(namespace_id) orelse return;
+        _ = ns.remove(user_id);
+
+        // Also remove from subscriber list
+        if (self.user_subscribers.getPtr(namespace_id)) |subs| {
+            // Remove this conn_id from subs if it was a subscriber
+            // (handled separately by connection cleanup)
         }
-        return result.toOwnedSlice();
-    }
-    
-    pub fn onJoin(self: *PresenceManager, namespace: []const u8) !PresenceSnapshot {
-        // Return current state + last 5 seconds of history
-        const current = self.presence.get(namespace);
-        
-        const history = if (self.history.get(namespace)) |h|
-            h.getLastNSeconds(5)
-        else
-            &.{};
-        
-        return .{
-            .current = current,
-            .history = history,
-        };
-    }
-    
-    pub fn remove(self: *PresenceManager, namespace: []const u8, user_id: []const u8) !void {
-        // Remove from memory
-        if (self.presence.get(namespace)) |ns| {
-            _ = ns.remove(user_id);
+
+        // If namespace is now empty, record empty timestamp for grace period
+        if (ns.count() == 0) {
+            try self.namespace_empty_at.put(namespace_id, std.time.milliTimestamp());
         }
-        
-        // Broadcast removal
-        try self.broadcastRemoval(namespace, user_id);
+
+        // Queue leave broadcast
+        try self.pending_user_updates.append(.{
+            .namespace_id = namespace_id,
+            .user_id      = user_id,
+            .field_map    = null,  // null signals leave
+        });
     }
-    
-    // Called every 50ms to batch presence updates
+
+    // --- Lifecycle ---
+
+    // Spawn the dedicated background flush thread (modeled on CheckpointManager).
+    pub fn start(self: *PresenceManager) !void {
+        self.shutdown_requested.store(false, .release);
+        const thread = try std.Thread.spawn(.{}, flushLoop, .{self});
+        self.background_thread = thread;
+    }
+
+    // Signal shutdown and join the background thread.
+    pub fn stop(self: *PresenceManager) void {
+        self.shutdown_requested.store(true, .release);
+        self.shutdown_mutex.lock();
+        self.shutdown_cond.signal();
+        self.shutdown_mutex.unlock();
+        if (self.background_thread) |thread| thread.join();
+    }
+
+    // Dedicated thread: blocks on timedWait for 50ms, then flushes.
+    fn flushLoop(self: *PresenceManager) !void {
+        self.shutdown_mutex.lock();
+        defer self.shutdown_mutex.unlock();
+        while (!self.shutdown_requested.load(.acquire)) {
+            self.shutdown_cond.timedWait(&self.shutdown_mutex, 50 * std.time.ns_per_ms) catch |err| {
+                if (err != error.Timeout) {
+                    std.log.err("PresenceManager flush loop error: {}", .{err});
+                }
+            };
+            if (self.shutdown_requested.load(.acquire)) break;
+            self.flushBatch();
+        }
+    }
+
+    // Runs on the dedicated background thread every 50ms.
+    // data_mutex is acquired for the duration of the flush to snapshot pending
+    // updates, then released before broadcasting (broadcasts don't need the lock).
     pub fn flushBatch(self: *PresenceManager) !void {
-        if (self.pending_updates.items.len == 0) return;
-        
-        // Group updates by namespace
-        var by_namespace = HashMap([]const u8, ArrayList(PresenceUpdate)).init(self.allocator);
-        
-        for (self.pending_updates.items) |update| {
-            var ns_updates = try by_namespace.getOrPut(update.namespace);
-            try ns_updates.value_ptr.append(update);
+        // 1. Evict expired grace-period entries (shared state cleanup)
+        const now = std.time.milliTimestamp();
+        const grace_ms: i64 = 5_000;
+        var grace_iter = self.namespace_empty_at.iterator();
+        while (grace_iter.next()) |entry| {
+            if (now - entry.value_ptr.* >= grace_ms) {
+                _ = self.shared_state.remove(entry.key_ptr.*);
+                _ = self.namespace_empty_at.remove(entry.key_ptr.*);
+            }
         }
-        
-        // Broadcast batched updates to each namespace
-        var iter = by_namespace.iterator();
-        while (iter.next()) |entry| {
-            try self.broadcastBatch(entry.key_ptr.*, entry.value_ptr.items);
+
+        // 2. Snapshot and clear pending updates under lock, then broadcast unlocked
+        self.data_mutex.lock();
+        const user_updates   = self.pending_user_updates;
+        const shared_updates = self.pending_shared_updates;
+        self.pending_user_updates   = ArrayList(PendingUserUpdate).init(self.allocator);
+        self.pending_shared_updates = ArrayList(PendingSharedUpdate).init(self.allocator);
+        self.data_mutex.unlock();
+
+        if (user_updates.items.len > 0) {
+            try self.broadcastUserBatch(user_updates.items);
+            user_updates.deinit();
         }
-        
-        // Clear pending updates
-        self.pending_updates.clearRetainingCapacity();
+
+        if (shared_updates.items.len > 0) {
+            try self.broadcastSharedBatch(shared_updates.items);
+            shared_updates.deinit();
+        }
     }
-};
-
-const PresenceData = struct {
-    data: json.Value,
-    joined_at: i64,
-};
-
-const PresenceSnapshot = struct {
-    user_id: []const u8,
-    data: json.Value,
-    timestamp: i64,
-};
-
-const PresenceUpdate = struct {
-    namespace: []const u8,
-    user_id: []const u8,
-    data: json.Value,
 };
 ```
 
-### History Ring Buffer
-Used to provide immediate context (like cursor trails) to late joiners.
+### FieldMap
+
+A value type representing an integer-keyed map of typed presence field values, matching the wire format directly:
 
 ```zig
-const RingBuffer = struct {
-    items: []PresenceSnapshot,
-    head: usize,
-    tail: usize,
-    
-    pub fn getLastNSeconds(self: *RingBuffer, seconds: i64) []PresenceSnapshot {
-        const now = std.time.milliTimestamp();
-        const cutoff = now - (seconds * 1000);
-        
-        var result = ArrayList(PresenceSnapshot).init(allocator);
-        // ... filtering logic ...
-        return result.toOwnedSlice();
-    }
+const FieldValue = union(enum) {
+    int:    i64,
+    float:  f64,
+    bool:   bool,
+    string: []const u8,
+    null,
 };
+
+// Indexed by field index (u8 is sufficient — presence schemas have < 256 fields)
+const FieldMap = []?FieldValue;
+
+fn mergeFieldMap(dest: *FieldMap, patch: FieldMap) !void {
+    for (patch, 0..) |val, i| {
+        if (val) |v| dest.*[i] = v;
+    }
+}
 ```
+
+---
 
 ## Operational Logic
 
-### Client-Side Throttling
-High-frequency updates (e.g., cursor moves) are automatically throttled by the client SDK to ~60fps (16ms) to prevent overwhelming the network and server.
+### Merge semantics
 
-### Server-Side Batching
-The server batches presence updates every 50ms. If multiple users update their state within the same window, they are broadcast in a single message.
+`setUser` and `setShared` perform field-level merges. The incoming `FieldMap` (an integer-keyed sparse array matching the wire payload) is patched over the existing stored record. Fields absent from the patch (represented as `null` slots) are not touched. This means:
 
-### Automatic Cleanup
-When a WebSocket connection is closed (manual disconnect or heartbeats fail), the server automatically removes the associated presence data using `PresenceManager.remove()` and broadcasts a removal message.
+- Sending `{ 0: 101.0 }` updates only `cursor__x`. All other fields unchanged.
+- The first `setUser` call for a new user creates a zero-initialized record and applies the patch.
+- `setShared` on a namespace with no existing shared record creates it.
 
-When a presence namespace changes or auth refresh changes the resolved presence user ID, the old presence entry is removed before the new presence scope becomes ready.
+### Client-side throttling
+
+High-frequency `presence.set()` calls are throttled at the SDK level to ~60fps (16ms). The server never receives more than ~60 user presence messages per second per connected user. `presence.setShared()` is not throttled — shared state changes are infrequent by design.
+
+### Server-side batching
+
+The `PresenceManager` flushes every 50ms via its batch loop. Multiple user updates and shared state updates within the window are grouped and sent in bulk. User updates are grouped by namespace, then each group triggers one pass over the namespace's subscriber list. This keeps broadcast cost O(subscribers × batch_size), not O(updates × subscribers).
+
+### Automatic user cleanup on disconnect
+
+When a WebSocket connection closes, the connection cleanup path calls `removeUser` for the presence scope. This removes the user's record, queues a `leave` broadcast, and — if the namespace is now empty — records `namespace_empty_at[namespace_id] = now`. The grace period timer starts.
+
+When a namespace switch occurs (`PresenceSetNamespace`), the old presence scope's user record is removed before the new scope resolves.
+
+### Grace period mechanism
+
+### Grace period mechanism
+
+When the last user leaves a namespace:
+1. `removeUser` records `namespace_empty_at[id] = now_ms`.
+2. Shared state remains alive in RAM.
+3. The 50ms flush loop checks `namespace_empty_at` on every tick. When `now - empty_at >= 5000ms`, it removes the shared state and the `namespace_empty_at` entry.
+4. If a user joins the namespace while it is in grace period (user count goes from 0 → 1), `namespace_empty_at[id]` is deleted — the grace timer is cancelled and shared state is preserved.
+
+This requires zero additional timer infrastructure. The 50ms loop already runs unconditionally; the grace check is O(number of recently-emptied namespaces) — negligible in normal operation.
+
+Shared state is RAM-only. Server restart clears all shared state regardless of grace period state. The grace period only protects against transient client disconnections, not server restarts.
+
+### Authorization at accept time
+
+Before calling `setUser` or `setShared`, the message handler evaluates the relevant authorization rule:
+- `presenceWrite` — checked for `PresenceSet` and `PresenceRemove`
+- `presenceSharedWrite` — checked for `PresenceSetShared`
+
+The incoming `FieldMap` (decoded from the integer-keyed wire payload) is made available as `$data` in both rules, enabling field-value-based authorization. The decode path is:
+
+1. Wire payload arrives as integer-keyed map: `{ 0: "active", 2: true }`
+2. Message handler looks up field names: `presenceUserFields[0]` → `"status"`, `presenceUserFields[2]` → `"typing"`
+3. Auth rule evaluator receives `$data.status = "active"`, `$data.typing = true`
+4. Rule is evaluated in RAM against the decoded field values
+
+Field type and index validation also happen at accept time; unknown or mistyped fields are rejected with `SCHEMA_VALIDATION_FAILED` before any state mutation.
 
 ---
 
 ## Client-Side State Management
 
-To enable sub-millisecond local reads, the ZyncBase Client SDKs maintain a mirrored state of the active `presenceNamespace`.
+### Local caches
 
-### Synchronous Getters
-The SDK methods `presence.get(userId)` and `presence.getAll()` are **not** mapped to wire protocol messages. Instead, they perform O(1) lookups against an internal cache.
+The SDK maintains two separate in-memory caches for the active presence namespace:
 
-1. **Populating the Cache**: The cache is initialized when the client receives the `PresenceSubscribe` response (which contains the current snapshot).
-2. **Updating the Cache**: The cache is updated in real-time as `PresenceBroadcast` messages arrive (joins, updates, leaves).
-3. **Invalidation**: The cache is cleared when the client unsubscribes or the connection is lost.
+| Cache | Populated by | Read by |
+|---|---|---|
+| `userCache: Map<userId, PresenceEntry>` | `PresenceSubscribe` ok response + `PresenceBroadcast` events | `presence.get()`, `presence.getAll()`, `subscribe()` callback |
+| `sharedCache: FieldMap \| null` | `PresenceSubscribeShared` ok response + `SharedStateBroadcast` events | `presence.getShared()`, `subscribeShared()` callback |
 
-### Rationale for Omission from Wire Protocol
-* **Performance**: UI rendering loops (like cursor tracking) cannot afford a network round-trip for every frame. Local sync lookups are effectively 0ms.
-* **Architecture**: Since the client must subscribe to receive updates anyway, the SDK already possesses the necessary data to fulfill "Get" requests locally.
+### Cache update logic
+
+**`PresenceBroadcast` handling:**
+- `event: "join"`: insert new entry into `userCache`. The `data` field is the full initial user record (all fields set so far).
+- `event: "update"`: merge `data` patch into the existing `userCache` entry for `userId`. Unknown `userId` is treated as join.
+- `event: "leave"`: delete entry from `userCache` for `userId`.
+
+The callback registered via `subscribe()` is fired after each cache mutation with the updated full user list.
+
+**`SharedStateBroadcast` handling:**
+- Merge `data` patch into `sharedCache`.
+- The callback registered via `subscribeShared()` is fired with the updated shared state object (SDK unflattens `cursor__x` / `cursor__y` back to `cursor: { x, y }`).
+
+### Synchronous getters
+
+`presence.get(userId)`, `presence.getAll()`, and `presence.getShared()` perform O(1) local cache lookups. No network round-trip is ever initiated for these calls. They return stale or empty results if no subscription is active — this is by design and documented.
+
+### Subscription invalidation on namespace switch
+
+When `setPresenceNamespace` resolves:
+- Both `userCache` and `sharedCache` are cleared.
+- All active `subscribe()` and `subscribeShared()` callbacks are deregistered.
+- The developer is responsible for re-subscribing in the new namespace.
+
+---
 
 ## Validation & Success Criteria
 
-### Success Metrics
-- [ ] Latency (Set): < 1ms
-- [ ] Latency (Get): < 100μs
-- [ ] Broadcast Interval: 50ms (+/- 5ms)
+### Performance targets
 
-### Verification Commands
+| Metric | Target |
+|---|---|
+| `PresenceSet` accept latency | < 1ms |
+| `presence.get()` / `getShared()` | < 100μs (local cache) |
+| Broadcast batch interval | 50ms ± 5ms |
+| Grace period accuracy | 5000ms ± 50ms (one flush tick) |
+
+### Verification
+
 ```bash
-# Unit tests for PresenceManager (set/get/remove/getAll)
-zig test src/presence_manager_test.zig
+# Unit tests for PresenceManager (set/merge/remove/shared/grace period)
+zig build test -Dtest-filter="presence"
 
-# Verify batching interval with thread sanitizer
-zig test src/presence_manager_test.zig -Dsanitize=thread
+# Thread safety under concurrent updates
+bun run test:tsan
 
-# Verify history ring buffer eviction
-zig test src/ring_buffer_test.zig
+# End-to-end: cursors, subscriptions, shared state
+bun run test:e2e
 ```
 
 ---
 
 ## See Also
 - [Presence API Design](../api-design/presence-api.md)
-- [Query Engine Implementation](./query-engine.md)
-- [Store API Reference](../api-design/store-api.md)
+- [Wire Protocol](./wire-protocol.md)
+- [Auth System](./auth-system.md)
+- [ADR-033: Typed Two-Tier Presence System](../architecture/adrs.md#adr-033-typed-two-tier-presence-system)

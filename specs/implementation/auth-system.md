@@ -1,8 +1,5 @@
 # ZyncBase Authorization Format (`authorization.json`)
 
-**Status**: Active design  
-**Context**: Replaces complex row-level security with a high-performance, JSON-declarative model executed natively by the ZyncBase Zig core. Evaluated on incoming MessagePack frames after the relevant store or presence scope is ready.
-
 **Drivers**:
 - [Configuration API Design](../api-design/configuration.md) - Server configuration and authorization rules.
 - [Auth Exchange](./auth-exchange.md) - Ticket handshake and `$session` construction.
@@ -128,8 +125,9 @@ Unlike the Store API, the Presence API is a flat, namespace-wide concept. Users 
 
 Presence authorization is defined directly at the namespace level:
 
-- **`presenceRead`**: Permission to subscribe to the presence channel and see who is online.
-- **`presenceWrite`**: Permission to broadcast your own presence object to the channel. Schema validation still applies.
+- **`presenceRead`**: Permission to subscribe to the presence channel (`PresenceSubscribe`, `PresenceSubscribeShared`) and see who is online and what the shared state is.
+- **`presenceWrite`**: Permission to broadcast user presence (`PresenceSet`, `PresenceRemove`). The `$data` variable exposes incoming field values, enabling content-gated rules.
+- **`presenceSharedWrite`**: Permission to write namespace-level shared state (`PresenceSetShared`). The `$data` variable exposes incoming field values. Defaults to the same value as `presenceWrite` when omitted — if you can write user presence, you can write shared state, unless explicitly restricted.
 
 Because presence is ephemeral, there is no `$doc` equivalent and no path-level routing. Presence still requires a ready presence scope so presence entries are keyed by the resolved internal user ID.
 
@@ -140,15 +138,18 @@ Example:
   "namespaces": [
     {
       "pattern": "org:{org_id}:project:{project_id}",
-      "presenceRead": {
+      "storeFilter": {
         "and": [
           { "$namespace.org_id": { "eq": "$session.org_id" } },
           { "$namespace.project_id": { "in": "$session.read_projects" } }
         ]
       },
-      "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
+      "presenceRead":        { "$namespace.project_id": { "in": "$session.read_projects" } },
+      "presenceWrite":       { "$namespace.project_id": { "in": "$session.write_projects" } },
+      "presenceSharedWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
     }
-  ]
+  ],
+  "store": []
 }
 ```
 

@@ -113,4 +113,4 @@ zig test src/cache_stress_test.zig -fsanitize=thread
 ## See Also
 - [Threading Implementation](./threading.md)
 - [Storage Implementation](./storage.md)
-- [Memory Management](./memory-management.md)
+- [Memory Management](./memory-strategy.md)

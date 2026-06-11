@@ -142,6 +142,7 @@ Error codes relevant to SDK consumers, grouped by category:
 |------|-------------|-------------|
 | `CONNECTION_FAILED` | Transport failure (WebSocket closed) | Yes — reconnect |
 | `MAX_CONNECTIONS_REACHED` | Server at capacity | No — try later |
+| `RESOURCE_EXHAUSTED` | Subscription engine memory budget reached | No — reduce active subscriptions |
 | `TIMEOUT` | Operation timed out | Yes — retry with backoff |
 | `INTERNAL_ERROR` | Unexpected server failure | Yes — retry up to 3 times |
 

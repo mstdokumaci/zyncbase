@@ -1,7 +1,5 @@
 # Query Language Grammar and SQL Translation
 
-**Status**: v1 — Implementation Specification
-
 ---
 
 ## Overview

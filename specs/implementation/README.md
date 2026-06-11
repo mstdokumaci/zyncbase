@@ -6,7 +6,7 @@ This directory contains the technical details, internal implementations, and low
 - [Networking & Protocol](./networking.md) — uWebSockets integration and event loop.
 - [Wire Protocol](./wire-protocol.md) — The binary MessagePack contract.
 - [Threading & Concurrency](./threading.md) — Multi-threaded core and task scheduling.
-- [Memory Management](./memory-management.md) — Tiered allocator and object pooling strategies.
+- [Memory Management](./memory-strategy.md) — Tiered allocator and object pooling strategies.
 
 ## Engine Internals
 - [Storage Engine](./storage.md) — SQLite WAL integration and schema management.

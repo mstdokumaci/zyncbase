@@ -1,7 +1,5 @@
 # ZyncBase Authentication Exchange
 
-**Status**: Active design
-
 ## 1. Core Principle
 
 ZyncBase is a **resource server**, not an identity provider. It does not manage accounts, passwords, OAuth flows, memberships, billing state, or permission truth.

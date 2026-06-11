@@ -1,7 +1,5 @@
 # Core Principles
 
-**Last Updated**: 2026-03-13
-
 ---
 
 ## Design Philosophy

@@ -1,7 +1,5 @@
 # Network Layer
 
-**Last Updated**: 2026-03-09
-
 ---
 
 ## Overview
@@ -273,8 +271,11 @@ const MessageType = enum {
     StoreLoadMore,
     // Client→Server (Presence)
     PresenceSet,
+    PresenceSetShared,
     PresenceSubscribe,
+    PresenceSubscribeShared,
     PresenceUnsubscribe,
+    PresenceUnsubscribeShared,
     PresenceRemove,
     // Client→Server (Namespace / Auth)
     StoreSetNamespace,
@@ -286,7 +287,10 @@ const MessageType = enum {
     SchemaSync,
     Connected,
     StoreDelta,
+    WriteCommitted,
+    WriteError,
     PresenceBroadcast,
+    SharedStateBroadcast,
     ServerDisconnect,
 };
 ```

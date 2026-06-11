@@ -217,7 +217,9 @@ The SDK should continue retrying up to `maxReconnectAttempts`. If exhausted, emi
 
 ### `client.authRefresh(token)`
 
-Update the connection's session with a new external JWT without disconnecting. Active scopes temporarily become not ready and are re-resolved before the returned promise resolves.
+Update the connection's session with a new external JWT without disconnecting. The server re-validates the new JWT and updates the session claims and token expiry in-place. Active store and presence scopes continue without interruption.
+
+If the new JWT is invalid, the server sends `ServerDisconnect` with code `AUTH_FAILED` and closes the connection.
 
 ```typescript
 client.on('tokenExpired', async () => {

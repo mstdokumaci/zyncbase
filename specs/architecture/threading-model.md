@@ -1,14 +1,12 @@
 # Threading Model
 
-**Last Updated**: 2026-03-09
-
 ---
 
 ## Overview
 
 ZyncBase uses a **multi-threaded architecture with read/write separation** to maximize vertical scaling. This design allows the system to utilize all CPU cores for read operations while maintaining correctness through serialized writes.
 
-**Key Innovation**: Lock-free cache for reads + mutex for writes = 17x performance improvement
+**Key Innovation**: Subscription Engine for parallel application data reads + lock-free cache for metadata + mutex for writes = 17x performance improvement
 
 ---
 
@@ -36,20 +34,22 @@ ZyncBase uses a **multi-threaded architecture with read/write separation** to ma
 │    (Parallel, Lock-Free)        (Serialized, Mutex)     │
 │              │                           │              │
 │    ┌─────────▼─────────┐       ┌─────────▼─────────┐    │
-│    │  Lock-Free Cache  │       │    Write Mutex    │    │
-│    │  ┌──┐  ┌──┐  ┌──┐ │       │  ┌──────────────┐ │    │
-│    │  │T1│  │T2│  │TN│ │       │  │ Single Writer│ │    │
-│    │  └──┘  └──┘  └──┘ │       │  └──────────────┘ │    │
-│    │  Atomic Ref Count │       │    State Updates  │    │
-│    └─────────┬─────────┘       └─────────┬─────────┘    │
-│              │                           │              │
-│    ┌─────────▼─────────┐       ┌─────────▼─────────┐    │
-│    │ SQLite Read Pool  │       │   SQLite Writer   │    │
-│    │  ┌──┐  ┌──┐  ┌──┐ │       │  ┌──────────────┐ │    │
-│    │  │R1│  │R2│  │RN│ │       │  │ WAL Batching │ │    │
-│    │  └──┘  └──┘  └──┘ │       │  └──────────────┘ │    │
-│    │    (WAL Mode)     │       │    (WAL Mode)     │    │
-│    └───────────────────┘       └───────────────────┘    │
+│    │ Subscription      │       │    Write Mutex    │    │
+│    │ Engine (warm)     │       │  ┌──────────────┐ │    │
+│    │ ┌──┐  ┌──┐  ┌──┐  │       │  │ Single Writer│ │    │
+│    │ │T1│  │T2│  │TN│  │       │  └──────────────┘ │    │
+│    │ └──┘  └──┘  └──┘  │       │    State Updates  │    │
+│    │ Lock-Free Cache   │       └─────────┬─────────┘    │
+│    │ (auth/schema/ns)  │                 │              │
+│    └─────────┬─────────┘       ┌─────────▼─────────┐    │
+│         (cold)                 │   SQLite Writer   │    │
+│    ┌─────────▼─────────┐       │  ┌──────────────┐ │    │
+│    │ SQLite Read Pool  │       │  │ WAL Batching │ │    │
+│    │  ┌──┐  ┌──┐  ┌──┐ │       │  └──────────────┘ │    │
+│    │  │R1│  │R2│  │RN│ │       │    (WAL Mode)     │    │
+│    │  └──┘  └──┘  └──┘ │       └───────────────────┘    │
+│    │    (WAL Mode)     │                                 │
+│    └───────────────────┘                                 │
 │                                                         │
 │  Performance (16-core, 90% reads):                      │
 │  - Reads:  16 × 11k = 176k req/sec (parallel)           │
@@ -80,22 +80,25 @@ ZyncBase uses a **multi-threaded architecture with read/write separation** to ma
 ### 3. Core Engine Uses Read/Write Separation
 
 **Read Path (Parallel):**
-- Lock-free cache access
-- Multiple threads execute simultaneously
-- SQLite connection pool enables parallel database reads
-- Scales linearly with CPU cores
+
+Application data reads go through the **Subscription Engine**:
+- Warm collections (with active subscribers) are evaluated entirely in memory — O(1) per unique subscription group, no SQLite involvement.
+- Cold one-shot queries (`StoreQuery` with no active subscription) hit the SQLite read pool directly.
+- The **lock-free cache** serves auth/schema metadata, namespace-to-integer mappings, and user identity mappings — all immutable once set, making them ideal for wait-free reads.
+- Multiple threads execute simultaneously with no cross-thread contention on the hot path.
+- Scales linearly with CPU cores.
 
 **Write Path (Serialized):**
 - Mutex-protected for correctness
-- Single writer thread
-- Batched writes to SQLite
-- Notifies subscribers after write
+- Single writer thread processes batched operations
+- Publishes `RecordChange` events to the Subscription Engine after commit
+- Notifies subscribers asynchronously via `NotificationDispatcher`
 
 ---
 
 ## Thread Safety Strategy
 
-The core engine acts as the orchestrator, routing incoming messages to either the parallel read path or the serialized write path. It ensures that the lock-free cache is kept in sync with the underlying storage.
+The core engine routes incoming messages to either the parallel read path or the serialized write path. The Subscription Engine maintains in-memory collection state updated by the writer thread after each commit. The lock-free cache handles auth/schema/namespace/identity metadata with atomic reference counting and COW map swaps.
 
 Detailed synchronization logic and Zig implementation can be found in the [Threading Implementation](../implementation/threading.md).
 
@@ -121,21 +124,25 @@ Combined: 10k req/sec
 CPU usage: 6% (1/16 cores)
 ```
 
-**Result: 17x performance improvement!**
+**Result: 17x performance improvement**
 
 ### Why This Works
 
-**1. Reads are lock-free**
-- Multiple threads read simultaneously
+**1. Warm reads are lock-free and in-memory**
+- Subscription Engine evaluates against in-memory state
+- No SQLite round-trip for subscribed collections
 - No contention, scales with CPU cores
-- SQLite parallel reads fully utilized
 
-**2. Writes are serialized**
+**2. Cold reads use the parallel SQLite read pool**
+- One reader connection per CPU core
+- WAL mode enables true parallel reads
+
+**3. Writes are serialized**
 - Necessary for correctness (ACID)
 - SQLite single-writer limitation
-- Still fast (10k+ writes/sec)
+- Batching keeps throughput high (10k+ writes/sec)
 
-**3. Read-heavy workloads scale linearly**
+**4. Read-heavy workloads scale linearly**
 - Most real-time apps are 80-95% reads
 - Reads use all CPU cores
 - Writes don't bottleneck reads
@@ -144,7 +151,7 @@ CPU usage: 6% (1/16 cores)
 
 ## Memory Management Strategy
 
-ZyncBase employs specialized allocation patterns to minimize overhead in a high-concurrency environment. See [Memory Management Implementation](../implementation/memory-management.md) for technical specifics on:
+ZyncBase employs specialized allocation patterns to minimize overhead in a high-concurrency environment. See [Memory Management Implementation](../implementation/memory-strategy.md) for technical specifics on:
 - **Arena Allocation** for request-scoped data.
 - **Object Pooling** for reusing common structures.
 - **Allocator Strategies** (Arena, Pool, GPA).
@@ -155,29 +162,29 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 
 ### Pros
 
-✅ **Uses all CPU cores** - True vertical scaling  
-✅ **Reads scale linearly** - More cores = more throughput  
-✅ **SQLite parallel reads** - Fully utilized  
-✅ **17x better performance** - Than single-threaded  
-✅ **Still simple** - No complex locking patterns  
+✅ **Uses all CPU cores** - True vertical scaling
+✅ **Warm reads are fully in-memory** - Subscription Engine eliminates SQLite round-trips for active data
+✅ **SQLite parallel reads** - Fully utilized for cold queries
+✅ **17x better performance** - Than single-threaded
+✅ **Lock-free metadata** - Auth/schema/namespace lookups are wait-free
 
 ### Cons
 
-⚠️ **Writes are serialized** - SQLite single-writer limitation  
-⚠️ **Need atomic operations** - For lock-free cache  
-⚠️ **More complex** - Than single-threaded approach  
+⚠️ **Writes are serialized** - SQLite single-writer limitation
+⚠️ **Need atomic operations** - For lock-free cache
+⚠️ **Cold queries hit SQLite** - First subscribe to a collection incurs a read
+⚠️ **More complex** - Than single-threaded approach
 
 ### Mitigation
 
 **For serialized writes:**
 - Most workloads are read-heavy (90%+)
 - 10k writes/sec is sufficient for most apps
-- Can batch writes for higher throughput
+- Batching increases effective throughput
 
-**For atomic operations:**
-- Zig provides safe atomic primitives
-- Compile-time checks prevent race conditions
-- Extensive testing validates correctness
+**For cold queries:**
+- After first subscribe, all subsequent reads for that collection are in-memory
+- `loadMore` always hits SQLite by design (historical data, not hot path)
 
 ---
 
@@ -206,8 +213,6 @@ ZyncBase employs specialized allocation patterns to minimize overhead in a high-
 - More complex than read/write separation
 - Harder to load balance
 - Requires more sophisticated scheduling
-
-**Decision:** Defer to v2.5+ if needed
 
 ---
 

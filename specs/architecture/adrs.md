@@ -7,7 +7,6 @@ All architectural decisions for ZyncBase, consolidated from multiple sources and
 ## ADR-001: Choice of Zig as Primary Language
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 Need maximum performance, predictable latency, and native multi-threading for a real-time collaborative database. Existing runtimes like Node.js introduce garbage collection pauses that are unacceptable for 100,000+ concurrent connections.
@@ -37,7 +36,6 @@ Use Zig as the primary implementation language for the core engine.
 ## ADR-002: Choice of uWebSockets for Networking
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 Standard networking libraries in many languages struggle with microsecond-scale latency and the memory overhead of hundreds of thousands of concurrent WebSocket connections.
@@ -65,7 +63,6 @@ Use uWebSockets (written in C++) as the networking foundation.
 ## ADR-003: Choice of SQLite Only
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 Need an embedded database for zero-config deployment that still provides ACID guarantees and high reliability for vertical scaling.
@@ -95,7 +92,6 @@ Use SQLite exclusively as the storage layer, with no other database adapters.
 ## ADR-004: SQLite WAL Mode & Concurrency
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 By default, SQLite's single writer blocks all readers, which limits throughput on multi-core systems.
@@ -120,7 +116,6 @@ Exclusively use SQLite in Write-Ahead Logging (WAL) mode.
 ## ADR-005: Multi-threaded Core Engine
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 A single-threaded core cannot utilize SQLite's parallel read capability (ADR-004) or the multi-threaded event loop of uWebSockets (ADR-002).
@@ -148,7 +143,6 @@ Implement a multi-threaded core with read/write separation:
 ## ADR-006: No Horizontal Scaling
 
 **Date**: 2026-03-08  
-**Status**: Accepted  
 
 **Context**: 
 Question of whether v1.0 should support clustering/horizontal scaling.
@@ -177,7 +171,6 @@ No. ZyncBase is designed exclusively for vertical scaling (single server, all CP
 ## ADR-007: Optimistic Writes by Default
 
 **Date**: 2026-03-09  
-**Status**: Superseded by ADR-031  
 
 **Context**: 
 How should the Client SDK handle real-time state updates for a fluid user experience?
@@ -203,7 +196,6 @@ All writes (`store.set`, `store.remove`) are optimistic by default.
 ## ADR-008: Server-side Only Validation
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Should the Client SDK replicate the server's validation logic to catch errors earlier?
@@ -230,7 +222,6 @@ No. Validation is enforced strictly on the server. The Client SDK uses TypeScrip
 ## ADR-009: Configuration-First (Zero-Zig)
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 High barrier to entry if users have to learn Zig to build a backend.
@@ -257,7 +248,6 @@ For the full philosophy and its impact on architectural decisions, see the [Zero
 ## ADR-010: Prisma-Inspired Query Language
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Need a query language that feels natural to modern web developers.
@@ -281,7 +271,6 @@ Use a Prisma-inspired JSON syntax (implicit AND, lowercase operators).
 ## ADR-011: Lock-Free Cache — Atomic Reference Counting
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 In-memory cache needs to support high-frequency reads from multiple threads without contention.
@@ -302,7 +291,6 @@ Utilize atomic reference counting for the in-memory cache.
 ## ADR-012: Iterative MessagePack Parser
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Risk of stack overflow from malicious client payloads with deep nesting.
@@ -319,7 +307,6 @@ Use an iterative (not recursive) MessagePack parser with hard limits on nesting 
 ## ADR-013: MessagePack for Production, JSON for Debug
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Wire protocol needs to be both efficient and accessible for debugging.
@@ -335,7 +322,6 @@ MessagePack for production (smaller, faster), JSON mode for debug.
 ## ADR-014: No WebSocket Compression (v1.0)
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Should we enable per-message deflate compression?
@@ -351,7 +337,6 @@ No compression in v1.0. MessagePack is already compact. Compression adds CPU ove
 ## ADR-015: Strict Client API Namespaces (`store` vs `presence`)
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Developers often confuse ephemeral awareness data with durable state.
@@ -371,7 +356,6 @@ SDK explicitly separates methods into `client.store.*` and `client.presence.*`.
 ## ADR-016: Bun Hook Server
 
 **Date**: 2026-03-09  
-**Status**: Superseded by [ADR-032](#adr-032-config-driven-authentication-and-external-permission-claims)  
 
 **Context**: 
 How to handle complex relational authorization without bloating the Zig core?
@@ -393,7 +377,6 @@ Provide an out-of-the-box Bun-based Hook Server for complex logic. Stateless che
 ## ADR-017: Conflict Resolution Strategy
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Context**: 
 Fundamental semantics of `store.set()` for concurrent users.
@@ -415,7 +398,6 @@ Server-Time Last-Write-Wins (LWW) at the Path Level.
 ## ADR-018: Query API MVP Scope
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Decision**: 
 MVP supports specific operators (eq, ne, gt, etc.) but excludes Regex, FTS, and complex joins in v1.
@@ -437,7 +419,6 @@ MVP supports specific operators (eq, ne, gt, etc.) but excludes Regex, FTS, and 
 
 **Date**: 2026-03-09  
 **Updated**: 2026-03-31  
-**Status**: Accepted  
 
 **Context**:  
 The SDK targets TypeScript developers who benefit from expressive, nested syntax (dot-notation paths, Prisma-style query objects). The Zig server benefits from flat, positional data that can be parsed without recursive descent or string-keyed map inspection.
@@ -468,7 +449,6 @@ See [Query Grammar](../implementation/query-grammar.md) for the full wire encodi
 ## ADR-020: Performance Targets
 
 **Date**: 2026-03-13  
-**Status**: Accepted  
 
 **Context**: 
 Need formal benchmarks to guide development and prevent performance regressions.
@@ -494,7 +474,6 @@ Establish strict targets for ZyncBase v1.0.
 ## ADR-021: Fine-Grained Subscription Invalidation
 
 **Date**: 2026-03-09  
-**Status**: Accepted  
 
 **Decision**: 
 Exclusively use fine-grained change detection with in-memory AST evaluation.
@@ -512,7 +491,6 @@ Exclusively use fine-grained change detection with in-memory AST evaluation.
 ## ADR-022: Formal Error Taxonomy and Handling Strategy
 
 **Date**: 2026-03-13  
-**Status**: Accepted (Modified by ADR-032)  
 
 **Decision**: 
 Implement a 6-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate-Limit, Server) that dictates automatic SDK behavior.
@@ -526,7 +504,6 @@ Implement a 6-category error taxonomy (Connection, Auth, AuthZ, Validation, Rate
 ## ADR-023: Unified Subscription Engine for All Read Operations
 
 **Date**: 2026-03-31  
-**Status**: Accepted  
 
 **Context**:  
 ZyncBase defines 4 SDK read commands (`get`, `listen`, `query`, `subscribe`) mapped to 4 wire message types. The message handler splits reads between `StorageEngine` and `SubscriptionManager`, creating dual code paths for semantically overlapping operations. The path-based commands are strict subsets of the collection-based ones. ADR-021 already mandates in-memory AST evaluation for subscriptions; this ADR extends that into a unified read architecture.
@@ -582,7 +559,6 @@ Subscription engine replaces the lock-free cache for application data reads. Loc
 ## ADR-024: Canonical Sorted-Set Semantics for Typed Array Fields
 
 **Date**: 2026-04-17  
-**Status**: Accepted  
 
 **Context**:  
 Typed array fields are commonly used for tags, labels, and roles. During implementation, ZyncBase introduced canonicalization (sort + dedupe) for typed arrays to improve developer experience, determinism, and runtime performance. This behavior is now a formal architectural contract.
@@ -625,7 +601,6 @@ ZyncBase treats schema-defined typed arrays (`type: "array"` + primitive `items`
 ## ADR-025: Schema Dictionary Compression (Integer Routing)
 
 **Date**: 2026-04-18  
-**Status**: Accepted  
 
 **Context**:  
 ZyncBase handles extremely high message throughput. Server-side routing using string-based collection names and field names requires allocating strings, computing hashes, and performing hash map lookups for every read and write operation. Sending repeated strings over the wire also increases bandwidth usage substantially.
@@ -636,7 +611,7 @@ Replace all schema-defined string identifiers with dense integer mappings over t
 1. **SchemaSync Handshake**: Immediately after connection, the server pushes a `SchemaSync` message containing positional arrays of tables and fields (including system columns). 
 2. **SDK Runtime Dictionary**: The client SDK dynamically builds an in-memory string-to-integer mapping at runtime from this payload.
 3. **Payload Translation**: The SDK resolves all developer-provided logical string paths (`'users.u1.address.city'`) into integer arrays representing `[table_index, id, field_index]` before sending them to the server. Operation values use integer-keyed maps (`{ 2: "Alice" }`) to safely permit sparse updates without payload ambiguity.
-4. **Presence Exemptions**: `Presence` APIs are explicitly exempt from this optimization and continue to use string-based properties, as they lack formal schema definitions.
+4. **Presence Exemptions**: ~~`Presence` APIs are explicitly exempt from this optimization and continue to use string-based properties, as they lack formal schema definitions.~~ **Removed by ADR-033.** Presence now participates fully in integer-index wire encoding via a typed `presence` schema defined in `schema.json`.
 5. **Offline Safety**: The SDK hashes the `SchemaSync` payload to detect unexpected schema modifications across server restarts, safeguarding offline operation queues against catastrophic index shifting.
 
 **Rationale**:
@@ -654,7 +629,6 @@ Replace all schema-defined string identifiers with dense integer mappings over t
 ## ADR-026: Internal Namespace Dictionary (Integer Routing for Namespaces)
 
 **Date**: 2026-04-24  
-**Status**: Accepted  
 
 **Context**:  
 Namespaces are highly dynamic strings (e.g., `tenant:acme:project-123`). Storing these strings directly in SQLite for every row wastes massive amounts of space (up to 300MB per 10 million rows) and makes index lookups much slower than integers. However, pushing namespace mapping to `config.json` is impossible due to their dynamic nature.
@@ -677,7 +651,6 @@ Implement a hidden internal system table `_zync_namespaces (id INTEGER PRIMARY K
 ## ADR-027: The `owner_id` System Column and Stateless Authorization Limits
 
 **Date**: 2026-04-24  
-**Status**: Accepted  
 
 **Context**:  
 Need to provide secure multi-tenancy and object-level ownership authorization out of the box. We also need to draw a hard line on the complexity of JSON-based authorization rules to maintain real-time performance.
@@ -710,7 +683,6 @@ Need to provide secure multi-tenancy and object-level ownership authorization ou
 ## ADR-028: Global Master Data (namespaced: false)
 
 **Date**: 2026-04-25  
-**Status**: Accepted  
 
 **Context**:  
 By default, all ZyncBase collections are horizontally partitioned by a `namespace_id`. However, SaaS applications frequently require master data tables (e.g. `users`, `pricing_tiers`, `global_settings`) that must transcend namespace boundaries and be visible globally.
@@ -739,7 +711,6 @@ By default, all ZyncBase collections are horizontally partitioned by a `namespac
 ## ADR-029: Scoped Session Readiness Gate
 
 **Date**: 2026-05-05  
-**Status**: Accepted  
 
 **Context**:  
 ADR-026 established integer namespace routing, ADR-027 established `owner_id` as an internal `users.id`, and ADR-028 allowed `users.namespaced = true`. Implementing these together exposed a missing invariant: a WebSocket transport can be open before the server has enough scoped context to safely process store or presence operations. In particular, when `users.namespaced = true`, the same external identity string can resolve to a different `users.id` per namespace. Therefore identity resolution cannot be treated as a hardcoded anonymous UUID or as transport-only state.
@@ -773,7 +744,6 @@ ADR-026 established integer namespace routing, ADR-027 established `owner_id` as
 ## ADR-030: Async Session Resolution (Non-Blocking Reactor Handoff)
 
 **Date**: 2026-05-06  
-**Status**: Accepted  
 
 **Context**:  
 ADR-029 established the scoped session readiness gate, where `StoreSetNamespace` triggers namespace and user identity resolution through the writer thread. The initial implementation uses `CompletionSignal.wait()` — a Mutex+Condition blocking call — on the uWS event loop thread to synchronously wait for the writer thread's result. This blocks the entire reactor for 500μs–2ms per resolution, stalling all concurrent WebSocket connections and violating the p50 < 1ms latency target (ADR-020).
@@ -832,7 +802,6 @@ Replace blocking `CompletionSignal.wait()` resolution with a two-tier strategy: 
 ## ADR-031: Mutation Acknowledgement and Realtime Consistency Semantics
 
 **Date**: 2026-05-25  
-**Status**: Accepted  
 **Supersedes**: ADR-007: Optimistic Writes by Default  
 
 **Context**:
@@ -1081,7 +1050,6 @@ Rejected. Request ids correlate immediate request responses. Writer outcomes nee
 ## ADR-032: Config-Driven Authentication and External Permission Claims
 
 **Date**: 2026-06-02  
-**Status**: Accepted  
 
 **Supersedes / Modifies**:
 - Supersedes [ADR-016: Bun Hook Server](#adr-016-bun-hook-server).
@@ -1142,3 +1110,112 @@ Rejected because it would turn `authorization.json` into a query engine and unde
 ### Require a new JWT for every namespace switch
 
 Rejected as too strict. A token may contain scoped grants such as `read_projects` and `write_projects`, and `authorization.json` can check namespace parts or same-row fields against those arrays. Applications can still choose narrower active-context tokens when token size or staleness matters.
+
+---
+
+## ADR-033: Typed Two-Tier Presence System
+
+**Date**: 2026-06-11
+
+**Supersedes / Modifies**:
+- Removes the presence exemption clause from [ADR-025: Schema Dictionary Compression](#adr-025-schema-dictionary-compression-integer-routing).
+
+**Context**:
+ADR-025 established integer-index wire routing for Store operations but explicitly exempted presence: *"Presence APIs are explicitly exempt from this optimization and continue to use string-based properties, as they lack formal schema definitions."* At that time, the reasoning was valid — presence was designed as a freeform, schemaless JSON blob, and the indexing machinery did not yet exist.
+
+Three factors now make that exemption obsolete and the right moment to design presence correctly from the ground up:
+
+1. **Presence is entirely unimplemented.** Neither the server (`message_handler.zig` has zero presence message handlers, no presence variants in `MsgType`) nor the SDK (no `presence.*` methods exist beyond namespace scaffolding, no `presence.ts` file) have implemented presence. The migration cost is zero.
+2. **Real-world presence data is structurally predictable.** Analysis of presence use cases across collaborative tools shows the data is always shallow (≤2 nesting levels), small (5–8 fields), and typed. Cursor positions, status enums, typing booleans — these are not arbitrary JSON blobs. They are exactly the kind of data that benefits most from integer-index compression at high frequency.
+3. **TypeScript-first developers need types anyway.** ZyncBase targets TypeScript frontends. Developers must define presence field types for their UI regardless. Requiring a `presence` schema section aligns server enforcement with the type definitions they already write, eliminating a redundancy.
+
+Additionally, analysis of presence use cases revealed a gap in the single-tier design: not all ephemeral state is user-owned. Patterns such as "current slide in a presentation," "shared video playback position," or "active viewport for all participants" represent namespace-level state — one value for the entire room, not one value per user. Without a second tier, developers either misuse the store (persisting ephemeral room state to SQLite) or build out-of-band coordination mechanisms.
+
+**Decision**:
+
+1. **Typed presence schema.** The server always defines a presence schema. When `schema.json` contains an explicit `presence` top-level key, that definition is authoritative. When the key is absent, the server synthesizes an implicit minimal schema: `{ "user": { "status": { "type": "string", "enum": ["active", "idle", "away"] } }, "shared": {} }`. There is no schemaless or freeform mode — presence data is always typed against a schema, whether implicit or explicit.
+
+2. **Two-tier field model.**
+   - `presence.user`: fields owned by each user individually. One record per connected user per namespace. Automatically cleaned up on disconnect.
+   - `presence.shared`: fields representing namespace-level ephemeral state. One record for the entire namespace. Survives for the namespace session lifetime (see point 8).
+
+3. **Flat wire format with `__` separator.** Nested presence fields (max one level of nesting enforced at schema load time) are flattened using the same `__` convention as the store (`cursor: { x, y }` → `cursor__x`, `cursor__y`). The SDK transparently flattens outbound and unflattens inbound data. Developers always interact with the nested object form.
+
+4. **Integer-keyed wire encoding for all presence messages.** `PresenceSet` and `PresenceSetShared` send integer-keyed maps. `PresenceBroadcast` and `SharedStateBroadcast` deliver integer-keyed data. The existing `SchemaDictionary` machinery is extended with presence-specific index maps built from the `SchemaSync` arrays.
+
+5. **`SchemaSync` extension.** Two new flat arrays added to the existing `SchemaSync` message:
+   - `presenceUserFields: string[]` — flattened field names in index order
+   - `presenceSharedFields: string[]` — flattened shared field names in index order
+   No companion flags arrays are needed. Presence fields have no system columns (no `id`, `namespace_id`, `created_at`) and no doc_id semantics. All presence field indices map to plain typed values.
+
+6. **Merge semantics for both tiers.** Both `PresenceSet` (user state) and `PresenceSetShared` (shared state) perform field-level merges, not full replacements. Sending `{ 0: 101.0 }` updates only `cursor__x`; all other fields in the stored record are preserved. The server maintains a per-user accumulated state map (for user fields) and a per-namespace accumulated state map (for shared fields) and applies incoming integer-keyed maps as patches.
+
+7. **Separate push message types.** `PresenceBroadcast` carries user presence events (`join`, `update`, `leave`). A new `SharedStateBroadcast` carries namespace-level shared state changes. These have different SDK handling paths and different local cache targets and must remain separate message types.
+
+8. **Shared state lifetime with grace period.** Shared state is cleared when all users leave the namespace. Shared state is RAM-only and does not survive server restart, regardless of grace period state. A 5-second grace period prevents transient disconnections (mobile network flap, brief tab hide/restore) from wiping shared state unexpectedly. The grace period is enforced by piggybacking onto the existing 50ms batch flush loop — a `namespace_empty_at` map records the timestamp when a namespace's user count drops to zero. Each flush cycle evicts entries older than the grace threshold. No additional timer infrastructure is introduced. If a user rejoins within the grace period, they receive the preserved shared state in the `PresenceSubscribeShared` ok response.
+
+9. **`presenceSharedWrite` authorization rule.** A new rule key in `authorization.json` controls who may write namespace-level shared state. Evaluated identically to `presenceWrite` — RAM-only predicate against `$session`, `$namespace`, and `$data`. The `$data` variable exposes incoming field values in both `presenceWrite` and `presenceSharedWrite`, enabling content-gated authorization (e.g., only hosts may set `status: "presenting"`).
+
+10. **Presence writes remain fire-and-forget.** Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presence writes are always accepted/eventual — the server validates types and field indices at accept time and rejects invalid payloads with `SCHEMA_VALIDATION_FAILED`. No write pipeline confirmation is meaningful for ephemeral state.
+
+**Wire Protocol Changes**:
+
+Complete message specifications are in [Wire Protocol](../implementation/wire-protocol.md). Summary:
+
+| Message | Change |
+|---|---|
+| `SchemaSync` | Gains `presenceUserFields: string[]` and `presenceSharedFields: string[]` |
+| `PresenceSet` | `data` changes from string-keyed object to integer-keyed map (merge delta) |
+| `PresenceSetShared` | **New C→S message.** Sets namespace-level shared fields; integer-keyed merge delta |
+| `PresenceSubscribe` ok | Returns current user snapshot (no shared state — shared state is obtained via `PresenceSubscribeShared`) |
+| `PresenceBroadcast` | `data` changes to integer-keyed map; `userId` encoded as `bin16`; `subId` as integer |
+| `SharedStateBroadcast` | **New S→C push.** Carries integer-keyed shared state delta to shared-state subscribers |
+
+**Authorization Changes**:
+
+```json
+{
+  "namespaces": [
+    {
+      "pattern": "workspace:*",
+      "storeFilter":        true,
+      "presenceRead":        { "$session.userId": { "ne": null } },
+      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
+    }
+  ],
+  "store": []
+}
+```
+
+`presenceSharedWrite` defaults to the same value as `presenceWrite` when omitted. This is consistent with safe defaults — if you can write user presence, you can write shared state, unless explicitly restricted.
+
+**Rationale**:
+
+- Presence fields are structurally simpler than store fields (no collections, no document IDs, no queries, no persistence). Applying integer-index encoding is strictly easier than it was for the store, not harder.
+- The payload savings are substantial at high frequency: a cursor update with status shrinks from ~50 bytes to ~22 bytes. At 60fps from many users fan-outing to many subscribers, this difference compounds dramatically across the broadcast path.
+- The server benefits identically: O(1) array index access replaces string hashing and hash map lookups per broadcast. The existing `decodeIntMap` pattern from store message handling is reused directly.
+- Shared state fills a genuine product gap. Without it, developers either pollute the store with ephemeral room state (paying SQLite write overhead and accumulating stale data on server restart) or build custom signaling outside ZyncBase.
+- The grace period via the 50ms flush loop costs zero additional infrastructure. The flush loop already runs unconditionally; the `namespace_empty_at` check is O(number of recently-emptied namespaces) — effectively zero in normal operation.
+- `$data` in presence auth rules is consistent with `$value` in store write rules. The plumbing is identical — the incoming integer-keyed map is decoded and made available to the rule evaluator before the write is accepted.
+
+**Principles Alignment**:
+- #1 Real-time First
+- #5 TypeScript-First
+- #8 Predictable Performance
+- #9 Secure by Default
+
+**Consequences**:
+
+- ✅ Full integer wire compression for all presence messages — same performance profile as store operations.
+- ✅ Server-side field type validation at accept time for all presence operations.
+- ✅ Namespace-level shared state for room-wide ephemeral coordination.
+- ✅ `$data` in auth rules enables content-gated presence writes.
+- ✅ Zero migration cost — presence was entirely unimplemented.
+- ✅ TypeScript SDK generates precise types from the presence schema section.
+- ✅ Grace period on shared state cleanup without timer infrastructure cost.
+- ⚠️ Presence is usable immediately via the implicit schema. Defining an explicit `presence` section in `schema.json` is recommended for custom fields and type safety.
+- ⚠️ Presence schema field changes trigger `schemaChange` on connected clients — same reconnect requirement as store schema changes.
+- ⚠️ Max one level of nesting in presence field definitions is enforced. Deeper nesting is rejected at server startup.
+- ⚠️ Shared state is RAM-only and does not survive server restart, regardless of grace period state.
+

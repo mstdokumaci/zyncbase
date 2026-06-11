@@ -107,7 +107,7 @@ ZyncBase automatically transforms a JSON-based store definition into optimized S
 | `integer` | `INTEGER` | 64-bit signed integer |
 | `number` | `REAL` | 64-bit float |
 | `boolean` | `INTEGER` | Stored as 0 or 1 |
-| `object` (nested) | Flattened columns | `address.city` → `address_city TEXT` |
+| `object` (nested) | Flattened columns | `address.city` → `address__city TEXT` |
 | `array` (primitives) | `BLOB` | Stored as canonical JSONB value (sorted, unique) |
 
 Built-in document IDs and schema `references` fields are stored as fixed-width `BLOB(16)` values and kept as packed 16-byte IDs throughout the storage engine.
@@ -352,24 +352,14 @@ The `ZyncBaseServer` implements the completion callbacks by looking up `client_i
 
 ---
 
-## Read Strategy: Cache Integration
+## Read Strategy: Subscription Engine Integration
 
-A lock-free in-memory cache acts as a read-through layer.
+Application data reads route through the **Subscription Engine** rather than a general-purpose read-through cache:
 
-```zig
-const StateManager = struct {
-    cache: HashMap([]const u8, *Namespace),
-    storage: *StorageLayer,
-    
-    pub fn getNamespace(self: *StateManager, id: []const u8) !*Namespace {
-        if (self.cache.get(id)) |ns| return ns;
-        
-        const ns = try self.storage.loadNamespace(id);
-        try self.cache.put(id, ns);
-        return ns;
-    }
-};
-```
+- **Warm path**: Collections with active subscribers are evaluated entirely in memory. The Subscription Engine maintains per-collection state updated by the writer thread after each commit. No SQLite involvement.
+- **Cold path**: One-shot `StoreQuery` requests with no active subscription query the SQLite read pool directly using the connection pool below.
+
+The lock-free cache is used exclusively for auth/schema metadata, namespace-to-integer mappings, and user identity mappings — all of which are immutable once written, making them safe for wait-free reads across all threads.
 
 ---
 

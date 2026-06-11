@@ -1,6 +1,6 @@
 # Sanitizer Configuration
 
-**Drivers**: [Threading Implementation](./threading.md), [Memory Management](./memory-management.md)
+**Drivers**: [Threading Implementation](./threading.md), [Memory Management](./memory-strategy.md)
 
 This document specifies which sanitizers run against which test targets, what invariants each sanitizer enforces, and what a passing CI run looks like.
 
@@ -79,5 +79,5 @@ valgrind --leak-check=full --error-exitcode=1 ./zig-out/bin/zyncbase-test
 
 ## See Also
 - [Threading Implementation](./threading.md) — lock-free cache SWMR model
-- [Memory Management](./memory-management.md) — GPA / arena / pool strategy
+- [Memory Management](./memory-strategy.md) — GPA / arena / pool strategy
 - [Lock-Free Cache](./lock-free-cache.md) — ref_count invariants

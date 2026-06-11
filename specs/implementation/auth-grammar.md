@@ -19,8 +19,9 @@ A namespace definition governs access to a namespace and its presence channels.
 |:---|:---|:---|
 | `pattern` | `string` | The namespace pattern (e.g., `tenant:{tenant_id}`). Segments enclosed in `{}` are extracted into the `$namespace` context. |
 | `storeFilter` | `Condition` | Evaluated on `StoreSetNamespace`. If `false`, the client is rejected from the store namespace. |
-| `presenceRead` | `Condition` | Evaluated on `PresenceSetNamespace` and `PresenceSubscribe`. |
-| `presenceWrite` | `Condition` | Evaluated on `PresenceSet` (broadcast). |
+| `presenceRead` | `Condition` | Evaluated on `PresenceSetNamespace`, `PresenceSubscribe`, and `PresenceSubscribeShared`. |
+| `presenceWrite` | `Condition` | Evaluated on `PresenceSet` and `PresenceRemove`. `$data` contains the incoming field values. |
+| `presenceSharedWrite` | `Condition` | Evaluated on `PresenceSetShared`. `$data` contains the incoming field values. Defaults to the same value as `presenceWrite` when omitted. |
 
 ### 2. Store Definition
 
@@ -54,17 +55,21 @@ Variables are evaluated using two execution paths:
 
 `$session` is built during the authentication exchange from a validated JWT or SDK-generated anonymous subject. It does not load fields from the `users` row for authorization.
 
-| Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$doc` |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
-| `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
-| `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
-| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ✅ Create: RAM candidate / Update: Predicate Lowering |
-| `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Predicate Lowering |
-| `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ✅ RAM | ❌ |
-| `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ |
+| Wire Command | `$session` | `$namespace` | `$path` (table) | `$value` (payload) | `$data` (presence) | `$doc` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `StoreSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
+| `PresenceSetNamespace` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
+| `StoreQuery` / `StoreSubscribe` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ Predicate Lowering |
+| `StoreSet` | ✅ RAM | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ✅ Create: RAM candidate / Update: Predicate Lowering |
+| `StoreRemove` | ✅ RAM | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ Predicate Lowering |
+| `PresenceSet` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
+| `PresenceSetShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ✅ RAM | ❌ |
+| `PresenceSubscribe` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
+| `PresenceSubscribeShared` | ✅ RAM | ✅ RAM | ❌ | ❌ | ❌ | ❌ |
 
-*(Note: If a rule references a forbidden variable for a specific command, evaluation fails safely, and access is denied. `StoreLoadMore` and `StoreUnsubscribe` inherit authorization established during `StoreSubscribe`.)*
+*(Note: If a rule references a forbidden variable for a specific command, evaluation fails safely, and access is denied. `StoreLoadMore` and `StoreUnsubscribe` inherit authorization established during `StoreSubscribe`. `PresenceUnsubscribe` and `PresenceUnsubscribeShared` require no authorization check.)*
+
+`$data` is the decoded presence field map from the incoming `PresenceSet` or `PresenceSetShared` message. Fields are identified by their schema name (e.g., `$data.status`, `$data.slide`). `$data` is only available on presence write commands.
 
 For `StoreSet`, `$doc` in write rules is interpreted by write kind:
 
@@ -103,9 +108,10 @@ If `authorization.json` is missing or not provided in the server configuration, 
   "namespaces": [
     {
       "pattern": "public",
-      "storeFilter": true,
-      "presenceRead": true,
-      "presenceWrite": true
+      "storeFilter":        true,
+      "presenceRead":       true,
+      "presenceWrite":      true,
+      "presenceSharedWrite": true
     }
   ],
   "store": [

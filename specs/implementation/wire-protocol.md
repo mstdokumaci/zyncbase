@@ -1,8 +1,5 @@
 # ZyncBase Wire Protocol Specification
 
-**Last Updated**: 2026-03-09  
-**Status**: Active design  
-
 ---
 
 ## Table of Contents
@@ -298,13 +295,15 @@ Stop receiving updates for a query subscription.
 
 #### `PresenceSet`
 
-Update the local user's presence data. Partial updates merge with existing state.
+Update the local user's presence data. Integer-keyed field-level merge — fields not included in the payload are preserved. Sends a `PresenceBroadcast` to all user-presence subscribers in the namespace.
+
+Field indices come from `presenceUserFields` in the `SchemaSync` message.
 
 ```
 {
   "type": "PresenceSet",
   "id":   8,
-  "data": { "cursor": { "x": 100, "y": 200 }, "color": "#ff0000" }
+  "data": { 0: 100.0, 1: 200.0 }   // cursor__x=0, cursor__y=1 — only changed fields
 }
 ```
 
@@ -317,49 +316,21 @@ Update the local user's presence data. Partial updates merge with existing state
 }
 ```
 
-After processing, the server broadcasts a `PresenceBroadcast` to other users in the namespace.
+Fire-and-forget. The server validates field indices and value types at accept time. Unknown field index or wrong type → `SCHEMA_VALIDATION_FAILED`.
 
 ---
 
-#### `PresenceSubscribe`
+#### `PresenceSetShared`
 
-Subscribe to presence changes in the current presence namespace.
+Merge fields into the namespace-level shared state. Integer-keyed field-level merge — fields not included are preserved. Sends a `SharedStateBroadcast` to all shared-state subscribers in the namespace.
 
-```
-{
-  "type": "PresenceSubscribe",
-  "id":   9
-}
-```
-
-**Response** (`type: "ok"`) — includes current presence snapshot:
+Field indices come from `presenceSharedFields` in the `SchemaSync` message.
 
 ```
 {
-  "type":  "ok",
-  "id":    9,
-  "subId": "sub-pres-789",
-  "users": [
-    {
-      "userId":   "user-123",
-      "data":     { "cursor": { "x": 100, "y": 200 }, "color": "#ff0000" },
-      "joinedAt": 1234567890
-    }
-  ]
-}
-```
-
----
-
-#### `PresenceUnsubscribe`
-
-Stop receiving presence updates.
-
-```
-{
-  "type":  "PresenceUnsubscribe",
-  "id":    10,
-  "subId": "sub-pres-789"
+  "type": "PresenceSetShared",
+  "id":   9,
+  "data": { 0: 5 }    // slide=0
 }
 ```
 
@@ -368,7 +339,111 @@ Stop receiving presence updates.
 ```
 {
   "type": "ok",
+  "id":   9
+}
+```
+
+Fire-and-forget. Subject to `presenceSharedWrite` authorization. Rejected with `PERMISSION_DENIED` if the rule is not satisfied. Unknown field index or wrong type → `SCHEMA_VALIDATION_FAILED`.
+
+---
+
+#### `PresenceSubscribe`
+
+Subscribe to user presence changes in the current presence namespace. Returns the current full user snapshot. Shared state is obtained separately via `PresenceSubscribeShared`.
+
+```
+{
+  "type": "PresenceSubscribe",
   "id":   10
+}
+```
+
+**Response** (`type: "ok"`) — includes current user snapshot:
+
+```
+{
+  "type":  "ok",
+  "id":    10,
+  "subId": 789,              // Integer subscription ID
+  "users": [
+    {
+      "userId":   <bin16>,   // Internal users.id as 16-byte binary
+      "data":     { 0: 100.0, 1: 200.0, 4: "Alice" },  // Integer-keyed user field map
+      "joinedAt": 1234567890
+    }
+  ]
+}
+```
+
+The initial snapshot reflects committed state at subscription time. Live updates begin arriving within one batch interval (≤50ms). The SDK decodes `data` using the `presenceUserFields` indices from `SchemaSync` and unflattens nested objects before delivering to the application.
+
+---
+
+#### `PresenceUnsubscribe`
+
+Stop receiving user presence updates for a subscription.
+
+```
+{
+  "type":  "PresenceUnsubscribe",
+  "id":    11,
+  "subId": 789
+}
+```
+
+**Response** (`type: "ok"`):
+
+```
+{
+  "type": "ok",
+  "id":   11
+}
+```
+
+---
+
+#### `PresenceSubscribeShared`
+
+Subscribe to shared state changes in the current presence namespace. Returns the current shared state immediately.
+
+```
+{
+  "type": "PresenceSubscribeShared",
+  "id":   12
+}
+```
+
+**Response** (`type: "ok"`) — includes current shared state:
+
+```
+{
+  "type":   "ok",
+  "id":     12,
+  "subId":  790,
+  "shared": { 0: 5, 1: true }    // Current shared state (integer-keyed); null if empty
+}
+```
+
+---
+
+#### `PresenceUnsubscribeShared`
+
+Stop receiving shared state updates.
+
+```
+{
+  "type":  "PresenceUnsubscribeShared",
+  "id":    13,
+  "subId": 790
+}
+```
+
+**Response** (`type: "ok"`):
+
+```
+{
+  "type": "ok",
+  "id":   13
 }
 ```
 
@@ -376,12 +451,12 @@ Stop receiving presence updates.
 
 #### `PresenceRemove`
 
-Remove the local user's presence data (also done automatically on disconnect).
+Remove the local user's presence data. Also done automatically on disconnect.
 
 ```
 {
   "type": "PresenceRemove",
-  "id":   11
+  "id":   14
 }
 ```
 
@@ -390,7 +465,7 @@ Remove the local user's presence data (also done automatically on disconnect).
 ```
 {
   "type": "ok",
-  "id":   11
+  "id":   14
 }
 ```
 
@@ -504,7 +579,7 @@ Notifies a subscribed client that their subscription's result set has changed.
 ```
 {
   "type":  "StoreDelta",
-  "subId": "sub-def-456",             // Subscription ID
+  "subId": 456,                  // Subscription ID (u64)
   "ops":   [                           // Array of atomic operations
     {
       "op":    "set",                  // "set" | "remove"
@@ -563,25 +638,43 @@ Notifies the SDK that a tracked or confirmed write failed after acceptance. This
 
 #### `PresenceBroadcast`
 
-Notifies subscribed clients about presence changes in their namespace.
+Notifies user-presence subscribers about presence changes in their namespace. Delivered in 50ms batches.
 
 ```
 {
-  "type":  "PresenceBroadcast",
-  "subId": "sub-pres-789",
-  "event": "update",                  // "join" | "update" | "leave"
-  "userId": "user-123",
-  "data":   { "cursor": { "x": 101, "y": 201 } }    // Present for "join" and "update"
+  "type":   "PresenceBroadcast",
+  "subId":  789,           // Integer subscription ID
+  "event":  "update",     // "join" | "update" | "leave"
+  "userId": <bin16>,      // Internal users.id as 16-byte binary
+  "data":   { 0: 101.0, 1: 201.0 }    // Integer-keyed merge delta. Present for "join" and "update"
 }
 ```
 
 **Event types:**
 
-| `event` | Description |
-|---------|-------------|
-| `"join"` | A user entered the presence namespace. `data` contains their initial presence. |
-| `"update"` | A user updated their presence. `data` contains the changed fields (partial). |
-| `"leave"` | A user left the presence namespace. No `data` field. |
+| `event` | `data` | Description |
+|---------|--------|-------------|
+| `"join"` | Full user field map (all set fields) | A user entered the namespace. |
+| `"update"` | Merge delta (only changed fields) | A user called `presence.set()`. SDK merges into local cache. |
+| `"leave"` | Absent | A user disconnected or called `presence.remove()`. |
+
+The SDK decodes `data` using `presenceUserFields` indices from `SchemaSync` and unflattens nested objects before delivering to `subscribe()` callbacks.
+
+---
+
+#### `SharedStateBroadcast`
+
+Notifies shared-state subscribers that the namespace-level shared state has changed. Delivered in 50ms batches.
+
+```
+{
+  "type":  "SharedStateBroadcast",
+  "subId": 790,                  // Integer subscription ID (from PresenceSubscribeShared)
+  "data":  { 0: 6 }             // Integer-keyed merge delta — only changed fields
+}
+```
+
+The SDK decodes `data` using `presenceSharedFields` indices from `SchemaSync`, merges the patch into the local shared state cache, unflattens nested objects, and fires all `subscribeShared()` callbacks with the updated shared state.
 
 ---
 
@@ -644,7 +737,7 @@ On success: HTTP 101 Switching Protocols. On failure: HTTP 401 or 403.
 After the WebSocket is established, the server pushes two foundational messages:
 
 **1. `SchemaSync`**
-Provides the structural dictionary for integer-based routing. The SDK must dynamically hash this payload offline to track queue compatibility.
+Provides the structural dictionary for integer-based routing for both store and presence operations. The SDK must dynamically hash this payload offline to track queue compatibility.
 *Note: The `fields` array matches the Zig server's internal memory layout, meaning system columns (`id`, `namespace_id`, `created_at`, `updated_at`) are explicitly included so the SDK's indices natively align.*
 
 ```
@@ -658,9 +751,13 @@ Provides the structural dictionary for integer-based routing. The SDK must dynam
   "fieldFlags": [
     [3, 1, 0, 1, 1], // bit 0 = system column, bit 1 = doc_id
     [3, 1, 0, 0, 1, 1]
-  ]
+  ],
+  "presenceUserFields":   ["cursor__x", "cursor__y", "status", "typing", "name"],
+  "presenceSharedFields": ["slide", "playing"]
 }
 ```
+
+Presence field arrays are flat lists of flattened field names (nested objects are expanded with `__`). The array index is the integer used on the wire. No companion flags arrays — presence fields have no system-column or doc_id semantics. Both arrays are omitted when the schema has no `presence` section.
 
 **2. `Connected`**
 Provides transport-level session context. It does not by itself authorize scoped store or presence operations.
@@ -735,6 +832,7 @@ All errors follow a consistent envelope:
 | `INVALID_MESSAGE_FORMAT` | validation | Missing required fields: type or id |
 | `INVALID_ARRAY_ELEMENT` | validation | Non-literal element in array |
 | `SUBSCRIPTION_NOT_FOUND` | state | `subId` not recognized (stale subscription) |
+| `RESOURCE_EXHAUSTED` | rate-limit | Subscription engine memory budget reached; reduce active subscriptions |
 
 ---
 
@@ -766,16 +864,20 @@ The `Connected` message may include a `protocolVersion` field if explicit versio
 | C→S | `StoreUnsubscribe` | (unsubscribe function) | `ok` |
 | C→S | `StoreLoadMore` | `subscription.loadMore()` | `ok` with `subId`, `value`, `hasMore`, `nextCursor` |
 | C→S | `PresenceSet` | `presence.set(data)` | `ok` |
-| C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId` + `users` |
-| C→S | `PresenceUnsubscribe` | (unsubscribe function) | `ok` |
+| C→S | `PresenceSetShared` | `presence.setShared(data)` | `ok` |
+| C→S | `PresenceSubscribe` | `presence.subscribe(cb)` | `ok` with `subId`, `users` (current snapshot) |
+| C→S | `PresenceUnsubscribe` | (unsubscribe function from `subscribe`) | `ok` |
+| C→S | `PresenceSubscribeShared` | `presence.subscribeShared(cb)` | `ok` with `subId`, `shared` |
+| C→S | `PresenceUnsubscribeShared` | (unsubscribe function from `subscribeShared`) | `ok` |
 | C→S | `PresenceRemove` | `presence.remove()` | `ok` |
 | C→S | `StoreSetNamespace` | `client.setStoreNamespace(ns)` | `ok` with store-scoped `session` |
 | C→S | `PresenceSetNamespace` | `client.setPresenceNamespace(ns)` | `ok` with presence-scoped `session` |
 | C→S | `AuthRefresh` | `client.authRefresh(token)` | `ok` with `session` |
-| S→C | `SchemaSync` | — | Push (no `id`) |
+| S→C | `SchemaSync` | — | Push (no `id`); includes `presenceUserFields`, `presenceSharedFields` |
 | S→C | `Connected` | — | Push (no `id`) |
 | S→C | `StoreDelta` | — | Push (no `id`) |
 | S→C | `WriteCommitted` | — | Push (no `id`, SDK-consumed) |
 | S→C | `WriteError` | — | Push (no `id`) |
-| S→C | `PresenceBroadcast` | — | Push (no `id`) |
+| S→C | `PresenceBroadcast` | — | Push (no `id`); integer-keyed `data`, `bin16` userId |
+| S→C | `SharedStateBroadcast` | — | Push (no `id`); integer-keyed shared state delta |
 | S→C | `ServerDisconnect` | — | Push (no `id`) |

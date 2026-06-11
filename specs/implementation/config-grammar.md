@@ -24,8 +24,8 @@ This document defines the formal grammar and property specification for `zyncbas
 | `performance` | `object` | `{}` | Tuning for throughput and latency. |
 | `dataDir` | `string` | `"./data"` | Directory for persistence (SQLite, WAL). |
 | `schema` | `string \| object` | `"./schema.json"` | Path to schema file or schema config object. If omitted or the default path is missing, server boots with only the implicit `users` collection. |
-| `authorization` | `string` | `null` | `[PLANNED]` Path to `authorization.json`. If omitted or the file is missing, the server boots with the safe implicit public playground rules defined in `auth-grammar.md`. |
-| `environment` | `string` | `"development"` | `[PLANNED]` Engine mode (`development`, `production`). |
+| `authorization` | `string` | `null` | Path to `authorization.json`. If omitted or the file is missing, the server boots with the safe implicit public playground rules defined in `auth-grammar.md`. |
+| `environment` | `string` | `"development"` | Engine mode (`development`, `production`). |
 
 ---
 

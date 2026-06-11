@@ -1,7 +1,5 @@
 # ZyncBase Server Configuration
 
-**Last Updated**: 2026-03-09
-
 Complete guide to configuring the ZyncBase server with JSON files.
 
 ---
@@ -60,7 +58,7 @@ Main server configuration file.
 
 ```json
 {
-  "environment": "development", // [PLANNED]
+  "environment": "development",
   "server": {
     "port": 3000,
     "host": "0.0.0.0"
@@ -322,7 +320,109 @@ Performance tuning.
 
 ## schema.json
 
-Define your data structure using ZyncBase store-based schema format.
+Define your data structure using ZyncBase schema format. The schema file has two top-level keys: `store` for persistent relational data and `presence` for typed ephemeral presence state.
+
+> [!IMPORTANT]
+> **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`) or using reserved system field names (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`). The `__` sequence is reserved for internal flattening of nested objects. Invalid names are rejected by the server with `error.InvalidFieldName`.
+
+---
+
+## Presence Schema (`presence`)
+
+The optional `presence` key defines typed ephemeral presence fields. When present, its definition is authoritative — the server rejects messages referencing unknown field indices or mismatched types. There is no schemaless fallback.
+
+Two tiers are supported:
+
+| Key | Description |
+|---|---|
+| `presence.user` | Fields owned per connected user. One record per user per namespace. Cleaned up on disconnect. |
+| `presence.shared` | Fields representing namespace-level state. One record for the entire namespace. Persists until all users leave (5-second grace period). |
+
+### Presence field constraints
+
+- **Nesting**: One level of object nesting is supported (`cursor: { x, y }`). Deeper nesting is rejected at server startup.
+- **Flattening**: Nested objects are flattened on the wire using `__` (`cursor__x`, `cursor__y`). The SDK handles this transparently.
+- **Required**: Presence fields are never required. Both tiers use field-level merge semantics.
+- **Supported types**: `string`, `number`, `integer`, `boolean`. All standard constraints apply (`enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern`).
+- **`presence.shared` is optional**: Omit if your application has no room-level shared state.
+
+### Example: Collaborative Editor with Shared Slide
+
+```json
+{
+  "version": "1.0.0",
+  "store": {
+    "documents": {
+      "fields": {
+        "title": { "type": "string" }
+      }
+    }
+  },
+  "presence": {
+    "user": {
+      "cursor": {
+        "type": "object",
+        "fields": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "status": { "type": "string", "enum": ["active", "idle", "away"] },
+      "typing": { "type": "boolean" },
+      "name":   { "type": "string", "maxLength": 64 },
+      "color":  { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+    },
+    "shared": {
+      "slide":   { "type": "integer", "minimum": 0 },
+      "playing": { "type": "boolean" }
+    }
+  }
+}
+```
+
+### Presence schema and SchemaSync
+
+When the server loads a schema with a `presence` section, it derives two flat arrays by flattening nested fields with `__`:
+
+```
+presenceUserFields:   ["cursor__x", "cursor__y", "status", "typing", "name"]
+presenceSharedFields: ["slide", "playing"]
+```
+
+These are included in the `SchemaSync` message pushed to every connecting client. The SDK builds index maps from these arrays and uses them to encode/decode all presence messages. The integer at position N in the array is the wire key for that field.
+
+### Presence authorization
+
+Presence auth rules are defined in `authorization.json` alongside store rules:
+
+```json
+{
+  "namespaces": [
+    {
+      "pattern": "workspace:*",
+      "storeFilter":        true,
+      "presenceRead":        { "$session.userId": { "ne": null } },
+      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
+    }
+  ],
+  "store": []
+}
+```
+
+| Rule | Applies to |
+|---|---|
+| `presenceRead` | `presence.subscribe()` and `presence.subscribeShared()` |
+| `presenceWrite` | `presence.set()` and `presence.remove()` |
+| `presenceSharedWrite` | `presence.setShared()` — defaults to same value as `presenceWrite` when omitted |
+
+The `$data` variable is available in both `presenceWrite` and `presenceSharedWrite` rules and exposes the incoming field values.
+
+See [Presence API Reference](./presence-api.md) for full usage details.
+
+---
+
+## store
 
 > [!IMPORTANT]
 > **Naming Restriction**: Field names are forbidden from containing the double underscore sequence (`__`) or using reserved system field names (`id`, `namespace_id`, `owner_id`, `created_at`, `updated_at`). The `__` sequence is reserved for internal flattening of nested objects. Invalid names are rejected by the server with `error.InvalidFieldName`.
@@ -535,12 +635,14 @@ const users = await zyncbase.query('users', {
 
 **Benefits:**
 - Efficient querying (standard SQLite indexes work on flattened columns)
-- No depth limit for nesting
+- Unlimited nesting depth for `store` fields (up to SQLite's column limit of ~2000)
 - Clean client-side experience (no manual flattening required)
 
 **Limitations:**
 - Nested objects cannot contain arrays of objects (arrays must be at the leaf level)
 - Total recursion depth is limited by the maximum number of SQLite columns (typically 2000)
+- Field names must not contain `__` — that sequence is reserved for the flattening separator
+- `presence` fields support only **one level** of nesting (`cursor: { x, y }` is valid; deeper nesting is rejected at server startup)
 
 ### Arrays
 
@@ -1209,7 +1311,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "anonymous": { "enabled": true }
   },
   "dataDir": "./data",
-  "namespaces": { // [PLANNED]
+  "namespaces": {
     "patterns": [{ "pattern": "room:*" }]
   }
 }
@@ -1266,7 +1368,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": { // [PLANNED]
+  "namespaces": {
     "patterns": [{ "pattern": "tenant:*" }]
   }
 }

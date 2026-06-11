@@ -1,7 +1,5 @@
 # ZyncBase Query Language Reference
 
-**Last Updated**: 2026-03-09
-
 Complete reference for ZyncBase's Prisma-inspired query language used in `client.store.query()` and `client.store.subscribe()`.
 
 ---

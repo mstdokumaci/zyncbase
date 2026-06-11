@@ -1,7 +1,5 @@
 # Cursor Pagination Implementation Spec
 
-**Status**: v1 — Implementation Specification
-
 ---
 
 ## Overview

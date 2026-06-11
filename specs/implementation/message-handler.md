@@ -1,6 +1,6 @@
 # Message Handler
 
-**Drivers**: [Memory Management](./memory-management.md), [Threading Implementation](./threading.md), [Wire Protocol](./wire-protocol.md)
+**Drivers**: [Memory Management](./memory-strategy.md), [Threading Implementation](./threading.md), [Wire Protocol](./wire-protocol.md)
 
 The `MessageHandler` is the primary component for processing incoming WebSocket messages. It implements the MessagePack wire protocol, handles the per-connection memory lifecycle, and routes operations to the storage engine.
 
@@ -48,7 +48,7 @@ pub const MessageHandler = struct {
 `routeMessage` enforces scoped readiness before dispatching domain operations:
 
 - `StoreSet`, `StoreRemove`, `StoreBatch`, `StoreQuery`, `StoreSubscribe`, `StoreUnsubscribe`, and `StoreLoadMore` require a ready store scope.
-- `PresenceSet`, `PresenceSubscribe`, `PresenceUnsubscribe`, and `PresenceRemove` require a ready presence scope.
+- `PresenceSet`, `PresenceSetShared`, `PresenceSubscribe`, `PresenceSubscribeShared`, `PresenceUnsubscribe`, `PresenceUnsubscribeShared`, and `PresenceRemove` require a ready presence scope.
 - `AuthRefresh`, `StoreSetNamespace`, `PresenceSetNamespace`, ping/pong, and close are accepted before scoped readiness because they establish or refresh scope.
 
 If a scoped operation arrives before the required scope is ready, the handler returns `SESSION_NOT_READY` without touching storage, subscriptions, or presence state.
@@ -96,6 +96,6 @@ The `MessageHandler` is shared across all worker threads. Thread safety is achie
 ---
 
 ## See Also
-- [Memory Management](./memory-management.md) — Arena and GPA strategy
+- [Memory Management](./memory-strategy.md) — Arena and GPA strategy
 - [Threading Implementation](./threading.md) — Per-thread memory isolation
 - [Wire Protocol](./wire-protocol.md) — Message format handled by this handler
