@@ -231,7 +231,7 @@ test "StorageEngine: delete document" {
     defer managed.deinit();
     try testing.expect(managed.records.len == 0);
 }
-test "StorageEngine: insertOrReplace and selectDocument" {
+test "StorageEngine: upsertDocument and selectDocument" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("items", &fields_arr);
@@ -507,7 +507,7 @@ test "StorageEngine: client writes blocked during migration" {
     // Simulate migration in progress
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
-    // insertOrReplace should be blocked
+    // upsertDocument should be blocked
     const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
@@ -601,7 +601,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.insertOrReplace(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
@@ -610,7 +610,7 @@ test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDen
     const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 999;
     const write_id: [16]u8 = .{1} ** 16;
-    try ctx.engine.insertOrReplace(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, conn_id, write_id);
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, conn_id, write_id);
     try ctx.engine.flushPendingWrites();
 
     var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
@@ -646,14 +646,14 @@ test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
     };
-    try ctx.engine.insertOrReplace(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
     defer guard.deinit(allocator);
 
     const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try ctx.engine.insertOrReplace(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, null, null);
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, null, null);
     try ctx.engine.flushPendingWrites();
 
     var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
@@ -691,7 +691,7 @@ test "StorageEngine: confirmed delete with rejecting guard returns PermissionDen
         .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
         .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "hello" } } },
     };
-    try ctx.engine.insertOrReplace(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
     try ctx.engine.flushPendingWrites();
 
     var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });

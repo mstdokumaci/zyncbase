@@ -373,7 +373,7 @@ pub const StorageEngine = struct {
         }
     }
 
-    pub fn docExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
+    pub fn documentExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
         if (table_index >= self.pk_sets.len) return false;
         return self.pk_sets[table_index].contains(id);
     }
@@ -509,7 +509,7 @@ pub const StorageEngine = struct {
     // ─── Storage methods ──────────────────────────────────────────────────
 
     /// INSERT OR REPLACE a document into a table.
-    pub fn insertOrReplace(
+    pub fn upsertDocument(
         self: *StorageEngine,
         table_index: usize,
         id: DocId,
@@ -530,7 +530,7 @@ pub const StorageEngine = struct {
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
         errdefer if (!queued) self.allocator.free(sql_string);
 
         const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
@@ -672,7 +672,7 @@ pub const StorageEngine = struct {
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
         errdefer self.allocator.free(sql_string);
 
         const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;

@@ -364,7 +364,7 @@ pub const StoreService = struct {
                 });
             }
 
-            const is_create = !self.storage_engine.docExists(path.table_index, path.doc_id);
+            const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
 
             if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
 
@@ -383,7 +383,7 @@ pub const StoreService = struct {
             const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
             if (is_create) {
-                try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
+                try self.storage_engine.upsertDocument(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
             } else {
                 try self.storage_engine.updateDocument(path.table_index, path.doc_id, ctx.namespace_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
             }
@@ -412,7 +412,7 @@ pub const StoreService = struct {
             defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
             const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
+            try self.storage_engine.upsertDocument(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
         } else {
             return StorageError.InvalidPath;
         }
@@ -458,7 +458,7 @@ pub const StoreService = struct {
                 });
             }
 
-            is_create = !self.storage_engine.docExists(path.table_index, path.doc_id);
+            is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
 
             if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
         } else if (path.segments_len == 3) {

@@ -409,7 +409,7 @@ fn insertNamedWithMetadata(
 ) !void {
     var resolved: [columns.len]storage_engine.ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try engine.insertOrReplace(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null, null, null);
+    try engine.upsertDocument(table_metadata.index, id, namespace_id, typed.zeroDocId, &resolved, null, null, null);
 }
 
 // ─── Record field accessors (module-level, for callers with raw Record + metadata) ───

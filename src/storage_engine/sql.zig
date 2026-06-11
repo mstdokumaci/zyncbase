@@ -406,7 +406,7 @@ pub fn resolveUserId(
     return errors.StorageError.InvalidOperation;
 }
 
-pub fn buildInsertOrReplaceSql(
+pub fn buildUpsertDocumentSql(
     allocator: Allocator,
     table_metadata: *const schema.Table,
     columns: []const ColumnValue,
