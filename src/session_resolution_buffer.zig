@@ -21,6 +21,7 @@ pub const SessionResolutionBuffer = struct {
     allocator: Allocator,
 
     const capacity = 256;
+    const overflow_capacity = 512;
 
     pub fn init(allocator: Allocator) !SessionResolutionBuffer {
         const buffer = try allocator.alloc(SessionResolutionResult, capacity);
@@ -42,6 +43,9 @@ pub const SessionResolutionBuffer = struct {
             self.overflow_mutex.lock();
             defer self.overflow_mutex.unlock();
 
+            if (self.overflow.items.len >= overflow_capacity) {
+                return error.BufferFull;
+            }
             try self.overflow.append(self.allocator, result);
             return;
         }

@@ -14,31 +14,25 @@ const typed = @import("typed.zig");
 fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .namespace_id = namespace_id,
+        .namespace = "public",
         .owner_doc_id = typed.zeroDocId,
+        .session_user_id = typed.zeroDocId,
     };
 }
 
-fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId, field_index: ?usize) !msgpack.Payload {
-    const segments_len: usize = if (field_index != null) 3 else 2;
-    const arr = try allocator.alloc(msgpack.Payload, segments_len);
+fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId) !msgpack.Payload {
+    const arr = try allocator.alloc(msgpack.Payload, 2);
     errdefer allocator.free(arr);
 
     arr[0] = msgpack.Payload.uintToPayload(table_index);
     const id_bytes = typed.docIdToBytes(id);
     arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
-    if (field_index) |index| {
-        arr[2] = msgpack.Payload.uintToPayload(index);
-    }
 
     return .{ .arr = arr };
 }
 
 fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId) !msgpack.Payload {
-    return storePath(allocator, table_index, id, null);
-}
-
-fn fieldPath(allocator: std.mem.Allocator, table_index: usize, id: typed.DocId, field_index: usize) !msgpack.Payload {
-    return storePath(allocator, table_index, id, field_index);
+    return storePath(allocator, table_index, id);
 }
 
 test "StoreService: set - full document replacement" {
@@ -91,7 +85,7 @@ test "StoreService: set - full document replacement" {
     }
 }
 
-test "StoreService: set - field level update" {
+test "StoreService: set - sparse field update" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
     try app.init(allocator, "store-service-test-field", &.{
@@ -106,18 +100,19 @@ test "StoreService: set - field level update" {
     const service = &app.store_service;
     const items = try app.table("items");
 
-    // 1. Success path: Update single field
+    // 1. Update single field via sparse map
     {
-        const val = try msgpack.Payload.strToPayload("active", allocator);
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "status", "active" },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "status"));
+        var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
         try service.setPath(writeCtx(1), path, val);
         try app.storage_engine.flushPendingWrites();
 
-        // Verify
         var doc = try items.getOne(allocator, 1, 1);
         defer doc.deinit();
         _ = try doc.expectFieldString("status", "active");
@@ -130,17 +125,24 @@ test "StoreService: set - field level update" {
         const val = msgpack.Payload{ .arr = tags };
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "metadata__tags"));
+        const map_val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "metadata__tags", val },
+        });
+        defer map_val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
-        try service.setPath(writeCtx(1), path, val);
+        try service.setPath(writeCtx(1), path, map_val);
     }
 
     {
-        const val = try msgpack.Payload.strToPayload("deep-value", allocator);
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "a__b__c", "deep-value" },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("items"), 1, app.fieldIndex("items", "a__b__c"));
+        var path = try documentPath(allocator, app.tableIndex("items"), 1);
         defer path.free(allocator);
 
         try service.setPath(writeCtx(1), path, val);
@@ -186,10 +188,15 @@ test "StoreService: setPath path validation" {
     }
 
     {
-        var path = try fieldPath(allocator, app.tableIndex("items"), 1, 999);
+        const arr = try allocator.alloc(msgpack.Payload, 3);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("items"));
+        const id_bytes = typed.docIdToBytes(1);
+        arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
+        arr[2] = msgpack.Payload.uintToPayload(999);
+        const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
-        try testing.expectError(StorageError.UnknownField, service.setPath(writeCtx(1), path, value));
+        try testing.expectError(StorageError.InvalidPath, service.setPath(writeCtx(1), path, value));
     }
 }
 
@@ -223,17 +230,21 @@ test "StoreService: remove" {
         try app.storage_engine.flushPendingWrites();
     }
 
-    // 1. Negative: Remove field (segments_len == 3) is forbidden
+    // 1. Negative: Depth-3 path is forbidden
     {
-        const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
-        var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
+        const arr = try allocator.alloc(msgpack.Payload, 3);
+        arr[0] = msgpack.Payload.uintToPayload(app.tableIndex("people"));
+        const id_bytes = typed.docIdToBytes(1);
+        arr[1] = try msgpack.Payload.binToPayload(&id_bytes, allocator);
+        arr[2] = msgpack.Payload.uintToPayload(app.fieldIndex("people", "name"));
+        const path = msgpack.Payload{ .arr = arr };
         defer path.free(allocator);
 
         const result = service.removePath(writeCtx(1), path);
         try testing.expectError(StorageError.InvalidPath, result);
     }
 
-    // 2. Success: Remove document (segments_len == 2)
+    // 2. Success: Remove document (depth-2)
     {
         var path = try documentPath(allocator, app.tableIndex("people"), 1);
         defer path.free(allocator);
@@ -255,23 +266,12 @@ test "StoreService: remove" {
         const result = service.removePath(writeCtx(4), path);
         try testing.expectError(StorageError.UnknownTable, result);
     }
-
-    // 4. Negative: Field removal is forbidden even if field name is unknown
-    {
-        const tbl_md = app.schema.getTable("people") orelse return error.UnknownTable;
-        var path = try fieldPath(allocator, tbl_md.index, 1, app.fieldIndex("people", "name"));
-        defer path.free(allocator);
-
-        const result = service.removePath(writeCtx(1), path);
-        try testing.expectError(StorageError.InvalidPath, result);
-    }
 }
 
 test "StoreService: array validation" {
     const allocator = testing.allocator;
     var app: helpers.AppTestContext = undefined;
 
-    // Use a schema with specific items types
     const schema_json =
         \\{
         \\  "version": "1.0.0",
@@ -290,15 +290,21 @@ test "StoreService: array validation" {
 
     const service = &app.store_service;
 
-    // 1. Success: Valid literal array of strings
+    // 1. Success: Valid literal array of strings via sparse map
     {
         var arr = try allocator.alloc(msgpack.Payload, 2);
         arr[0] = try msgpack.Payload.strToPayload("tag1", allocator);
         arr[1] = try msgpack.Payload.strToPayload("tag2", allocator);
-        const val = msgpack.Payload{ .arr = arr };
+        const tags_val = msgpack.Payload{ .arr = arr };
+        defer tags_val.free(allocator);
+
+        const collections = try app.table("collections");
+        const val = try store_helpers.createDocumentMapPayload(allocator, collections.metadata, .{
+            .{ "tags", tags_val },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
         try service.setPath(writeCtx(1), path, val);
@@ -308,10 +314,16 @@ test "StoreService: array validation" {
     {
         var arr = try allocator.alloc(msgpack.Payload, 1);
         arr[0] = msgpack.Payload.intToPayload(123);
-        const val = msgpack.Payload{ .arr = arr };
+        const tags_val = msgpack.Payload{ .arr = arr };
+        defer tags_val.free(allocator);
+
+        const collections = try app.table("collections");
+        const val = try store_helpers.createDocumentMapPayload(allocator, collections.metadata, .{
+            .{ "tags", tags_val },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
         const result = app.store_service.setPath(writeCtx(1), path, val);
@@ -322,24 +334,36 @@ test "StoreService: array validation" {
     {
         var arr = try allocator.alloc(msgpack.Payload, 1);
         arr[0] = msgpack.Payload.mapPayload(allocator);
-        const val = msgpack.Payload{ .arr = arr };
+        const tags_val = msgpack.Payload{ .arr = arr };
+        defer tags_val.free(allocator);
+
+        const collections = try app.table("collections");
+        const val = try store_helpers.createDocumentMapPayload(allocator, collections.metadata, .{
+            .{ "tags", tags_val },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "tags"));
+        var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
         const result = app.store_service.setPath(writeCtx(1), path, val);
         try testing.expectError(StorageError.InvalidArrayElement, result);
     }
 
-    // 4. Success: Valid integers in scores array
+    // 4. Success: Valid integers in scores array via sparse map
     {
         var arr = try allocator.alloc(msgpack.Payload, 1);
         arr[0] = msgpack.Payload.intToPayload(42);
-        const val = msgpack.Payload{ .arr = arr };
+        const scores_val = msgpack.Payload{ .arr = arr };
+        defer scores_val.free(allocator);
+
+        const collections = try app.table("collections");
+        const val = try store_helpers.createDocumentMapPayload(allocator, collections.metadata, .{
+            .{ "scores", scores_val },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("collections"), 1, app.fieldIndex("collections", "scores"));
+        var path = try documentPath(allocator, app.tableIndex("collections"), 1);
         defer path.free(allocator);
 
         try service.setPath(writeCtx(1), path, val);
@@ -359,10 +383,12 @@ test "StoreService: persistence and namespace isolation" {
 
     // 1. Basic Persistence
     {
-        const val = try msgpack.Payload.strToPayload("value1", allocator);
+        const val = try store_helpers.createDocumentMapPayload(allocator, test_table.metadata, .{
+            .{ "val", "value1" },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
         try app.store_service.setPath(writeCtx(2), path, val);
@@ -375,22 +401,21 @@ test "StoreService: persistence and namespace isolation" {
 
     // 2. Duplicate ids do not cross namespace boundaries
     {
-        const val = try msgpack.Payload.strToPayload("value2", allocator);
+        const val = try store_helpers.createDocumentMapPayload(allocator, test_table.metadata, .{
+            .{ "val", "value2" },
+        });
         defer val.free(allocator);
 
-        // Same table/id, different namespace
-        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
         try service.setPath(writeCtx(3), path, val);
         try app.storage_engine.flushPendingWrites();
 
-        // Verify ns-a still has value1
         var doc_a = try test_table.getOne(allocator, 1, 2);
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
-        // Verify ns-b did not get a second row with the same id.
         var managed_b = try test_table.selectDocument(allocator, 1, 4);
         defer managed_b.deinit();
         try testing.expectEqual(@as(usize, 0), managed_b.records.len);
@@ -398,10 +423,12 @@ test "StoreService: persistence and namespace isolation" {
 
     // 3. Updates
     {
-        const val = try msgpack.Payload.strToPayload("updated", allocator);
+        const val = try store_helpers.createDocumentMapPayload(allocator, test_table.metadata, .{
+            .{ "val", "updated" },
+        });
         defer val.free(allocator);
 
-        var path = try fieldPath(allocator, app.tableIndex("test"), 1, app.fieldIndex("test", "val"));
+        var path = try documentPath(allocator, app.tableIndex("test"), 1);
         defer path.free(allocator);
 
         try app.store_service.setPath(writeCtx(2), path, val);
@@ -688,7 +715,7 @@ test "StoreService: batchWrite - multi-set inserts documents atomically" {
     ops_arr[1] = t2;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload, null);
+    try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Verify both documents exist
@@ -747,7 +774,7 @@ test "StoreService: batchWrite - mixed set and remove" {
     ops_arr[1] = set_op;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload, null);
+    try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Doc 1 should be gone
@@ -774,7 +801,7 @@ test "StoreService: batchWrite - empty ops is a no-op" {
     const ops_payload = msgpack.Payload{ .arr = empty_arr };
 
     // Should succeed silently
-    try app.store_service.batchWrite(writeCtx(1), ops_payload, null);
+    try app.store_service.batchWrite(writeCtx(1), ops_payload);
 }
 
 test "StoreService: batchWrite - rejects invalid kind" {
@@ -802,7 +829,7 @@ test "StoreService: batchWrite - rejects invalid kind" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects set with missing value" {
@@ -830,7 +857,7 @@ test "StoreService: batchWrite - rejects set with missing value" {
     ops_arr[0] = tuple;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.MissingRequiredFields, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects unknown table" {
@@ -854,7 +881,7 @@ test "StoreService: batchWrite - rejects unknown table" {
     ops_arr[0] = t;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(StorageError.UnknownTable, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects non-array payload" {
@@ -865,7 +892,7 @@ test "StoreService: batchWrite - rejects non-array payload" {
     });
     defer app.deinit();
 
-    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil, null));
+    try testing.expectError(error.InvalidMessageFormat, app.store_service.batchWrite(writeCtx(1), .nil));
 }
 
 test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
@@ -882,7 +909,7 @@ test "StoreService: batchWrite - rejects batch exceeding 500 ops" {
     @memset(ops_arr, .nil);
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload, null));
+    try testing.expectError(error.BatchTooLarge, app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: resolveStoreScope uses global users table by default" {
@@ -935,4 +962,90 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     var managed = try app.storage_engine.selectDocument(allocator, users.index, scope_b.user_doc_id, scope_b.namespace_id, null);
     defer managed.deinit();
     try testing.expectEqual(@as(usize, 1), managed.records.len);
+}
+
+test "StoreService: create requires all required fields but update does not" {
+    const allocator = testing.allocator;
+    var app: helpers.AppTestContext = undefined;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "items": {
+        \\      "required": ["name", "status"],
+        \\      "fields": {
+        \\        "name": { "type": "string" },
+        \\        "status": { "type": "string" },
+        \\        "description": { "type": "string" }
+        \\      }
+        \\    }
+        \\  }
+        \\}
+    ;
+    try app.initWithSchemaJSON(allocator, "store-service-required-fields", schema_json);
+    defer app.deinit();
+
+    const service = &app.store_service;
+    const items = try app.table("items");
+    const doc_id: typed.DocId = 1;
+
+    // 1. Create without required field 'status' should fail
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "name", "Test Item" },
+            .{ "description", "Some description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        const result = service.setPath(writeCtx(1), path, val);
+        try testing.expectError(StorageError.MissingRequiredField, result);
+    }
+
+    // 2. Create with all required fields should succeed
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "name", "Test Item" },
+            .{ "status", "active" },
+            .{ "description", "Some description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        // Verify the document was created
+        var doc = try items.getOne(allocator, 1, doc_id);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("name", "Test Item");
+        _ = try doc.expectFieldString("status", "active");
+        _ = try doc.expectFieldString("description", "Some description");
+    }
+
+    // 3. Full document update without required field should succeed
+    // because it's an update, not a create
+    {
+        const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
+            .{ "status", "archived" },
+            .{ "description", "Updated description" },
+        });
+        defer val.free(allocator);
+
+        var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
+        defer path.free(allocator);
+
+        try service.setPath(writeCtx(1), path, val);
+        try app.storage_engine.flushPendingWrites();
+
+        // Verify the update succeeded
+        var doc = try items.getOne(allocator, 1, doc_id);
+        defer doc.deinit();
+        _ = try doc.expectFieldString("status", "archived");
+        _ = try doc.expectFieldString("description", "Updated description");
+    }
 }

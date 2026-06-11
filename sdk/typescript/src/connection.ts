@@ -7,6 +7,7 @@ import {
 } from "./connection_wire.js";
 import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import { PendingRequests } from "./pending_requests.js";
+import { RetryPolicy } from "./retry_policy.js";
 import type {
 	ClientOptions,
 	ConnectedMessage,
@@ -33,6 +34,7 @@ export class ConnectionManager {
 	private readonly options: ClientOptions;
 	private readonly wire = new ConnectionWireCodec();
 	readonly schemaDictionary = this.wire.schema;
+	private readonly retryPolicy: RetryPolicy;
 
 	private ws: WebSocket | null = null;
 	private readonly pending = new PendingRequests<
@@ -62,6 +64,7 @@ export class ConnectionManager {
 
 	constructor(options: ClientOptions) {
 		this.options = options;
+		this.retryPolicy = new RetryPolicy(options);
 		this.storeNamespace = options.storeNamespace ?? "public";
 		this.presenceNamespace = options.presenceNamespace ?? this.storeNamespace;
 	}
@@ -173,6 +176,14 @@ export class ConnectionManager {
 	}
 
 	dispatch(msg: OutboundRequest): Promise<OkResponse> {
+		return this.dispatchWithRetry(msg, 0);
+	}
+
+	private sendRequest(msg: OutboundRequest): {
+		id: number;
+		result: Promise<OkResponse>;
+		debugType: string;
+	} {
 		const id = this.pending.nextId();
 		const encoded = this.wire.encode(msg, id);
 
@@ -189,7 +200,41 @@ export class ConnectionManager {
 		} catch (err) {
 			this.pending.reject(id, err);
 		}
-		return result;
+
+		return { id, result, debugType: encoded.debugMessage.type };
+	}
+
+	private async dispatchWithRetry(
+		msg: OutboundRequest,
+		attempt: number,
+	): Promise<OkResponse> {
+		const { result, debugType } = this.sendRequest(msg);
+
+		try {
+			return await result;
+		} catch (err) {
+			if (this.intentionalDisconnect) throw err;
+			return this.handleRetryOrThrow(msg, attempt, err, debugType);
+		}
+	}
+
+	private async handleRetryOrThrow(
+		msg: OutboundRequest,
+		attempt: number,
+		err: unknown,
+		debugType: string,
+	): Promise<OkResponse> {
+		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
+
+		const delay = this.retryPolicy.getDelay(err, attempt);
+		if (this.options.debug) {
+			console.log(
+				`[SDK] Retrying ${debugType} in ${delay}ms (attempt ${attempt + 1})`,
+			);
+		}
+		await sleep(delay);
+		if (this.intentionalDisconnect) throw err;
+		return this.dispatchWithRetry(msg, attempt + 1);
 	}
 
 	authRefresh(token: string): Promise<void> {
@@ -469,4 +514,8 @@ export class ConnectionManager {
 		this.schemaSyncResolve = null;
 		this.schemaSyncReject = null;
 	}
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -598,6 +598,208 @@ test "buildDocPredicate preserves logical_or predicate" {
     try testing.expectEqualStrings("public", predicate.or_conditions.?[1].value.?.scalar.text);
 }
 
+// ─── Create Auth Tests ──────────────────────────────────────────────────────
+
+test "evaluateConditionWithDoc allows $doc.owner_id == $session.userId when owner matches" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const test_id = typed.generateUuidV7();
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = test_id,
+        .owner_doc_id = test_id,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
+    try testing.expect(result);
+}
+
+test "evaluateConditionWithDoc denies $doc.owner_id == $session.userId when owner differs" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const session_id = typed.generateUuidV7();
+    const other_id = typed.generateUuidV7();
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = session_id,
+        .owner_doc_id = other_id,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(config.store_rules[0].write, ctx);
+    try testing.expect(!result);
+}
+
+test "evaluateConditionWithDoc denies when $doc field is absent from candidate" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const status_field = try allocator.dupe(u8, "status");
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = status_field },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = typed.generateUuidV7(),
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = typed.generateUuidV7(),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    try testing.expect(!result);
+}
+
+test "evaluateConditionWithDoc allows $doc.status == draft when status is draft" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const status_field = try allocator.dupe(u8, "status");
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = status_field },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try payload.mapPut("status", try msgpack.Payload.strToPayload("draft", allocator));
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = typed.generateUuidV7(),
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = typed.generateUuidV7(),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    try testing.expect(result);
+}
+
+test "evaluateConditionWithDoc denies $doc.status == draft when status is published" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const status_field = try allocator.dupe(u8, "status");
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = status_field },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try payload.mapPut("status", try msgpack.Payload.strToPayload("published", allocator));
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = typed.generateUuidV7(),
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = typed.generateUuidV7(),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const result = authorization.evaluateConditionWithDoc(condition, ctx);
+    try testing.expect(!result);
+}
+
+test "authorizeWriteCondition denies create when $doc rule fails" {
+    const allocator = testing.allocator;
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const status_field = try allocator.dupe(u8, "status");
+    const condition = authorization.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = status_field },
+        .op = .eq,
+        .rhs = .{ .literal = .{ .scalar = .{ .text = try allocator.dupe(u8, "draft") } } },
+    } };
+    defer condition.deinit(allocator);
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try payload.mapPut("status", try msgpack.Payload.strToPayload("published", allocator));
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = typed.generateUuidV7(),
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = typed.generateUuidV7(),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const result = authorization.authorizeWriteCondition(condition, ctx, &table, true);
+    try testing.expectError(error.AccessDenied, result);
+}
+
+test "authorizeWriteCondition allows create and returns predicate when $doc rule passes" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.owner_id":{"eq":"$session.userId"}}}]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = makeTestTable(allocator, "test", &[_]TestFieldDef{
+        .{ .name = "owner_id", .field_type = .doc_id },
+    });
+    defer table.deinit(allocator);
+
+    const test_id = typed.generateUuidV7();
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = test_id,
+        .doc_id = typed.generateUuidV7(),
+        .owner_doc_id = test_id,
+        .value_table = &table,
+    };
+
+    var predicate = try authorization.authorizeWriteCondition(config.store_rules[0].write, ctx, &table, true);
+    if (predicate) |*p| {
+        defer p.deinit(allocator);
+    }
+
+    try testing.expect(predicate != null);
+}
+
 // ─── Test Helpers ───────────────────────────────────────────────────────────
 
 fn initTestConfig(allocator: std.mem.Allocator, json: []const u8) !AuthConfig {

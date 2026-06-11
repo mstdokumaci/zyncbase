@@ -249,7 +249,9 @@ pub const ConnectionManager = struct {
                 conn.acquire();
                 connections.append(self.allocator, conn) catch |err| {
                     std.log.err("Failed to add connection to disconnect list: {}", .{err});
-                    _ = conn.release();
+                    if (conn.release()) {
+                        self.memory_strategy.releaseConnection(conn);
+                    }
                 };
             }
         }
@@ -258,6 +260,51 @@ pub const ConnectionManager = struct {
             conn.send(msg) catch |err| {
                 std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
             };
+            conn.ws.close();
+            if (conn.release()) {
+                self.memory_strategy.releaseConnection(conn);
+            }
+        }
+    }
+
+    pub fn sweepExpiredTokens(self: *ConnectionManager, grace_period_seconds: u32) void {
+        const now = std.time.timestamp();
+        var to_close: std.ArrayListUnmanaged(*Connection) = .empty;
+        defer to_close.deinit(self.allocator);
+
+        self.mutex.lock();
+
+        var it = self.map.valueIterator();
+        while (it.next()) |state| {
+            const conn = state.*;
+            if (conn.session) |sess| {
+                if (now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds))) {
+                    conn.acquire();
+                    to_close.append(self.allocator, conn) catch |err| {
+                        std.log.err("Failed to add expired connection to close list: {}", .{err});
+                        if (conn.release()) {
+                            self.memory_strategy.releaseConnection(conn);
+                        }
+                    };
+                }
+            }
+        }
+
+        self.mutex.unlock();
+
+        for (to_close.items) |conn| {
+            const msg = wire.encodeServerDisconnect(self.allocator, "TOKEN_EXPIRED", "Your authentication token has expired.") catch |err| {
+                std.log.err("Failed to encode TOKEN_EXPIRED: {}", .{err});
+                conn.ws.close();
+                if (conn.release()) {
+                    self.memory_strategy.releaseConnection(conn);
+                }
+                continue;
+            };
+            conn.send(msg) catch |err| {
+                std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
+            };
+            self.allocator.free(msg);
             conn.ws.close();
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);

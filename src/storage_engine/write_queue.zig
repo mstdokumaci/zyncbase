@@ -37,7 +37,7 @@ pub const ReconnectionConfig = struct {
 };
 
 pub const BatchEntry = struct {
-    kind: enum { upsert, delete },
+    kind: enum { upsert, update, delete },
     table_index: usize,
     id: typed.DocId,
     namespace_id: i64,
@@ -67,6 +67,18 @@ pub const WriteOp = union(enum) {
         id: typed.DocId,
         namespace_id: i64,
         owner_doc_id: typed.DocId,
+        sql: []const u8,
+        values: []typed.Value,
+        guard_values: ?[]typed.Value = null,
+        timestamp: i64,
+        completion_signal: ?*CompletionSignal = null,
+        conn_id: ?u64 = null,
+        write_id: ?[16]u8 = null,
+    },
+    update: struct {
+        table_index: usize,
+        id: typed.DocId,
+        namespace_id: i64,
         sql: []const u8,
         values: []typed.Value,
         guard_values: ?[]typed.Value = null,
@@ -138,6 +150,7 @@ pub const WriteOp = union(enum) {
         return switch (self) {
             .checkpoint => |op| op.completion_signal,
             .upsert => |op| op.completion_signal,
+            .update => |op| op.completion_signal,
             .delete => |op| op.completion_signal,
             .resolve_session => null,
             .batch => |op| op.completion_signal,
@@ -147,6 +160,10 @@ pub const WriteOp = union(enum) {
     pub fn getWriteAckInfo(self: WriteOp) ?struct { conn_id: u64, write_id: [16]u8 } {
         return switch (self) {
             .upsert => |op| if (op.conn_id != null and op.write_id != null)
+                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
+            else
+                null,
+            .update => |op| if (op.conn_id != null and op.write_id != null)
                 .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
             else
                 null,
@@ -165,6 +182,15 @@ pub const WriteOp = union(enum) {
     pub fn deinit(self: WriteOp, allocator: Allocator) void {
         switch (self) {
             .upsert => |op| {
+                allocator.free(op.sql);
+                for (op.values) |value| value.deinit(allocator);
+                allocator.free(op.values);
+                if (op.guard_values) |guard_vals| {
+                    for (guard_vals) |v| v.deinit(allocator);
+                    allocator.free(guard_vals);
+                }
+            },
+            .update => |op| {
                 allocator.free(op.sql);
                 for (op.values) |value| value.deinit(allocator);
                 allocator.free(op.values);

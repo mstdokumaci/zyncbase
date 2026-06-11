@@ -19,7 +19,7 @@ test "storage SQL builders quote identifiers" {
         .{ .index = schema_mod.first_user_field_index, .value = undefined },
     };
 
-    const insert_sql = try sql.buildInsertOrReplaceSql(allocator, table_metadata, &columns, null);
+    const insert_sql = try sql.buildUpsertDocumentSql(allocator, table_metadata, &columns, null);
     defer allocator.free(insert_sql);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "INSERT INTO \"select\" (\"id\", \"namespace_id\", \"owner_id\", \"from\", \"created_at\", \"updated_at\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, insert_sql, "\"from\" = excluded.\"from\"") != null);

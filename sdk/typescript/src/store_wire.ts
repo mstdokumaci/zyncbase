@@ -56,12 +56,18 @@ export function buildSet(
 		});
 	}
 
+	const wirePath = segments.slice(0, 2);
+	const wireValue =
+		segments.length >= 3
+			? { [joinFieldPath(...segments.slice(2))]: value }
+			: value;
+
 	return {
-		segments,
+		segments: wirePath,
 		message: {
 			type: "StoreSet",
-			path: segments,
-			value: encodeWriteValue(segments, value),
+			path: wirePath,
+			value: encodeWriteValue(wirePath, wireValue),
 			...(options?.confirm ? { confirm: options.confirm } : {}),
 			...(options?.confirm === "committed"
 				? { writeId: generateUUIDv7().replace(/-/g, "") }
@@ -156,23 +162,7 @@ export function buildBatch(
 
 	const ops: StoreBatch["ops"] = [];
 	for (const op of operations) {
-		if (op.op !== "set" && op.op !== "remove") {
-			throw new ZyncBaseError(
-				"Batch operation must specify op as set or remove",
-				{
-					code: ErrorCodes.INVALID_MESSAGE,
-					category: "client",
-					retryable: false,
-				},
-			);
-		}
-
-		const segments = normalizePath(op.path);
-		if (op.op === "remove") {
-			ops.push(["r", segments]);
-			continue;
-		}
-		ops.push(["s", segments, encodeWriteValue(segments, op.value ?? null)]);
+		ops.push(buildBatchOp(op));
 	}
 
 	return {
@@ -183,6 +173,47 @@ export function buildBatch(
 			? { writeId: generateUUIDv7().replace(/-/g, "") }
 			: {}),
 	};
+}
+
+function buildBatchOp(op: BatchOperation): StoreBatch["ops"][number] {
+	if (op.op !== "set" && op.op !== "remove") {
+		throw new ZyncBaseError(
+			"Batch operation must specify op as set or remove",
+			{
+				code: ErrorCodes.INVALID_MESSAGE,
+				category: "client",
+				retryable: false,
+			},
+		);
+	}
+
+	const segments = normalizePath(op.path);
+	if (segments.length < 2) {
+		throw new ZyncBaseError("Batch operation path requires depth 2 or more", {
+			code: ErrorCodes.INVALID_PATH,
+			category: "client",
+			retryable: false,
+		});
+	}
+	if (op.op === "remove") {
+		if (segments.length !== 2) {
+			throw new ZyncBaseError(
+				"store.remove requires a path of depth 2 (collection + document id)",
+				{
+					code: ErrorCodes.INVALID_PATH,
+					category: "client",
+					retryable: false,
+				},
+			);
+		}
+		return ["r", segments];
+	}
+	const wirePath = segments.slice(0, 2);
+	const wireValue =
+		segments.length >= 3
+			? { [joinFieldPath(...segments.slice(2))]: op.value ?? null }
+			: (op.value ?? null);
+	return ["s", wirePath, encodeWriteValue(wirePath, wireValue)];
 }
 
 export function buildListen(
@@ -316,8 +347,8 @@ function buildIdQuery(segments: string[]): Omit<StoreQuery, "id"> {
 	};
 }
 
-function encodeWriteValue(segments: string[], value: JsonValue): JsonValue {
-	if (segments.length === 2 && isObjectRecord(value)) {
+function encodeWriteValue(_segments: string[], value: JsonValue): JsonValue {
+	if (isObjectRecord(value)) {
 		return flatten(value);
 	}
 	return value;

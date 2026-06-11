@@ -14,6 +14,7 @@ const Keys = struct {
     pub const id = comptimeEncodeKey("id");
     pub const code = comptimeEncodeKey("code");
     pub const message = comptimeEncodeKey("message");
+    pub const retry_after = comptimeEncodeKey("retryAfter");
     pub const sub_id = comptimeEncodeKey("subId");
     pub const value = comptimeEncodeKey("value");
     pub const has_more = comptimeEncodeKey("hasMore");
@@ -29,6 +30,8 @@ const Keys = struct {
     pub const details = comptimeEncodeKey("details");
     pub const phase = comptimeEncodeKey("phase");
     pub const batch_index = comptimeEncodeKey("batchIndex");
+    pub const session = comptimeEncodeKey("session");
+    pub const token = comptimeEncodeKey("token");
 };
 
 const Values = struct {
@@ -110,6 +113,35 @@ pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     return list.toOwnedSlice(msgpack_allocator);
 }
 
+pub fn encodeOkWithSession(
+    msgpack_allocator: Allocator,
+    msg_id: u64,
+    session_claims: *const std.StringHashMapUnmanaged(typed.Value),
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(msgpack_allocator);
+    const writer = list.writer(msgpack_allocator);
+
+    try msgpack.encodeMapHeader(writer, 3);
+
+    try list.appendSlice(msgpack_allocator, Keys.type);
+    try list.appendSlice(msgpack_allocator, Values.ok);
+
+    try list.appendSlice(msgpack_allocator, Keys.id);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, msg_id, .big);
+
+    try list.appendSlice(msgpack_allocator, Keys.session);
+    try msgpack.encodeMapHeader(writer, session_claims.count());
+    var it = session_claims.iterator();
+    while (it.next()) |entry| {
+        try msgpack.writeMsgPackStr(writer, entry.key_ptr.*);
+        try typed.writeMsgPack(entry.value_ptr.*, writer);
+    }
+
+    return list.toOwnedSlice(msgpack_allocator);
+}
+
 pub fn encodeConnected(
     msgpack_allocator: Allocator,
     user_id: ?[]const u8,
@@ -142,17 +174,40 @@ pub fn encodeError(
     errdefer list.deinit(msgpack_allocator);
     const writer = list.writer(msgpack_allocator);
 
-    try list.appendSlice(msgpack_allocator, if (msg_id != null) &error_header_with_id else &error_header_without_id);
-    try list.appendSlice(msgpack_allocator, wire_err.code);
+    if (wire_err.retry_after_ms) |retry_after| {
+        const map_size: usize = if (msg_id != null) 5 else 4;
+        try msgpack.encodeMapHeader(writer, map_size);
 
-    if (msg_id) |id| {
-        try list.appendSlice(msgpack_allocator, Keys.id);
-        try writer.writeByte(0xcf);
-        try writer.writeInt(u64, id, .big);
+        try list.appendSlice(msgpack_allocator, Keys.type);
+        try list.appendSlice(msgpack_allocator, Values.@"error");
+
+        try list.appendSlice(msgpack_allocator, Keys.code);
+        try list.appendSlice(msgpack_allocator, wire_err.code);
+
+        if (msg_id) |id| {
+            try list.appendSlice(msgpack_allocator, Keys.id);
+            try writer.writeByte(0xcf);
+            try writer.writeInt(u64, id, .big);
+        }
+
+        try list.appendSlice(msgpack_allocator, Keys.message);
+        try list.appendSlice(msgpack_allocator, wire_err.message);
+
+        try list.appendSlice(msgpack_allocator, Keys.retry_after);
+        try msgpack.encode(msgpack.Payload.uintToPayload(retry_after), writer);
+    } else {
+        try list.appendSlice(msgpack_allocator, if (msg_id != null) &error_header_with_id else &error_header_without_id);
+        try list.appendSlice(msgpack_allocator, wire_err.code);
+
+        if (msg_id) |id| {
+            try list.appendSlice(msgpack_allocator, Keys.id);
+            try writer.writeByte(0xcf);
+            try writer.writeInt(u64, id, .big);
+        }
+
+        try list.appendSlice(msgpack_allocator, Keys.message);
+        try list.appendSlice(msgpack_allocator, wire_err.message);
     }
-
-    try list.appendSlice(msgpack_allocator, Keys.message);
-    try list.appendSlice(msgpack_allocator, wire_err.message);
 
     return list.toOwnedSlice(msgpack_allocator);
 }

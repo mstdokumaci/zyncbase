@@ -43,6 +43,7 @@ pub fn createMockWebSocketWithExternalId(allocator: Allocator, external_id: []co
         .session = Session{
             .external_id = allocator.dupe(u8, external_id) catch @panic("OOM creating mock WebSocket"),
             .is_anonymous = false,
+            .token_expires_at = std.time.timestamp() + 3600,
         },
     };
 }
@@ -109,6 +110,7 @@ pub const AppTestContext = struct {
     auth_config: authorization.AuthConfig,
     test_context: schema_helpers.TestContext,
     test_resolution_mutex: std.Thread.Mutex,
+    empty_claims: std.StringHashMapUnmanaged([]const u8) = .{},
 
     pub fn init(self: *AppTestContext, allocator: std.mem.Allocator, prefix: []const u8, table_defs: []const schema_helpers.TableDef) !void {
         try self.initWithOptions(allocator, prefix, table_defs, .{ .in_memory = true });
@@ -173,7 +175,7 @@ pub const AppTestContext = struct {
         self.store_service = StoreService.init(gpa, &self.storage_engine, &self.schema, &self.auth_config);
 
         // 8. Initialize Handler and Manager
-        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema);
+        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager

@@ -3,6 +3,7 @@ const comptimeEncodeKey = @import("comptime.zig").comptimeEncodeKey;
 pub const WireError = struct {
     code: []const u8,
     message: []const u8,
+    retry_after_ms: ?u64 = null,
 };
 
 fn wireError(comptime code: []const u8, comptime message: []const u8) WireError {
@@ -19,6 +20,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.ImmutableField => wireError("IMMUTABLE_FIELD", "Attempted to modify a system-protected field"),
         error.TypeMismatch => wireError("SCHEMA_VALIDATION_FAILED", "Field type mismatch"),
         error.ConstraintViolation => wireError("SCHEMA_VALIDATION_FAILED", "Schema constraint violation"),
+        error.MissingRequiredField => wireError("SCHEMA_VALIDATION_FAILED", "Required field missing during document creation"),
         error.InvalidArrayElement => wireError("INVALID_ARRAY_ELEMENT", "Array field contains non-literal value"),
         error.InvalidFieldName => wireError("INVALID_FIELD_NAME", "Field name contains forbidden characters"),
         error.InvalidMessageFormat => wireError("INVALID_MESSAGE_FORMAT", "Malformed MessagePack frame"),
@@ -49,6 +51,7 @@ pub fn getWireError(err: anyerror) WireError {
         error.RequestSuperseded => wireError("REQUEST_SUPERSEDED", "Scope superseded by newer request"),
         error.BatchTooLarge => wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations"),
         error.InvalidWriteAck => wireError("INVALID_MESSAGE", "writeId requires confirm: committed"),
+        error.EngineUnhealthy => wireError("ENGINE_UNHEALTHY", "Write engine is in a degraded state"),
         else => wireError("INTERNAL_ERROR", "Zig core failure"),
     };
 }

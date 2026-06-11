@@ -106,8 +106,7 @@ Public store facade.
 
 Owns:
 
-- Store API methods: `set`, `remove`, `create`, `push`, `update`, `get`, `query`,
-  `batch`, `listen`, and `subscribe`.
+- Store API methods: `set`, `remove`, `create`, `get`, `query`, `batch`, `listen`, and `subscribe`.
 - Calling `ConnectionManager.dispatch`.
 - User-facing error normalization and emission.
 - High-level subscription open/close flow.

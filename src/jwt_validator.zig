@@ -288,6 +288,7 @@ pub const JwtValidator = struct {
 
     pub const ValidatedToken = struct {
         subject: []const u8,
+        expires_at: i64,
         claims: std.StringHashMapUnmanaged(typed.Value) = .{},
 
         pub fn deinit(self: *ValidatedToken, allocator: Allocator) void {
@@ -418,12 +419,28 @@ pub const JwtValidator = struct {
             gop.value_ptr.* = typed_val;
         }
 
+        const exp = extractExp(payload);
+
         return ValidatedToken{
             .subject = try allocator.dupe(u8, sub),
+            .expires_at = exp,
             .claims = claims,
         };
     }
 };
+
+fn extractExp(payload: std.json.Value) i64 {
+    if (payload != .object) return 0;
+    const obj = payload.object;
+    if (obj.get("exp")) |exp_val| {
+        return switch (exp_val) {
+            .integer => exp_val.integer,
+            .float => |f| floatToI64(f) orelse 0,
+            else => 0,
+        };
+    }
+    return 0;
+}
 
 fn decodeBase64Url(allocator: Allocator, input: []const u8) ![]u8 {
     var end = input.len;

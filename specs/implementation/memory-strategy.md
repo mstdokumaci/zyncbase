@@ -74,7 +74,7 @@ pub fn release(self: *Self, data: *T) void {
 - **No Unbounded Allocations**: All parsers (MessagePack) enforce strict depth and size limits to prevent OOM attacks.
 - **Self-Healing Pools**: `IndexPool` returns dynamic memory to the OS immediately upon release to avoid footprint bloat.
 - **In-Place Initialization**: Types containing `std.Thread.Mutex` or `std.atomic.Value` MUST be initialized in-place (e.g., `initInPlace(self: *T, ...)`). Returning such types by value is illegal as it leads to memory corruption in synchronized components.
-- **Fail-Fast on OOM**: ZyncBase treats allocation failure as a fatal request error.
+- **Fail-Fast on OOM**: ZyncBase treats allocation failure as a fatal request error. **Exception**: Internal background buffers (e.g., `SessionResolutionBuffer`) that operate outside the request-response lifecycle use bounded overflow + silent drop rather than propagating OOM as `INTERNAL_ERROR`. These buffers have explicit capacity caps to prevent unbounded allocation.
 
 ## Invariants & Error Conditions
 

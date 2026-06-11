@@ -44,9 +44,11 @@ pub const Writer = struct {
     metadata_cache: *storage_cache.metadata_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
+    pk_sets: []@import("pk_set.zig").PkSet,
     schema: *const schema.Schema,
     shutdown_requested: std.atomic.Value(bool),
     is_ready: std.atomic.Value(bool),
+    is_healthy: std.atomic.Value(bool),
     queue: WriteQueue,
     performance_config: PerformanceConfig,
     db_path: [:0]const u8,
@@ -62,14 +64,21 @@ pub const Writer = struct {
     }
 
     pub fn enqueueOp(self: *Writer, op: WriteOp) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (!self.is_healthy.load(.acquire)) {
+            return StorageError.EngineUnhealthy;
+        }
         self.beginOp();
         self.queue.push(op) catch |err| {
             self.endOp(1);
             return err;
         };
-        self.mutex.lock();
         self.work_cond.signal();
-        self.mutex.unlock();
+    }
+
+    pub fn isHealthy(self: *const Writer) bool {
+        return self.is_healthy.load(.acquire);
     }
 
     pub fn pendingOpCount(self: *const Writer) usize {
@@ -218,6 +227,7 @@ pub const Writer = struct {
         self: *Writer,
         ops: []const WriteOp,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        guard_rejected: *std.ArrayListUnmanaged(usize),
     ) !void {
         execTransactionControl(&self.conn, "BEGIN TRANSACTION") catch |err| {
             const classified_err = errors.classifyError(err);
@@ -237,7 +247,12 @@ pub const Writer = struct {
             sql_cache.deinit();
         }
 
-        for (ops) |op| {
+        var pk_inserts = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_inserts.deinit(self.allocator);
+        var pk_deletes = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_deletes.deinit(self.allocator);
+
+        for (ops, 0..) |op, op_idx| {
             switch (op) {
                 .upsert => |iop| {
                     const table_metadata = self.schema.getTableByIndex(iop.table_index) orelse return StorageError.UnknownTable;
@@ -259,6 +274,11 @@ pub const Writer = struct {
 
                     if (maybe_new_record) |new_record| {
                         const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                        if (old_record == null) {
+                            pk_inserts.append(self.allocator, .{ .table_index = iop.table_index, .id = iop.id }) catch |err| {
+                                std.log.warn("Failed to track pk_insert for table {d}: {}", .{ iop.table_index, err });
+                            };
+                        }
                         pushOwnedChange(self.allocator, pending_changes, namespace_id, iop.table_index, op_type, old_record, new_record) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
@@ -268,13 +288,53 @@ pub const Writer = struct {
                             return classified_err;
                         };
                     } else {
-                        // The upsert is guarded by namespace_id. A missing RETURNING row means
-                        // the id already exists in another namespace, which we surface as a
-                        // dropped write rather than silently mutating hidden data.
-                        var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, typed.docIdHexSlice(iop.id, &id_hex_buf) });
+                        if (old_record != null and iop.guard_values != null and op.getWriteAckInfo() != null) {
+                            guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                std.log.err("Failed to track guard rejection: {}", .{err});
+                            };
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ iop.table_index, typed.docIdHexSlice(iop.id, &id_hex_buf) });
+                        }
                         if (old_record) |r| r.deinit(self.allocator);
-                        continue;
+                    }
+                },
+                .update => |uop| {
+                    const table_metadata = self.schema.getTableByIndex(uop.table_index) orelse return StorageError.UnknownTable;
+                    const namespace_id = if (table_metadata.namespaced) uop.namespace_id else schema.global_namespace_id;
+                    var old_record: ?Record = null;
+                    const capture_res = getDocumentHelper(self, uop.table_index, namespace_id, uop.id, &sql_cache);
+                    if (capture_res) |record| {
+                        old_record = record;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ uop.table_index, err });
+                    }
+                    const maybe_new_record = executeUpdate(self, uop, namespace_id, table_metadata) catch |err| {
+                        if (old_record) |r| r.deinit(self.allocator);
+                        const classified_err = errors.classifyError(err);
+                        errors.logDatabaseError("executeBatch UPDATE", classified_err, table_metadata.name);
+                        return classified_err;
+                    };
+
+                    if (maybe_new_record) |new_record| {
+                        pushOwnedChange(self.allocator, pending_changes, namespace_id, uop.table_index, .update, old_record, new_record) catch |err| {
+                            const classified_err = errors.classifyError(err);
+                            std.log.err("Failed to capture row change: {}", .{classified_err});
+                            if (old_record) |r| r.deinit(self.allocator);
+                            var r = new_record;
+                            r.deinit(self.allocator);
+                            return classified_err;
+                        };
+                    } else {
+                        if (old_record != null and uop.guard_values != null and op.getWriteAckInfo() != null) {
+                            guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                std.log.err("Failed to track guard rejection: {}", .{err});
+                            };
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPDATE for table index {d}/{s} had no matching row", .{ uop.table_index, typed.docIdHexSlice(uop.id, &id_hex_buf) });
+                        }
+                        if (old_record) |r| r.deinit(self.allocator);
                     }
                 },
                 .delete => |dop| {
@@ -288,6 +348,9 @@ pub const Writer = struct {
 
                     // For DELETE, the RETURNING * result IS the old record.
                     if (maybe_old_record) |old_record| {
+                        pk_deletes.append(self.allocator, .{ .table_index = dop.table_index, .id = dop.id }) catch |err| {
+                            std.log.warn("Failed to track pk_delete for table {d}: {}", .{ dop.table_index, err });
+                        };
                         pushOwnedChange(self.allocator, pending_changes, namespace_id, dop.table_index, .delete, old_record, null) catch |err| {
                             const classified_err = errors.classifyError(err);
                             std.log.err("Failed to capture row change: {}", .{classified_err});
@@ -296,10 +359,21 @@ pub const Writer = struct {
                             return classified_err;
                         };
                     } else {
-                        // If RETURNING * is empty, the row did not exist or was already deleted.
-                        // This is a valid no-op state; we skip notifications for non-existent documents.
-                        var id_hex_buf: [32]u8 = undefined;
-                        std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, typed.docIdHexSlice(dop.id, &id_hex_buf) });
+                        if (dop.guard_values != null and op.getWriteAckInfo() != null) {
+                            const exists = getDocumentHelper(self, dop.table_index, namespace_id, dop.id, &sql_cache) catch |err| blk: {
+                                std.log.err("Delete guard post-check failed: {}", .{err});
+                                break :blk null;
+                            };
+                            if (exists != null) {
+                                exists.?.deinit(self.allocator);
+                                guard_rejected.append(self.allocator, op_idx) catch |err| {
+                                    std.log.err("Failed to track guard rejection: {}", .{err});
+                                };
+                            }
+                        } else {
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ dop.table_index, typed.docIdHexSlice(dop.id, &id_hex_buf) });
+                        }
                     }
                 },
                 else => unreachable,
@@ -311,6 +385,17 @@ pub const Writer = struct {
             errors.logDatabaseError("executeBatch COMMIT", classified_err, "");
             return classified_err;
         };
+
+        for (pk_inserts.items) |item| {
+            if (item.table_index < self.pk_sets.len) {
+                self.pk_sets[item.table_index].insert(self.allocator, item.id);
+            }
+        }
+        for (pk_deletes.items) |item| {
+            if (item.table_index < self.pk_sets.len) {
+                self.pk_sets[item.table_index].remove(item.id);
+            }
+        }
     }
 
     pub fn flushBatch(
@@ -350,6 +435,12 @@ pub const Writer = struct {
                     namespace_id = o.namespace_id;
                     break :blk true;
                 },
+                .update => |o| blk: {
+                    table_index = o.table_index;
+                    id = o.id;
+                    namespace_id = o.namespace_id;
+                    break :blk true;
+                },
                 .delete => |o| blk: {
                     table_index = o.table_index;
                     id = o.id;
@@ -371,7 +462,10 @@ pub const Writer = struct {
             pending_changes.deinit(self.allocator);
         }
 
-        const result = executeBatch(self, batch.items, &pending_changes);
+        var guard_rejected = std.ArrayListUnmanaged(usize).empty;
+        defer guard_rejected.deinit(self.allocator);
+
+        const result = executeBatch(self, batch.items, &pending_changes, &guard_rejected);
         if (result) |_| {
             self.bumpVersion();
 
@@ -380,12 +474,18 @@ pub const Writer = struct {
             }
 
             var pushed_outcome = false;
-            for (batch.items) |op| {
+            for (batch.items, 0..) |op, op_idx| {
                 if (op.getWriteAckInfo()) |info| {
+                    const is_guard_rejected = for (guard_rejected.items) |idx| {
+                        if (idx == op_idx) break true;
+                    } else false;
+
+                    const outcome_err: ?anyerror = if (is_guard_rejected) error.PermissionDenied else null;
+
                     self.write_outcome_buffer.push(.{
                         .conn_id = info.conn_id,
                         .write_id = info.write_id,
-                        .err = null,
+                        .err = outcome_err,
                     }) catch |push_err| {
                         std.log.err("Failed to push write outcome: {}", .{push_err});
                     };
@@ -430,6 +530,31 @@ pub const Writer = struct {
     fn writeThreadLoop(self: *Writer) void {
         writeThreadLoopImpl(self) catch |err| {
             std.log.err("writeThreadLoop fatal error: {}", .{err});
+            {
+                self.mutex.lock();
+                self.is_healthy.store(false, .release);
+                self.mutex.unlock();
+            }
+
+            while (self.queue.pop()) |op| {
+                if (op.getCompletionSignal()) |sig| {
+                    sig.signal(StorageError.EngineUnhealthy);
+                }
+                if (op.getWriteAckInfo()) |info| {
+                    self.write_outcome_buffer.push(.{
+                        .conn_id = info.conn_id,
+                        .write_id = info.write_id,
+                        .err = StorageError.EngineUnhealthy,
+                    }) catch |push_err| {
+                        std.log.err("Failed to push write outcome during crash drain: {}", .{push_err});
+                    };
+                }
+                op.deinit(self.allocator);
+                self.endOp(1);
+            }
+
+            self.wakeFlushWaiters();
+            self.notifyChanges();
         };
     }
 
@@ -484,7 +609,7 @@ pub const Writer = struct {
             while (batch.items.len < batch_size) {
                 if (self.queue.pop()) |op| {
                     switch (op) {
-                        .upsert, .delete => {
+                        .upsert, .update, .delete => {
                             batch.append(self.allocator, op) catch |err| {
                                 std.log.err("Failed to append to batch: {}", .{err});
                                 op.deinit(self.allocator);
@@ -522,7 +647,7 @@ pub const Writer = struct {
         // Drain
         while (self.queue.pop()) |op| {
             switch (op) {
-                .upsert, .delete => {
+                .upsert, .update, .delete => {
                     batch.append(self.allocator, op) catch {
                         op.deinit(self.allocator);
                         self.endOp(1);
@@ -613,12 +738,22 @@ pub const Writer = struct {
         };
         tx_started = true;
 
+        const is_confirmed = if (@hasField(@TypeOf(bop), "conn_id"))
+            bop.conn_id != null and bop.write_id != null
+        else
+            false;
+
         var sql_cache = std.AutoHashMap(usize, []const u8).init(self.allocator);
         defer {
             var it = sql_cache.valueIterator();
             while (it.next()) |sql_str| self.allocator.free(sql_str.*);
             sql_cache.deinit();
         }
+
+        var pk_inserts = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_inserts.deinit(self.allocator);
+        var pk_deletes = std.ArrayListUnmanaged(struct { table_index: usize, id: DocId }).empty;
+        defer pk_deletes.deinit(self.allocator);
 
         for (entries, 0..) |entry, entry_idx| {
             const table_metadata = self.schema.getTableByIndex(entry.table_index) orelse {
@@ -642,6 +777,11 @@ pub const Writer = struct {
                     if (executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata)) |maybe_new_record| {
                         if (maybe_new_record) |new_record| {
                             const op_type: OwnedRecordChange.Operation = if (old_record == null) .insert else .update;
+                            if (old_record == null) {
+                                pk_inserts.append(self.allocator, .{ .table_index = entry.table_index, .id = entry.id }) catch |err| {
+                                    std.log.warn("Failed to track pk_insert for table {d}: {}", .{ entry.table_index, err });
+                                };
+                            }
                             if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, op_type, old_record, new_record)) |_| {
                                 // success
                             } else |err| {
@@ -655,6 +795,12 @@ pub const Writer = struct {
                                 break;
                             }
                         } else {
+                            if (old_record != null and entry.guard_values != null and is_confirmed) {
+                                if (old_record) |r| r.deinit(self.allocator);
+                                final_err = error.PermissionDenied;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
                             var id_hex_buf: [32]u8 = undefined;
                             std.log.debug("UPSERT for table index {d}/{s} conflicted with a different namespace", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
                             if (old_record) |r| r.deinit(self.allocator);
@@ -668,9 +814,54 @@ pub const Writer = struct {
                         break;
                     }
                 },
+                .update => {
+                    var old_record: ?Record = null;
+                    if (getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache)) |record| {
+                        old_record = record;
+                    } else |err| {
+                        std.log.err("Failed to capture old state (pre-UPDATE) for table index {d}: {}", .{ entry.table_index, err });
+                    }
+
+                    if (executeUpdate(self, entry, namespace_id, table_metadata)) |maybe_new_record| {
+                        if (maybe_new_record) |new_record| {
+                            if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .update, old_record, new_record)) |_| {
+                                // success
+                            } else |err| {
+                                const classified_err = errors.classifyError(err);
+                                std.log.err("Failed to capture row change: {}", .{classified_err});
+                                if (old_record) |r| r.deinit(self.allocator);
+                                var r = new_record;
+                                r.deinit(self.allocator);
+                                final_err = classified_err;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
+                        } else {
+                            if (old_record != null and entry.guard_values != null and is_confirmed) {
+                                if (old_record) |r| r.deinit(self.allocator);
+                                final_err = error.PermissionDenied;
+                                failed_batch_index = entry_idx;
+                                break;
+                            }
+                            var id_hex_buf: [32]u8 = undefined;
+                            std.log.debug("UPDATE for table index {d}/{s} had no matching row", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            if (old_record) |r| r.deinit(self.allocator);
+                        }
+                    } else |err| {
+                        if (old_record) |r| r.deinit(self.allocator);
+                        const classified_err = errors.classifyError(err);
+                        errors.logDatabaseError("executeBatchOp UPDATE", classified_err, table_metadata.name);
+                        final_err = classified_err;
+                        failed_batch_index = entry_idx;
+                        break;
+                    }
+                },
                 .delete => {
                     if (executeDelete(self, entry, namespace_id, table_metadata)) |maybe_old_record| {
                         if (maybe_old_record) |old_record| {
+                            pk_deletes.append(self.allocator, .{ .table_index = entry.table_index, .id = entry.id }) catch |err| {
+                                std.log.warn("Failed to track pk_delete for table {d}: {}", .{ entry.table_index, err });
+                            };
                             if (pushOwnedChange(self.allocator, &pending_changes, namespace_id, entry.table_index, .delete, old_record, null)) |_| {
                                 // success
                             } else |err| {
@@ -683,8 +874,21 @@ pub const Writer = struct {
                                 break;
                             }
                         } else {
-                            var id_hex_buf: [32]u8 = undefined;
-                            std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            if (entry.guard_values != null and is_confirmed) {
+                                const exists = getDocumentHelper(self, entry.table_index, namespace_id, entry.id, &sql_cache) catch |err| blk: {
+                                    std.log.err("Delete guard post-check failed: {}", .{err});
+                                    break :blk null;
+                                };
+                                if (exists != null) {
+                                    exists.?.deinit(self.allocator);
+                                    final_err = error.PermissionDenied;
+                                    failed_batch_index = entry_idx;
+                                    break;
+                                }
+                            } else {
+                                var id_hex_buf: [32]u8 = undefined;
+                                std.log.debug("DELETE for table index {d}/{s}: no row found (already deleted)", .{ entry.table_index, typed.docIdHexSlice(entry.id, &id_hex_buf) });
+                            }
                         }
                     } else |err| {
                         const classified_err = errors.classifyError(err);
@@ -704,6 +908,17 @@ pub const Writer = struct {
 
                 if (eviction_keys.items.len > 0) {
                     self.metadata_cache.bulkEvict(eviction_keys.items);
+                }
+
+                for (pk_inserts.items) |item| {
+                    if (item.table_index < self.pk_sets.len) {
+                        self.pk_sets[item.table_index].insert(self.allocator, item.id);
+                    }
+                }
+                for (pk_deletes.items) |item| {
+                    if (item.table_index < self.pk_sets.len) {
+                        self.pk_sets[item.table_index].remove(item.id);
+                    }
                 }
 
                 flushPendingChanges(self, &pending_changes);
@@ -805,7 +1020,7 @@ pub const Writer = struct {
                 self.endOp(1);
                 self.wakeFlushWaiters();
             },
-            .upsert, .delete => unreachable,
+            .upsert, .update, .delete => unreachable,
         }
     }
 
@@ -854,6 +1069,58 @@ pub const Writer = struct {
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
         if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        if (op.guard_values) |guard_vals| {
+            for (guard_vals) |val| {
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
+
+        const rc = sqlite.c.sqlite3_step(stmt);
+        if (rc == sqlite.c.SQLITE_ROW) {
+            return try reader.decodeRecord(self.allocator, stmt, table_metadata);
+        }
+        if (rc != sqlite.c.SQLITE_DONE and rc != sqlite.c.SQLITE_ROW) return errors.classifyStepError(&self.conn);
+        return null;
+    }
+
+    fn executeUpdate(
+        self: *Writer,
+        op: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema.Table,
+    ) !?Record {
+        const sql_str = op.sql;
+        var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, sql_str);
+        defer mstmt.release();
+        const stmt = mstmt.stmt;
+
+        var bind_idx: c_int = 1;
+
+        if (@typeInfo(@TypeOf(op.values)) == .optional) {
+            if (op.values) |vals| {
+                for (vals) |val| {
+                    try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                    bind_idx += 1;
+                }
+            }
+        } else {
+            for (op.values) |val| {
+                try sql.bindValue(val, &self.conn, stmt, bind_idx, self.allocator);
+                bind_idx += 1;
+            }
+        }
+
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        const id_bytes = typed.docIdToBytes(op.id);
+        if (sql.bindBlobTransient(stmt, bind_idx, &id_bytes) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx += 1;
+
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, namespace_id) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
         bind_idx += 1;
 
         if (op.guard_values) |guard_vals| {

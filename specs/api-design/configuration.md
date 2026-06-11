@@ -215,7 +215,8 @@ Authentication source and ticket settings. ZyncBase validates external identity 
         "org_id": "org_id",
         "read_projects": "read_projects",
         "write_projects": "write_projects"
-      }
+      },
+      "tokenGracePeriodSeconds": 30
     },
     "anonymous": {
       "enabled": true,
@@ -245,6 +246,8 @@ Authentication source and ticket settings. ZyncBase validates external identity 
 `session.claims` maps `$session` property names to verified JWT claim names. These projected claims are the only permission inputs ZyncBase receives from the identity provider.
 
 The `users` row is not loaded into `$session` for authorization. The reserved `users` collection maps the external subject to an internal `users.id` for `owner_id`, presence identity, and profile/display data.
+
+- `session.tokenGracePeriodSeconds` - Grace period after JWT expiry before the server terminates the connection. The SDK is expected to refresh tokens before expiry; this grace period is a safety net for slow refreshes. Default: 30 seconds.
 
 **Anonymous Auth:**
 

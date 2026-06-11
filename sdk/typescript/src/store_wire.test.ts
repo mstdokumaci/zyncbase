@@ -27,6 +27,28 @@ describe("store_wire", () => {
 		});
 	});
 
+	test("buildSet converts field-level paths to depth-2 sparse maps", () => {
+		const command = buildSet("users.u1.name", "Ada");
+
+		expect(command.segments).toEqual(["users", "u1"]);
+		expect(command.message).toEqual({
+			type: "StoreSet",
+			path: ["users", "u1"],
+			value: { name: "Ada" },
+		});
+	});
+
+	test("buildSet converts nested field paths to depth-2 sparse maps", () => {
+		const command = buildSet("users.u1.address.city", "London");
+
+		expect(command.segments).toEqual(["users", "u1"]);
+		expect(command.message).toEqual({
+			type: "StoreSet",
+			path: ["users", "u1"],
+			value: { address__city: "London" },
+		});
+	});
+
 	test("buildRemove rejects non-document paths", () => {
 		expect(() => buildRemove("users")).toThrow(ZyncBaseError);
 		expect(() => buildRemove("users.u1.name")).toThrow(ZyncBaseError);

@@ -231,7 +231,7 @@ test "StorageEngine: delete document" {
     defer managed.deinit();
     try testing.expect(managed.records.len == 0);
 }
-test "StorageEngine: insertOrReplace and selectDocument" {
+test "StorageEngine: upsertDocument and selectDocument" {
     const allocator = testing.allocator;
     var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
     const table = sth.makeTable("items", &fields_arr);
@@ -507,10 +507,243 @@ test "StorageEngine: client writes blocked during migration" {
     // Simulate migration in progress
     engine.migration_active.store(true, .release);
     defer engine.migration_active.store(false, .release);
-    // insertOrReplace should be blocked
+    // upsertDocument should be blocked
     const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
     try testing.expectError(sth.StorageError.MigrationInProgress, err1);
     // deleteDocument should be blocked
     const err3 = (try ctx.table("items")).deleteDocument(1, 1);
     try testing.expectError(sth.StorageError.MigrationInProgress, err3);
+}
+test "StorageEngine: engine healthy after start" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-healthy-start", table);
+    defer ctx.deinit();
+
+    try testing.expect(ctx.engine.isHealthy());
+    try testing.expect(ctx.engine.writer.isHealthy());
+}
+test "StorageEngine: writes rejected when engine unhealthy" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-unhealthy-reject", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    engine.writer.is_healthy.store(false, .release);
+    defer engine.writer.is_healthy.store(true, .release);
+
+    try testing.expect(!engine.isHealthy());
+
+    const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
+    try testing.expectError(sth.StorageError.EngineUnhealthy, err1);
+
+    const err2 = (try ctx.table("items")).deleteDocument(1, 1);
+    try testing.expectError(sth.StorageError.EngineUnhealthy, err2);
+}
+test "StorageEngine: ensureHealthy returns error when unhealthy" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{sth.makeField("val", .text, false)};
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "engine-ensure-healthy", table);
+    defer ctx.deinit();
+    const engine = &ctx.engine;
+
+    try engine.ensureHealthy();
+
+    engine.writer.is_healthy.store(false, .release);
+    defer engine.writer.is_healthy.store(true, .release);
+
+    try testing.expectError(sth.StorageError.EngineUnhealthy, engine.ensureHealthy());
+}
+
+const query_ast = @import("query_ast.zig");
+const typed = @import("typed.zig");
+const WriteOutcomeResult = @import("write_outcome_buffer.zig").WriteOutcomeResult;
+
+fn makeGuardPredicate(allocator: std.mem.Allocator, field_index: usize, field_type: sth.FieldType, value: typed.Value) !query_ast.FilterPredicate {
+    const conditions = try allocator.alloc(query_ast.Condition, 1);
+    conditions[0] = .{
+        .field_index = field_index,
+        .op = .eq,
+        .value = value,
+        .field_type = field_type,
+        .items_type = null,
+    };
+    return .{ .conditions = conditions };
+}
+
+test "StorageEngine: confirmed upsert with rejecting guard returns PermissionDenied" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-upsert-reject", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_a: typed.DocId = 100;
+    const author_b: typed.DocId = 200;
+
+    const columns = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    const conn_id: u64 = 999;
+    const write_id: [16]u8 = .{1} ** 16;
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
+    defer outcomes.deinit(allocator);
+    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+
+    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
+    try testing.expect(outcomes.items[0].err != null);
+    try testing.expectEqual(error.PermissionDenied, outcomes.items[0].err.?);
+    try testing.expectEqual(conn_id, outcomes.items[0].conn_id);
+}
+
+test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-upsert-accepted", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_a: typed.DocId = 100;
+    const author_b: typed.DocId = 200;
+
+    const columns = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "original" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const update_columns = &[_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, update_columns, &guard, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
+    defer outcomes.deinit(allocator);
+    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+    try testing.expectEqual(@as(usize, 0), outcomes.items.len);
+
+    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.records.len);
+    const val = result.records[0].values[val_field_idx];
+    try testing.expectEqualStrings("original", val.scalar.text);
+}
+
+test "StorageEngine: confirmed delete with rejecting guard returns PermissionDenied" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-delete-reject", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const val_field_idx = table_meta.fieldIndex("val").?;
+    const doc_id: typed.DocId = 42;
+    const namespace_id: i64 = 1;
+    const author_a: typed.DocId = 100;
+    const author_b: typed.DocId = 200;
+
+    const columns = [_]sth.ColumnValue{
+        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
+        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "hello" } } },
+    };
+    try ctx.engine.upsertDocument(table_meta.index, doc_id, namespace_id, author_a, &columns, null, null, null);
+    try ctx.engine.flushPendingWrites();
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const conn_id: u64 = 888;
+    const write_id: [16]u8 = .{2} ** 16;
+    try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
+    defer outcomes.deinit(allocator);
+    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+
+    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
+    try testing.expect(outcomes.items[0].err != null);
+    try testing.expectEqual(error.PermissionDenied, outcomes.items[0].err.?);
+
+    var result = try ctx.engine.selectDocument(allocator, table_meta.index, doc_id, namespace_id, null);
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.records.len);
+}
+
+test "StorageEngine: confirmed delete of non-existent row succeeds" {
+    const allocator = testing.allocator;
+    var fields_arr = [_]sth.Field{
+        sth.makeField("author_id", .doc_id, false),
+        sth.makeField("val", .text, false),
+    };
+    const table = sth.makeTable("items", &fields_arr);
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "guard-delete-missing", table);
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("items");
+    const author_field_idx = table_meta.fieldIndex("author_id").?;
+    const doc_id: typed.DocId = 999;
+    const namespace_id: i64 = 1;
+    const author_b: typed.DocId = 200;
+
+    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
+    defer guard.deinit(allocator);
+
+    const conn_id: u64 = 777;
+    const write_id: [16]u8 = .{3} ** 16;
+    try ctx.engine.deleteDocument(table_meta.index, doc_id, namespace_id, &guard, conn_id, write_id);
+    try ctx.engine.flushPendingWrites();
+
+    var outcomes = std.ArrayListUnmanaged(WriteOutcomeResult).empty;
+    defer outcomes.deinit(allocator);
+    try ctx.engine.writeOutcomeBuffer().drainInto(&outcomes, allocator);
+
+    try testing.expectEqual(@as(usize, 1), outcomes.items.len);
+    try testing.expect(outcomes.items[0].err == null);
 }

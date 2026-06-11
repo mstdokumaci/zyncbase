@@ -63,6 +63,20 @@ pub fn validateFieldWrite(
     return field;
 }
 
+fn validateRequiredFieldsForCreate(
+    table: *const schema_mod.Table,
+    columns: []const storage_mod.ColumnValue,
+) !void {
+    const user_fields = table.fields[schema_mod.first_user_field_index .. table.fields.len - schema_mod.trailing_system_field_count];
+    for (user_fields, schema_mod.first_user_field_index..) |f, f_idx| {
+        if (!f.required) continue;
+        const present = for (columns) |col| {
+            if (col.index == f_idx) break true;
+        } else false;
+        if (!present) return StorageError.MissingRequiredField;
+    }
+}
+
 /// StoreService provides a domain-level facade for storage operations.
 /// It encapsulates schema validation, path resolution, and ColumnValue construction.
 pub const StoreService = struct {
@@ -84,8 +98,11 @@ pub const StoreService = struct {
 
     pub const WriteContext = struct {
         namespace_id: i64,
+        namespace: []const u8,
         owner_doc_id: DocId,
-        auth_predicate: ?*const query_ast.FilterPredicate = null,
+        session_user_id: DocId,
+        session_external_id: ?[]const u8 = null,
+        session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,
         conn_id: ?u64 = null,
         write_id: ?[16]u8 = null,
     };
@@ -95,17 +112,10 @@ pub const StoreService = struct {
         user_doc_id: DocId,
     };
 
-    const PathKind = enum {
-        document_or_field,
-        document_only,
-    };
-
     const StorePath = struct {
         table_index: usize,
         table: *const schema_mod.Table,
         doc_id: DocId,
-        segments_len: usize,
-        field_index: ?usize,
     };
 
     pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?ScopedSession {
@@ -141,7 +151,7 @@ pub const StoreService = struct {
         path: msgpack.Payload,
         value: msgpack.Payload,
     ) !void {
-        const parsed = try self.parseStorePath(path, .document_or_field);
+        const parsed = try self.parseStorePath(path);
         try self.applySet(parsed, ctx, value);
     }
 
@@ -150,23 +160,34 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path: msgpack.Payload,
     ) !void {
-        const parsed = try self.parseStorePath(path, .document_only);
-        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
+        const parsed = try self.parseStorePath(path);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = parsed.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = parsed.doc_id,
+            .value = null,
+            .is_create = false,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+        try self.storage_engine.deleteDocument(parsed.table_index, parsed.doc_id, ctx.namespace_id, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
     }
 
     pub fn batchWrite(
         self: *StoreService,
         ctx: WriteContext,
         ops_payload: msgpack.Payload,
-        auth_predicates: ?[]const ?query_ast.FilterPredicate,
     ) !void {
         if (ops_payload != .arr) return error.InvalidMessageFormat;
         const ops = ops_payload.arr;
         if (ops.len == 0) return; // no-op, success
         if (ops.len > 500) return error.BatchTooLarge;
-        if (auth_predicates) |predicates| {
-            if (predicates.len != ops.len) return error.InvalidMessageFormat;
-        }
 
         var entries = try self.allocator.alloc(storage_mod.BatchEntry, ops.len);
         var initialized: usize = 0;
@@ -179,21 +200,17 @@ pub const StoreService = struct {
         const timestamp = std.time.timestamp();
 
         for (ops, 0..) |op_payload, i| {
+            _ = i;
             if (op_payload != .arr or op_payload.arr.len < 2) return error.InvalidMessageFormat;
             const tuple = op_payload.arr;
             if (tuple[0] != .str) return error.InvalidMessageFormat;
             const kind_str = tuple[0].str.value();
 
-            const auth_predicate = if (auth_predicates) |predicates|
-                if (predicates[i]) |*predicate| predicate else null
-            else
-                null;
-
             if (std.mem.eql(u8, kind_str, "s")) {
                 if (tuple.len < 3) return error.MissingRequiredFields;
-                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp, auth_predicate);
+                entries[initialized] = try self.buildBatchSetEntry(ctx, tuple[1], tuple[2], timestamp);
             } else if (std.mem.eql(u8, kind_str, "r")) {
-                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp, auth_predicate);
+                entries[initialized] = try self.buildBatchRemoveEntry(ctx, tuple[1], timestamp);
             } else {
                 return error.InvalidMessageFormat;
             }
@@ -274,15 +291,11 @@ pub const StoreService = struct {
     fn parseStorePath(
         self: *StoreService,
         payload: msgpack.Payload,
-        kind: PathKind,
     ) !StorePath {
         if (payload != .arr) return error.InvalidMessageFormat;
 
         const path = payload.arr;
-        switch (kind) {
-            .document_or_field => if (path.len != 2 and path.len != 3) return StorageError.InvalidPath,
-            .document_only => if (path.len != 2) return StorageError.InvalidPath,
-        }
+        if (path.len != 2) return StorageError.InvalidPath;
 
         const table_index = msgpack.extractPayloadUint(path[0]) orelse return error.InvalidMessageFormat;
         const table = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
@@ -290,18 +303,10 @@ pub const StoreService = struct {
         if (path[1] != .bin) return error.InvalidMessageFormat;
         const parsed_doc_id = try typed.docIdFromBytes(path[1].bin.value());
 
-        const field_index: ?usize = if (path.len == 3) blk: {
-            const index = msgpack.extractPayloadUint(path[2]) orelse return error.InvalidMessageFormat;
-            if (index >= table.fields.len) return StorageError.UnknownField;
-            break :blk index;
-        } else null;
-
         return .{
             .table_index = table_index,
             .table = table,
             .doc_id = parsed_doc_id,
-            .segments_len = path.len,
-            .field_index = field_index,
         };
     }
 
@@ -311,49 +316,56 @@ pub const StoreService = struct {
         ctx: WriteContext,
         value: msgpack.Payload,
     ) !void {
-        if (path.segments_len == 2) {
-            if (value != .map) return error.InvalidPayload;
+        if (value != .map) return error.InvalidPayload;
 
-            var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
-            defer {
-                for (columns.items) |col| col.value.deinit(self.allocator);
-                columns.deinit(self.allocator);
-            }
+        var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
+        defer {
+            for (columns.items) |col| col.value.deinit(self.allocator);
+            columns.deinit(self.allocator);
+        }
 
-            var it = value.map.iterator();
-            while (it.next()) |entry| {
-                const f_idx = blk: {
-                    if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
-                    if (entry.key_ptr.* == .str) {
-                        const key_str = entry.key_ptr.*.str.value();
-                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
-                    }
-                    return StorageError.UnknownField;
-                };
+        var it = value.map.iterator();
+        while (it.next()) |entry| {
+            const f_idx = blk: {
+                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
+                if (entry.key_ptr.* == .str) {
+                    const key_str = entry.key_ptr.*.str.value();
+                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
+                }
+                return StorageError.UnknownField;
+            };
 
-                const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
+            const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
 
-                try columns.append(self.allocator, .{
-                    .index = f_idx,
-                    .value = typed_value,
-                });
-            }
-
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
-        } else if (path.segments_len == 3) {
-            const f_index = path.field_index orelse return StorageError.InvalidPath;
-            const field = try validateFieldWrite(path.table, f_index, value);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, value);
-            defer typed_value.deinit(self.allocator);
-
-            const col = [_]storage_mod.ColumnValue{.{
-                .index = f_index,
+            try columns.append(self.allocator, .{
+                .index = f_idx,
                 .value = typed_value,
-            }};
-            try self.storage_engine.insertOrReplace(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, &col, ctx.auth_predicate, ctx.conn_id, ctx.write_id);
+            });
+        }
+
+        const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
+
+        if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = path.doc_id,
+            .value = &value,
+            .is_create = is_create,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+        if (is_create) {
+            try self.storage_engine.upsertDocument(path.table_index, path.doc_id, ctx.namespace_id, ctx.owner_doc_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
         } else {
-            return StorageError.InvalidPath;
+            try self.storage_engine.updateDocument(path.table_index, path.doc_id, ctx.namespace_id, columns.items, auth_predicate_ptr, ctx.conn_id, ctx.write_id);
         }
     }
 
@@ -363,9 +375,10 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         value: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
-        const path = try self.parseStorePath(path_payload, .document_or_field);
+        const path = try self.parseStorePath(path_payload);
+
+        if (value != .map) return error.InvalidPayload;
 
         var columns = std.ArrayListUnmanaged(storage_mod.ColumnValue).empty;
         defer {
@@ -373,50 +386,64 @@ pub const StoreService = struct {
             columns.deinit(self.allocator);
         }
 
-        if (path.segments_len == 2) {
-            if (value != .map) return error.InvalidPayload;
+        var it = value.map.iterator();
+        while (it.next()) |entry| {
+            const f_idx = blk: {
+                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
+                if (entry.key_ptr.* == .str) {
+                    const key_str = entry.key_ptr.*.str.value();
+                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
+                }
+                return StorageError.UnknownField;
+            };
 
-            var it = value.map.iterator();
-            while (it.next()) |entry| {
-                const f_idx = blk: {
-                    if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
-                    if (entry.key_ptr.* == .str) {
-                        const key_str = entry.key_ptr.*.str.value();
-                        break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return StorageError.UnknownField;
-                    }
-                    return StorageError.UnknownField;
-                };
-
-                const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
-                const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
-
-                try columns.append(self.allocator, .{
-                    .index = f_idx,
-                    .value = typed_value,
-                });
-            }
-        } else if (path.segments_len == 3) {
-            const f_index = path.field_index orelse return StorageError.InvalidPath;
-            const field = try validateFieldWrite(path.table, f_index, value);
-            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, value);
+            const field = try validateFieldWrite(path.table, f_idx, entry.value_ptr.*);
+            const typed_value = try typed.valueFromPayload(self.allocator, field.storage_type, field.items_type, entry.value_ptr.*);
 
             try columns.append(self.allocator, .{
-                .index = f_index,
+                .index = f_idx,
                 .value = typed_value,
             });
-        } else {
-            return StorageError.InvalidPath;
         }
 
-        return try self.storage_engine.prepareBatchUpsert(
-            path.table_index,
-            path.doc_id,
-            ctx.namespace_id,
-            ctx.owner_doc_id,
-            columns.items,
-            auth_predicate,
-            timestamp,
-        );
+        const is_create = !self.storage_engine.documentExists(path.table_index, path.doc_id);
+
+        if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = path.doc_id,
+            .value = &value,
+            .is_create = is_create,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
+
+        if (is_create) {
+            return try self.storage_engine.prepareBatchUpsert(
+                path.table_index,
+                path.doc_id,
+                ctx.namespace_id,
+                ctx.owner_doc_id,
+                columns.items,
+                auth_predicate_ptr,
+                timestamp,
+            );
+        } else {
+            return try self.storage_engine.prepareBatchUpdate(
+                path.table_index,
+                path.doc_id,
+                ctx.namespace_id,
+                columns.items,
+                auth_predicate_ptr,
+                timestamp,
+            );
+        }
     }
 
     fn buildBatchRemoveEntry(
@@ -424,16 +451,29 @@ pub const StoreService = struct {
         ctx: WriteContext,
         path_payload: msgpack.Payload,
         timestamp: i64,
-        auth_predicate: ?*const query_ast.FilterPredicate,
     ) !storage_mod.BatchEntry {
-        const path = try self.parseStorePath(path_payload, .document_only);
+        const path = try self.parseStorePath(path_payload);
+
+        var auth_result = try authorization.authorizeStoreWrite(self.allocator, .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.session_user_id,
+            .session_external_id = ctx.session_external_id,
+            .session_claims = ctx.session_claims,
+            .namespace = ctx.namespace,
+            .doc_id = path.doc_id,
+            .value = null,
+            .is_create = false,
+        });
+        defer if (auth_result.update_predicate) |*p| p.deinit(self.allocator);
+        const auth_predicate_ptr = if (auth_result.update_predicate) |*p| p else null;
 
         return try self.storage_engine.prepareBatchDelete(
             path.table_index,
             path.doc_id,
             ctx.namespace_id,
             ctx.owner_doc_id,
-            auth_predicate,
+            auth_predicate_ptr,
             timestamp,
         );
     }

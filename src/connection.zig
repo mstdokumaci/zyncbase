@@ -158,6 +158,19 @@ pub const Connection = struct {
         self.resetStoreScopeLocked();
     }
 
+    pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed.Value), token_expires_at: i64) void {
+        std.debug.assert(self.session != null);
+        const sess = &self.session.?;
+        var it = sess.claims.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        sess.claims.deinit(self.allocator);
+        sess.claims = new_claims;
+        sess.token_expires_at = token_expires_at;
+    }
+
     pub fn dupeExternalUserId(self: *Connection, allocator: Allocator) ![]const u8 {
         const sess = self.session orelse return error.MissingExternalIdentity;
         return allocator.dupe(u8, sess.external_id);
@@ -232,6 +245,10 @@ pub const Connection = struct {
 
     pub fn isScopeSeqCurrent(self: *Connection, expected_scope_seq: u64) bool {
         return self.scope_seq == expected_scope_seq;
+    }
+
+    pub fn getStoreNamespace(self: *Connection) ?[]const u8 {
+        return self.store_namespace;
     }
 
     pub fn dupeStoreNamespace(self: *Connection, allocator: Allocator) !?[]const u8 {

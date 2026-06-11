@@ -347,6 +347,7 @@ test "logging: level filtering" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
+        const empty_claims: std.StringHashMapUnmanaged([]const u8) = .{};
         handler.init(
             allocator,
             &memory_strategy,
@@ -356,6 +357,8 @@ test "logging: level filtering" {
             .{},
             &auth_config,
             &sm2,
+            null,
+            &empty_claims,
         );
         defer handler.deinit();
 
@@ -435,6 +438,7 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
+        const empty_claims2: std.StringHashMapUnmanaged([]const u8) = .{};
         handler.init(
             allocator,
             &memory_strategy,
@@ -444,6 +448,8 @@ test "logging: message formatting" {
             .{},
             &auth_config2,
             &sm3,
+            null,
+            &empty_claims2,
         );
         defer handler.deinit();
 
@@ -507,6 +513,7 @@ test "logging: message formatting" {
         defer store_service.deinit();
 
         var handler: MessageHandler = undefined;
+        const empty_claims3: std.StringHashMapUnmanaged([]const u8) = .{};
         handler.init(
             allocator,
             &memory_strategy,
@@ -516,6 +523,8 @@ test "logging: message formatting" {
             .{},
             &auth_config3,
             &sm4,
+            null,
+            &empty_claims3,
         );
         defer handler.deinit();
 

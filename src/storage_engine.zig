@@ -15,6 +15,7 @@ const MemoryStrategy = @import("memory_strategy.zig").MemoryStrategy;
 const typed = @import("typed.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const storage_errors = @import("storage_engine/errors.zig");
+const pk_set_mod = @import("storage_engine/pk_set.zig");
 const write_queue = @import("storage_engine/write_queue.zig");
 const sql = @import("storage_engine/sql.zig");
 const filter_sql = @import("storage_engine/filter_sql.zig");
@@ -24,6 +25,7 @@ const SessionResolutionBuffer = @import("session_resolution_buffer.zig").Session
 const WriteOutcomeBuffer = @import("write_outcome_buffer.zig").WriteOutcomeBuffer;
 
 pub const StorageError = storage_errors.StorageError;
+pub const PkSet = pk_set_mod.PkSet;
 pub const ColumnValue = sql.ColumnValue;
 pub const TableMetadata = schema_mod.Table;
 pub const CheckpointMode = write_queue.CheckpointMode;
@@ -102,6 +104,7 @@ pub const StorageEngine = struct {
     identity_cache: identity_cache_type,
     options: Options,
     writer: Writer,
+    pk_sets: []PkSet,
 
     pub fn init(
         self: *StorageEngine,
@@ -225,9 +228,12 @@ pub const StorageEngine = struct {
                 .namespace_cache = undefined,
                 // SAFETY: Set after cache init below
                 .identity_cache = undefined,
+                // SAFETY: Set after pk_sets init below
+                .pk_sets = undefined,
                 .schema = schema,
                 .shutdown_requested = std.atomic.Value(bool).init(false),
                 .is_ready = std.atomic.Value(bool).init(false),
+                .is_healthy = std.atomic.Value(bool).init(true),
                 // SAFETY: Initialized below via .write_queue.init().
                 .queue = undefined,
                 .performance_config = performance_config,
@@ -236,6 +242,8 @@ pub const StorageEngine = struct {
                 .write_thread = null,
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
+            // SAFETY: Initialized below
+            .pk_sets = undefined,
         };
 
         self.writer.stmt_cache.init(allocator, self.writer.performance_config.statement_cache_size);
@@ -258,6 +266,15 @@ pub const StorageEngine = struct {
 
         try self.writer.queue.init(allocator, &self.node_pool);
         errdefer self.writer.queue.deinit();
+
+        const num_tables = schema.tables.len;
+        self.pk_sets = try allocator.alloc(PkSet, num_tables);
+        errdefer allocator.free(self.pk_sets);
+        for (self.pk_sets) |*pk_set| {
+            pk_set.* = PkSet.empty;
+        }
+
+        self.writer.pk_sets = self.pk_sets;
     }
 
     pub fn deinit(self: *StorageEngine) void {
@@ -278,14 +295,20 @@ pub const StorageEngine = struct {
         self.namespace_cache.deinit();
         self.identity_cache.deinit();
 
-        // 4. Clean up readers
+        // 4. Deinit pk_sets
+        for (self.pk_sets) |*pk_set| {
+            pk_set.deinit(gpa);
+        }
+        gpa.free(self.pk_sets);
+
+        // 5. Clean up readers
         for (self.reader_pool) |*node| {
             node.stmt_cache.deinit(self.allocator);
             node.conn.deinit();
         }
         gpa.free(self.reader_pool);
 
-        // 5. Clean up the writer and queue
+        // 6. Clean up the writer and queue
         self.writer.deinit();
         self.node_pool.deinit();
     }
@@ -340,6 +363,21 @@ pub const StorageEngine = struct {
         }
     }
 
+    pub fn isHealthy(self: *const StorageEngine) bool {
+        return self.state.load(.acquire) == .running and self.writer.isHealthy();
+    }
+
+    pub fn ensureHealthy(self: *const StorageEngine) !void {
+        if (!self.isHealthy()) {
+            return StorageError.EngineUnhealthy;
+        }
+    }
+
+    pub fn documentExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
+        if (table_index >= self.pk_sets.len) return false;
+        return self.pk_sets[table_index].contains(id);
+    }
+
     /// Execute setup SQL (DDL/Migrations) before the engine starts.
     /// This method is only allowed when the engine is in the 'setup' state.
     pub fn execSetupSQL(self: *StorageEngine, sql_query: []const u8) !void {
@@ -367,6 +405,27 @@ pub const StorageEngine = struct {
     pub fn start(self: *StorageEngine) !void {
         if (self.state.load(.acquire) != .setup) {
             return error.InvalidState;
+        }
+
+        for (self.schema.tables, 0..) |table, table_index| {
+            const sql_str = try sql.buildSelectAllIdsSql(self.allocator, table.name_quoted);
+            defer self.allocator.free(sql_str);
+
+            var mstmt = try self.writer.stmt_cache.acquire(self.allocator, &self.writer.conn, sql_str);
+            defer mstmt.release();
+
+            while (true) {
+                const rc = sqlite.c.sqlite3_step(mstmt.stmt);
+                if (rc == sqlite.c.SQLITE_DONE) break;
+                if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.writer.conn);
+
+                const ptr = sqlite.c.sqlite3_column_blob(mstmt.stmt, 0);
+                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(mstmt.stmt, 0));
+                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
+                const doc_id = try typed.docIdFromBytes(bytes);
+
+                self.pk_sets[table_index].insert(self.allocator, doc_id);
+            }
         }
 
         // Spawn the write thread
@@ -447,13 +506,10 @@ pub const StorageEngine = struct {
         self.writer.flushPendingWrites();
     }
 
-    /// Converts a msgpack.Payload to a Value based on the schema's FieldType.
-    /// Strings and blobs (JSON arrays) are duplicated and owned by the Value.
-
     // ─── Storage methods ──────────────────────────────────────────────────
 
     /// INSERT OR REPLACE a document into a table.
-    pub fn insertOrReplace(
+    pub fn upsertDocument(
         self: *StorageEngine,
         table_index: usize,
         id: DocId,
@@ -465,6 +521,7 @@ pub const StorageEngine = struct {
         write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
@@ -473,7 +530,7 @@ pub const StorageEngine = struct {
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
         errdefer if (!queued) self.allocator.free(sql_string);
 
         const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
@@ -507,6 +564,60 @@ pub const StorageEngine = struct {
         queued = true;
     }
 
+    /// UPDATE an existing document in a table.
+    pub fn updateDocument(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        columns: []const ColumnValue,
+        guard_predicate: ?*const query_ast.FilterPredicate,
+        conn_id: ?u64,
+        write_id: ?[16]u8,
+    ) !void {
+        try self.ensureRunning();
+        try self.ensureHealthy();
+        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+        var queued = false;
+
+        var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
+
+        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        errdefer if (!queued) self.allocator.free(sql_string);
+
+        const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
+        errdefer if (!queued) {
+            if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+        };
+
+        const values = try self.cloneColumnValues(columns);
+        errdefer if (!queued) {
+            for (values) |v| v.deinit(self.allocator);
+            self.allocator.free(values);
+        };
+
+        const op = WriteOp{
+            .update = .{
+                .table_index = table_index,
+                .id = id,
+                .namespace_id = effective_namespace_id,
+                .sql = sql_string,
+                .values = values,
+                .guard_values = guard_values,
+                .timestamp = std.time.timestamp(),
+                .completion_signal = null,
+                .conn_id = conn_id,
+                .write_id = write_id,
+            },
+        };
+
+        try self.writer.enqueueOp(op);
+        queued = true;
+    }
+
     /// Atomically execute a batch of upsert/delete operations in a single transaction.
     /// Fire-and-forget: takes ownership of entries and returns immediately after enqueue.
     pub fn batchWrite(
@@ -522,6 +633,7 @@ pub const StorageEngine = struct {
         };
 
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
 
         for (entries) |entry| {
@@ -560,7 +672,7 @@ pub const StorageEngine = struct {
         var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
         defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
 
-        const sql_string = try sql.buildInsertOrReplaceSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        const sql_string = try sql.buildUpsertDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
         errdefer self.allocator.free(sql_string);
 
         const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
@@ -578,6 +690,46 @@ pub const StorageEngine = struct {
             .id = id,
             .namespace_id = effective_namespace_id,
             .owner_doc_id = owner_doc_id,
+            .sql = sql_string,
+            .values = values,
+            .guard_values = guard_values,
+            .timestamp = timestamp,
+        };
+    }
+
+    pub fn prepareBatchUpdate(
+        self: *StorageEngine,
+        table_index: usize,
+        id: DocId,
+        namespace_id: i64,
+        columns: []const ColumnValue,
+        guard_predicate: ?*const query_ast.FilterPredicate,
+        timestamp: i64,
+    ) !BatchEntry {
+        const table_metadata = self.schema.getTableByIndex(table_index) orelse return StorageError.UnknownTable;
+        const effective_namespace_id = if (table_metadata.namespaced) namespace_id else schema_mod.global_namespace_id;
+
+        var rendered_guard = try filter_sql.renderAndClause(self.allocator, table_metadata, guard_predicate);
+        defer if (rendered_guard) |*rendered| rendered.deinit(self.allocator);
+
+        const sql_string = try sql.buildUpdateDocumentSql(self.allocator, table_metadata, columns, if (rendered_guard) |*rendered| rendered.sqlSlice() else null);
+        errdefer self.allocator.free(sql_string);
+
+        const guard_values = if (rendered_guard) |*rendered| rendered.takeValues() else null;
+        errdefer if (guard_values) |values| filter_sql.deinitValueSlice(self.allocator, values);
+
+        const values = try self.cloneColumnValues(columns);
+        errdefer {
+            for (values) |value| value.deinit(self.allocator);
+            self.allocator.free(values);
+        }
+
+        return .{
+            .kind = .update,
+            .table_index = table_index,
+            .id = id,
+            .namespace_id = effective_namespace_id,
+            .owner_doc_id = typed.zeroDocId,
             .sql = sql_string,
             .values = values,
             .guard_values = guard_values,
@@ -770,6 +922,7 @@ pub const StorageEngine = struct {
         write_id: ?[16]u8,
     ) !void {
         try self.ensureRunning();
+        try self.ensureHealthy();
         if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
         const table_metadata = self.schema.getTableByIndex(table_index) orelse return error.UnknownTable;
         if (guard_predicate) |predicate| {

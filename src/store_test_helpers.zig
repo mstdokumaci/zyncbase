@@ -10,26 +10,9 @@ pub fn createStoreSetMessage(
     namespace_id: i64,
     table_index: usize,
     doc_id_value: typed.DocId,
-    value: []const u8,
+    value: msgpack_utils.Payload,
 ) ![]u8 {
-    // Compatibility helper for single-field test tables:
-    // field index 0 is `id`, field index 1 is `namespace_id`.
-    // The first custom user field sits at index 2.
-    return createStoreSetFieldMessage(allocator, id, namespace_id, table_index, doc_id_value, 2, value);
-}
-
-pub fn createStoreSetFieldMessage(
-    allocator: std.mem.Allocator,
-    id: u64,
-    namespace_id: i64,
-    table_index: usize,
-    doc_id_value: typed.DocId,
-    field_index: usize,
-    value: []const u8,
-) ![]u8 {
-    const val_payload = try msgpack_utils.Payload.strToPayload(value, allocator);
-    defer val_payload.free(allocator);
-    return createStoreSetMessageWithPayload(allocator, id, namespace_id, table_index, doc_id_value, field_index, val_payload);
+    return createStoreSetMessageWithPayload(allocator, id, namespace_id, table_index, doc_id_value, value);
 }
 
 pub fn createStoreSetMessageWithPayload(
@@ -38,7 +21,6 @@ pub fn createStoreSetMessageWithPayload(
     _namespace_id: i64,
     table_index: usize,
     doc_id_value: typed.DocId,
-    field_index: ?usize,
     value: msgpack_utils.Payload,
 ) ![]u8 {
     _ = _namespace_id;
@@ -55,8 +37,7 @@ pub fn createStoreSetMessageWithPayload(
     try writer.writeInt(u64, id, .big);
 
     try msgpack_utils.writeMsgPackStr(writer, "path");
-    const path_len: usize = if (field_index != null) 3 else 2;
-    try buf.append(allocator, @intCast(0x90 | path_len)); // fixarray
+    try buf.append(allocator, 0x90 | 2); // fixarray(2)
 
     // 1. Table Index
     try buf.append(allocator, 0xcf); // uint64
@@ -65,12 +46,6 @@ pub fn createStoreSetMessageWithPayload(
     // 2. Doc ID
     const doc_id_bytes = typed.docIdToBytes(doc_id_value);
     try msgpack_utils.writeMsgPackBin(writer, &doc_id_bytes);
-
-    // 3. Optional Field Index
-    if (field_index) |fi| {
-        try buf.append(allocator, 0xcf); // uint64
-        try writer.writeInt(u64, fi, .big);
-    }
 
     try msgpack_utils.writeMsgPackStr(writer, "value");
     try msgpack_utils.encode(value, buf.writer(allocator));

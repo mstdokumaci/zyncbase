@@ -489,4 +489,185 @@ describe("ConnectionManager", () => {
 			expect(delay).toBeLessThanOrEqual(1100);
 		});
 	});
+
+	describe("dispatch() — automatic retry", () => {
+		test("retries on RATE_LIMITED and succeeds", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatch({
+				type: "StoreSet",
+				path: ["a", "b"],
+				value: 1,
+			});
+
+			// First attempt: send RATE_LIMITED with retryAfter
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+
+			// Wait for retry
+			await new Promise((r) => setTimeout(r, 100));
+
+			// Second attempt: send ok
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+
+			const result = await p;
+			expect(result).toMatchObject({ type: "ok", id: 3 });
+			expect(mockWs.sentMessages.length).toBeGreaterThanOrEqual(3);
+		});
+
+		test("does not retry validation errors", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatch({
+				type: "StoreSet",
+				path: ["a", "b"],
+				value: 1,
+			});
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "SCHEMA_VALIDATION_FAILED",
+					message: "Invalid data",
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({
+				code: "SCHEMA_VALIDATION_FAILED",
+			});
+
+			// Only one message sent (no retry)
+			expect(mockWs.sentMessages.length).toBe(2);
+		});
+
+		test("gives up after maxServerRetries for server errors", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnectDelay: 10,
+				maxServerRetries: 2,
+			});
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatch({
+				type: "StoreSet",
+				path: ["a", "b"],
+				value: 1,
+			});
+
+			// First attempt: INTERNAL_ERROR
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "INTERNAL_ERROR",
+					message: "Server error",
+				}),
+			);
+
+			// Wait for first retry
+			await new Promise((r) => setTimeout(r, 50));
+
+			// Second attempt: INTERNAL_ERROR
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 3,
+					code: "INTERNAL_ERROR",
+					message: "Server error",
+				}),
+			);
+
+			// Wait for second retry
+			await new Promise((r) => setTimeout(r, 50));
+
+			// Third attempt: INTERNAL_ERROR (should give up)
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 4,
+					code: "INTERNAL_ERROR",
+					message: "Server error",
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+		});
+
+		test("does not retry when retryRateLimits is false", async () => {
+			const { manager, mockWs } = makeManager({ retryRateLimits: false });
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatch({
+				type: "StoreSet",
+				path: ["a", "b"],
+				value: 1,
+			});
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({ code: "RATE_LIMITED" });
+
+			// Only one message sent (no retry)
+			expect(mockWs.sentMessages.length).toBe(2);
+		});
+
+		test("respects retryAfter delay", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatch({
+				type: "StoreSet",
+				path: ["a", "b"],
+				value: 1,
+			});
+
+			// First attempt: RATE_LIMITED with retryAfter=200
+			await new Promise((r) => setTimeout(r, 0));
+			const startTime = Date.now();
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 200,
+				}),
+			);
+
+			// Wait for retry (should take ~200ms, not ~10ms)
+			await new Promise((r) => setTimeout(r, 100));
+			// Should still be waiting
+			expect(mockWs.sentMessages.length).toBe(2);
+
+			// Wait for retry to happen
+			await new Promise((r) => setTimeout(r, 150));
+			// Now retry should have happened
+			expect(mockWs.sentMessages.length).toBe(3);
+
+			// Send ok to resolve
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			await p;
+
+			const elapsed = Date.now() - startTime;
+			expect(elapsed).toBeGreaterThanOrEqual(180);
+		});
+	});
 });

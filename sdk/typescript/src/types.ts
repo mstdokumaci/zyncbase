@@ -51,6 +51,9 @@ export interface ClientOptions {
 	maxReconnectDelay?: number; // ms, default: 30_000
 	maxReconnectAttempts?: number; // default: Infinity
 	reconnectJitter?: boolean; // default: true
+	retryRateLimits?: boolean; // default: true — auto-retry RATE_LIMITED
+	retryServerErrors?: boolean; // default: true — auto-retry INTERNAL_ERROR, ENGINE_UNHEALTHY
+	maxServerRetries?: number; // default: 3 — max attempts for server errors
 	debug?: boolean; // default: false
 }
 
@@ -95,14 +98,6 @@ export interface Store {
 		value: JsonValue,
 		options?: WriteOptions,
 	): Promise<string>;
-	/** Push a new value to a collection with an auto-generated ULID/UUID. Returns a Promise of the ID. */
-	push(
-		collection: string,
-		value: JsonValue,
-		options?: WriteOptions,
-	): Promise<string>;
-	/** Merge fields into an existing document. Returns a Promise that resolves when the server acknowledges. */
-	update(path: Path, value: JsonValue, options?: WriteOptions): Promise<void>;
 	/** Get current value(s) in a one-off read. */
 	get(path: Path): Promise<JsonValue | null | undefined>;
 	/** Listen for changes at a path. Returns an unlisten function. */

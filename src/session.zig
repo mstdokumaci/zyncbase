@@ -5,6 +5,7 @@ const typed = @import("typed.zig");
 pub const Session = struct {
     external_id: []const u8,
     is_anonymous: bool,
+    token_expires_at: i64,
     claims: std.StringHashMapUnmanaged(typed.Value) = .{},
 
     pub fn deinit(self: *Session, allocator: Allocator) void {

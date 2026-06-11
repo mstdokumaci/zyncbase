@@ -5,6 +5,8 @@ const evaluate_mod = @import("authorization/evaluate.zig");
 const doc_predicate_mod = @import("authorization/doc_predicate.zig");
 const parse_mod = @import("authorization/parse.zig");
 const errors = @import("authorization/errors.zig");
+const read_auth_mod = @import("authorization/read_auth.zig");
+const write_auth_mod = @import("authorization/write_auth.zig");
 
 pub const AuthConfig = types.AuthConfig;
 pub const NamespaceRule = types.NamespaceRule;
@@ -31,8 +33,17 @@ pub const EvalContext = evaluate_mod.EvalContext;
 pub const EvalResult = evaluate_mod.EvalResult;
 pub const evaluateCondition = evaluate_mod.evaluateCondition;
 pub const evaluateConditionStrict = evaluate_mod.evaluateConditionStrict;
+pub const evaluateConditionWithDoc = evaluate_mod.evaluateConditionWithDoc;
 pub const authorizeStoreNamespace = evaluate_mod.authorizeStoreNamespace;
 
 pub const buildDocPredicate = doc_predicate_mod.buildDocPredicate;
+pub const authorizeWriteCondition = doc_predicate_mod.authorizeWriteCondition;
 pub const validateDocPredicate = doc_predicate_mod.validateDocPredicate;
 pub const validateAuthConfig = parse_mod.validateConfig;
+
+pub const ReadAuthInput = read_auth_mod.ReadAuthInput;
+pub const authorizeStoreRead = read_auth_mod.authorizeStoreRead;
+
+pub const WriteAuthInput = write_auth_mod.WriteAuthInput;
+pub const WriteAuthResult = write_auth_mod.WriteAuthResult;
+pub const authorizeStoreWrite = write_auth_mod.authorizeStoreWrite;

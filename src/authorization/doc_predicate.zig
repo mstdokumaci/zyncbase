@@ -79,6 +79,20 @@ pub fn buildDocPredicate(
     }
 }
 
+pub fn authorizeWriteCondition(
+    condition: types.Condition,
+    ctx: EvalContext,
+    table: *const schema.Table,
+    is_create: bool,
+) !?query_ast.FilterPredicate {
+    if (is_create) {
+        if (!evaluate_mod.evaluateConditionWithDoc(condition, ctx)) {
+            return error.AccessDenied;
+        }
+    }
+    return try buildDocPredicate(condition, ctx, table);
+}
+
 fn lowerCondition(
     condition: types.Condition,
     ctx: EvalContext,
