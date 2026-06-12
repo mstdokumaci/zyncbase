@@ -226,7 +226,7 @@ pub fn handleRecordChange(self: *SubscriptionEngine, change: RecordChange, alloc
 
 ## Presence Awareness
 
-ZyncBase's presence system tracks ephemeral user state (cursors, typing indicators, online status) in real-time. All presence data is stored in-memory only. For the internal implementation details of state management, batching, and history buffers, see [Presence Internals](./presence-internals.md).
+ZyncBase's presence system tracks ephemeral user state (cursors, typing indicators, online status) in real-time. All presence data is stored in-memory only. For the internal implementation details of state management and broadcast batching, see [Presence Internals](./presence-internals.md).
 
 ---
 

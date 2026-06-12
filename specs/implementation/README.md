@@ -12,7 +12,7 @@ This directory contains the technical details, internal implementations, and low
 - [Storage Engine](./storage.md) — SQLite WAL integration and schema management.
 - [Lock-Free Cache](./lock-free-cache.md) — Atomic wait-free read cache.
 - [Query Engine](./query-engine.md) — AST parsing and query execution logic.
-- [Presence Internals](./presence-internals.md) — History buffers and broadcast batching.
+- [Presence Internals](./presence-internals.md) — In-memory state management and broadcast batching.
 
 ## SDK Internals
 - [TypeScript SDK](./typescript-sdk.md) — Internal module ownership, wire flow, subscription materialization, and verification rules for the TypeScript SDK.
