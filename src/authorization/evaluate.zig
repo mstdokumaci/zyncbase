@@ -3,6 +3,7 @@ const msgpack = @import("msgpack");
 const types = @import("types.zig");
 const pattern_mod = @import("pattern.zig");
 const typed = @import("../typed.zig");
+const schema_mod = @import("../schema.zig");
 const Allocator = std.mem.Allocator;
 const Value = typed.Value;
 const ScalarValue = typed.ScalarValue;
@@ -15,7 +16,8 @@ pub const EvalContext = struct {
     namespace_captures: ?*const std.StringHashMapUnmanaged([]const u8) = null,
     path_table: ?[]const u8 = null,
     value_payload: ?*const msgpack.Payload = null,
-    value_table: ?*const @import("../schema.zig").Table = null,
+    value_table: ?*const schema_mod.Table = null,
+    presence_fields: ?[]const schema_mod.PresenceField = null,
     doc_id: ?typed.DocId = null,
     owner_doc_id: ?typed.DocId = null,
 };
@@ -165,6 +167,77 @@ pub fn authorizeStoreNamespace(
     if (!evaluateConditionStrict(match.rule.store_filter, ctx)) return error.NamespaceUnauthorized;
 }
 
+pub fn authorizePresenceNamespace(
+    allocator: Allocator,
+    config: *const types.AuthConfig,
+    namespace: []const u8,
+    session_user_id: typed.DocId,
+    session_external_id: []const u8,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+) !void {
+    var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
+    defer match.deinit(allocator);
+
+    const ctx: EvalContext = .{
+        .allocator = allocator,
+        .session_user_id = session_user_id,
+        .session_external_id = session_external_id,
+        .session_claims = session_claims,
+        .namespace_captures = &match.captures.captures,
+    };
+    if (!evaluateConditionStrict(match.rule.presence_read, ctx)) return error.NamespaceUnauthorized;
+}
+
+pub fn authorizePresenceWrite(
+    allocator: Allocator,
+    config: *const types.AuthConfig,
+    namespace: []const u8,
+    session_user_id: typed.DocId,
+    session_external_id: []const u8,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    presence_fields: []const schema_mod.PresenceField,
+    data_payload: *const msgpack.Payload,
+) !void {
+    var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
+    defer match.deinit(allocator);
+
+    const ctx: EvalContext = .{
+        .allocator = allocator,
+        .session_user_id = session_user_id,
+        .session_external_id = session_external_id,
+        .session_claims = session_claims,
+        .namespace_captures = &match.captures.captures,
+        .value_payload = data_payload,
+        .presence_fields = presence_fields,
+    };
+    if (!evaluateConditionStrict(match.rule.presence_write, ctx)) return error.NamespaceUnauthorized;
+}
+
+pub fn authorizePresenceSharedWrite(
+    allocator: Allocator,
+    config: *const types.AuthConfig,
+    namespace: []const u8,
+    session_user_id: typed.DocId,
+    session_external_id: []const u8,
+    session_claims: ?*const std.StringHashMapUnmanaged(typed.Value),
+    presence_fields: []const schema_mod.PresenceField,
+    data_payload: *const msgpack.Payload,
+) !void {
+    var match = (try pattern_mod.matchNamespaceRule(allocator, config, namespace)) orelse return error.NamespaceUnauthorized;
+    defer match.deinit(allocator);
+
+    const ctx: EvalContext = .{
+        .allocator = allocator,
+        .session_user_id = session_user_id,
+        .session_external_id = session_external_id,
+        .session_claims = session_claims,
+        .namespace_captures = &match.captures.captures,
+        .value_payload = data_payload,
+        .presence_fields = presence_fields,
+    };
+    if (!evaluateConditionStrict(match.rule.presence_shared_write, ctx)) return error.NamespaceUnauthorized;
+}
+
 fn evaluateConditionInternal(condition: types.Condition, ctx: EvalContext, strict: bool) EvalResult {
     switch (condition) {
         .boolean => |b| return if (b) .allow else .deny,
@@ -242,13 +315,40 @@ pub fn resolveOperand(value: types.Operand, ctx: EvalContext) ?ResolvedAuthValue
 
 fn resolveIncomingValueField(field: []const u8, ctx: EvalContext) ?ResolvedAuthValue {
     const payload = ctx.value_payload orelse return null;
+
+    if (payload.* != .map) return null;
+    const map = payload.map;
+
+    // Presence fields: look up by name in the presence_fields array
+    if (ctx.presence_fields) |fields| {
+        const field_index = for (fields, 0..) |f, idx| {
+            if (std.mem.eql(u8, f.name, field)) break idx;
+        } else return null;
+        const field_type = fields[field_index].declared_type;
+
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const matched = switch (key) {
+                .uint => key.uint == field_index,
+                .int => key.int == field_index,
+                .str => std.mem.eql(u8, key.str.value(), field),
+                else => false,
+            };
+            if (matched) {
+                const value = typed.valueFromPayload(ctx.allocator, field_type, null, entry.value_ptr.*) catch return null; // zwanzig-disable-line: swallowed-error
+                return ResolvedAuthValue.fromOwned(value);
+            }
+        }
+
+        return ResolvedAuthValue.fromBorrowed(.nil);
+    }
+
+    // Store fields: look up by name in the value_table
     const table = ctx.value_table orelse return null;
 
     const field_index = table.fieldIndex(field) orelse return null;
     const field_meta = table.fields[field_index];
-
-    if (payload.* != .map) return null;
-    const map = payload.map;
 
     var it = map.iterator();
     while (it.next()) |entry| {

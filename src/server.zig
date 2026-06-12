@@ -23,6 +23,7 @@ const DDLGenerator = @import("ddl_generator.zig").DDLGenerator;
 const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
+const PresenceManager = @import("presence.zig").PresenceManager;
 const ticket_exchange_mod = @import("ticket_exchange.zig");
 const TicketExchange = ticket_exchange_mod.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
@@ -51,6 +52,7 @@ pub const ZyncBaseServer = struct {
     websocket_server: WebSocketServer,
     connection_manager: ConnectionManager,
     store_service: StoreService,
+    presence_manager: PresenceManager,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -258,6 +260,12 @@ pub const ZyncBaseServer = struct {
             &self.auth_config,
         );
 
+        self.presence_manager.init(
+            self.memory_strategy.generalAllocator(),
+            self.schema.presence_user_fields,
+            self.schema.presence_shared_fields,
+        );
+
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
@@ -294,6 +302,7 @@ pub const ZyncBaseServer = struct {
             &self.memory_strategy,
             &self.violation_tracker,
             &self.store_service,
+            &self.presence_manager,
             &self.subscription_engine,
             config.security,
             &self.auth_config,
@@ -399,6 +408,9 @@ pub const ZyncBaseServer = struct {
 
         // Start checkpoint manager background thread
         try self.checkpoint_manager.startBackgroundLoop();
+
+        // Start presence manager background thread
+        try self.presence_manager.start();
 
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
@@ -512,6 +524,9 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
+
+        std.log.debug("Deinitializing presence_manager", .{});
+        self.presence_manager.deinit();
 
         std.log.debug("Deinitializing write_outcome_dispatcher", .{});
         self.write_outcome_dispatcher.deinit();

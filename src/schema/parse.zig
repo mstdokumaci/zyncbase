@@ -68,7 +68,124 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
         appended = true;
     }
 
-    return initFromTables(allocator, version_val.string, root_metadata, declared_tables.items);
+    // Parse presence block if exists, else synthesize implicit minimal schema
+    var presence_user_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
+    var presence_shared_fields = std.ArrayListUnmanaged(types.PresenceField).empty;
+    defer {
+        for (presence_user_fields.items) |f| f.deinit(allocator);
+        presence_user_fields.deinit(allocator);
+        for (presence_shared_fields.items) |f| f.deinit(allocator);
+        presence_shared_fields.deinit(allocator);
+    }
+
+    if (root.object.get("presence")) |presence_val| {
+        if (presence_val != .object) return error.InvalidSchema;
+        const presence_obj = presence_val.object;
+
+        if (presence_obj.get("user")) |user_val| {
+            try parsePresenceTier(allocator, user_val, &presence_user_fields);
+        }
+        if (presence_obj.get("shared")) |shared_val| {
+            try parsePresenceTier(allocator, shared_val, &presence_shared_fields);
+        }
+    } else {
+        // Synthesize implicit minimal schema: user.status: string
+        const status_name = try allocator.dupe(u8, "status");
+        errdefer allocator.free(status_name);
+        try presence_user_fields.append(allocator, .{
+            .name = status_name,
+            .declared_type = .text,
+        });
+    }
+
+    // Build name arrays for presence fields
+    var user_names = std.ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (user_names.items) |name| allocator.free(name);
+        user_names.deinit(allocator);
+    }
+    for (presence_user_fields.items) |f| {
+        try user_names.append(allocator, try allocator.dupe(u8, f.name));
+    }
+
+    var shared_names = std.ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (shared_names.items) |name| allocator.free(name);
+        shared_names.deinit(allocator);
+    }
+    for (presence_shared_fields.items) |f| {
+        try shared_names.append(allocator, try allocator.dupe(u8, f.name));
+    }
+
+    return initFromTables(
+        allocator,
+        version_val.string,
+        root_metadata,
+        declared_tables.items,
+        presence_user_fields.items,
+        presence_shared_fields.items,
+        user_names.items,
+        shared_names.items,
+    );
+}
+
+fn parsePresenceTier(
+    allocator: Allocator,
+    tier_val: std.json.Value,
+    fields_list: *std.ArrayListUnmanaged(types.PresenceField),
+) !void {
+    if (tier_val != .object) return error.InvalidSchema;
+    var it = tier_val.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        if (val != .object) return error.InvalidSchema;
+
+        const type_val = val.object.get("type") orelse return error.InvalidSchema;
+        if (type_val != .string) return error.InvalidVersion; // using InvalidVersion as generic validation err
+
+        if (std.mem.eql(u8, type_val.string, "object")) {
+            // Nested object - parse fields (1 level only)
+            const nested_fields_val = val.object.get("fields") orelse return error.InvalidSchema;
+            if (nested_fields_val != .object) return error.InvalidSchema;
+
+            var nested_it = nested_fields_val.object.iterator();
+            while (nested_it.next()) |nested_entry| {
+                const nested_key = nested_entry.key_ptr.*;
+                const nested_val = nested_entry.value_ptr.*;
+                if (nested_val != .object) return error.InvalidSchema;
+
+                const nested_type_val = nested_val.object.get("type") orelse return error.InvalidSchema;
+                if (nested_type_val != .string) return error.InvalidSchema;
+                if (std.mem.eql(u8, nested_type_val.string, "object")) {
+                    return error.InvalidSchema; // Enforce max 1 level of nesting!
+                }
+
+                if (!isValidFieldIdentifier(nested_key)) return error.InvalidFieldName;
+
+                const flat_name = try std.fmt.allocPrint(allocator, "{s}__{s}", .{ key, nested_key });
+                errdefer allocator.free(flat_name);
+
+                const f_type = try mapPrimitiveType(nested_type_val.string);
+                try fields_list.append(allocator, .{
+                    .name = flat_name,
+                    .declared_type = f_type,
+                });
+            }
+        } else {
+            // Direct field definition
+            if (!isValidFieldIdentifier(key)) return error.InvalidFieldName;
+
+            const f_name = try allocator.dupe(u8, key);
+            errdefer allocator.free(f_name);
+
+            const f_type = try mapPrimitiveType(type_val.string);
+            try fields_list.append(allocator, .{
+                .name = f_name,
+                .declared_type = f_type,
+            });
+        }
+    }
 }
 
 pub fn initFromTables(
@@ -76,6 +193,10 @@ pub fn initFromTables(
     version: []const u8,
     root_metadata: ?types.Metadata,
     declared_tables: []const types.Table,
+    presence_user_fields: []const types.PresenceField,
+    presence_shared_fields: []const types.PresenceField,
+    presence_user_fields_names: []const []const u8,
+    presence_shared_fields_names: []const []const u8,
 ) !types.Schema {
     const version_owned = try allocator.dupe(u8, version);
     var version_owned_by_schema = false;
@@ -128,21 +249,86 @@ pub fn initFromTables(
         built_count += 1;
     }
 
+    // Clone presence fields (same pattern as store tables - caller keeps ownership)
+    const cloned_user_fields = try clonePresenceFields(allocator, presence_user_fields);
+    var user_fields_owned = false;
+    errdefer if (!user_fields_owned) {
+        for (cloned_user_fields) |f| f.deinit(allocator);
+        allocator.free(cloned_user_fields);
+    };
+
+    const cloned_shared_fields = try clonePresenceFields(allocator, presence_shared_fields);
+    var shared_fields_owned = false;
+    errdefer if (!shared_fields_owned) {
+        for (cloned_shared_fields) |f| f.deinit(allocator);
+        allocator.free(cloned_shared_fields);
+    };
+
+    const cloned_user_names = try cloneStringSlice(allocator, presence_user_fields_names);
+    var user_names_owned = false;
+    errdefer if (!user_names_owned) {
+        for (cloned_user_names) |name| allocator.free(name);
+        allocator.free(cloned_user_names);
+    };
+
+    const cloned_shared_names = try cloneStringSlice(allocator, presence_shared_fields_names);
+    var shared_names_owned = false;
+    errdefer if (!shared_names_owned) {
+        for (cloned_shared_names) |name| allocator.free(name);
+        allocator.free(cloned_shared_names);
+    };
+
     var schema = types.Schema{
         .allocator = allocator,
         .version = version_owned,
         .tables = tables,
         .has_index = false,
         .metadata = metadata_owned,
+        .presence_user_fields = cloned_user_fields,
+        .presence_shared_fields = cloned_shared_fields,
+        .presence_user_fields_names = cloned_user_names,
+        .presence_shared_fields_names = cloned_shared_names,
     };
     version_owned_by_schema = true;
     metadata_owned_by_schema = true;
     tables_owned_by_schema = true;
+    user_fields_owned = true;
+    shared_fields_owned = true;
+    user_names_owned = true;
+    shared_names_owned = true;
     errdefer schema.deinit();
 
     try index.buildTableIndex(allocator, &schema);
     try validateReferences(&schema);
     return schema;
+}
+
+fn clonePresenceFields(allocator: Allocator, fields: []const types.PresenceField) ![]const types.PresenceField {
+    const cloned = try allocator.alloc(types.PresenceField, fields.len);
+    var built: usize = 0;
+    errdefer {
+        for (cloned[0..built]) |f| f.deinit(allocator);
+        allocator.free(cloned);
+    }
+    for (fields) |field| {
+        cloned[built] = try field.clone(allocator);
+        built += 1;
+    }
+    return cloned;
+}
+
+fn cloneStringSlice(allocator: Allocator, strings: []const []const u8) ![]const []const u8 {
+    const cloned = try allocator.alloc([]const u8, strings.len);
+    var built: usize = 0;
+    errdefer {
+        for (cloned[0..built]) |s| allocator.free(s);
+        allocator.free(cloned);
+    }
+    for (strings) |s| {
+        cloned[built] = try allocator.dupe(u8, s);
+        built += 1;
+    }
+    return cloned;
 }
 
 fn implicitUsersTable(allocator: Allocator) !types.Table {
@@ -448,6 +634,7 @@ fn rejectUnknownRootKeys(root: std.json.Value) !void {
         if (std.mem.eql(u8, key, "version")) continue;
         if (std.mem.eql(u8, key, "store")) continue;
         if (std.mem.eql(u8, key, "metadata")) continue;
+        if (std.mem.eql(u8, key, "presence")) continue;
         return error.UnknownSchemaKey;
     }
 }

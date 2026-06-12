@@ -140,9 +140,10 @@ pub const StoreService = struct {
         scope_seq: u64,
         namespace: []const u8,
         external_user_id: []const u8,
+        is_presence: bool,
     ) !void {
         if (namespace.len == 0 or external_user_id.len == 0) return error.InvalidMessageFormat;
-        try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, scope_seq, namespace, external_user_id);
+        try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, scope_seq, namespace, external_user_id, is_presence);
     }
 
     pub fn setPath(

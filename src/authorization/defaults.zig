@@ -61,6 +61,7 @@ fn makePublicNamespaceRule(allocator: Allocator) !NamespaceRule {
         .store_filter = .{ .boolean = true },
         .presence_read = .{ .boolean = true },
         .presence_write = .{ .boolean = true },
+        .presence_shared_write = .{ .boolean = true },
     };
 }
 

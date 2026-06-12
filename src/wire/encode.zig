@@ -32,6 +32,12 @@ const Keys = struct {
     pub const batch_index = comptimeEncodeKey("batchIndex");
     pub const session = comptimeEncodeKey("session");
     pub const token = comptimeEncodeKey("token");
+    pub const presence_user_fields = comptimeEncodeKey("presenceUserFields");
+    pub const presence_shared_fields = comptimeEncodeKey("presenceSharedFields");
+    pub const event = comptimeEncodeKey("event");
+    pub const data = comptimeEncodeKey("data");
+    pub const users = comptimeEncodeKey("users");
+    pub const shared = comptimeEncodeKey("shared");
 };
 
 const Values = struct {
@@ -43,9 +49,14 @@ const Values = struct {
     pub const op_remove = comptimeEncodeKey("remove");
     pub const op_set = comptimeEncodeKey("set");
     pub const write_committed = comptimeEncodeKey("WriteCommitted");
+    pub const presence_broadcast = comptimeEncodeKey("PresenceBroadcast");
+    pub const shared_state_broadcast = comptimeEncodeKey("SharedStateBroadcast");
     pub const write_error = comptimeEncodeKey("WriteError");
     pub const phase_write = comptimeEncodeKey("write");
     pub const server_disconnect = comptimeEncodeKey("ServerDisconnect");
+    pub const event_join = comptimeEncodeKey("join");
+    pub const event_update = comptimeEncodeKey("update");
+    pub const event_leave = comptimeEncodeKey("leave");
 };
 
 // === Comptime-encoded hot-path headers ===
@@ -266,7 +277,7 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
     errdefer list.deinit(allocator);
     const writer = list.writer(allocator);
 
-    try msgpack.encodeMapHeader(writer, 4);
+    try msgpack.encodeMapHeader(writer, 6);
 
     try list.appendSlice(allocator, Keys.type);
     try list.appendSlice(allocator, Values.schema_sync);
@@ -300,6 +311,18 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_mod.Schema) 
             if (field.storage_type == .doc_id) flags |= 0b10;
             try msgpack.encode(msgpack.Payload.uintToPayload(flags), writer);
         }
+    }
+
+    try list.appendSlice(allocator, Keys.presence_user_fields);
+    try msgpack.encodeArrayHeader(writer, schema.presence_user_fields_names.len);
+    for (schema.presence_user_fields_names) |name| {
+        try msgpack.writeMsgPackStr(writer, name);
+    }
+
+    try list.appendSlice(allocator, Keys.presence_shared_fields);
+    try msgpack.encodeArrayHeader(writer, schema.presence_shared_fields_names.len);
+    for (schema.presence_shared_fields_names) |name| {
+        try msgpack.writeMsgPackStr(writer, name);
     }
 
     return list.toOwnedSlice(allocator);
@@ -444,4 +467,178 @@ pub fn encodeServerDisconnect(allocator: Allocator, code: []const u8, message: [
     try msgpack.writeMsgPackStr(writer, message);
 
     return list.toOwnedSlice(allocator);
+}
+
+// === Presence encoding ===
+
+const PresenceManager = @import("../presence.zig").PresenceManager;
+const PresenceRecord = @import("../presence.zig").PresenceRecord;
+
+/// Encode a PresenceBroadcast message with multiple user updates.
+pub fn encodePresenceBroadcast(
+    allocator: Allocator,
+    sub_id: u64,
+    updates: []const PresenceManager.PendingUserUpdate,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 3);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.presence_broadcast);
+
+    try list.appendSlice(allocator, Keys.sub_id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
+
+    try list.appendSlice(allocator, Keys.users);
+    try msgpack.encodeArrayHeader(writer, updates.len);
+
+    for (updates) |update| {
+        // Each user entry: { userId: bin16, event: "join"|"update"|"leave", data: {...} }
+        const map_size: usize = if (update.patch != null) 3 else 2;
+        try msgpack.encodeMapHeader(writer, map_size);
+
+        try list.appendSlice(allocator, Keys.user_id);
+        const id_bytes = typed.docIdToBytes(update.user_id);
+        try msgpack.writeMsgPackBin(writer, &id_bytes);
+
+        try list.appendSlice(allocator, Keys.event);
+        if (update.patch) |_| {
+            try list.appendSlice(allocator, Values.event_update);
+        } else {
+            try list.appendSlice(allocator, Values.event_leave);
+        }
+
+        if (update.patch) |patch| {
+            try list.appendSlice(allocator, Keys.data);
+            try msgpack.encode(patch, writer);
+        }
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Encode a SharedStateBroadcast message with shared state updates.
+pub fn encodeSharedStateBroadcast(
+    allocator: Allocator,
+    sub_id: u64,
+    updates: []const PresenceManager.PendingSharedUpdate,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 3);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.shared_state_broadcast);
+
+    try list.appendSlice(allocator, Keys.sub_id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
+
+    try list.appendSlice(allocator, Keys.data);
+    // Merge all updates into a single patch for broadcast
+    if (updates.len == 1) {
+        try msgpack.encode(updates[0].patch, writer);
+    } else {
+        // For multiple updates, encode as array of patches
+        try msgpack.encodeArrayHeader(writer, updates.len);
+        for (updates) |update| {
+            try msgpack.encode(update.patch, writer);
+        }
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Encode a PresenceSubscribe ok response with user snapshot.
+pub fn encodePresenceUserSnapshot(
+    allocator: Allocator,
+    msg_id: u64,
+    sub_id: u64,
+    users: []const @import("../presence.zig").UserEntry,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 4);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.ok);
+
+    try list.appendSlice(allocator, Keys.id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+
+    try list.appendSlice(allocator, Keys.sub_id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
+
+    try list.appendSlice(allocator, Keys.users);
+    try msgpack.encodeArrayHeader(writer, users.len);
+
+    for (users) |user| {
+        // Each user: { userId: bin16, data: {...} }
+        try msgpack.encodeMapHeader(writer, 2);
+
+        try list.appendSlice(allocator, Keys.user_id);
+        const id_bytes = typed.docIdToBytes(user.user_id);
+        try msgpack.writeMsgPackBin(writer, &id_bytes);
+
+        try list.appendSlice(allocator, Keys.data);
+        try encodePresenceRecord(writer, user.data);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Encode a PresenceSubscribeShared ok response with shared state.
+pub fn encodePresenceSharedSnapshot(
+    allocator: Allocator,
+    msg_id: u64,
+    sub_id: u64,
+    shared: ?*const PresenceRecord,
+) ![]const u8 {
+    var list = std.ArrayListUnmanaged(u8).empty;
+    errdefer list.deinit(allocator);
+    const writer = list.writer(allocator);
+
+    try msgpack.encodeMapHeader(writer, 4);
+
+    try list.appendSlice(allocator, Keys.type);
+    try list.appendSlice(allocator, Values.ok);
+
+    try list.appendSlice(allocator, Keys.id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(msg_id), writer);
+
+    try list.appendSlice(allocator, Keys.sub_id);
+    try msgpack.encode(msgpack.Payload.uintToPayload(sub_id), writer);
+
+    try list.appendSlice(allocator, Keys.shared);
+    if (shared) |record| {
+        try encodePresenceRecord(writer, record.*);
+    } else {
+        try msgpack.encode(.nil, writer);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
+/// Encode a PresenceRecord as an integer-keyed map.
+fn encodePresenceRecord(writer: anytype, record: PresenceRecord) !void {
+    // Count non-null fields
+    var count: usize = 0;
+    for (record.values) |slot| {
+        if (slot != null) count += 1;
+    }
+
+    try msgpack.encodeMapHeader(writer, count);
+
+    for (record.values, 0..) |slot, idx| {
+        if (slot) |value| {
+            try msgpack.encode(msgpack.Payload.uintToPayload(idx), writer);
+            try typed.writeMsgPack(value, writer);
+        }
+    }
 }

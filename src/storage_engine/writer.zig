@@ -938,6 +938,7 @@ pub const Writer = struct {
             .namespace_id = 0,
             .user_doc_id = typed.zeroDocId,
             .err = null,
+            .is_presence = sop.is_presence,
         };
 
         if (sql.resolveNamespaceId(self.allocator, &self.conn, &self.stmt_cache, sop.namespace)) |namespace_id| {

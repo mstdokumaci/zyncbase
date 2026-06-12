@@ -20,6 +20,7 @@ pub const TableDef = schema_helpers.TableDef;
 const msgpack = @import("msgpack_test_helpers.zig");
 const msgpack_utils = @import("msgpack_utils.zig");
 const StoreService = @import("store_service.zig").StoreService;
+const PresenceManager = @import("presence.zig").PresenceManager;
 const wire = @import("wire.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const tth = @import("typed_test_helpers.zig");
@@ -104,6 +105,7 @@ pub const AppTestContext = struct {
     session_resolver: SessionResolver,
     subscription_engine: SubscriptionEngine,
     store_service: StoreService,
+    presence_manager: PresenceManager,
     handler: MessageHandler,
     connection_manager: ConnectionManager,
     schema: Schema,
@@ -174,8 +176,11 @@ pub const AppTestContext = struct {
         // 7. Initialize Store Service
         self.store_service = StoreService.init(gpa, &self.storage_engine, &self.schema, &self.auth_config);
 
-        // 8. Initialize Handler and Manager
-        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
+        // 8. Initialize Presence Manager
+        self.presence_manager.init(gpa, self.schema.presence_user_fields, self.schema.presence_shared_fields);
+
+        // 9. Initialize Handler and Manager
+        self.handler.init(gpa, &self.memory_strategy, &self.violation_tracker, &self.store_service, &self.presence_manager, &self.subscription_engine, .{}, &self.auth_config, &self.schema, null, &self.empty_claims);
         errdefer self.handler.deinit();
 
         // 9. Initialize Connection Manager
@@ -311,7 +316,7 @@ pub const AppTestContext = struct {
         const msg_id = resolution_id +% 1;
         const scope_seq = resolution_id +% 2;
 
-        try self.store_service.enqueueResolveScope(conn_id, msg_id, scope_seq, namespace, external_user_id);
+        try self.store_service.enqueueResolveScope(conn_id, msg_id, scope_seq, namespace, external_user_id, false);
         try self.storage_engine.flushPendingWrites();
 
         var out = std.ArrayListUnmanaged(SessionResolutionResult).empty;

@@ -168,6 +168,23 @@ pub const Table = struct {
     }
 };
 
+pub const PresenceField = struct {
+    name: []const u8,
+    declared_type: FieldType,
+
+    pub fn clone(self: PresenceField, allocator: Allocator) !PresenceField {
+        const cloned_name = try allocator.dupe(u8, self.name);
+        return .{
+            .name = cloned_name,
+            .declared_type = self.declared_type,
+        };
+    }
+
+    pub fn deinit(self: PresenceField, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+};
+
 pub const Schema = struct {
     allocator: Allocator,
     version: []const u8,
@@ -175,6 +192,12 @@ pub const Schema = struct {
     table_index_map: ?std.StringHashMapUnmanaged(usize) = null,
     has_index: bool = false,
     metadata: ?Metadata = null,
+
+    // Presence fields
+    presence_user_fields: []const PresenceField,
+    presence_shared_fields: []const PresenceField,
+    presence_user_fields_names: []const []const u8,
+    presence_shared_fields_names: []const []const u8,
 
     pub fn deinit(self: *Schema) void {
         if (self.has_index) {
@@ -184,6 +207,16 @@ pub const Schema = struct {
         self.allocator.free(self.tables);
         self.allocator.free(self.version);
         if (self.metadata) |metadata| metadata.deinit(self.allocator);
+
+        for (self.presence_user_fields) |f| f.deinit(self.allocator);
+        self.allocator.free(self.presence_user_fields);
+        for (self.presence_shared_fields) |f| f.deinit(self.allocator);
+        self.allocator.free(self.presence_shared_fields);
+
+        for (self.presence_user_fields_names) |name| self.allocator.free(name);
+        self.allocator.free(self.presence_user_fields_names);
+        for (self.presence_shared_fields_names) |name| self.allocator.free(name);
+        self.allocator.free(self.presence_shared_fields_names);
     }
 
     pub fn table(self: *const Schema, name: []const u8) ?*const Table {

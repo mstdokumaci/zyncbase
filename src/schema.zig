@@ -1,4 +1,3 @@
-const std = @import("std");
 const types = @import("schema/types.zig");
 const system = @import("schema/system.zig");
 const parse = @import("schema/parse.zig");
@@ -9,6 +8,7 @@ const errors = @import("schema/errors.zig");
 pub const Schema = types.Schema;
 pub const Table = types.Table;
 pub const Field = types.Field;
+pub const PresenceField = types.PresenceField;
 pub const FieldType = types.FieldType;
 pub const StorageType = types.StorageType;
 pub const FieldKind = types.FieldKind;
@@ -41,9 +41,6 @@ pub const effectiveNamespaceLabel = system.effectiveNamespaceLabel;
 
 pub const initSchema = parse.initFromJson;
 
-pub fn initSchemaFromTables(allocator: std.mem.Allocator, version: []const u8, tables: []const types.Table) !types.Schema {
-    return parse.initFromTables(allocator, version, null, tables);
-}
 pub const mapType = parse.mapType;
 pub const mapPrimitiveType = parse.mapPrimitiveType;
 pub const parseOnDelete = parse.parseOnDelete;

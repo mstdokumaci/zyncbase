@@ -105,6 +105,7 @@ pub const WriteOp = union(enum) {
         external_user_id: []const u8,
         timestamp: i64,
         result_buffer: *SessionResolutionBuffer,
+        is_presence: bool = false,
     },
     batch: struct {
         entries: []BatchEntry,

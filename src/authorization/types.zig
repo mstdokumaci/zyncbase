@@ -58,6 +58,7 @@ pub const NamespaceRule = struct {
     store_filter: Condition,
     presence_read: Condition,
     presence_write: Condition,
+    presence_shared_write: Condition,
 
     pub fn deinit(self: *NamespaceRule, allocator: Allocator) void {
         allocator.free(self.pattern);
@@ -66,6 +67,7 @@ pub const NamespaceRule = struct {
         self.store_filter.deinit(allocator);
         self.presence_read.deinit(allocator);
         self.presence_write.deinit(allocator);
+        self.presence_shared_write.deinit(allocator);
     }
 };
 

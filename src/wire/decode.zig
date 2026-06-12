@@ -34,6 +34,7 @@ const Key = struct {
     pub const confirm = comptimeKeyPayload("confirm");
     pub const write_id = comptimeKeyPayload("writeId");
     pub const token = comptimeKeyPayload("token");
+    pub const data = comptimeKeyPayload("data");
 };
 
 // === Low-Level MessagePack Parser Primitives ===
@@ -466,4 +467,169 @@ fn readSubtree(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) !Pa
     const slice = bytes[start..pos.*];
     var reader: std.Io.Reader = .fixed(slice);
     return msgpack.decode(allocator, &reader);
+}
+
+pub const PresenceSetNamespaceRequest = struct {
+    namespace: []const u8,
+};
+
+pub fn extractPresenceSetNamespaceFast(bytes: []const u8) !PresenceSetNamespaceRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var namespace: ?[]const u8 = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.namespace)) {
+            namespace = try readStr(bytes, &pos);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{
+        .namespace = namespace orelse return error.MissingRequiredFields,
+    };
+}
+
+pub const PresenceSetRequest = struct {
+    data: Payload,
+};
+
+pub fn extractPresenceSetFast(bytes: []const u8, allocator: std.mem.Allocator) !PresenceSetRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var data: ?Payload = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.data)) {
+            data = try readSubtree(bytes, &pos, allocator);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{
+        .data = data orelse return error.MissingRequiredFields,
+    };
+}
+
+pub const PresenceUnsubscribeRequest = struct {
+    subId: u64,
+};
+
+pub fn extractPresenceUnsubscribeFast(bytes: []const u8) !PresenceUnsubscribeRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var sub_id: ?u64 = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.sub_id)) {
+            sub_id = try readU64(bytes, &pos);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{
+        .subId = sub_id orelse return error.MissingRequiredFields,
+    };
+}
+
+pub const PresenceSetSharedRequest = struct {
+    data: Payload,
+};
+
+pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Allocator) !PresenceSetSharedRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var data: ?Payload = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.data)) {
+            data = try readSubtree(bytes, &pos, allocator);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{
+        .data = data orelse return error.MissingRequiredFields,
+    };
+}
+
+pub const PresenceSubscribeRequest = struct {};
+
+pub fn extractPresenceSubscribeFast(bytes: []const u8) !PresenceSubscribeRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        _ = key;
+        try skipValue(bytes, &pos);
+    }
+
+    return .{};
+}
+
+pub const PresenceSubscribeSharedRequest = struct {};
+
+pub fn extractPresenceSubscribeSharedFast(bytes: []const u8) !PresenceSubscribeSharedRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        _ = key;
+        try skipValue(bytes, &pos);
+    }
+
+    return .{};
+}
+
+pub const PresenceUnsubscribeSharedRequest = struct {
+    subId: u64,
+};
+
+pub fn extractPresenceUnsubscribeSharedFast(bytes: []const u8) !PresenceUnsubscribeSharedRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    var sub_id: ?u64 = null;
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        if (std.mem.eql(u8, key, Key.sub_id)) {
+            sub_id = try readU64(bytes, &pos);
+        } else {
+            try skipValue(bytes, &pos);
+        }
+    }
+
+    return .{
+        .subId = sub_id orelse return error.MissingRequiredFields,
+    };
+}
+
+pub const PresenceRemoveRequest = struct {};
+
+pub fn extractPresenceRemoveFast(bytes: []const u8) !PresenceRemoveRequest {
+    var pos: usize = 0;
+    const map_len = try readMapHeader(bytes, &pos);
+
+    for (0..map_len) |_| {
+        const key = try readStr(bytes, &pos);
+        _ = key;
+        try skipValue(bytes, &pos);
+    }
+
+    return .{};
 }

@@ -318,6 +318,10 @@ pub fn createSchema(allocator: Allocator, tables: []const Table) !Schema {
         .allocator = allocator,
         .version = try allocator.dupe(u8, "1.0.0"),
         .tables = runtime_tables,
+        .presence_user_fields = &.{},
+        .presence_shared_fields = &.{},
+        .presence_user_fields_names = &.{},
+        .presence_shared_fields_names = &.{},
     };
     errdefer result.deinit();
 

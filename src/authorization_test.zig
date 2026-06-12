@@ -320,6 +320,109 @@ test "authorizeStoreNamespace enforces storeFilter" {
     try testing.expectError(error.NamespaceUnauthorized, authorization.authorizeStoreNamespace(allocator, &config, "public", user_id, "external-1", null));
 }
 
+test "authorizePresenceNamespace enforces presenceRead" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    try authorization.authorizePresenceNamespace(allocator, &config, "room:lobby", user_id, "external-1", null);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceNamespace(allocator, &config, "unknown:xyz", user_id, "external-1", null));
+}
+
+test "authorizePresenceNamespace denies when presenceRead is false" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"private:{id}","storeFilter":true,"presenceRead":false,"presenceWrite":true}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceNamespace(allocator, &config, "private:secret", user_id, "external-1", null));
+}
+
+test "authorizePresenceWrite enforces presenceWrite condition" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    const presence_fields = [_]schema_mod.PresenceField{
+        .{ .name = "cursor_x", .declared_type = .real },
+    };
+    var patch = msgpack.Payload.mapPayload(allocator);
+    defer patch.free(allocator);
+    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .float = 42.0 });
+
+    try authorization.authorizePresenceWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+}
+
+test "authorizePresenceWrite denies when presenceWrite is false" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"readonly:{id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    const presence_fields = [_]schema_mod.PresenceField{
+        .{ .name = "status", .declared_type = .text },
+    };
+    var patch = msgpack.Payload.mapPayload(allocator);
+    defer patch.free(allocator);
+    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), try msgpack.Payload.strToPayload("online", allocator));
+
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceWrite(allocator, &config, "readonly:ns", user_id, "external-1", null, &presence_fields, &patch));
+}
+
+test "authorizePresenceSharedWrite enforces presenceSharedWrite condition" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true,"presenceSharedWrite":true}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    const presence_fields = [_]schema_mod.PresenceField{
+        .{ .name = "slide", .declared_type = .integer },
+    };
+    var patch = msgpack.Payload.mapPayload(allocator);
+    defer patch.free(allocator);
+    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .uint = 5 });
+
+    try authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch);
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "unknown:xyz", user_id, "external-1", null, &presence_fields, &patch));
+}
+
+test "authorizePresenceSharedWrite falls back to presenceWrite when not specified" {
+    const allocator = testing.allocator;
+    const json =
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":false}],"store":[]}
+    ;
+    var config = try initTestConfig(allocator, json);
+    defer config.deinit();
+
+    const user_id = typed.generateUuidV7();
+    const presence_fields = [_]schema_mod.PresenceField{
+        .{ .name = "slide", .declared_type = .integer },
+    };
+    var patch = msgpack.Payload.mapPayload(allocator);
+    defer patch.free(allocator);
+    try patch.mapPutGeneric(msgpack.Payload.uintToPayload(0), .{ .uint = 5 });
+
+    try testing.expectError(error.NamespaceUnauthorized, authorization.authorizePresenceSharedWrite(allocator, &config, "room:lobby", user_id, "external-1", null, &presence_fields, &patch));
+}
+
 // ─── Doc Predicate Tests ────────────────────────────────────────────────────
 
 test "buildDocPredicate produces filter predicate for $doc comparison" {

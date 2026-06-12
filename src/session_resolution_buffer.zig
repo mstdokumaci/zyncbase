@@ -10,6 +10,7 @@ pub const SessionResolutionResult = struct {
     namespace_id: i64,
     user_doc_id: DocId,
     err: ?anyerror,
+    is_presence: bool = false,
 };
 
 pub const SessionResolutionBuffer = struct {

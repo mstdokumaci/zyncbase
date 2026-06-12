@@ -101,6 +101,9 @@ fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.Namesp
     errdefer presence_read.deinit(allocator);
     const presence_write = try parseCondition(allocator, obj.get("presenceWrite") orelse return error.InvalidNamespaceRule);
     errdefer presence_write.deinit(allocator);
+    const presence_shared_write_val = obj.get("presenceSharedWrite") orelse obj.get("presenceWrite").?;
+    const presence_shared_write = try parseCondition(allocator, presence_shared_write_val);
+    errdefer presence_shared_write.deinit(allocator);
 
     return types.NamespaceRule{
         .pattern = pattern,
@@ -108,6 +111,7 @@ fn parseNamespaceRule(allocator: Allocator, value: std.json.Value) !types.Namesp
         .store_filter = store_filter,
         .presence_read = presence_read,
         .presence_write = presence_write,
+        .presence_shared_write = presence_shared_write,
     };
 }
 
@@ -309,6 +313,7 @@ fn rejectUnknownNamespaceKeys(obj: std.json.ObjectMap) !void {
         if (std.mem.eql(u8, key, "storeFilter")) continue;
         if (std.mem.eql(u8, key, "presenceRead")) continue;
         if (std.mem.eql(u8, key, "presenceWrite")) continue;
+        if (std.mem.eql(u8, key, "presenceSharedWrite")) continue;
         return error.UnknownAuthKey;
     }
 }
