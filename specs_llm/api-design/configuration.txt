@@ -1,4 +1,4 @@
-ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents [Configuration-First Approach [zyncbase-config.json [schema.json Migrations [authorization.json [Environment Variables 7. [Examples] ZyncBase follows"Zero-Zig" don't write server code data validation to security rules defined in declarative JSON files details [Zero-Zig Philosophy] configuration files `zyncbase-config.json Main server settings `schema.json Data validation `authorization.json Security rules zyncbase-config.json Main server configuration file Minimal Configuration```json
+ZyncBase Server Configuration guide with JSON files Table of Contents [Configuration-First Approach [zyncbase-config.json] [schema.json [Schema Migrations [authorization.json] [Environment Variables 7. [Examples Configuration-First Approach ZyncBase follows"Zero-Zig" don't write server code data validation to security rules defined in declarative JSON files [Zero-Zig Philosophy] configuration files `zyncbase-config.json server settings `schema.json Data validation `authorization.json Security rules zyncbase-config.json configuration file Minimal Configuration```json
 {
   "server": {
     "port": 3000
@@ -17,7 +17,7 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
 }
 ```Configuration```json
 {
-  "environment": "development", // [PLANNED]
+  "environment": "development",
   "server": {
     "port": 3000,
     "host": "0.0.0.0"
@@ -170,7 +170,53 @@ ZyncBase Server Configuration 2026-03-09 guide with JSON files Table of Contents
     "statementCacheSize": 100
   }
 }
-```schema.json Define data structure ZyncBase schema format **Naming Restriction** Field names forbidden double underscore sequence`__` reserved system field names `__` sequence reserved internal flattening nested objects Invalid names `error.InvalidFieldName` Example Collaborative Canvas```json
+```schema.json data structure ZyncBase schema format two top keys `store persistent relational data `presence ephemeral presence state **Naming Restriction** Field names double underscore sequence reserved system field names `__` sequence reserved for internal flattening nested objects Invalid names `error.InvalidFieldName` Presence Schema optional `presence key defines ephemeral presence fields authoritative rejects messages unknown field indices mismatched types no schemaless fallback Two tiers supported `presence.user` Fields per user One record per user namespace Cleaned on disconnect `presence.shared` Fields namespace-level state One record namespace Persists until users leave (5-second Presence field constraints One level object nesting supported Deeper nesting rejected at startup Nested objects flattened using `__` SDK handles Presence fields required tiers use field-level merge semantics **Supported `string `number `integer `booleanstandard constraints apply`enum `maxLength`presence.shared optional** Omit application no room-level shared state Example Collaborative Editor Shared Slide```json
+{
+  "version": "1.0.0",
+  "store": {
+    "documents": {
+      "fields": {
+        "title": { "type": "string" }
+      }
+    }
+  },
+  "presence": {
+    "user": {
+      "cursor": {
+        "type": "object",
+        "fields": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "status": { "type": "string", "enum": ["active", "idle", "away"] },
+      "typing": { "type": "boolean" },
+      "name":   { "type": "string", "maxLength": 64 },
+      "color":  { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+    },
+    "shared": {
+      "slide":   { "type": "integer", "minimum": 0 },
+      "playing": { "type": "boolean" }
+    }
+  }
+}
+```Presence schema SchemaSync server loads schema section derives two flat arrays flattening fields```
+presenceUserFields:   ["cursor__x", "cursor__y", "status", "typing", "name"]
+presenceSharedFields: ["slide", "playing"]
+```included in `SchemaSync message client SDK builds index maps arrays encode presence messages integer at position N wire key field Presence authorization rules defined in `authorization.json store rules```json
+{
+  "namespaces": [
+    {
+      "pattern": "workspace:*",
+      "storeFilter":        true,
+      "presenceRead":        { "$session.userId": { "ne": null } },
+      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
+    }
+  ],
+  "store": []
+}
+```Rule Applies `presenceRead`.subscribe().subscribeShared()` `presenceWrite`.set().remove()` `presenceSharedWrite`.setShared() defaults same value `presenceWrite` when omitted `$data` variable available in `presenceWrite` rules exposes incoming field values See [Presence API Reference-api full usage details **Naming Restriction** Field names forbidden double underscore sequence reserved system field names`id `__` sequence reserved for internal flattening nested objects Invalid names `error.InvalidFieldName` Example Collaborative Canvas```json
 {
   "version": "1.0.0",
   "store": {
@@ -327,7 +373,7 @@ await zyncbase.set(['users', 'user-1', 'address', 'location', 'lat'], 37.8)
 const users = await zyncbase.query('users', {
   where: { 'address.location.lat': { gte: 37 } }
 })
-```Nested fields flattened to columns double underscore separator Base field names `__` collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings SDK **Benefits Efficient querying SQLite indexes on flattened columns No depth limit for nesting Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 ZyncBase supports arrays with constraints Simple arrays```json
+```Nested fields flattened to columns double underscore separator Base field names `__` prevent collisions server reconstructs nested structure on `get `query operations string identifiers replaced by numeric index mappings SDK **Benefits Efficient querying SQLite indexes on flattened columns Unlimited nesting depth for `store fields to column limit ~2000 Clean client-side experience manual flattening **Limitations Nested objects contain arrays at leaf level recursion depth limited by maximum SQLite columns 2000 Field names contain `__` flattening separator `presence` fields support **one nesting deeper nesting rejected at startup ZyncBase supports arrays with constraints Simple arrays```json
 {
   "store": {
     "tasks": {
@@ -791,7 +837,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "anonymous": { "enabled": true }
   },
   "dataDir": "./data",
-  "namespaces": { // [PLANNED]
+  "namespaces": {
     "patterns": [{ "pattern": "room:*" }]
   }
 }
@@ -838,7 +884,7 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
     "jwt": { "secret": "${JWT_SECRET}" }
   },
   "dataDir": "./data",
-  "namespaces": { // [PLANNED]
+  "namespaces": {
     "patterns": [{ "pattern": "tenant:*" }]
   }
 }

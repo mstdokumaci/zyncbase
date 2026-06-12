@@ -80,7 +80,7 @@ Attempt 3: ~4s
 Attempt 4: ~8s
 Attempt 5: ~16s
 Attempt 6+: ~30s (capped)
-```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh `client.authRefresh(token) Update session new external JWT without disconnecting scopes ready re-resolved before promise```typescript
+```SDK `maxReconnectAttempts exhausted emit `disconnected stop Token Refresh `client.authRefresh(token) Update session new JWT without disconnecting server re-validates JWT updates session claims token expiry store presence scopes continue JWT invalid sends `ServerDisconnect `AUTH_FAILED closes connection```typescript
 client.on('tokenExpired', async () => {
   const newToken = await myAuthService.refresh()
   await client.authRefresh(newToken)

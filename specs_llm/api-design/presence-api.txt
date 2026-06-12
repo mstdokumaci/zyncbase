@@ -1,37 +1,184 @@
-Presence API tracks user state real-time cursor positions selections typing indicators data stored in-memory schemaless validated against `schema.json cleaned on disconnect methods require ready presence scope.connect(.setPresenceNamespace(namespace resolve after resolved namespace user ID calling before fails with `SESSION_NOT_READY` Table of Contents [Methods-methods [Namespaces-namespaces [Use Cases Examples Practices Presence Methods `presence.set(data) Set presence data broadcast to users same```typescript
-client.presence.set({ cursor: { x: 100, y: 200 }, status: 'active' })
-````presence.subscribe Subscribe real-time changes leaves updates users namespace```typescript
+Presence API Reference tracks ephemeral state real-time Presence data typed against schema in.json stored in-memory never persisted to SQLite Two tiers of presence state **User state** one record per user cleaned on disconnect **Shared state** one record per namespace writable by authorized user persists until users leave 5-second grace period for reconnects). Presence methods require ready presence `client.connect() `client.setPresenceNamespace(namespace)` resolve after server resolved namespace string internal presence `users.id` Calling presence methods before ready fails with `SESSION_NOT_READY` Table of Contents [Schema Definition [User Presence Methods].set(data.subscribe(callback.get(userId(options.remove [Shared State Methods].setShared(data.subscribeShared(callbackgetShared 4. [Namespaces-namespaces [Authorization 6. Cases Examples 7. Practices Schema Definition Presence fields defined `schema top-level `presence key parallel `store```json
+{
+  "version": "1.0.0",
+  "store": { ... },
+  "presence": {
+    "user": {
+      "cursor": {
+        "type": "object",
+        "fields": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "status": { "type": "string", "enum": ["active", "idle", "away"] },
+      "typing": { "type": "boolean" },
+      "name":   { "type": "string", "maxLength": 64 },
+      "color":  { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+    },
+    "shared": {
+      "slide":   { "type": "integer", "minimum": 0 },
+      "playing": { "type": "boolean" }
+    }
+  }
+}
+````presence key omitted from `schema.json server synthesizes minimal default "user "status "type "shared Presence usable `presence.set( status "active works without schema configuration explicit `presence section recommended for custom fields typing indicators One level object nesting supported `cursor x y flattened to same convention store Developers work with nested objects SDK handles flattening unflattening constraints** standard schema constraints apply `enum `minimum `maximum `minLength `maxLength `pattern Unknown field indices in `PresenceSet with `SCHEMA_VALIDATION_FAILED Presence fields required tiers use merge semantics subset fields sent`presence.shared` omitted** no room-level shared state omit `shared section Only user presence active User Presence Methods `presence.set(data)` user presence data Merges with existing record fields not preserved unchanged broadcasts changed fields to subscribers```typescript
+client.presence.set({ cursor: { x: 100, y: 200 } })
+// cursor__x and cursor__y update. status, typing, name are untouched.
+
+client.presence.set({ status: 'idle' })
+// Only status changes. Cursor position is preserved.
+```Fire-forget validates field types accept time SDK throttles `presence.set( calls to (16ms intervals network saturation `presence.subscribe Subscribe real-time user presence changes response includes snapshot users updates users join update leave```typescript
 const unsubscribe = client.presence.subscribe((users) => {
   renderCursors(users)
 })
-```<PresenceEntry> each entry contains```typescript
-{
-  userId: string,        // Internal users.id for the active presence scope
-  data: object,          // User's presence data (cursor, status, etc.)
-  joinedAt: number       // Unix timestamp of when the user joined
+````Array<PresenceEntry>` excluding self```typescript
+interface PresenceEntry {
+  userId:   string  // Internal users.id for the active presence scope
+  data: {           // User's typed presence data (SDK unflattens nested objects)
+    cursor?: { x: number, y: number }
+    status?: 'active' | 'idle' | 'away'
+    typing?: boolean
+    name?:   string
+    color?:  string
+  }
+  joinedAt: number  // Unix timestamp ms of when the user joined
 }
-```**Returns** unsubscribe function `presence.get(userId) specific user's current presence data **synchronous local lookup** SDK's internal cache returns values active [Subscription] namespace```typescript
-const alice = client.presence.get('user-123')
-````presence.getAll Returns users presence data namespace Excludes self Like `get() **synchronous local returns empty array no active subscription```typescript
+```unsubscribe function sends `PresenceUnsubscribe server `presence.get(userId) lookup user presence Returns `undefined if not present no active `subscribe()` Zero-latency reads SDK-memory cache `subscribe() call `subscribe( before `get( returns data```typescript
+const alice = client.presence.get('018f3a...')
+// { cursor: { x: 100, y: 200 }, status: 'active', joinedAt: 1234567890 }
+````presence.getAll Synchronous lookup users presence namespace Excludes self```typescript
+const others   = client.presence.getAll()
 const everyone = client.presence.getAll({ includeSelf: true })
-````presence.remove() presence data Called automatically disconnect manually```typescript
+```Returns `[]` no active `subscribe() `presence.remove( broadcast `leave event subscribers Called automatically disconnect invoke manually "invisible without disconnecting```typescript
 client.presence.remove()
-```Presence Namespaces scoped [Client Initialization users same namespace see other `users.namespaced = true determines internal user ID presence Document-Scoped Presence**```typescript
+```Shared State Methods single merged record namespace authorized user write Last-writer-wins field granularity record persists until users leave 5-second grace period before `presence.setShared(data) Merge fields namespace-level shared state Fire-and-forget Fields preserved unchanged fields subscribers```typescript
+client.presence.setShared({ slide: 5 })
+// Only slide changes. playing is preserved.
+```validates field types Subject `presenceSharedWrite authorization Rejected `PERMISSION_DENIED rule satisfied.subscribeShared Subscribe changes namespace-level shared state initial response includes current shared state `null no user called updates authorized user calls```typescript
+const unsubscribe = client.presence.subscribeShared((shared) => {
+  goToSlide(shared.slide)
+})
+```typed state object optional fields unflattens nested```typescript
+{ slide?: number, playing?: boolean }
+```unsubscribe function sends `PresenceUnsubscribeShared server `subscribe()() independent calls hold active simultaneously prerequisite `presence.getShared() Synchronous local lookup shared state Returns `null no active `subscribeShared() or no shared state set Zero-latency reads SDK in-memory cache `subscribeShared() call `subscribeShared() before `getShared() returns data```typescript
+const shared = client.presence.getShared()
+// { slide: 5, playing: true }
+```Presence Namespaces scoped `presenceNamespace` users same namespace see share state record `users.namespaced = true namespace determines `users.id` presence identity```typescript
 const client = createClient({
   presenceNamespace: 'workspace:acme:doc:123'
 })
-// Users in doc:123 only see each other's cursors.
-```Use Cases Examples Collaborative Editor```typescript
+````client.setPresenceNamespace removes presence old namespace clears local shared state caches resolves new presence scope invalidates active shared-state subscriptions client re-subscribe Authorization.json namespace pattern```json
+{
+  "namespaces": [
+    {
+      "pattern": "workspace:*",
+      "storeFilter":        true,
+      "presenceRead":        { "$session.userId": { "ne": null } },
+      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
+    }
+  ],
+  "store": []
+}
+```Rule Controls `presenceRead` subscribe user presence shared state namespace `presenceWrite` call `presence.set()`.remove()` `presenceSharedWrite` call `presence.setShared()``$data` rules** incoming field values exposed `$data` `presenceWrite` rules content-gated authorization```json
+"presenceSharedWrite": { "$data.slide": { "gte": 0 } }
+```three rules accept `true presence `false RAM-only predicate over$session$namespace$data``presenceSharedWrite` omitted defaults same value as `presenceWrite` write user presence shared state unless restricted Use Cases Examples Collaborative Editor Cursors Status```typescript
+// schema.json
+{
+  "presence": {
+    "user": {
+      "cursor": {
+        "type": "object",
+        "fields": {
+          "x": { "type": "number" },
+          "y": { "type": "number" }
+        }
+      },
+      "name":   { "type": "string", "maxLength": 64 },
+      "color":  { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+      "status": { "type": "string", "enum": ["active", "idle"] }
+    }
+  }
+}
+
+// Client
 document.addEventListener('mousemove', (e) => {
-  client.presence.set({ cursor: { x: e.clientX, y: e.clientY }, name: 'Alice' })
+  client.presence.set({ cursor: { x: e.clientX, y: e.clientY } })
 })
 
 client.presence.subscribe((users) => {
-  users.forEach(u => renderCursor(u.userId, u.data.cursor, u.data.name))
+  users.forEach(u => renderCursor(u.userId, u.data.cursor, u.data.color))
 })
 ```Typing```typescript
+let typingTimer: ReturnType<typeof setTimeout>
+
 input.addEventListener('input', () => {
   client.presence.set({ typing: true })
-  setTimeout(() => client.presence.set({ typing: false }), 3000)
+  clearTimeout(typingTimer)
+  typingTimer = setTimeout(() => client.presence.set({ typing: false }), 3000)
 })
-```Throttling **Client SDK throttles high-frequency `presence.set() calls to ~60fps server batches presence broadcasts every 50ms efficiency Best Practices **Keep Data Presence updates frequent include essential transient state **Namespace Granularity** Use specific:123 reduce unneeded broadcasts Late Joiners** joining receive last 5s updates API Reference persistent state management [Configuration Defining presence fields schema [Connection Management Client lifecycle namespace switching [Error Handling Error types handling
+```Presentation Shared Slide```typescript
+// schema.json
+{
+  "presence": {
+    "user": {
+      "name": { "type": "string", "maxLength": 64 }
+    },
+    "shared": {
+      "slide": { "type": "integer", "minimum": 0 }
+    }
+  }
+}
+
+// authorization.json — only hosts can advance the slide
+{
+  "namespaces": [
+    {
+      "pattern": "presentation:*",
+      "storeFilter":        true,
+      "presenceRead":        true,
+      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceSharedWrite": { "$session.role": { "eq": "host" } }
+    }
+  ],
+  "store": []
+}
+
+// Host client
+nextBtn.addEventListener('click', () => {
+  const current = client.presence.getShared()?.slide ?? 0
+  client.presence.setShared({ slide: current + 1 })
+})
+
+// All clients
+client.presence.subscribeShared((shared) => {
+  goToSlide(shared.slide)
+})
+```Co-Watch```typescript
+// schema.json
+{
+  "presence": {
+    "user": {
+      "name": { "type": "string", "maxLength": 64 }
+    },
+    "shared": {
+      "playing":   { "type": "boolean" },
+      "timestamp": { "type": "number" }
+    }
+  }
+}
+
+// Any authorized user can control playback
+video.addEventListener('play', () => {
+  client.presence.setShared({ playing: true, timestamp: video.currentTime })
+})
+video.addEventListener('pause', () => {
+  client.presence.setShared({ playing: false, timestamp: video.currentTime })
+})
+
+client.presence.subscribeShared(({ playing, timestamp }) => {
+  video.currentTime = timestamp
+  playing ? video.play() : video.pause()
+})
+```Throttling Operation Layer Mechanism `presence.set()` Client-side SDK throttles to ~60fps (16ms `presence.setShared()` Client-side Not throttled shared state changes infrequent User presence broadcasts Server-side Batched every 50ms Multiple updates merged into one `PresenceBroadcast per subscriber Shared state broadcasts Server-side Batched every 50ms `setShared calls merged into one `SharedStateBroadcast per subscriber Best Practices user fields include essential transient state Move stable data like to `users collection store persist only what pay for what send Cursor-only updates include status name Use specific:123 reduce fan-out avoid leaking presence `subscribeShared` for room-level store for ephemeral room state shared faster never persisted cleaned up automatically shared state for two users write shared state last-writer-wins server Shared state fields self-describing values meaningful under concurrent writes API Reference persistent state management [Configuration].md Defining presence store schemas[Authorization/configuration#authorizationjson auth rules [Error Handling]-handling.md Error types handling strategies

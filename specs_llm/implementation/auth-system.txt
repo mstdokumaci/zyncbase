@@ -1,4 +1,4 @@
-ZyncBase Authorization Format.json Active design Replaces row-level security with high JSON-declarative model by ZyncBase Zig core Evaluated on MessagePack frames after store presence scope ready [Configuration API Design Server configuration authorization rules [Auth Exchange Ticket handshake `$session` construction [ADR-032]-driven-authentication-external-permission-claims authentication external permission claims Core Principles **Deny by Default** access denied unless allowed by rule **Native-Only Rules evaluated by Zig limited context$session resolved session context$namespace current string$doc Columns on target row `FilterPredicate$value incoming mutation payload RAM$path table name Permission ZyncBase compute memberships billing state group inheritance permission graphs present in trusted token claims namespace parts same-row data incoming value-Row$doc same row selected deleted Rules requiring relationship traversal joins external calls lookups table invalid in JSONPredicate Auth JSON keeps rule syntax groups comparison residual `$doc predicate lower query predicate StoreQuery zero AND conditions one OR group Auth supports expressive `$doc` filter store query Namespace rules handle horizontal presence Store rules collection-level access same-row ownership `users table not read authorization maps external subject internal `users.id`$session.userId `owner_id presence identity foreign keys Optional profile fields remain application data Rule Format Structure file organized decoupled arrays`namespaces full grammar [Auth Grammar```json
+ZyncBase Authorization Format.json [Configuration API Design/configuration Server configuration authorization rules [Auth Exchange Ticket handshake `$session` construction [ADR-032]-driven-authentication-external-permission-claims authentication external permission claims Core Principles **Deny by Default** access denied unless allowed rule **Native-Only Rules evaluated Zig limited context$session resolved session context validated JWT anonymous identity$namespace current string$doc Columns target row lowered `FilterPredicate `StoreQuery `StoreSubscribe$value incoming mutation payload RAM$path table name **External Permission ZyncBase compute memberships billing state group inheritance permission graphs in trusted token claims parts same-row data incoming value-Row `$doc` constrain same row deleted Rules relationship traversal joins external calls lookups table invalid JSON **Query Predicate Auth JSON keeps rule syntax comparison residual `$doc` predicate lower same query predicate StoreQuery zero AND conditions plus one OR groupAuth supports expressive$doc filter store query language Namespace rules handle horizontal presence Store rules collection-level access same-row ownership `users table not read authorization maps external subject internal `users.id$session.userId_id presence identity foreign keys Optional profile fields remain application data Rule Format Structure file organized decoupled arrays`namespaces full grammar [Auth Grammar```json
 {
   "namespaces": [
     {
@@ -49,20 +49,23 @@ ZyncBase Authorization Format.json Active design Replaces row-level security wit
     }
   ]
 }
-```using arrays roles JWT/session ZyncBase performs scope validation RAM same-row SQL predicates Permission lists human-manageable applications use roles groups active-context tokens grant arrays Presence API Authorization Store flat namespace-wide concept Users join presence namespace broadcast state listen others Presence authorization defined namespace level subscribe channel see online broadcast presence object Schema validation applies ephemeral no `$doc` equivalent path-level routing requires ready presence scope entries keyed by resolved user ID Example```json
+```using arrays roles JWT/session ZyncBase performs scope validation in RAM same-row SQL predicates Permission lists human-manageable applications use roles groups active-context tokens unbounded grant arrays Presence API Authorization Store API flat namespace-wide concept Users join presence namespace broadcast state listen others Presence authorization defined level`presenceRead subscribe presence channel see who online shared state`presenceWrite broadcast user presence$data variable exposes values content-gated rules`presenceSharedWrite Permission write namespace-level shared state exposes values Defaults same value as `presenceWrite omitted presence shared state presence ephemeral no `$doc` equivalent no path-level routing requires ready presence scope entries keyed by resolved internal user ID Example```json
 {
   "namespaces": [
     {
       "pattern": "org:{org_id}:project:{project_id}",
-      "presenceRead": {
+      "storeFilter": {
         "and": [
           { "$namespace.org_id": { "eq": "$session.org_id" } },
           { "$namespace.project_id": { "in": "$session.read_projects" } }
         ]
       },
-      "presenceWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
+      "presenceRead":        { "$namespace.project_id": { "in": "$session.read_projects" } },
+      "presenceWrite":       { "$namespace.project_id": { "in": "$session.write_projects" } },
+      "presenceSharedWrite": { "$namespace.project_id": { "in": "$session.write_projects" } }
     }
-  ]
+  ],
+  "store": []
 }
 ```Composition Model Conditions mirror store query predicate model apply `$doc use RAM evaluation$session$namespace$path$value **Boolean Values** `true (allow or `false `eq `ne `gt `lt `contains `and `or` server boot `AuthConfig.init schema validates store rule against schema rule evaluated RAM same-row `FilterPredicate fails startup Unknown$doc fields invalid operators expressions nested groups beyond store-query predicate shape invalid```json
 {

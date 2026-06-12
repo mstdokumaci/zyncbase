@@ -1,4 +1,4 @@
-Query Engine 2026-03-09 handles filtering sorting real-time subscriptions executes queries in-memory cache SQLite storage tracks subscriptions clients changes Fine-grained change detection in-memory subscriptions efficient real-time updates Query Structure Grammar AST definitions`QueryFilter `Condition `SortDescriptor```zig
+Query Engine handles filtering sorting real subscriptions executes queries in-memory cache SQLite storage tracks subscriptions clients changes Fine change detection in-memory subscriptions efficient real-time updates Query AST Structure Grammar AST definitions`QueryFilter `Condition `SortDescriptor```zig
 const Query = struct {
     table_index: usize,                    // Integer index from SchemaSync dictionary
     filters: []Condition,

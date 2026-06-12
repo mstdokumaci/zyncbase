@@ -1,4 +1,4 @@
-Network Layer 2026-03-09 Overview ZyncBase uses uWebSockets networking foundation integrated Zig multi event loop TLS OpenSSL zero-copy I/O server uWebSockets Architecture Core Components```
+Network Layer ZyncBase uses uWebSockets networking foundation integrated Zig multi event loop TLS OpenSSL zero-copy I/O server uWebSockets Architecture Core Components```
 ┌─────────────────────────────────────────────────────┐
 │  uWebSockets (C++)                                  │
 │                                                     │
@@ -199,8 +199,11 @@ const MessageType = enum {
     StoreLoadMore,
     // Client→Server (Presence)
     PresenceSet,
+    PresenceSetShared,
     PresenceSubscribe,
+    PresenceSubscribeShared,
     PresenceUnsubscribe,
+    PresenceUnsubscribeShared,
     PresenceRemove,
     // Client→Server (Namespace / Auth)
     StoreSetNamespace,
@@ -212,7 +215,10 @@ const MessageType = enum {
     SchemaSync,
     Connected,
     StoreDelta,
+    WriteCommitted,
+    WriteError,
     PresenceBroadcast,
+    SharedStateBroadcast,
     ServerDisconnect,
 };
 ```Security Iterative Parser overflow nested data Iterative parser depth limits```zig

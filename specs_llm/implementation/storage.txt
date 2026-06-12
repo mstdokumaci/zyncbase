@@ -53,7 +53,7 @@ const StorageLayer = struct {
         return &self.read_pool[reader_idx];
     }
 };
-```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text `integer 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object` Flattened columns `address.city` `address_city TEXT `array` `BLOB` JSONB value document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs Document identity is `id` collection expects `id globally unique DDL uses `PRIMARY KEY(id) `namespace_id` retained for namespace routing authorization not part of document key System Tables storage engine maintains internal system tables not.json_zync_namespaces (id PRIMARY KEY dictionary for integer routing dynamic namespaces ID `0` for global namespace client-created namespaces use positive IDs `users` hybrid system collection`external_id column maps identity strings to `BLOB(16) user IDs `owner_id$session.userId `userId Array Canonicalization Pipeline-defined array fields Validate element against type Reject invalid elements Normalize to sorted unique form Persist canonicalized array value guarantees deterministic on-disk representation read/query semantics for typed arrays Implementation `StorageEngine initialization receives parsed `Schema` `schema.json file omitted missing synthesizes users-only schema before storage initialization ZyncBase enforces architecture user database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing omitted server boot defined `users` collection data storage mutations other collections rejected```zig
+```Schema-to-DDL Generation ZyncBase transforms JSON store definition into SQLite tables Type Mapping JSON Schema SQLite `string UTF-8 text `integer 64-bit integer `number 64-bit float `boolean Stored as 0 or 1 `object` Flattened columns `address.city` `address__city TEXT `array` `BLOB` JSONB value unique document IDs schema `references fields stored as fixed-width `BLOB(16) values packed 16-byte IDs Document identity is `id` collection expects `id globally unique DDL uses `PRIMARY KEY(id) `namespace_id` retained for namespace routing authorization not part of document key System Tables storage engine maintains internal system tables not.json_zync_namespaces (id KEY dictionary for integer routing dynamic namespaces ID `0` for global namespace client-created namespaces use positive IDs `users` hybrid system collection`external_id column maps identity strings to `BLOB(16) user IDs `owner_id$session.userId `userId Array Canonicalization Pipeline-defined array fields Validate element against type Reject invalid elements Normalize to sorted unique form Persist canonicalized array value guarantees deterministic on-disk representation read/query semantics for typed arrays Implementation `StorageEngine initialization receives parsed `Schema` `schema.json file omitted missing synthesizes users-only schema before storage initialization ZyncBase enforces architecture user database tables columns derived from schema ad-hoc table creation prohibited Dynamic/schemaless storage fallbacks removed typed relational integrity If `schema.json file missing omitted server boot defined `users` collection data storage mutations other collections rejected```zig
 const Schema = @import("schema.zig").Schema;
 
 var schema = try Schema.init(allocator, schema_json);
@@ -209,20 +209,7 @@ const StorageLayer = struct {
             }
         }
     };
-    ```Server Integration `ZyncBaseServer implements completion callbacks_id connection registry success sends `WriteCommitted failure sends `WriteError connection gone completion status discarded-status records durable Strategy Cache Integration lock-free-memory cache read-through layer```zig
-const StateManager = struct {
-    cache: HashMap([]const u8, *Namespace),
-    storage: *StorageLayer,
-    
-    pub fn getNamespace(self: *StateManager, id: []const u8) !*Namespace {
-        if (self.cache.get(id)) |ns| return ns;
-        
-        const ns = try self.storage.loadNamespace(id);
-        try self.cache.put(id, ns);
-        return ns;
-    }
-};
-```Checkpoint Management Prevents WAL starvation minimizes read degradation Mode Behavior Use Case PASSIVE Non-blocking best effort Background maintenance Waits readers completes Scheduled maintenance Resets shrinks WAL Reclaim disk space Performance Optimization Authorization Snapshots permission queries connection In-memory lookup prevents authorization read-path Backup Online Backup safe server running checkpoints WAL database copies atomically SQLite online backup API```zig
+    ```Server Integration `ZyncBaseServer implements completion callbacks `client_id connection registry success sends `WriteCommitted` failure sends `WriteError` connection gone completion status discarded write-status records durable Read Strategy Subscription Engine Integration Application data reads through cache **Warm Collections active subscribers evaluated in memory maintains per-collection state updated commit No SQLite involvement **Cold One-shot `StoreQuery requests no active subscription query SQLite read pool connection pool lock-free cache for auth/schema metadata namespace-to-integer mappings user identity mappings immutable once written safe for wait-free reads threads Checkpoint Management Prevents WAL file starvation minimizes read degradation Non-blocking Background maintenance Waits readers Resets shrinks WAL disk space Performance Optimization Authorization Snapshots overhead permission queries on connection In-memory lookup prevents authorization bottlenecking read-path Backup Online Backup safe server running checkpoints WAL database copies atomically using SQLite online backup API```zig
 pub fn backup(self: *StorageLayer, dest_path: []const u8) !void {
     // Checkpoint WAL into the main database file
     try self.write_conn.exec("PRAGMA wal_checkpoint(FULL)");
