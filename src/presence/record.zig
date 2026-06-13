@@ -55,7 +55,14 @@ pub const PresenceRecord = struct {
         if (patch != .map) return error.InvalidPayload;
         var it = patch.map.iterator();
         while (it.next()) |entry| {
-            const f_idx = msgpack.extractPayloadUint(entry.key_ptr.*) orelse return error.InvalidFieldIndex;
+            const f_idx: usize = blk: {
+                if (msgpack.extractPayloadUint(entry.key_ptr.*)) |idx| break :blk idx;
+                if (entry.key_ptr.* == .str) {
+                    const key_str = entry.key_ptr.*.str.value();
+                    break :blk std.fmt.parseUnsigned(usize, key_str, 10) catch return error.InvalidFieldIndex;
+                }
+                return error.InvalidFieldIndex;
+            };
             if (f_idx >= fields.len) return error.InvalidFieldIndex;
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 

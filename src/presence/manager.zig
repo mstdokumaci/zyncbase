@@ -45,13 +45,18 @@ pub const PresenceManager = struct {
     pending_user_updates: std.ArrayListUnmanaged(PendingUserUpdate),
     pending_shared_updates: std.ArrayListUnmanaged(PendingSharedUpdate),
 
-    // Subscription tracking: namespace_id → []ConnectionId
-    user_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(u64)),
-    shared_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(u64)),
+    // Subscription tracking: namespace_id → []Subscriber
+    user_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
+    shared_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
 
     // Connection to PresenceManager reference for sending broadcasts
     connection_manager: ?*anyopaque,
     send_broadcast_fn: ?*const fn (ctx: *anyopaque, conn_id: u64, data: []const u8) void,
+
+    pub const Subscriber = struct {
+        conn_id: u64,
+        sub_id: u64,
+    };
 
     pub const PendingUserUpdate = struct {
         namespace_id: i64,
@@ -134,10 +139,14 @@ pub const PresenceManager = struct {
 
         for (self.pending_user_updates.items) |*update| {
             if (update.patch) |patch| {
-                _ = patch; // Payload is arena-allocated, no cleanup needed
+                patch.free(self.allocator);
             }
         }
         self.pending_user_updates.deinit(self.allocator);
+
+        for (self.pending_shared_updates.items) |*update| {
+            update.patch.free(self.allocator);
+        }
         self.pending_shared_updates.deinit(self.allocator);
 
         var user_sub_iter = self.user_subscribers.iterator();
@@ -189,11 +198,25 @@ pub const PresenceManager = struct {
         // Cancel grace period if it was set
         _ = self.namespace_empty_at.fetchRemove(namespace_id);
 
-        // Queue for broadcast
+        // Coalesce with any pending update for this user in the current batch.
+        const maybe_existing = self.findPendingUserUpdate(namespace_id, user_id);
+        if (maybe_existing) |existing| {
+            if (existing.patch != null) {
+                try self.mergePayloadMaps(&existing.patch.?, patch);
+            } else {
+                const cloned_patch = try patch.deepClone(self.allocator);
+                existing.patch = cloned_patch;
+            }
+            if (!existing.is_new_user) existing.is_new_user = is_new_user;
+            return;
+        }
+
+        // No pending update for this user; clone once and append.
+        const cloned_patch = try patch.deepClone(self.allocator);
         try self.pending_user_updates.append(self.allocator, .{
             .namespace_id = namespace_id,
             .user_id = user_id,
-            .patch = patch,
+            .patch = cloned_patch,
             .is_new_user = is_new_user,
         });
     }
@@ -217,10 +240,18 @@ pub const PresenceManager = struct {
         // Merge patch into record
         try result.value_ptr.mergeFromPayload(self.allocator, self.shared_fields, patch);
 
-        // Queue for broadcast
+        // Coalesce pending shared updates for the namespace.
+        if (self.findPendingSharedUpdate(namespace_id)) |existing| {
+            try self.mergePayloadMaps(&existing.patch, patch);
+            existing.source_conn = source_conn;
+            return;
+        }
+
+        // No pending shared update; clone once and append.
+        const cloned_patch = try patch.deepClone(self.allocator);
         try self.pending_shared_updates.append(self.allocator, .{
             .namespace_id = namespace_id,
-            .patch = patch,
+            .patch = cloned_patch,
             .source_conn = source_conn,
         });
     }
@@ -254,6 +285,23 @@ pub const PresenceManager = struct {
                 try self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp());
             }
 
+            if (self.findPendingUserUpdateIndex(namespace_id, user_id)) |idx| {
+                var existing = &self.pending_user_updates.items[idx];
+                if (existing.patch == null) {
+                    return;
+                }
+                if (existing.is_new_user) {
+                    if (existing.patch) |patch| patch.free(self.allocator);
+                    _ = self.pending_user_updates.orderedRemove(idx);
+                    return;
+                }
+
+                if (existing.patch) |patch| patch.free(self.allocator);
+                existing.patch = null;
+                existing.is_new_user = false;
+                return;
+            }
+
             // Queue leave broadcast
             try self.pending_user_updates.append(self.allocator, .{
                 .namespace_id = namespace_id,
@@ -264,12 +312,73 @@ pub const PresenceManager = struct {
         }
     }
 
+    fn findPendingUserUpdateIndex(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed.DocId,
+    ) ?usize {
+        var i: usize = 0;
+        while (i < self.pending_user_updates.items.len) {
+            if (self.pending_user_updates.items[i].namespace_id == namespace_id and self.pending_user_updates.items[i].user_id == user_id) {
+                return i;
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    fn findPendingUserUpdate(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed.DocId,
+    ) ?*PendingUserUpdate {
+        for (self.pending_user_updates.items) |*update| {
+            if (update.namespace_id == namespace_id and update.user_id == user_id) return update;
+        }
+        return null;
+    }
+
+    fn findPendingSharedUpdate(
+        self: *PresenceManager,
+        namespace_id: i64,
+    ) ?*PendingSharedUpdate {
+        for (self.pending_shared_updates.items) |*update| {
+            if (update.namespace_id == namespace_id) return update;
+        }
+        return null;
+    }
+
+    fn mergePayloadMaps(
+        self: *PresenceManager,
+        target: *msgpack.Payload,
+        source: msgpack.Payload,
+    ) !void {
+        if (target.* != .map or source != .map) return;
+
+        var it = source.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const new_value = try entry.value_ptr.*.deepClone(self.allocator);
+
+            if (target.map.getPtr(key)) |existing_value| {
+                existing_value.*.free(self.allocator);
+                existing_value.* = new_value;
+            } else {
+                var owned_key = try key.deepClone(self.allocator);
+                defer if (owned_key != .nil) owned_key.free(self.allocator);
+                try target.mapPutGeneric(owned_key, new_value);
+                owned_key = .nil;
+            }
+        }
+    }
+
     /// Subscribe to user presence updates in a namespace.
     /// Returns a snapshot of current users.
     pub fn onSubscribeUser(
         self: *PresenceManager,
         namespace_id: i64,
         conn_id: u64,
+        sub_id: u64,
     ) !UserSnapshot {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
@@ -279,7 +388,7 @@ pub const PresenceManager = struct {
         if (!sub_result.found_existing) {
             sub_result.value_ptr.* = .{};
         }
-        try sub_result.value_ptr.append(self.allocator, conn_id);
+        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
         // Build snapshot of current users
         var snapshot = UserSnapshot{
@@ -315,6 +424,7 @@ pub const PresenceManager = struct {
         self: *PresenceManager,
         namespace_id: i64,
         conn_id: u64,
+        sub_id: u64,
     ) !?PresenceRecord {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
@@ -324,7 +434,7 @@ pub const PresenceManager = struct {
         if (!sub_result.found_existing) {
             sub_result.value_ptr.* = .{};
         }
-        try sub_result.value_ptr.append(self.allocator, conn_id);
+        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
         // Return clone of current shared state
         if (self.shared_state.get(namespace_id)) |record| {
@@ -345,7 +455,7 @@ pub const PresenceManager = struct {
         if (self.user_subscribers.getPtr(namespace_id)) |subs| {
             var i: usize = 0;
             while (i < subs.items.len) {
-                if (subs.items[i] == conn_id) {
+                if (subs.items[i].conn_id == conn_id) {
                     _ = subs.orderedRemove(i);
                 } else {
                     i += 1;
@@ -366,7 +476,7 @@ pub const PresenceManager = struct {
         if (self.shared_subscribers.getPtr(namespace_id)) |subs| {
             var i: usize = 0;
             while (i < subs.items.len) {
-                if (subs.items[i] == conn_id) {
+                if (subs.items[i].conn_id == conn_id) {
                     _ = subs.orderedRemove(i);
                 } else {
                     i += 1;
@@ -447,11 +557,19 @@ pub const PresenceManager = struct {
         // 3. Broadcast updates (no lock needed)
         if (user_updates.items.len > 0) {
             self.broadcastUserBatch(user_updates.items);
+            for (user_updates.items) |*update| {
+                if (update.patch) |patch| {
+                    patch.free(self.allocator);
+                }
+            }
             user_updates.deinit(self.allocator);
         }
 
         if (shared_updates.items.len > 0) {
             self.broadcastSharedBatch(shared_updates.items);
+            for (shared_updates.items) |*update| {
+                update.patch.free(self.allocator);
+            }
             shared_updates.deinit(self.allocator);
         }
     }
@@ -473,19 +591,21 @@ pub const PresenceManager = struct {
             if (subs.items.len == 0) continue;
 
             // Build and send broadcast for each subscriber
-            for (subs.items) |conn_id| {
-                self.sendUserBroadcast(conn_id, ns_updates);
+            for (subs.items) |subscriber| {
+                self.sendUserBroadcast(subscriber, ns_updates);
             }
         }
     }
 
-    fn sendUserBroadcast(self: *PresenceManager, conn_id: u64, updates: []const PendingUserUpdate) void {
+    fn sendUserBroadcast(self: *PresenceManager, subscriber: Subscriber, updates: []const PendingUserUpdate) void {
         if (self.send_broadcast_fn) |send_fn| {
             if (self.connection_manager) |ctx| {
-                // Encode broadcast message
-                const encoded = wire.encodePresenceBroadcast(self.allocator, conn_id, updates) catch return;
+                const encoded = wire.encodePresenceBroadcast(self.allocator, subscriber.sub_id, updates) catch |err| {
+                    std.log.err("Presence broadcast encoding failed: {}", .{err});
+                    return;
+                };
                 defer self.allocator.free(encoded);
-                send_fn(ctx, conn_id, encoded);
+                send_fn(ctx, subscriber.conn_id, encoded);
             }
         }
     }
@@ -507,19 +627,19 @@ pub const PresenceManager = struct {
             if (subs.items.len == 0) continue;
 
             // Build and send broadcast for each subscriber
-            for (subs.items) |conn_id| {
-                self.sendSharedBroadcast(conn_id, ns_updates);
+            for (subs.items) |subscriber| {
+                self.sendSharedBroadcast(subscriber, ns_updates);
             }
         }
     }
 
-    fn sendSharedBroadcast(self: *PresenceManager, conn_id: u64, updates: []const PendingSharedUpdate) void {
+    fn sendSharedBroadcast(self: *PresenceManager, subscriber: Subscriber, updates: []const PendingSharedUpdate) void {
         if (self.send_broadcast_fn) |send_fn| {
             if (self.connection_manager) |ctx| {
                 // Encode broadcast message
-                const encoded = wire.encodeSharedStateBroadcast(self.allocator, conn_id, updates) catch return;
+                const encoded = wire.encodeSharedStateBroadcast(self.allocator, subscriber.sub_id, updates) catch return;
                 defer self.allocator.free(encoded);
-                send_fn(ctx, conn_id, encoded);
+                send_fn(ctx, subscriber.conn_id, encoded);
             }
         }
     }

@@ -653,7 +653,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        var snapshot = try self.presence_manager.onSubscribeUser(session.namespace_id, conn.id);
+        var snapshot = try self.presence_manager.onSubscribeUser(session.namespace_id, conn.id, sub_id);
         defer snapshot.deinit(self.allocator);
 
         return try wire.encodePresenceUserSnapshot(arena_allocator, msg_id, sub_id, snapshot.users.items);
@@ -691,7 +691,7 @@ pub const MessageHandler = struct {
         const session = try requirePresenceSession(conn);
         const sub_id = try conn.allocateSubscriptionId();
 
-        var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id);
+        var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id, sub_id);
         defer if (shared) |*s| s.deinit(self.allocator);
 
         return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |s| &s else null);
@@ -801,8 +801,8 @@ fn classifyMsgType(t: []const u8) ?MsgType {
         'Q' => if (std.mem.eql(u8, t, "StoreQuery")) return .store_query else null,
         'U' => if (std.mem.eql(u8, t, "StoreUnsubscribe")) return .store_unsubscribe else null,
         'L' => if (std.mem.eql(u8, t, "StoreLoadMore")) return .store_load_more else null,
-        'e' => {
-            // Presence messages start with "Presence"
+        'n' => {
+            // Presence messages: "Presence..." has 'n' at index 5
             if (std.mem.eql(u8, t, "PresenceSetNamespace")) return .presence_set_namespace;
             if (std.mem.eql(u8, t, "PresenceSetShared")) return .presence_set_shared;
             if (std.mem.eql(u8, t, "PresenceSet")) return .presence_set;

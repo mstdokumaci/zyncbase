@@ -197,6 +197,68 @@ test "PresenceManager - setShared creates record and queues pending update" {
     try testing.expectEqual(@as(u64, 42), manager.pending_shared_updates.items[0].source_conn);
 }
 
+test "PresenceManager - setUser coalesces pending updates for same user" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .uint = 1 } },
+    });
+    defer patch1.free(allocator);
+    try manager.setUser(1, user_id, patch1);
+
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 1, .value = .{ .uint = 2 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    const merged_patch = manager.pending_user_updates.items[0].patch orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 2), merged_patch.map.count());
+    const first_value = try merged_patch.mapGetGeneric(msgpack.Payload.uintToPayload(0));
+    const second_value = try merged_patch.mapGetGeneric(msgpack.Payload.uintToPayload(1));
+    try testing.expect(first_value != null);
+    try testing.expect(second_value != null);
+}
+
+test "PresenceManager - setShared coalesces pending shared updates for same namespace" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .uint = 5 } },
+    });
+    defer patch1.free(allocator);
+    try manager.setShared(1, patch1, 42);
+
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 1, .value = .{ .bool = true } },
+    });
+    defer patch2.free(allocator);
+    try manager.setShared(1, patch2, 43);
+
+    try testing.expectEqual(@as(usize, 1), manager.pending_shared_updates.items.len);
+    const merged_patch = manager.pending_shared_updates.items[0].patch;
+    try testing.expectEqual(@as(usize, 2), merged_patch.map.count());
+    try testing.expectEqual(@as(u64, 43), manager.pending_shared_updates.items[0].source_conn);
+}
+
 test "PresenceManager - removeUser cleans up and queues leave" {
     const allocator = testing.allocator;
     const user_fields = try makeTestUserFields(allocator);
@@ -219,8 +281,9 @@ test "PresenceManager - removeUser cleans up and queues leave" {
 
     try manager.removeUser(1, user_id);
 
-    try testing.expectEqual(@as(usize, 2), manager.pending_user_updates.items.len);
-    try testing.expect(manager.pending_user_updates.items[1].patch == null);
+    // If the user joined and left before flush, the pending join update is canceled
+    // rather than emitting a leave event.
+    try testing.expectEqual(@as(usize, 0), manager.pending_user_updates.items.len);
 
     try testing.expectEqual(@as(usize, 1), manager.namespace_empty_at.count());
 }
@@ -259,7 +322,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
     defer patch.free(allocator);
     try manager.setUser(1, user_id, patch);
 
-    var snapshot = try manager.onSubscribeUser(1, 100);
+    var snapshot = try manager.onSubscribeUser(1, 100, 1);
     defer snapshot.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
@@ -267,7 +330,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
 
     const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 1), subs.items.len);
-    try testing.expectEqual(@as(u64, 100), subs.items[0]);
+    try testing.expectEqual(@as(u64, 100), subs.items[0].conn_id);
 }
 
 test "PresenceManager - onSubscribeShared returns current state" {
@@ -287,7 +350,7 @@ test "PresenceManager - onSubscribeShared returns current state" {
     defer set_patch.free(allocator);
     try manager.setShared(1, set_patch, 42);
 
-    var shared = try manager.onSubscribeShared(1, 200);
+    var shared = try manager.onSubscribeShared(1, 200, 1);
     try testing.expect(shared != null);
     if (shared) |*rec| {
         defer rec.deinit(allocator);
@@ -309,7 +372,7 @@ test "PresenceManager - onSubscribeShared returns null when no state" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const shared = try manager.onSubscribeShared(1, 200);
+    const shared = try manager.onSubscribeShared(1, 200, 1);
     try testing.expect(shared == null);
 }
 
@@ -324,8 +387,8 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
     manager.init(allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    _ = try manager.onSubscribeUser(1, 100);
-    _ = try manager.onSubscribeUser(1, 200);
+    _ = try manager.onSubscribeUser(1, 100, 1);
+    _ = try manager.onSubscribeUser(1, 200, 2);
 
     {
         const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
@@ -337,7 +400,7 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
     {
         const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
         try testing.expectEqual(@as(usize, 1), subs.items.len);
-        try testing.expectEqual(@as(u64, 200), subs.items[0]);
+        try testing.expectEqual(@as(u64, 200), subs.items[0].conn_id);
     }
 }
 
@@ -401,7 +464,7 @@ test "PresenceManager - multiple users in same namespace" {
     const ns_map = manager.user_state.get(1) orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), ns_map.count());
 
-    var snapshot = try manager.onSubscribeUser(1, 300);
+    var snapshot = try manager.onSubscribeUser(1, 300, 1);
     defer snapshot.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), snapshot.users.items.len);
 }
@@ -494,17 +557,18 @@ test "PresenceManager - is_new_user flag set correctly" {
     try manager.setUser(1, user_id, patch1);
     try testing.expect(manager.pending_user_updates.items[0].is_new_user);
 
-    // Second setUser should mark is_new_user = false
+    // Second setUser is merged into the existing pending join update.
     var patch2 = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 200.0 } },
     });
     defer patch2.free(allocator);
     try manager.setUser(1, user_id, patch2);
-    try testing.expect(!manager.pending_user_updates.items[1].is_new_user);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_new_user);
 
-    // removeUser should mark is_new_user = false (leave event)
+    // removeUser cancels the unflushed join update entirely.
     try manager.removeUser(1, user_id);
-    try testing.expect(!manager.pending_user_updates.items[2].is_new_user);
+    try testing.expectEqual(@as(usize, 0), manager.pending_user_updates.items.len);
 }
 
 test "PresenceManager - snapshot includes joined_at" {
@@ -525,7 +589,7 @@ test "PresenceManager - snapshot includes joined_at" {
     defer patch.free(allocator);
     try manager.setUser(1, user_id, patch);
 
-    var snapshot = try manager.onSubscribeUser(1, 100);
+    var snapshot = try manager.onSubscribeUser(1, 100, 1);
     defer snapshot.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);

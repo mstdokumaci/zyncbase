@@ -16,6 +16,7 @@ import { run as runBatch } from "./test-batch";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
 import { run as runPersistence } from "./test-persistence";
+import { run as runPresence } from "./test-presence";
 import { run as runSync } from "./test-sync";
 
 setDefaultTimeout(120_000);
@@ -80,6 +81,23 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runFilters(port);
+				},
+			);
+		});
+	});
+
+	test("presence: user state, shared state, merge, throttle, namespace switch", async () => {
+		await runE2ETest("Presence", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-presence.json"),
+					dataDir: ctx.dataPath("presence"),
+					configName: "zyncbase-config-presence.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+				},
+				async ({ port }) => {
+					await runPresence(port);
 				},
 			);
 		});

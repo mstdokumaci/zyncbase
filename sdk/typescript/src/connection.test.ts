@@ -74,14 +74,14 @@ describe("ConnectionManager", () => {
 				value: 2,
 			});
 
-			const msg1 = decode(mockWs.sentMessages[1]) as Record<string, unknown>;
-			const msg2 = decode(mockWs.sentMessages[2]) as Record<string, unknown>;
+			const msg1 = decode(mockWs.sentMessages[2]) as Record<string, unknown>;
+			const msg2 = decode(mockWs.sentMessages[3]) as Record<string, unknown>;
 
-			expect(msg1.id).toBe(2);
-			expect(msg2.id).toBe(3);
+			expect(msg1.id).toBe(3);
+			expect(msg2.id).toBe(4);
 
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
 			await p1;
 			await p2;
 		});
@@ -96,11 +96,11 @@ describe("ConnectionManager", () => {
 				value: 1,
 			});
 			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 2, value: [{ x: 1 }] }),
+				encodeToBuffer({ type: "ok", id: 3, value: [{ x: 1 }] }),
 			);
 
 			const result = await p;
-			expect(result).toMatchObject({ type: "ok", id: 2 });
+			expect(result).toMatchObject({ type: "ok", id: 3 });
 		});
 
 		test("rejects promise on type:error response with matching id", async () => {
@@ -115,7 +115,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "PERMISSION_DENIED",
 					message: "Not allowed",
 				}),
@@ -168,8 +168,8 @@ describe("ConnectionManager", () => {
 			const delta = { type: "StoreDelta", subId: 99, ops: [] };
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
-			await expect(p).resolves.toMatchObject({ type: "ok", id: 2 });
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			await expect(p).resolves.toMatchObject({ type: "ok", id: 3 });
 		});
 	});
 
@@ -506,7 +506,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 					retryAfter: 50,
@@ -517,11 +517,11 @@ describe("ConnectionManager", () => {
 			await new Promise((r) => setTimeout(r, 100));
 
 			// Second attempt: send ok
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
 
 			const result = await p;
-			expect(result).toMatchObject({ type: "ok", id: 3 });
-			expect(mockWs.sentMessages.length).toBeGreaterThanOrEqual(3);
+			expect(result).toMatchObject({ type: "ok", id: 4 });
+			expect(mockWs.sentMessages.length).toBeGreaterThanOrEqual(4);
 		});
 
 		test("does not retry validation errors", async () => {
@@ -537,7 +537,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "SCHEMA_VALIDATION_FAILED",
 					message: "Invalid data",
 				}),
@@ -548,7 +548,7 @@ describe("ConnectionManager", () => {
 			});
 
 			// Only one message sent (no retry)
-			expect(mockWs.sentMessages.length).toBe(2);
+			expect(mockWs.sentMessages.length).toBe(3);
 		});
 
 		test("gives up after maxServerRetries for server errors", async () => {
@@ -569,7 +569,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -582,7 +582,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 4,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -595,7 +595,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 4,
+					id: 5,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -617,7 +617,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 				}),
@@ -626,7 +626,7 @@ describe("ConnectionManager", () => {
 			await expect(p).rejects.toMatchObject({ code: "RATE_LIMITED" });
 
 			// Only one message sent (no retry)
-			expect(mockWs.sentMessages.length).toBe(2);
+			expect(mockWs.sentMessages.length).toBe(3);
 		});
 
 		test("respects retryAfter delay", async () => {
@@ -645,7 +645,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 2,
+					id: 3,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 					retryAfter: 200,
@@ -655,15 +655,15 @@ describe("ConnectionManager", () => {
 			// Wait for retry (should take ~200ms, not ~10ms)
 			await new Promise((r) => setTimeout(r, 100));
 			// Should still be waiting
-			expect(mockWs.sentMessages.length).toBe(2);
+			expect(mockWs.sentMessages.length).toBe(3);
 
 			// Wait for retry to happen
 			await new Promise((r) => setTimeout(r, 150));
 			// Now retry should have happened
-			expect(mockWs.sentMessages.length).toBe(3);
+			expect(mockWs.sentMessages.length).toBe(4);
 
 			// Send ok to resolve
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
 			await p;
 
 			const elapsed = Date.now() - startTime;

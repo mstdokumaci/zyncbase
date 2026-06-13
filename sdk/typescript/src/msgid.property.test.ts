@@ -75,7 +75,7 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 
 		manager.disconnect();
 
-		if (ids.length !== n + 1) return false;
+		if (ids.length !== n + 2) return false;
 
 		if (ids[0] !== 1) return false;
 

@@ -29,9 +29,17 @@ export class SchemaDictionary {
 	private fields: string[][] = [];
 	private fieldFlags: number[][] = [];
 
+	// ─── Presence field arrays (from SchemaSync) ──────────────────────────
+	private presenceUserFields: string[] = [];
+	private presenceSharedFields: string[] = [];
+
 	// ─── Bidirectional maps ────────────────────────────────────────────────
 	private tableToIndex = new Map<string, number>();
 	private fieldToIndex: Map<number, Map<string, number>> = new Map();
+
+	// ─── Presence bidirectional maps ───────────────────────────────────────
+	private presenceUserFieldToIndex = new Map<string, number>();
+	private presenceSharedFieldToIndex = new Map<string, number>();
 
 	// ─── Offline safety hash ───────────────────────────────────────────────
 	private hash: string | null = null;
@@ -56,10 +64,22 @@ export class SchemaDictionary {
 		tables: string[];
 		fields: string[][];
 		fieldFlags: number[][];
+		presenceUserFields?: string[];
+		presenceSharedFields?: string[];
 	}): Promise<boolean> {
-		// Save previous hash for comparison
 		this.previousHash = this.hash;
+		this.validateSchemaSyncPayload(payload);
+		this.buildStoreMaps(payload);
+		this.buildPresenceMaps(payload);
+		this.hash = await this.computeHash(payload);
+		this.ready = true;
+		return this.previousHash !== null && this.previousHash !== this.hash;
+	}
 
+	private validateSchemaSyncPayload(payload: {
+		fields: string[][];
+		fieldFlags: number[][];
+	}): void {
 		if (!Array.isArray(payload.fieldFlags)) {
 			throw new Error("SchemaDictionary: SchemaSync missing fieldFlags");
 		}
@@ -75,19 +95,22 @@ export class SchemaDictionary {
 				);
 			}
 		}
+	}
 
-		// Store raw arrays
+	private buildStoreMaps(payload: {
+		tables: string[];
+		fields: string[][];
+		fieldFlags: number[][];
+	}): void {
 		this.tables = payload.tables;
 		this.fields = payload.fields;
 		this.fieldFlags = payload.fieldFlags;
 
-		// Build table index map
 		this.tableToIndex.clear();
 		for (let i = 0; i < payload.tables.length; i++) {
 			this.tableToIndex.set(payload.tables[i], i);
 		}
 
-		// Build field index maps (per table)
 		this.fieldToIndex.clear();
 		for (let ti = 0; ti < payload.fields.length; ti++) {
 			const fieldMap = new Map<string, number>();
@@ -96,14 +119,24 @@ export class SchemaDictionary {
 			}
 			this.fieldToIndex.set(ti, fieldMap);
 		}
+	}
 
-		// Compute xxHash64 of the canonical payload for offline safety
-		this.hash = await this.computeHash(payload);
+	private buildPresenceMaps(payload: {
+		presenceUserFields?: string[];
+		presenceSharedFields?: string[];
+	}): void {
+		this.presenceUserFields = payload.presenceUserFields ?? [];
+		this.presenceSharedFields = payload.presenceSharedFields ?? [];
 
-		this.ready = true;
+		this.presenceUserFieldToIndex.clear();
+		for (let i = 0; i < this.presenceUserFields.length; i++) {
+			this.presenceUserFieldToIndex.set(this.presenceUserFields[i], i);
+		}
 
-		// Schema changed if previous hash exists and differs
-		return this.previousHash !== null && this.previousHash !== this.hash;
+		this.presenceSharedFieldToIndex.clear();
+		for (let i = 0; i < this.presenceSharedFields.length; i++) {
+			this.presenceSharedFieldToIndex.set(this.presenceSharedFields[i], i);
+		}
 	}
 
 	/** Get the table index for a collection name. Throws if not found. */
@@ -336,6 +369,123 @@ export class SchemaDictionary {
 		return (this.getFieldFlags(tableIndex, fieldIndex) & 0b10) !== 0;
 	}
 
+	// ─── Presence Encoding / Decoding ─────────────────────────────────────
+
+	/**
+	 * Encode a nested presence data object into an integer-keyed wire map for user presence.
+	 * Flattens nested objects (e.g., { cursor: { x: 1, y: 2 } } → { "cursor__x": 1, "cursor__y": 2 })
+	 * then maps field names to their integer indices.
+	 */
+	encodePresenceUserValue(
+		data: Record<string, unknown>,
+	): Record<number, unknown> {
+		const flat = flattenPresenceData(data);
+		const result: Record<number, unknown> = {};
+		for (const [key, value] of Object.entries(flat)) {
+			const index = this.presenceUserFieldToIndex.get(key);
+			if (index === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown presence user field "${key}"`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			result[index] = value;
+		}
+		return result;
+	}
+
+	/**
+	 * Encode a nested presence data object into an integer-keyed wire map for shared state.
+	 */
+	encodePresenceSharedValue(
+		data: Record<string, unknown>,
+	): Record<number, unknown> {
+		const flat = flattenPresenceData(data);
+		const result: Record<number, unknown> = {};
+		for (const [key, value] of Object.entries(flat)) {
+			const index = this.presenceSharedFieldToIndex.get(key);
+			if (index === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown presence shared field "${key}"`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			result[index] = value;
+		}
+		return result;
+	}
+
+	/**
+	 * Decode an integer-keyed wire map into a nested string-keyed object for user presence.
+	 */
+	decodePresenceUserValue(
+		wireData: Record<number, unknown>,
+	): Record<string, unknown> {
+		const flat: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(wireData)) {
+			const index = Number(key);
+			const fieldName = this.presenceUserFields[index];
+			if (fieldName === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown presence user field index ${index}`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			flat[fieldName] = value;
+		}
+		return unflattenPresenceData(flat);
+	}
+
+	/**
+	 * Decode an integer-keyed wire map into a nested string-keyed object for shared state.
+	 */
+	decodePresenceSharedValue(
+		wireData: Record<number, unknown>,
+	): Record<string, unknown> {
+		const flat: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(wireData)) {
+			const index = Number(key);
+			const fieldName = this.presenceSharedFields[index];
+			if (fieldName === undefined) {
+				throw new SchemaError(
+					`SchemaDictionary: unknown presence shared field index ${index}`,
+					"FIELD_NOT_FOUND",
+				);
+			}
+			flat[fieldName] = value;
+		}
+		return unflattenPresenceData(flat);
+	}
+
+	/**
+	 * Decode a bin16 userId (Uint8Array) to a UUID string.
+	 */
+	decodePresenceUserId(bin: Uint8Array): string {
+		if (bin.length !== 16) {
+			throw new Error(
+				`SchemaDictionary: invalid userId binary length ${bin.length}`,
+			);
+		}
+		const hex = Array.from(bin)
+			.map((b) => b.toString(16).padStart(2, "0"))
+			.join("");
+		return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+	}
+
+	/**
+	 * Check if presence user fields are defined.
+	 */
+	hasPresenceUserFields(): boolean {
+		return this.presenceUserFields.length > 0;
+	}
+
+	/**
+	 * Check if presence shared fields are defined.
+	 */
+	hasPresenceSharedFields(): boolean {
+		return this.presenceSharedFields.length > 0;
+	}
+
 	// ─── Private helpers ───────────────────────────────────────────────────
 	private static xxhashPromise: ReturnType<typeof xxhash> | null = null;
 
@@ -380,4 +530,63 @@ export class SchemaDictionary {
 		});
 		return hasher.h64ToString(canonical).padStart(16, "0");
 	}
+}
+
+/**
+ * Flatten a nested presence data object using "__" as the key separator.
+ * Only flattens one level deep (presence schema allows max 1 level of nesting).
+ *
+ * Example:
+ *   { cursor: { x: 1, y: 2 }, status: "active" } → { "cursor__x": 1, "cursor__y": 2, "status": "active" }
+ */
+function flattenPresenceData(
+	obj: Record<string, unknown>,
+	prefix = "",
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const key of Object.keys(obj)) {
+		const fullKey = prefix ? `${prefix}__${key}` : key;
+		const value = obj[key];
+		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+			const nested = flattenPresenceData(
+				value as Record<string, unknown>,
+				fullKey,
+			);
+			for (const nestedKey of Object.keys(nested)) {
+				result[nestedKey] = nested[nestedKey];
+			}
+		} else {
+			result[fullKey] = value;
+		}
+	}
+	return result;
+}
+
+/**
+ * Reconstruct a nested object from "__"-separated flat keys.
+ *
+ * Example:
+ *   { "cursor__x": 1, "cursor__y": 2 } → { cursor: { x: 1, y: 2 } }
+ */
+function unflattenPresenceData(
+	flat: Record<string, unknown>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const key of Object.keys(flat)) {
+		const parts = key.split("__");
+		let current = result;
+		for (let i = 0; i < parts.length - 1; i++) {
+			const part = parts[i];
+			if (
+				current[part] === undefined ||
+				typeof current[part] !== "object" ||
+				Array.isArray(current[part])
+			) {
+				current[part] = {};
+			}
+			current = current[part] as Record<string, unknown>;
+		}
+		current[parts[parts.length - 1]] = flat[key];
+	}
+	return result;
 }

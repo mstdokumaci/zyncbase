@@ -207,6 +207,27 @@ pub const ConnectionManager = struct {
         return conn;
     }
 
+    /// Broadcast helper as a method on ConnectionManager.
+    pub fn sendToConnection(self: *ConnectionManager, conn_id: u64, data: []const u8) void {
+        const conn = self.acquireConnection(conn_id) catch return;
+        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+
+        conn.send(data) catch |err| switch (err) {
+            error.Dropped => {
+                std.log.warn("Connection {} dropped by uWS, closing", .{conn_id});
+                conn.ws.close();
+            },
+            error.Full => {
+                std.log.warn("Connection {} outbox full (slow client), closing", .{conn_id});
+                conn.ws.close();
+            },
+            else => {
+                std.log.err("Connection {} unexpected send error: {}", .{ conn_id, err });
+                conn.ws.close();
+            },
+        };
+    }
+
     /// Called by the uWS drain callback. Flushes queued delta messages for the given connection.
     /// Closes the connection if uWS signals it is dead (DROPPED).
     pub fn flushOutbox(self: *ConnectionManager, conn_id: u64) void {
@@ -312,3 +333,9 @@ pub const ConnectionManager = struct {
         }
     }
 };
+
+// Default send-broadcast helper used by other modules (e.g. presence manager).
+pub fn sendToConnection(ctx: *anyopaque, conn_id: u64, data: []const u8) void {
+    const cm: *ConnectionManager = @ptrCast(@alignCast(ctx));
+    cm.sendToConnection(conn_id, data);
+}

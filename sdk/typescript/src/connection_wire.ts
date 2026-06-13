@@ -8,7 +8,17 @@ import type {
 	JsonValue,
 	OkResponse,
 	OutboundMessage,
+	PresenceBroadcast,
+	PresenceRemove,
+	PresenceSet,
+	PresenceSetNamespace,
+	PresenceSetShared,
+	PresenceSubscribe,
+	PresenceSubscribeShared,
+	PresenceUnsubscribe,
+	PresenceUnsubscribeShared,
 	SchemaSync,
+	SharedStateBroadcast,
 	StoreBatch,
 	StoreDelta,
 	StoreLoadMore,
@@ -31,7 +41,15 @@ export type OutboundRequest =
 	| WithoutId<StoreQuery>
 	| WithoutId<StoreSubscribe>
 	| WithoutId<StoreUnsubscribe>
-	| WithoutId<StoreLoadMore>;
+	| WithoutId<StoreLoadMore>
+	| WithoutId<PresenceSetNamespace>
+	| WithoutId<PresenceSet>
+	| WithoutId<PresenceSetShared>
+	| WithoutId<PresenceSubscribe>
+	| WithoutId<PresenceUnsubscribe>
+	| WithoutId<PresenceSubscribeShared>
+	| WithoutId<PresenceUnsubscribeShared>
+	| WithoutId<PresenceRemove>;
 
 export interface PendingRequestContext {
 	type: OutboundMessage["type"];
@@ -87,6 +105,10 @@ export class ConnectionWireCodec {
 
 		if (!msg || typeof msg !== "object" || !("type" in msg)) return null;
 		if (msg.type === "StoreDelta") return this.decodeDelta(msg);
+		if (msg.type === "PresenceBroadcast")
+			return this.decodePresenceBroadcast(msg);
+		if (msg.type === "SharedStateBroadcast")
+			return this.decodeSharedStateBroadcast(msg);
 		return msg;
 	}
 
@@ -108,6 +130,27 @@ export class ConnectionWireCodec {
 				) as OkResponse["value"],
 			};
 		}
+
+		if (context?.type === "PresenceSubscribe" && Array.isArray(ok.users)) {
+			return {
+				...ok,
+				users: ok.users.map((user) => ({
+					userId: user.userId,
+					data: this.schema.decodePresenceUserValue(user.data),
+					joinedAt: user.joinedAt,
+				})),
+			};
+		}
+
+		if (context?.type === "PresenceSubscribeShared" && ok.shared != null) {
+			return {
+				...ok,
+				shared: this.schema.decodePresenceSharedValue(
+					ok.shared as Record<number, unknown>,
+				),
+			};
+		}
+
 		return ok;
 	}
 
@@ -116,6 +159,8 @@ export class ConnectionWireCodec {
 			tables: msg.tables,
 			fields: msg.fields,
 			fieldFlags: msg.fieldFlags,
+			presenceUserFields: msg.presenceUserFields,
+			presenceSharedFields: msg.presenceSharedFields,
 		});
 	}
 
@@ -131,8 +176,21 @@ export class ConnectionWireCodec {
 		msg: Record<string, unknown>,
 	): Record<string, unknown> {
 		const type = msg.type;
-		if (typeof type !== "string" || !type.startsWith("Store")) return msg;
+		if (typeof type !== "string") return msg;
 
+		if (type.startsWith("Store")) {
+			return this.encodeStoreMessage(msg, type);
+		}
+		if (type.startsWith("Presence")) {
+			return this.encodePresenceMessage(msg, type);
+		}
+		return msg;
+	}
+
+	private encodeStoreMessage(
+		msg: Record<string, unknown>,
+		type: string,
+	): Record<string, unknown> {
 		let wire: Record<string, unknown> = { ...msg };
 		if (type === "StoreSet" || type === "StoreRemove") {
 			wire = this.encodeStoreSetRemove(wire, type);
@@ -145,6 +203,29 @@ export class ConnectionWireCodec {
 		) {
 			wire = this.encodeStoreQuerySubscribe(wire);
 		}
+		return wire;
+	}
+
+	private encodePresenceMessage(
+		msg: Record<string, unknown>,
+		type: string,
+	): Record<string, unknown> {
+		const wire: Record<string, unknown> = { ...msg };
+
+		if (type === "PresenceSet" && wire.data && typeof wire.data === "object") {
+			wire.data = this.schema.encodePresenceUserValue(
+				wire.data as Record<string, unknown>,
+			);
+		} else if (
+			type === "PresenceSetShared" &&
+			wire.data &&
+			typeof wire.data === "object"
+		) {
+			wire.data = this.schema.encodePresenceSharedValue(
+				wire.data as Record<string, unknown>,
+			);
+		}
+
 		return wire;
 	}
 
@@ -333,6 +414,49 @@ export class ConnectionWireCodec {
 			tableIndex,
 			row as unknown as Record<number, unknown>,
 		) as JsonValue;
+	}
+
+	private decodePresenceBroadcast(msg: PresenceBroadcast): PresenceBroadcast {
+		return {
+			...msg,
+			users: msg.users.map((entry) => {
+				const decoded: {
+					userId: Uint8Array;
+					event: "join" | "update" | "leave";
+					data?: Record<string, unknown>;
+					joinedAt?: number;
+				} = {
+					userId: entry.userId,
+					event: entry.event,
+				};
+				if (entry.data != null) {
+					decoded.data = this.schema.decodePresenceUserValue(entry.data);
+				}
+				if (entry.joinedAt != null) {
+					decoded.joinedAt = entry.joinedAt;
+				}
+				return decoded;
+			}),
+		} as PresenceBroadcast;
+	}
+
+	private decodeSharedStateBroadcast(
+		msg: SharedStateBroadcast,
+	): SharedStateBroadcast {
+		if (Array.isArray(msg.data)) {
+			return {
+				...msg,
+				data: msg.data.map((patch) =>
+					this.schema.decodePresenceSharedValue(patch),
+				),
+			} as SharedStateBroadcast;
+		}
+		return {
+			...msg,
+			data: this.schema.decodePresenceSharedValue(
+				msg.data as Record<number, unknown>,
+			),
+		} as SharedStateBroadcast;
 	}
 
 	private mapSchemaEncodingError(err: unknown): ZyncBaseError {

@@ -15,6 +15,7 @@ const NotificationDispatcher = @import("notification_dispatcher.zig").Notificati
 const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const WriteOutcomeDispatcher = @import("write_outcome_dispatcher.zig").WriteOutcomeDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
+const connection_mod = @import("connection_manager.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
@@ -411,6 +412,10 @@ pub const ZyncBaseServer = struct {
 
         // Start presence manager background thread
         try self.presence_manager.start();
+        self.presence_manager.setConnectionManager(
+            &self.connection_manager,
+            connection_mod.sendToConnection,
+        );
 
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();

@@ -23,6 +23,11 @@ import type {
 type EventHandler = (...args: unknown[]) => void;
 type MessageHandler = (msg: InboundMessage) => void;
 type DeltaHandler = (delta: StoreDelta) => void;
+type PresenceBroadcastHandler = (
+	msg:
+		| import("./types.js").PresenceBroadcast
+		| import("./types.js").SharedStateBroadcast,
+) => void;
 
 type ConnectionStatus =
 	| "connecting"
@@ -45,6 +50,7 @@ export class ConnectionManager {
 
 	private messageHandler: MessageHandler | null = null;
 	private deltaHandler: DeltaHandler | null = null;
+	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
 
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -82,7 +88,8 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	setPresenceNamespace(ns: string): void {
+	async setPresenceNamespace(ns: string): Promise<void> {
+		await this.dispatch({ type: "PresenceSetNamespace", namespace: ns });
 		this.presenceNamespace = ns;
 	}
 
@@ -134,6 +141,7 @@ export class ConnectionManager {
 
 			ws.onopen = () => {
 				this.setStoreNamespace(this.storeNamespace)
+					.then(() => this.setPresenceNamespace(this.presenceNamespace))
 					.then(() => {
 						this.reconnectAttempt = 0;
 						this.setStatus("connected");
@@ -249,6 +257,10 @@ export class ConnectionManager {
 
 	onDelta(handler: DeltaHandler): void {
 		this.deltaHandler = handler;
+	}
+
+	onPresenceBroadcast(handler: PresenceBroadcastHandler): void {
+		this.presenceBroadcastHandler = handler;
 	}
 
 	disconnect(): void {
@@ -414,6 +426,10 @@ export class ConnectionManager {
 				break;
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
+				break;
+			case "PresenceBroadcast":
+			case "SharedStateBroadcast":
+				this.presenceBroadcastHandler?.(msg);
 				break;
 			case "WriteCommitted":
 			case "WriteError":
