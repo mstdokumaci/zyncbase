@@ -115,6 +115,9 @@ const PresenceManager = struct {
     // PresenceRecord is []?typed.Value indexed by field index
     user_state: HashMap(i64, HashMap(DocId, PresenceRecord)),
 
+    // User join timestamps: namespace_id → (users.id → joined_at_ms)
+    user_joined_at: HashMap(i64, HashMap(DocId, i64)),
+
     // Shared state: namespace_id → PresenceRecord
     shared_state: HashMap(i64, PresenceRecord),
 
@@ -144,6 +147,12 @@ const PresenceManager = struct {
         // Merge into existing record (patch, not replace)
         var ns = try self.user_state.getOrPut(namespace_id);
         var user_record = try ns.value_ptr.getOrPut(user_id);
+        const is_new_user = !user_record.found_existing;
+        if (is_new_user) {
+            // Record join timestamp
+            var joined_ns = try self.user_joined_at.getOrPut(namespace_id);
+            try joined_ns.value_ptr.put(user_id, std.time.milliTimestamp());
+        }
         try mergeFromPayload(user_record.value_ptr, self.user_fields, patch);
 
         // Queue for 50ms batch broadcast
@@ -151,6 +160,7 @@ const PresenceManager = struct {
             .namespace_id = namespace_id,
             .user_id      = user_id,
             .patch        = patch,
+            .is_new_user  = is_new_user,  // true → "join" event, false → "update" event
         });
     }
 
@@ -189,9 +199,10 @@ const PresenceManager = struct {
         var subs = try self.user_subscribers.getOrPut(namespace_id);
         try subs.value_ptr.append(conn_id);
 
-        // Return current user records
+        // Return current user records with join timestamps
         const users = self.user_state.get(namespace_id);
-        return .{ .users = users };
+        const joined = self.user_joined_at.get(namespace_id);
+        return .{ .users = users, .joined_at = joined };
     }
 
     pub fn onSubscribeShared(
@@ -221,10 +232,9 @@ const PresenceManager = struct {
         const ns = self.user_state.getPtr(namespace_id) orelse return;
         _ = ns.remove(user_id);
 
-        // Also remove from subscriber list
-        if (self.user_subscribers.getPtr(namespace_id)) |subs| {
-            // Remove this conn_id from subs if it was a subscriber
-            // (handled separately by connection cleanup)
+        // Clean up join timestamp
+        if (self.user_joined_at.getPtr(namespace_id)) |joined| {
+            _ = joined.remove(user_id);
         }
 
         // If namespace is now empty, record empty timestamp for grace period
@@ -237,6 +247,7 @@ const PresenceManager = struct {
             .namespace_id = namespace_id,
             .user_id      = user_id,
             .patch        = null,  // null signals leave
+            .is_new_user  = false,
         });
     }
 
@@ -421,11 +432,12 @@ The SDK maintains two separate in-memory caches for the active presence namespac
 ### Cache update logic
 
 **`PresenceBroadcast` handling:**
-- `event: "join"`: insert new entry into `userCache`. The `data` field is the full initial user record (all fields set so far).
+The broadcast message contains a `users` array with multiple events per message (batched by the 50ms flush loop). For each entry in the array:
+- `event: "join"`: insert new entry into `userCache` with `joinedAt`. The `data` field is the full initial user record (all fields set so far).
 - `event: "update"`: merge `data` patch into the existing `userCache` entry for `userId`. Unknown `userId` is treated as join.
 - `event: "leave"`: delete entry from `userCache` for `userId`.
 
-The callback registered via `subscribe()` is fired after each cache mutation with the updated full user list.
+After processing all entries in the batch, the callback registered via `subscribe()` is fired once with the updated full user list.
 
 **`SharedStateBroadcast` handling:**
 - Merge `data` patch into `sharedCache`.

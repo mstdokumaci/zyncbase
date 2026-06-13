@@ -32,6 +32,9 @@ pub const PresenceManager = struct {
     // User state: namespace_id → (users.id → PresenceRecord)
     user_state: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed.DocId, PresenceRecord)),
 
+    // User join timestamps: namespace_id → (users.id → joined_at_ms)
+    user_joined_at: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed.DocId, i64)),
+
     // Shared state: namespace_id → PresenceRecord
     shared_state: std.AutoHashMapUnmanaged(i64, PresenceRecord),
 
@@ -54,6 +57,7 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         user_id: typed.DocId,
         patch: ?msgpack.Payload, // null = leave
+        is_new_user: bool, // true = join event, false = update event
     };
 
     pub const PendingSharedUpdate = struct {
@@ -78,6 +82,7 @@ pub const PresenceManager = struct {
             .user_fields = user_fields,
             .shared_fields = shared_fields,
             .user_state = .{},
+            .user_joined_at = .{},
             .shared_state = .{},
             .namespace_empty_at = .{},
             .pending_user_updates = .{},
@@ -109,6 +114,13 @@ pub const PresenceManager = struct {
             ns_map.deinit(self.allocator);
         }
         self.user_state.deinit(self.allocator);
+
+        // Clean up user_joined_at
+        var joined_iter = self.user_joined_at.iterator();
+        while (joined_iter.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.user_joined_at.deinit(self.allocator);
 
         // Clean up shared_state
         var shared_iter = self.shared_state.iterator();
@@ -159,8 +171,16 @@ pub const PresenceManager = struct {
 
         // Get or create user record
         const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
-        if (!user_result.found_existing) {
+        const is_new_user = !user_result.found_existing;
+        if (is_new_user) {
             user_result.value_ptr.* = try PresenceRecord.init(self.allocator, self.user_fields.len);
+
+            // Record join timestamp
+            const joined_ns_result = try self.user_joined_at.getOrPut(self.allocator, namespace_id);
+            if (!joined_ns_result.found_existing) {
+                joined_ns_result.value_ptr.* = .{};
+            }
+            try joined_ns_result.value_ptr.put(self.allocator, user_id, std.time.milliTimestamp());
         }
 
         // Merge patch into record
@@ -174,6 +194,7 @@ pub const PresenceManager = struct {
             .namespace_id = namespace_id,
             .user_id = user_id,
             .patch = patch,
+            .is_new_user = is_new_user,
         });
     }
 
@@ -219,6 +240,15 @@ pub const PresenceManager = struct {
             var record = entry.value;
             record.deinit(self.allocator);
 
+            // Clean up join timestamp
+            if (self.user_joined_at.getPtr(namespace_id)) |joined_map| {
+                _ = joined_map.fetchRemove(user_id);
+                if (joined_map.count() == 0) {
+                    joined_map.deinit(self.allocator);
+                    _ = self.user_joined_at.remove(namespace_id);
+                }
+            }
+
             // If namespace is now empty, record timestamp for grace period
             if (ns_ptr.count() == 0) {
                 try self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp());
@@ -229,6 +259,7 @@ pub const PresenceManager = struct {
                 .namespace_id = namespace_id,
                 .user_id = user_id,
                 .patch = null, // null signals leave
+                .is_new_user = false,
             });
         }
     }
@@ -262,12 +293,15 @@ pub const PresenceManager = struct {
         }
 
         if (self.user_state.get(namespace_id)) |ns_map| {
+            const joined_map = self.user_joined_at.get(namespace_id);
             var iter = ns_map.iterator();
             while (iter.next()) |entry| {
                 const cloned = try entry.value_ptr.clone(self.allocator);
+                const joined_at = if (joined_map) |jm| jm.get(entry.key_ptr.*) orelse 0 else 0;
                 try snapshot.users.append(self.allocator, .{
                     .user_id = entry.key_ptr.*,
                     .data = cloned,
+                    .joined_at = joined_at,
                 });
             }
         }
@@ -515,4 +549,5 @@ pub const UserSnapshot = struct {
 pub const UserEntry = struct {
     user_id: typed.DocId,
     data: PresenceRecord,
+    joined_at: i64,
 };

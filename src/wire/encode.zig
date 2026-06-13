@@ -38,6 +38,7 @@ const Keys = struct {
     pub const data = comptimeEncodeKey("data");
     pub const users = comptimeEncodeKey("users");
     pub const shared = comptimeEncodeKey("shared");
+    pub const joined_at = comptimeEncodeKey("joinedAt");
 };
 
 const Values = struct {
@@ -496,8 +497,11 @@ pub fn encodePresenceBroadcast(
     try msgpack.encodeArrayHeader(writer, updates.len);
 
     for (updates) |update| {
-        // Each user entry: { userId: bin16, event: "join"|"update"|"leave", data: {...} }
-        const map_size: usize = if (update.patch != null) 3 else 2;
+        // Each user entry: { userId: bin16, event: "join"|"update"|"leave", data: {...}, joinedAt: int }
+        // join events have data + joinedAt, update events have data only, leave events have neither
+        const is_leave = update.patch == null;
+        const is_join = update.is_new_user and !is_leave;
+        const map_size: usize = if (is_leave) 2 else if (is_join) 4 else 3;
         try msgpack.encodeMapHeader(writer, map_size);
 
         try list.appendSlice(allocator, Keys.user_id);
@@ -505,15 +509,22 @@ pub fn encodePresenceBroadcast(
         try msgpack.writeMsgPackBin(writer, &id_bytes);
 
         try list.appendSlice(allocator, Keys.event);
-        if (update.patch) |_| {
-            try list.appendSlice(allocator, Values.event_update);
-        } else {
+        if (is_leave) {
             try list.appendSlice(allocator, Values.event_leave);
+        } else if (is_join) {
+            try list.appendSlice(allocator, Values.event_join);
+        } else {
+            try list.appendSlice(allocator, Values.event_update);
         }
 
         if (update.patch) |patch| {
             try list.appendSlice(allocator, Keys.data);
             try msgpack.encode(patch, writer);
+
+            if (is_join) {
+                try list.appendSlice(allocator, Keys.joined_at);
+                try msgpack.encode(msgpack.Payload{ .int = std.time.milliTimestamp() }, writer);
+            }
         }
     }
 
@@ -579,8 +590,8 @@ pub fn encodePresenceUserSnapshot(
     try msgpack.encodeArrayHeader(writer, users.len);
 
     for (users) |user| {
-        // Each user: { userId: bin16, data: {...} }
-        try msgpack.encodeMapHeader(writer, 2);
+        // Each user: { userId: bin16, data: {...}, joinedAt: int }
+        try msgpack.encodeMapHeader(writer, 3);
 
         try list.appendSlice(allocator, Keys.user_id);
         const id_bytes = typed.docIdToBytes(user.user_id);
@@ -588,6 +599,9 @@ pub fn encodePresenceUserSnapshot(
 
         try list.appendSlice(allocator, Keys.data);
         try encodePresenceRecord(writer, user.data);
+
+        try list.appendSlice(allocator, Keys.joined_at);
+        try msgpack.encode(msgpack.Payload{ .int = user.joined_at }, writer);
     }
 
     return list.toOwnedSlice(allocator);

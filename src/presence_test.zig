@@ -405,3 +405,129 @@ test "PresenceManager - multiple users in same namespace" {
     defer snapshot.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), snapshot.users.items.len);
 }
+
+test "PresenceManager - setUser tracks joined_at timestamp" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch.free(allocator);
+
+    try manager.setUser(1, user_id, patch);
+
+    // Verify joined_at was recorded
+    const joined_ns = manager.user_joined_at.get(1) orelse return error.TestExpectedValue;
+    const joined_at = joined_ns.get(user_id) orelse return error.TestExpectedValue;
+    try testing.expect(joined_at > 0);
+
+    // Second setUser should NOT update joined_at (user already exists)
+    const original_joined_at = joined_at;
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 200.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+
+    const joined_ns2 = manager.user_joined_at.get(1) orelse return error.TestExpectedValue;
+    const joined_at2 = joined_ns2.get(user_id) orelse return error.TestExpectedValue;
+    try testing.expectEqual(original_joined_at, joined_at2);
+}
+
+test "PresenceManager - removeUser cleans up joined_at" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch.free(allocator);
+    try manager.setUser(1, user_id, patch);
+
+    // Verify joined_at exists
+    try testing.expect(manager.user_joined_at.get(1) != null);
+
+    try manager.removeUser(1, user_id);
+
+    // Verify joined_at was cleaned up
+    const joined_ns = manager.user_joined_at.get(1);
+    if (joined_ns) |ns| {
+        try testing.expectEqual(@as(usize, 0), ns.count());
+    }
+}
+
+test "PresenceManager - is_new_user flag set correctly" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+
+    // First setUser should mark is_new_user = true
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch1.free(allocator);
+    try manager.setUser(1, user_id, patch1);
+    try testing.expect(manager.pending_user_updates.items[0].is_new_user);
+
+    // Second setUser should mark is_new_user = false
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 200.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+    try testing.expect(!manager.pending_user_updates.items[1].is_new_user);
+
+    // removeUser should mark is_new_user = false (leave event)
+    try manager.removeUser(1, user_id);
+    try testing.expect(!manager.pending_user_updates.items[2].is_new_user);
+}
+
+test "PresenceManager - snapshot includes joined_at" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
+    });
+    defer patch.free(allocator);
+    try manager.setUser(1, user_id, patch);
+
+    var snapshot = try manager.onSubscribeUser(1, 100);
+    defer snapshot.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
+    try testing.expect(snapshot.users.items[0].joined_at > 0);
+}
