@@ -624,15 +624,25 @@ pub const PresenceManager = struct {
 
         const now = std.time.milliTimestamp();
         const grace_ms: i64 = 5_000;
-        var grace_iter = self.namespace_empty_at.iterator();
-        while (grace_iter.next()) |entry| {
-            if (now - entry.value_ptr.* >= grace_ms) {
-                if (self.shared_state.fetchRemove(entry.key_ptr.*)) |removed| {
-                    var record = removed.value;
-                    record.deinit(self.allocator);
+
+        // Collect expired keys first — modifying the map while iterating is UB.
+        var to_remove = std.ArrayListUnmanaged(i64).empty;
+        defer to_remove.deinit(self.allocator);
+        {
+            var grace_iter = self.namespace_empty_at.iterator();
+            while (grace_iter.next()) |entry| {
+                if (now - entry.value_ptr.* >= grace_ms) {
+                    to_remove.append(self.allocator, entry.key_ptr.*) catch return;
                 }
-                _ = self.namespace_empty_at.remove(entry.key_ptr.*);
             }
+        }
+
+        for (to_remove.items) |ns_id| {
+            if (self.shared_state.fetchRemove(ns_id)) |removed| {
+                var record = removed.value;
+                record.deinit(self.allocator);
+            }
+            _ = self.namespace_empty_at.remove(ns_id);
         }
     }
 };

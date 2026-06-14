@@ -99,22 +99,17 @@ pub fn initFromJson(allocator: Allocator, json_text: []const u8) !types.Schema {
     }
 
     // Build name arrays for presence fields
+    // These borrow from presence_user_fields which outlives initFromTables.
     var user_names = std.ArrayListUnmanaged([]const u8).empty;
-    defer {
-        for (user_names.items) |name| allocator.free(name);
-        user_names.deinit(allocator);
-    }
+    defer user_names.deinit(allocator);
     for (presence_user_fields.items) |f| {
-        try user_names.append(allocator, try allocator.dupe(u8, f.name));
+        try user_names.append(allocator, f.name);
     }
 
     var shared_names = std.ArrayListUnmanaged([]const u8).empty;
-    defer {
-        for (shared_names.items) |name| allocator.free(name);
-        shared_names.deinit(allocator);
-    }
+    defer shared_names.deinit(allocator);
     for (presence_shared_fields.items) |f| {
-        try shared_names.append(allocator, try allocator.dupe(u8, f.name));
+        try shared_names.append(allocator, f.name);
     }
 
     return initFromTables(
