@@ -193,9 +193,19 @@ pub const MessageHandler = struct {
     pub fn teardownSession(self: *MessageHandler, conn: *Connection) void {
         self.violation_tracker.clearViolations(conn.id);
 
+        // Capture presence state before resetSessionLocked clears it
+        const presence_ns = conn.presence_namespace_id;
+        const presence_user = conn.user_doc_id;
+
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
+
+        if (presence_ns != connection_mod.unset_namespace_id) {
+            self.presence_manager.removeAllForConnection(presence_ns, presence_user, conn.id) catch |err| {
+                std.log.err("Failed to clean up presence on disconnect: {}", .{err});
+            };
+        }
     }
 
     fn resetStoreScopeAndClearSubscriptions(self: *MessageHandler, conn: *Connection, namespace: []const u8) !u64 {
@@ -746,10 +756,23 @@ pub const MessageHandler = struct {
         var transferred = false;
         errdefer if (!transferred) conn.allocator.free(namespace_owned);
 
+        // Capture old presence state before beginPresenceScopeResolutionLocked resets it
+        const old_ns = conn.presence_namespace_id;
+        const old_user = conn.user_doc_id;
+
         conn.beginPresenceScopeResolutionLocked(namespace_owned);
         transferred = true;
         const scope_seq = conn.presence_scope_seq;
-        _ = self; // May need to unsubscribe from presence subscriptions in the future
+
+        // Unsubscribe from old namespace before switching to the new one
+        if (old_ns != connection_mod.unset_namespace_id) {
+            self.presence_manager.onUnsubscribeUser(old_ns, conn.id);
+            self.presence_manager.onUnsubscribeShared(old_ns, conn.id);
+            self.presence_manager.removeUser(old_ns, old_user) catch |err| {
+                std.log.err("Failed to remove user presence from old namespace during switch: {}", .{err});
+            };
+        }
+
         return scope_seq;
     }
 

@@ -143,15 +143,31 @@ pub const PresenceManager = struct {
 
         // Get or create namespace map
         const ns_result = try self.user_state.getOrPut(self.allocator, namespace_id);
-        if (!ns_result.found_existing) {
+        const ns_created = !ns_result.found_existing;
+        if (ns_created) {
             ns_result.value_ptr.* = .{};
         }
 
         // Get or create user record
         const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
         const is_new_user = !user_result.found_existing;
+
         if (is_new_user) {
+            // getOrPut inserted user_id with undefined value — register cleanup
+            // before any try that might fail.
+            errdefer {
+                _ = ns_result.value_ptr.fetchRemove(user_id);
+                if (ns_created and ns_result.value_ptr.count() == 0) {
+                    ns_result.value_ptr.deinit(self.allocator);
+                    _ = self.user_state.remove(namespace_id);
+                }
+            }
+
             user_result.value_ptr.* = try PresenceRecord.init(self.allocator, self.user_fields.len);
+            // Record is initialized — register deinit (fires before fetchRemove, LIFO)
+            errdefer {
+                user_result.value_ptr.deinit(self.allocator);
+            }
 
             // Record join timestamp
             const joined_ns_result = try self.user_joined_at.getOrPut(self.allocator, namespace_id);
@@ -161,14 +177,14 @@ pub const PresenceManager = struct {
             try joined_ns_result.value_ptr.put(self.allocator, user_id, std.time.milliTimestamp());
         }
 
-        // Merge patch into record
+        // Merge patch into record — catch handles cleanup for new users
         user_result.value_ptr.mergeFromPayload(self.allocator, self.user_fields, patch) catch |err| {
             if (is_new_user) {
                 user_result.value_ptr.deinit(self.allocator);
                 _ = ns_result.value_ptr.fetchRemove(user_id);
                 if (ns_result.value_ptr.count() == 0) {
                     ns_result.value_ptr.deinit(self.allocator);
-                    _ = self.user_state.remove(namespace_id);
+                    if (ns_created) _ = self.user_state.remove(namespace_id);
                 }
                 if (self.user_joined_at.getPtr(namespace_id)) |joined_map| {
                     _ = joined_map.fetchRemove(user_id);
@@ -220,12 +236,23 @@ pub const PresenceManager = struct {
 
         // Get or create shared record
         const result = try self.shared_state.getOrPut(self.allocator, namespace_id);
-        if (!result.found_existing) {
+        const is_new = !result.found_existing;
+        if (is_new) {
             result.value_ptr.* = try PresenceRecord.init(self.allocator, self.shared_fields.len);
+            errdefer {
+                result.value_ptr.deinit(self.allocator);
+                _ = self.shared_state.remove(namespace_id);
+            }
         }
 
         // Merge patch into record
-        try result.value_ptr.mergeFromPayload(self.allocator, self.shared_fields, patch);
+        result.value_ptr.mergeFromPayload(self.allocator, self.shared_fields, patch) catch |err| {
+            if (is_new) {
+                result.value_ptr.deinit(self.allocator);
+                _ = self.shared_state.remove(namespace_id);
+            }
+            return err;
+        };
 
         // Coalesce pending shared updates for the namespace.
         if (self.findPendingSharedUpdate(namespace_id)) |existing| {
@@ -516,6 +543,21 @@ pub const PresenceManager = struct {
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
+
+        // Sort by namespace_id to ensure contiguous grouping
+        const SortHelpers = struct {
+            fn compareUser(ctx: void, a: PendingUserUpdate, b: PendingUserUpdate) bool {
+                _ = ctx;
+                return a.namespace_id < b.namespace_id;
+            }
+            fn compareShared(ctx: void, a: PendingSharedUpdate, b: PendingSharedUpdate) bool {
+                _ = ctx;
+                return a.namespace_id < b.namespace_id;
+            }
+        };
+
+        std.mem.sort(PendingUserUpdate, self.pending_user_updates.items, {}, SortHelpers.compareUser);
+        std.mem.sort(PendingSharedUpdate, self.pending_shared_updates.items, {}, SortHelpers.compareShared);
 
         var i: usize = 0;
         while (i < self.pending_user_updates.items.len) {

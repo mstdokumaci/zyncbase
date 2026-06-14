@@ -54,6 +54,9 @@ pub const PresenceDispatcher = struct {
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
             for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*update| {
+                    if (update.patch) |patch| patch.free(self.allocator);
+                }
                 batch.updates.deinit(self.allocator);
                 batch.subscribers.deinit(self.allocator);
             }
@@ -63,6 +66,9 @@ pub const PresenceDispatcher = struct {
         var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
         defer {
             for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*update| {
+                    update.patch.free(self.allocator);
+                }
                 batch.updates.deinit(self.allocator);
                 batch.subscribers.deinit(self.allocator);
             }

@@ -210,27 +210,33 @@ export class PresenceImpl implements Presence {
 		this.sharedCache = null;
 		this.userSubId = null;
 		this.sharedSubId = null;
+		this.userSubPromise = null;
+		this.sharedSubPromise = null;
 		this.clearThrottle();
 	}
 
 	replaySubscriptions(): void {
-		if (this.userCallbacks.size > 0) {
+		if (this.userCallbacks.size > 0 && !this.userSubPromise) {
 			this.userSubId = null;
-			this.conn
+			this.userSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribe" })
 				.then((ok) => {
+					this.userSubPromise = null;
 					this.userSubId = ok.subId ?? null;
 					this.populateUserCacheFromSnapshot(ok);
 					this.fireUserCallbacks();
 				})
-				.catch(() => {});
+				.catch(() => {
+					this.userSubPromise = null;
+				});
 		}
 
-		if (this.sharedCallbacks.size > 0) {
+		if (this.sharedCallbacks.size > 0 && !this.sharedSubPromise) {
 			this.sharedSubId = null;
-			this.conn
+			this.sharedSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribeShared" })
 				.then((ok) => {
+					this.sharedSubPromise = null;
 					this.sharedSubId = ok.subId ?? null;
 					if (ok.shared != null) {
 						this.sharedCache = ok.shared as Record<string, unknown>;
@@ -239,7 +245,9 @@ export class PresenceImpl implements Presence {
 					}
 					this.fireSharedCallbacks();
 				})
-				.catch(() => {});
+				.catch(() => {
+					this.sharedSubPromise = null;
+				});
 		}
 	}
 

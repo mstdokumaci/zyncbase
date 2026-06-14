@@ -45,7 +45,8 @@ pub const PresenceRecord = struct {
 
     /// Iterate only the sparse entries in the wire Payload patch.
     /// Validates field index bounds and value types against the schema via
-    /// `typed.valueFromPayload`. Patches the dense record in place.
+    /// `typed.valueFromPayload`. Decodes all fields first into a temporary
+    /// buffer, then applies them atomically to avoid partial mutation on error.
     pub fn mergeFromPayload(
         self: *PresenceRecord,
         allocator: Allocator,
@@ -53,6 +54,17 @@ pub const PresenceRecord = struct {
         patch: msgpack.Payload,
     ) !void {
         if (patch != .map) return error.InvalidPayload;
+
+        const TempUpdate = struct {
+            idx: usize,
+            value: typed.Value,
+        };
+        var temp_updates = std.ArrayListUnmanaged(TempUpdate).empty;
+        defer {
+            for (temp_updates.items) |*update| update.value.deinit(allocator);
+            temp_updates.deinit(allocator);
+        }
+
         var it = patch.map.iterator();
         while (it.next()) |entry| {
             const f_idx: usize = blk: {
@@ -68,9 +80,16 @@ pub const PresenceRecord = struct {
 
             const field = fields[f_idx];
             const new_value = typed.valueFromPayload(allocator, field.declared_type, null, entry.value_ptr.*) catch return error.SchemaValidationFailed;
+            errdefer new_value.deinit(allocator);
 
-            if (self.values[f_idx]) |*old| old.deinit(allocator);
-            self.values[f_idx] = new_value;
+            try temp_updates.append(allocator, .{ .idx = f_idx, .value = new_value });
         }
+
+        // All decoded successfully — apply atomically
+        for (temp_updates.items) |update| {
+            if (self.values[update.idx]) |*old| old.deinit(allocator);
+            self.values[update.idx] = update.value;
+        }
+        temp_updates.clearRetainingCapacity();
     }
 };

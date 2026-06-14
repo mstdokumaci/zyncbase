@@ -539,6 +539,12 @@ export class SchemaDictionary {
  * Example:
  *   { cursor: { x: 1, y: 2 }, status: "active" } → { "cursor__x": 1, "cursor__y": 2, "status": "active" }
  */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null) return false;
+	const proto = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
 function flattenPresenceData(
 	obj: Record<string, unknown>,
 	prefix = "",
@@ -547,11 +553,8 @@ function flattenPresenceData(
 	for (const key of Object.keys(obj)) {
 		const fullKey = prefix ? `${prefix}__${key}` : key;
 		const value = obj[key];
-		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-			const nested = flattenPresenceData(
-				value as Record<string, unknown>,
-				fullKey,
-			);
+		if (isPlainObject(value)) {
+			const nested = flattenPresenceData(value, fullKey);
 			for (const nestedKey of Object.keys(nested)) {
 				result[nestedKey] = nested[nestedKey];
 			}
