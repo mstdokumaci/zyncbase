@@ -15,7 +15,6 @@ const NotificationDispatcher = @import("notification_dispatcher.zig").Notificati
 const SessionResolver = @import("session_resolver.zig").SessionResolver;
 const WriteOutcomeDispatcher = @import("write_outcome_dispatcher.zig").WriteOutcomeDispatcher;
 const ConnectionManager = @import("connection_manager.zig").ConnectionManager;
-const connection_mod = @import("connection_manager.zig");
 const ViolationTracker = @import("violation_tracker.zig").ConnectionViolationTracker;
 const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
@@ -25,6 +24,7 @@ const MigrationDetector = @import("migration_detector.zig").MigrationDetector;
 const MigrationExecutor = @import("migration_executor.zig").MigrationExecutor;
 const StoreService = @import("store_service.zig").StoreService;
 const PresenceManager = @import("presence.zig").PresenceManager;
+const PresenceDispatcher = @import("presence.zig").PresenceDispatcher;
 const ticket_exchange_mod = @import("ticket_exchange.zig");
 const TicketExchange = ticket_exchange_mod.TicketExchange;
 const JwtValidationConfig = @import("jwt_validator.zig").JwtValidationConfig;
@@ -54,6 +54,7 @@ pub const ZyncBaseServer = struct {
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
+    presence_dispatcher: PresenceDispatcher,
     message_handler: MessageHandler,
     shutdown_requested: std.atomic.Value(bool),
     schema: Schema,
@@ -267,6 +268,11 @@ pub const ZyncBaseServer = struct {
             self.schema.presence_shared_fields,
         );
 
+        self.presence_dispatcher.init(
+            self.memory_strategy.generalAllocator(),
+            &self.presence_manager,
+        );
+
         const auth_cfg = &config.authentication;
         var jwks_cache_ptr: ?*JwksCache = null;
         if (auth_cfg.jwt_jwks_url) |jwks_url| {
@@ -410,12 +416,7 @@ pub const ZyncBaseServer = struct {
         // Start checkpoint manager background thread
         try self.checkpoint_manager.startBackgroundLoop();
 
-        // Start presence manager background thread
-        try self.presence_manager.start();
-        self.presence_manager.setConnectionManager(
-            &self.connection_manager,
-            connection_mod.sendToConnection,
-        );
+        try self.presence_dispatcher.start(&self.connection_manager);
 
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
@@ -530,6 +531,9 @@ pub const ZyncBaseServer = struct {
         std.log.debug("Deinitializing store_service", .{});
         self.store_service.deinit();
 
+        std.log.debug("Deinitializing presence_dispatcher", .{});
+        self.presence_dispatcher.deinit();
+
         std.log.debug("Deinitializing presence_manager", .{});
         self.presence_manager.deinit();
 
@@ -614,6 +618,7 @@ pub const ZyncBaseServer = struct {
         self.notification_dispatcher.poll(&self.connection_manager);
         self.session_resolver.poll(&self.connection_manager);
         self.write_outcome_dispatcher.poll(&self.connection_manager);
+        self.presence_dispatcher.poll(&self.connection_manager);
 
         const now_ms = std.time.milliTimestamp();
         if (now_ms - self.last_token_sweep_ms >= 15_000) {

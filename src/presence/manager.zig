@@ -4,25 +4,12 @@ const typed = @import("../typed.zig");
 const schema_mod = @import("../schema.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
-const wire = @import("../wire.zig");
 
-/// PresenceManager manages ephemeral presence state for connected users.
-/// All data lives in RAM for sub-100ms latency. Runs on a dedicated background
-/// thread for periodic flush, with a mutex protecting internal state from
-/// concurrent uWS message handler access.
+/// Owns presence state, pending batches, and subscription tracking.
+/// Thread-safe; does not know about networking.
 pub const PresenceManager = struct {
     allocator: Allocator,
 
-    // --- Thread management (modeled on CheckpointManager) ---
-    background_thread: ?std.Thread,
-    shutdown_requested: std.atomic.Value(bool),
-    shutdown_mutex: std.Thread.Mutex,
-    shutdown_cond: std.Thread.Condition,
-
-    // --- Data protection ---
-    // Guards all mutable state below. Acquired by uWS message handler threads
-    // on setUser/setShared/onSubscribeUser/onSubscribeShared/removeUser.
-    // Also acquired by the flush loop thread during flushBatch.
     data_mutex: std.Thread.Mutex,
 
     // Typed schema built at startup (names + declared types)
@@ -48,10 +35,6 @@ pub const PresenceManager = struct {
     // Subscription tracking: namespace_id → []Subscriber
     user_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
     shared_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
-
-    // Connection to PresenceManager reference for sending broadcasts
-    connection_manager: ?*anyopaque,
-    send_broadcast_fn: ?*const fn (ctx: *anyopaque, conn_id: u64, data: []const u8) void,
 
     pub const Subscriber = struct {
         conn_id: u64,
@@ -79,10 +62,6 @@ pub const PresenceManager = struct {
     ) void {
         self.* = .{
             .allocator = allocator,
-            .background_thread = null,
-            .shutdown_requested = std.atomic.Value(bool).init(false),
-            .shutdown_mutex = .{},
-            .shutdown_cond = .{},
             .data_mutex = .{},
             .user_fields = user_fields,
             .shared_fields = shared_fields,
@@ -94,20 +73,10 @@ pub const PresenceManager = struct {
             .pending_shared_updates = .{},
             .user_subscribers = .{},
             .shared_subscribers = .{},
-            .connection_manager = null,
-            .send_broadcast_fn = null,
         };
     }
 
     pub fn deinit(self: *PresenceManager) void {
-        // Stop background thread if running
-        if (self.background_thread) |thread| {
-            self.stop();
-            thread.join();
-            self.background_thread = null;
-        }
-
-        // Clean up user_state
         var user_iter = self.user_state.iterator();
         while (user_iter.next()) |entry| {
             var ns_map = entry.value_ptr.*;
@@ -497,42 +466,93 @@ pub const PresenceManager = struct {
         self.onUnsubscribeShared(namespace_id, conn_id);
     }
 
-    // --- Lifecycle ---
+    // --- Public API for Dispatcher ---
 
-    /// Spawn the dedicated background flush thread.
-    pub fn start(self: *PresenceManager) !void {
-        self.shutdown_requested.store(false, .release);
-        const thread = try std.Thread.spawn(.{}, flushLoop, .{self});
-        self.background_thread = thread;
-    }
+    /// Batch of user presence updates for a single namespace.
+    pub const UserUpdateBatch = struct {
+        namespace_id: i64,
+        updates: std.ArrayListUnmanaged(PendingUserUpdate),
+        subscribers: std.ArrayListUnmanaged(Subscriber),
+    };
 
-    /// Signal shutdown and join the background thread.
-    pub fn stop(self: *PresenceManager) void {
-        self.shutdown_requested.store(true, .release);
-        self.shutdown_mutex.lock();
-        self.shutdown_cond.signal();
-        self.shutdown_mutex.unlock();
-    }
+    /// Batch of shared state updates for a single namespace.
+    pub const SharedUpdateBatch = struct {
+        namespace_id: i64,
+        updates: std.ArrayListUnmanaged(PendingSharedUpdate),
+        subscribers: std.ArrayListUnmanaged(Subscriber),
+    };
 
-    /// Dedicated thread: blocks on timedWait for 50ms, then flushes.
-    fn flushLoop(self: *PresenceManager) void {
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
+    /// Drains pending updates and returns them grouped by namespace with their subscribers.
+    /// Caller owns the returned batches and must deinit them.
+    pub fn drainPendingBatches(
+        self: *PresenceManager,
+        allocator: Allocator,
+        user_batches: *std.ArrayListUnmanaged(UserUpdateBatch),
+        shared_batches: *std.ArrayListUnmanaged(SharedUpdateBatch),
+    ) !void {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
 
-        while (!self.shutdown_requested.load(.acquire)) {
-            self.shutdown_cond.timedWait(&self.shutdown_mutex, 50 * std.time.ns_per_ms) catch |err| {
-                if (err != error.Timeout) {
-                    std.log.err("PresenceManager flush loop error: {}", .{err});
-                }
+        var i: usize = 0;
+        while (i < self.pending_user_updates.items.len) {
+            const namespace_id = self.pending_user_updates.items[i].namespace_id;
+            const range_start = i;
+
+            while (i < self.pending_user_updates.items.len and self.pending_user_updates.items[i].namespace_id == namespace_id) : (i += 1) {}
+
+            const ns_updates = self.pending_user_updates.items[range_start..i];
+
+            var batch = UserUpdateBatch{
+                .namespace_id = namespace_id,
+                .updates = std.ArrayListUnmanaged(PendingUserUpdate).empty,
+                .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
-            if (self.shutdown_requested.load(.acquire)) break;
-            self.flushBatch();
+            errdefer {
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+
+            try batch.updates.appendSlice(allocator, ns_updates);
+            if (self.user_subscribers.get(namespace_id)) |subs| {
+                try batch.subscribers.appendSlice(allocator, subs.items);
+            }
+
+            try user_batches.append(allocator, batch);
         }
+
+        self.pending_user_updates.clearRetainingCapacity();
+
+        i = 0;
+        while (i < self.pending_shared_updates.items.len) {
+            const namespace_id = self.pending_shared_updates.items[i].namespace_id;
+            const range_start = i;
+
+            while (i < self.pending_shared_updates.items.len and self.pending_shared_updates.items[i].namespace_id == namespace_id) : (i += 1) {}
+
+            const ns_updates = self.pending_shared_updates.items[range_start..i];
+
+            var batch = SharedUpdateBatch{
+                .namespace_id = namespace_id,
+                .updates = std.ArrayListUnmanaged(PendingSharedUpdate).empty,
+                .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
+            };
+            errdefer {
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+
+            try batch.updates.appendSlice(allocator, ns_updates);
+            if (self.shared_subscribers.get(namespace_id)) |subs| {
+                try batch.subscribers.appendSlice(allocator, subs.items);
+            }
+
+            try shared_batches.append(allocator, batch);
+        }
+
+        self.pending_shared_updates.clearRetainingCapacity();
     }
 
-    /// Runs on the dedicated background thread every 50ms.
-    fn flushBatch(self: *PresenceManager) void {
-        // 1. Evict expired grace-period entries
+    pub fn evictExpiredGracePeriods(self: *PresenceManager) void {
         const now = std.time.milliTimestamp();
         const grace_ms: i64 = 5_000;
         var grace_iter = self.namespace_empty_at.iterator();
@@ -545,113 +565,6 @@ pub const PresenceManager = struct {
                 _ = self.namespace_empty_at.remove(entry.key_ptr.*);
             }
         }
-
-        // 2. Snapshot and clear pending updates under lock
-        self.data_mutex.lock();
-        var user_updates = self.pending_user_updates;
-        var shared_updates = self.pending_shared_updates;
-        self.pending_user_updates = .{};
-        self.pending_shared_updates = .{};
-        self.data_mutex.unlock();
-
-        // 3. Broadcast updates (no lock needed)
-        if (user_updates.items.len > 0) {
-            self.broadcastUserBatch(user_updates.items);
-            for (user_updates.items) |*update| {
-                if (update.patch) |patch| {
-                    patch.free(self.allocator);
-                }
-            }
-            user_updates.deinit(self.allocator);
-        }
-
-        if (shared_updates.items.len > 0) {
-            self.broadcastSharedBatch(shared_updates.items);
-            for (shared_updates.items) |*update| {
-                update.patch.free(self.allocator);
-            }
-            shared_updates.deinit(self.allocator);
-        }
-    }
-
-    fn broadcastUserBatch(self: *PresenceManager, updates: []const PendingUserUpdate) void {
-        // Group by namespace and broadcast to subscribers
-        var i: usize = 0;
-        while (i < updates.len) {
-            const namespace_id = updates[i].namespace_id;
-            const range_start = i;
-
-            // Find range of updates for this namespace
-            while (i < updates.len and updates[i].namespace_id == namespace_id) : (i += 1) {}
-
-            const ns_updates = updates[range_start..i];
-
-            // Get subscribers for this namespace
-            const subs = self.user_subscribers.get(namespace_id) orelse continue;
-            if (subs.items.len == 0) continue;
-
-            // Build and send broadcast for each subscriber
-            for (subs.items) |subscriber| {
-                self.sendUserBroadcast(subscriber, ns_updates);
-            }
-        }
-    }
-
-    fn sendUserBroadcast(self: *PresenceManager, subscriber: Subscriber, updates: []const PendingUserUpdate) void {
-        if (self.send_broadcast_fn) |send_fn| {
-            if (self.connection_manager) |ctx| {
-                const encoded = wire.encodePresenceBroadcast(self.allocator, subscriber.sub_id, updates) catch |err| {
-                    std.log.err("Presence broadcast encoding failed: {}", .{err});
-                    return;
-                };
-                defer self.allocator.free(encoded);
-                send_fn(ctx, subscriber.conn_id, encoded);
-            }
-        }
-    }
-
-    fn broadcastSharedBatch(self: *PresenceManager, updates: []const PendingSharedUpdate) void {
-        // Group by namespace and broadcast to subscribers
-        var i: usize = 0;
-        while (i < updates.len) {
-            const namespace_id = updates[i].namespace_id;
-            const range_start = i;
-
-            // Find range of updates for this namespace
-            while (i < updates.len and updates[i].namespace_id == namespace_id) : (i += 1) {}
-
-            const ns_updates = updates[range_start..i];
-
-            // Get subscribers for this namespace
-            const subs = self.shared_subscribers.get(namespace_id) orelse continue;
-            if (subs.items.len == 0) continue;
-
-            // Build and send broadcast for each subscriber
-            for (subs.items) |subscriber| {
-                self.sendSharedBroadcast(subscriber, ns_updates);
-            }
-        }
-    }
-
-    fn sendSharedBroadcast(self: *PresenceManager, subscriber: Subscriber, updates: []const PendingSharedUpdate) void {
-        if (self.send_broadcast_fn) |send_fn| {
-            if (self.connection_manager) |ctx| {
-                // Encode broadcast message
-                const encoded = wire.encodeSharedStateBroadcast(self.allocator, subscriber.sub_id, updates) catch return;
-                defer self.allocator.free(encoded);
-                send_fn(ctx, subscriber.conn_id, encoded);
-            }
-        }
-    }
-
-    /// Set the connection manager and broadcast function for sending updates.
-    pub fn setConnectionManager(
-        self: *PresenceManager,
-        connection_manager: *anyopaque,
-        send_fn: *const fn (*anyopaque, u64, []const u8) void,
-    ) void {
-        self.connection_manager = connection_manager;
-        self.send_broadcast_fn = send_fn;
     }
 };
 
