@@ -25,6 +25,8 @@ export class PresenceImpl implements Presence {
 	private sharedCache: Record<string, unknown> | null = null;
 	private userSubId: number | null = null;
 	private sharedSubId: number | null = null;
+	private userSubPromise: Promise<void> | null = null;
+	private sharedSubPromise: Promise<void> | null = null;
 	private userCallbacks = new Set<(users: PresenceEntry[]) => void>();
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
@@ -74,10 +76,13 @@ export class PresenceImpl implements Presence {
 	subscribe(callback: (users: PresenceEntry[]) => void): () => void {
 		this.userCallbacks.add(callback);
 
-		if (this.userSubId === null) {
-			this.conn
+		if (this.userSubId !== null) {
+			callback(this.getAll());
+		} else if (!this.userSubPromise) {
+			this.userSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribe" })
 				.then((ok) => {
+					this.userSubPromise = null;
 					if (this.userCallbacks.size === 0) {
 						if (ok.subId !== undefined) {
 							this.conn
@@ -93,21 +98,26 @@ export class PresenceImpl implements Presence {
 					this.populateUserCacheFromSnapshot(ok);
 					this.fireUserCallbacks();
 				})
-				.catch(() => {});
+				.catch(() => {
+					this.userSubPromise = null;
+				});
 		}
 
 		return () => {
 			this.userCallbacks.delete(callback);
-			if (this.userCallbacks.size === 0 && this.userSubId !== null) {
+			if (this.userCallbacks.size === 0 && (this.userSubId !== null || this.userSubPromise !== null)) {
 				const subId = this.userSubId;
 				this.userSubId = null;
+				this.userSubPromise = null;
 				this.userCache.clear();
-				this.conn
-					.dispatch({
-						type: "PresenceUnsubscribe",
-						subId,
-					})
-					.catch(() => {});
+				if (subId !== null) {
+					this.conn
+						.dispatch({
+							type: "PresenceUnsubscribe",
+							subId,
+						})
+						.catch(() => {});
+				}
 			}
 		};
 	}
@@ -117,43 +127,57 @@ export class PresenceImpl implements Presence {
 	): () => void {
 		this.sharedCallbacks.add(callback);
 
-		if (this.sharedSubId === null) {
-			this.subscribeSharedRemote();
-		} else {
+		if (this.sharedSubId !== null) {
 			callback(this.sharedCache);
+		} else if (!this.sharedSubPromise) {
+			this.sharedSubPromise = this.conn
+				.dispatch({ type: "PresenceSubscribeShared" })
+				.then((ok) => {
+					this.sharedSubPromise = null;
+					this.handleSharedSubscribeResponse(ok);
+				})
+				.catch(() => {
+					this.sharedSubPromise = null;
+				});
 		}
 
 		return () => {
 			this.sharedCallbacks.delete(callback);
-			if (this.sharedCallbacks.size === 0 && this.sharedSubId !== null) {
+			if (this.sharedCallbacks.size === 0 && (this.sharedSubId !== null || this.sharedSubPromise !== null)) {
 				const subId = this.sharedSubId;
 				this.sharedSubId = null;
+				this.sharedSubPromise = null;
 				this.sharedCache = null;
-				this.conn
-					.dispatch({
-						type: "PresenceUnsubscribeShared",
-						subId,
-					})
-					.catch(() => {});
+				if (subId !== null) {
+					this.conn
+						.dispatch({
+							type: "PresenceUnsubscribeShared",
+							subId,
+						})
+						.catch(() => {});
+				}
 			}
 		};
 	}
 
-	private subscribeSharedRemote(): void {
-		this.conn
-			.dispatch({ type: "PresenceSubscribeShared" })
-			.then((ok) => this.handleSharedSubscribeResponse(ok))
-			.catch(() => {});
-	}
-
 	private handleSharedSubscribeResponse(ok: OkResponse): void {
 		if (this.sharedCallbacks.size === 0) {
-			this.maybeUnsubscribeShared(ok.subId);
+			if (ok.subId !== undefined) {
+				this.conn
+					.dispatch({
+						type: "PresenceUnsubscribeShared",
+						subId: ok.subId,
+					})
+					.catch(() => {});
+			}
 			return;
 		}
 		this.sharedSubId = ok.subId ?? null;
-		this.sharedCache =
-			ok.shared != null ? (ok.shared as Record<string, unknown>) : null;
+		if (ok.shared != null) {
+			this.sharedCache = ok.shared as Record<string, unknown>;
+		} else {
+			this.sharedCache = null;
+		}
 		this.fireSharedCallbacks();
 	}
 
@@ -274,9 +298,13 @@ export class PresenceImpl implements Presence {
 			return;
 		}
 
-		const existing = this.userCache.get(userId);
-		if (existing) {
-			existing.data = { ...existing.data, ...(entry.data ?? {}) };
+		if (this.userCache.has(userId)) {
+			const existing = this.userCache.get(userId)!;
+			this.userCache.set(userId, {
+				userId,
+				joinedAt: existing.joinedAt,
+				data: entry.data ?? {},
+			});
 		} else {
 			this.userCache.set(userId, {
 				userId,

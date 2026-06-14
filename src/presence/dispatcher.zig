@@ -16,9 +16,6 @@ pub const PresenceDispatcher = struct {
     shutdown_mutex: std.Thread.Mutex,
     shutdown_cond: std.Thread.Condition,
 
-    user_batches: std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch) = .empty,
-    shared_batches: std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch) = .empty,
-
     pub fn init(
         self: *PresenceDispatcher,
         allocator: Allocator,
@@ -31,8 +28,6 @@ pub const PresenceDispatcher = struct {
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.shutdown_mutex = .{};
         self.shutdown_cond = .{};
-        self.user_batches = .empty;
-        self.shared_batches = .empty;
     }
 
     pub fn deinit(self: *PresenceDispatcher) void {
@@ -44,18 +39,6 @@ pub const PresenceDispatcher = struct {
             thread.join();
             self.background_thread = null;
         }
-
-        for (self.user_batches.items) |*batch| {
-            batch.updates.deinit(self.allocator);
-            batch.subscribers.deinit(self.allocator);
-        }
-        self.user_batches.deinit(self.allocator);
-
-        for (self.shared_batches.items) |*batch| {
-            batch.updates.deinit(self.allocator);
-            batch.subscribers.deinit(self.allocator);
-        }
-        self.shared_batches.deinit(self.allocator);
     }
 
     pub fn start(self: *PresenceDispatcher, cm: *ConnectionManager) !void {
@@ -68,14 +51,32 @@ pub const PresenceDispatcher = struct {
     pub fn poll(self: *PresenceDispatcher, cm: *ConnectionManager) void {
         self.presence_manager.evictExpiredGracePeriods();
 
-        self.presence_manager.drainPendingBatches(self.allocator, &self.user_batches, &self.shared_batches) catch |err| {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                batch.updates.deinit(self.allocator);
+                batch.subscribers.deinit(self.allocator);
+            }
+            user_batches.deinit(self.allocator);
+        }
+
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                batch.updates.deinit(self.allocator);
+                batch.subscribers.deinit(self.allocator);
+            }
+            shared_batches.deinit(self.allocator);
+        }
+
+        self.presence_manager.drainPendingBatches(self.allocator, &user_batches, &shared_batches) catch |err| {
             std.log.err("PresenceDispatcher drain failed: {}", .{err});
             return;
         };
 
-        if (self.user_batches.items.len == 0 and self.shared_batches.items.len == 0) return;
+        if (user_batches.items.len == 0 and shared_batches.items.len == 0) return;
 
-        for (self.user_batches.items) |batch| {
+        for (user_batches.items) |batch| {
             if (batch.subscribers.items.len == 0) continue;
             for (batch.subscribers.items) |subscriber| {
                 const msg = wire.encodePresenceBroadcast(self.allocator, subscriber.sub_id, batch.updates.items) catch |err| {
@@ -87,7 +88,7 @@ pub const PresenceDispatcher = struct {
             }
         }
 
-        for (self.shared_batches.items) |batch| {
+        for (shared_batches.items) |batch| {
             if (batch.subscribers.items.len == 0) continue;
             for (batch.subscribers.items) |subscriber| {
                 const msg = wire.encodeSharedStateBroadcast(self.allocator, subscriber.sub_id, batch.updates.items) catch |err| {
@@ -98,18 +99,6 @@ pub const PresenceDispatcher = struct {
                 self.allocator.free(msg);
             }
         }
-
-        for (self.user_batches.items) |*batch| {
-            batch.updates.deinit(self.allocator);
-            batch.subscribers.deinit(self.allocator);
-        }
-        self.user_batches.clearRetainingCapacity();
-
-        for (self.shared_batches.items) |*batch| {
-            batch.updates.deinit(self.allocator);
-            batch.subscribers.deinit(self.allocator);
-        }
-        self.shared_batches.clearRetainingCapacity();
     }
 
     fn flushLoop(self: *PresenceDispatcher) void {

@@ -182,6 +182,7 @@ pub const PresenceManager = struct {
 
         // No pending update for this user; clone once and append.
         const cloned_patch = try patch.deepClone(self.allocator);
+        errdefer cloned_patch.free(self.allocator);
         try self.pending_user_updates.append(self.allocator, .{
             .namespace_id = namespace_id,
             .user_id = user_id,
@@ -218,6 +219,7 @@ pub const PresenceManager = struct {
 
         // No pending shared update; clone once and append.
         const cloned_patch = try patch.deepClone(self.allocator);
+        errdefer cloned_patch.free(self.allocator);
         try self.pending_shared_updates.append(self.allocator, .{
             .namespace_id = namespace_id,
             .patch = cloned_patch,
@@ -352,21 +354,14 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        // Register subscriber
-        const sub_result = try self.user_subscribers.getOrPut(self.allocator, namespace_id);
-        if (!sub_result.found_existing) {
-            sub_result.value_ptr.* = .{};
-        }
-        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
-
-        // Build snapshot of current users
+        // Build snapshot before registering subscriber — any failure here
+        // must not leave a subscriber registered with no snapshot delivered.
         var snapshot = UserSnapshot{
             .users = std.ArrayListUnmanaged(UserEntry).empty,
         };
         errdefer {
-            for (snapshot.users.items) |*entry| {
+            for (snapshot.users.items) |*entry|
                 entry.data.deinit(self.allocator);
-            }
             snapshot.users.deinit(self.allocator);
         }
 
@@ -374,7 +369,9 @@ pub const PresenceManager = struct {
             const joined_map = self.user_joined_at.get(namespace_id);
             var iter = ns_map.iterator();
             while (iter.next()) |entry| {
-                const cloned = try entry.value_ptr.clone(self.allocator);
+                var cloned = try entry.value_ptr.clone(self.allocator);
+                errdefer cloned.deinit(self.allocator);
+
                 const joined_at = if (joined_map) |jm| jm.get(entry.key_ptr.*) orelse 0 else 0;
                 try snapshot.users.append(self.allocator, .{
                     .user_id = entry.key_ptr.*,
@@ -383,6 +380,12 @@ pub const PresenceManager = struct {
                 });
             }
         }
+
+        const sub_result = try self.user_subscribers.getOrPut(self.allocator, namespace_id);
+        if (!sub_result.found_existing) {
+            sub_result.value_ptr.* = .{};
+        }
+        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
         return snapshot;
     }
@@ -398,18 +401,20 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        // Register subscriber
+        // Clone before registering subscriber.
+        var cloned_record = if (self.shared_state.get(namespace_id)) |record|
+            try record.clone(self.allocator)
+        else
+            null;
+        errdefer if (cloned_record) |*r| r.deinit(self.allocator);
+
         const sub_result = try self.shared_subscribers.getOrPut(self.allocator, namespace_id);
         if (!sub_result.found_existing) {
             sub_result.value_ptr.* = .{};
         }
         try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
-        // Return clone of current shared state
-        if (self.shared_state.get(namespace_id)) |record| {
-            return try record.clone(self.allocator);
-        }
-        return null;
+        return cloned_record;
     }
 
     /// Unsubscribe from user presence updates.
@@ -553,6 +558,9 @@ pub const PresenceManager = struct {
     }
 
     pub fn evictExpiredGracePeriods(self: *PresenceManager) void {
+        self.data_mutex.lock();
+        defer self.data_mutex.unlock();
+
         const now = std.time.milliTimestamp();
         const grace_ms: i64 = 5_000;
         var grace_iter = self.namespace_empty_at.iterator();
