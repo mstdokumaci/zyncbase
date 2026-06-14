@@ -114,7 +114,9 @@ pub const PresenceDispatcher = struct {
                 }
             };
             if (self.shutdown_requested.load(.acquire)) break;
+            self.shutdown_mutex.unlock();
             self.poll(cm);
+            self.shutdown_mutex.lock();
         }
     }
 };

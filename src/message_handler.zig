@@ -654,7 +654,7 @@ pub const MessageHandler = struct {
         const sub_id = try conn.allocateSubscriptionId();
 
         var snapshot = try self.presence_manager.onSubscribeUser(session.namespace_id, conn.id, sub_id);
-        defer snapshot.deinit(self.allocator);
+        defer snapshot.deinit(self.presence_manager.allocator);
 
         return try wire.encodePresenceUserSnapshot(arena_allocator, msg_id, sub_id, snapshot.users.items);
     }
@@ -692,7 +692,7 @@ pub const MessageHandler = struct {
         const sub_id = try conn.allocateSubscriptionId();
 
         var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id, sub_id);
-        defer if (shared) |*s| s.deinit(self.allocator);
+        defer if (shared) |*s| s.deinit(self.presence_manager.allocator);
 
         return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |s| &s else null);
     }

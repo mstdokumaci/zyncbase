@@ -111,7 +111,6 @@ export class PresenceImpl implements Presence {
 			) {
 				const subId = this.userSubId;
 				this.userSubId = null;
-				this.userSubPromise = null;
 				this.userCache.clear();
 				if (subId !== null) {
 					this.conn
@@ -152,7 +151,6 @@ export class PresenceImpl implements Presence {
 			) {
 				const subId = this.sharedSubId;
 				this.sharedSubId = null;
-				this.sharedSubPromise = null;
 				this.sharedCache = null;
 				if (subId !== null) {
 					this.conn
@@ -212,8 +210,6 @@ export class PresenceImpl implements Presence {
 		this.sharedCache = null;
 		this.userSubId = null;
 		this.sharedSubId = null;
-		this.userCallbacks.clear();
-		this.sharedCallbacks.clear();
 		this.clearThrottle();
 	}
 

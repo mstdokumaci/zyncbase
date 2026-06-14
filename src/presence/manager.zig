@@ -162,7 +162,24 @@ pub const PresenceManager = struct {
         }
 
         // Merge patch into record
-        try user_result.value_ptr.mergeFromPayload(self.allocator, self.user_fields, patch);
+        user_result.value_ptr.mergeFromPayload(self.allocator, self.user_fields, patch) catch |err| {
+            if (is_new_user) {
+                user_result.value_ptr.deinit(self.allocator);
+                _ = ns_result.value_ptr.fetchRemove(user_id);
+                if (ns_result.value_ptr.count() == 0) {
+                    ns_result.value_ptr.deinit(self.allocator);
+                    _ = self.user_state.remove(namespace_id);
+                }
+                if (self.user_joined_at.getPtr(namespace_id)) |joined_map| {
+                    _ = joined_map.fetchRemove(user_id);
+                    if (joined_map.count() == 0) {
+                        joined_map.deinit(self.allocator);
+                        _ = self.user_joined_at.remove(namespace_id);
+                    }
+                }
+            }
+            return err;
+        };
 
         // Cancel grace period if it was set
         _ = self.namespace_empty_at.fetchRemove(namespace_id);
@@ -251,8 +268,10 @@ pub const PresenceManager = struct {
                 }
             }
 
-            // If namespace is now empty, record timestamp for grace period
+            // If namespace is now empty, deinit the empty map and record grace period
             if (ns_ptr.count() == 0) {
+                ns_ptr.deinit(self.allocator);
+                _ = self.user_state.remove(namespace_id);
                 try self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp());
             }
 

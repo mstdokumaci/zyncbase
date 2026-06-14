@@ -421,10 +421,12 @@ describe("PresenceImpl", () => {
 		expect(receivedShared).toEqual({ slide: 1, playing: false });
 	});
 
-	test("invalidate() clears all caches and subscriptions", async () => {
+	test("invalidate() clears caches and subIds but preserves callbacks", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
+
+		let callbackFired = false;
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
 			if (msg.type === "PresenceSubscribe") {
@@ -444,15 +446,24 @@ describe("PresenceImpl", () => {
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
 		};
 
-		presence.subscribe(() => {});
+		presence.subscribe(() => {
+			callbackFired = true;
+		});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(presence.getAll().length).toBe(1);
 
 		presence.invalidate();
 
+		// Caches cleared but callbacks survive
 		expect(presence.getAll().length).toBe(0);
 		expect(presence.getShared()).toBeNull();
+
+		// replaySubscriptions should work because callbacks are preserved
+		callbackFired = false;
+		presence.replaySubscriptions();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(callbackFired).toBe(true);
 	});
 });
 
