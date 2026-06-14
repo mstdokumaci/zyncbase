@@ -105,7 +105,10 @@ export class PresenceImpl implements Presence {
 
 		return () => {
 			this.userCallbacks.delete(callback);
-			if (this.userCallbacks.size === 0 && (this.userSubId !== null || this.userSubPromise !== null)) {
+			if (
+				this.userCallbacks.size === 0 &&
+				(this.userSubId !== null || this.userSubPromise !== null)
+			) {
 				const subId = this.userSubId;
 				this.userSubId = null;
 				this.userSubPromise = null;
@@ -143,7 +146,10 @@ export class PresenceImpl implements Presence {
 
 		return () => {
 			this.sharedCallbacks.delete(callback);
-			if (this.sharedCallbacks.size === 0 && (this.sharedSubId !== null || this.sharedSubPromise !== null)) {
+			if (
+				this.sharedCallbacks.size === 0 &&
+				(this.sharedSubId !== null || this.sharedSubPromise !== null)
+			) {
 				const subId = this.sharedSubId;
 				this.sharedSubId = null;
 				this.sharedSubPromise = null;
@@ -179,17 +185,6 @@ export class PresenceImpl implements Presence {
 			this.sharedCache = null;
 		}
 		this.fireSharedCallbacks();
-	}
-
-	private maybeUnsubscribeShared(subId: number | undefined): void {
-		if (subId !== undefined) {
-			this.conn
-				.dispatch({
-					type: "PresenceUnsubscribeShared",
-					subId,
-				})
-				.catch(() => {});
-		}
 	}
 
 	get(userId: string): PresenceEntry | undefined {
@@ -298,12 +293,12 @@ export class PresenceImpl implements Presence {
 			return;
 		}
 
-		if (this.userCache.has(userId)) {
-			const existing = this.userCache.get(userId)!;
+		const existing = this.userCache.get(userId);
+		if (existing) {
 			this.userCache.set(userId, {
 				userId,
 				joinedAt: existing.joinedAt,
-				data: entry.data ?? {},
+				data: { ...existing.data, ...(entry.data ?? {}) },
 			});
 		} else {
 			this.userCache.set(userId, {
