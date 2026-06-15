@@ -530,22 +530,44 @@ pub const PresenceManager = struct {
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
+
+        // Discard items left over from a previous partial drain
+        // (patches already transferred to a batch that was never delivered).
+        {
+            var write: usize = 0;
+            for (self.pending_user_updates.items, 0..) |_, read_idx| {
+                const u = &self.pending_user_updates.items[read_idx];
+                if (u.patch == null) continue;
+                if (write != read_idx)
+                    self.pending_user_updates.items[write] = self.pending_user_updates.items[read_idx];
+                write += 1;
+            }
+            self.pending_user_updates.shrinkRetainingCapacity(write);
+        }
+        {
+            var write: usize = 0;
+            for (self.pending_shared_updates.items, 0..) |_, read_idx| {
+                const u = &self.pending_shared_updates.items[read_idx];
+                if (u.patch == .nil) continue;
+                if (write != read_idx)
+                    self.pending_shared_updates.items[write] = self.pending_shared_updates.items[read_idx];
+                write += 1;
+            }
+            self.pending_shared_updates.shrinkRetainingCapacity(write);
+        }
+
+        var success = false;
         defer {
-            // Free any patches that were not transferred to batches.
-            // After a successful appendSlice, the originals' patches are
-            // cleared (ownership transferred to the batch): user updates
-            // are set to null (optional), shared updates are set to .nil.
-            // Any remaining non-null/non-nil patches belong to items that
-            // were never processed.
-            for (self.pending_user_updates.items) |*update| {
-                if (update.patch) |p| p.free(self.allocator);
+            if (success) {
+                for (self.pending_user_updates.items) |*update| {
+                    if (update.patch) |p| p.free(self.allocator);
+                }
+                for (self.pending_shared_updates.items) |*update| {
+                    update.patch.free(self.allocator);
+                }
+                self.pending_user_updates.clearRetainingCapacity();
+                self.pending_shared_updates.clearRetainingCapacity();
             }
-            for (self.pending_shared_updates.items) |*update| {
-                // free(.nil) is a no-op; real patches get freed here.
-                update.patch.free(self.allocator);
-            }
-            self.pending_user_updates.clearRetainingCapacity();
-            self.pending_shared_updates.clearRetainingCapacity();
         }
 
         // Sort by namespace_id to ensure contiguous grouping
@@ -578,19 +600,17 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(self.allocator);
                 batch.updates.deinit(self.allocator);
                 batch.subscribers.deinit(self.allocator);
             }
 
             try batch.updates.appendSlice(self.allocator, ns_updates);
-            // Null originals' patches — ownership transferred to batch
-            for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
             if (self.user_subscribers.get(namespace_id)) |subs| {
                 try batch.subscribers.appendSlice(self.allocator, subs);
             }
-
             try user_batches.append(self.allocator, batch);
+            // Transfer ownership: batch now owns the patches.
+            for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
         }
 
         i = 0;
@@ -608,20 +628,20 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
-                for (batch.updates.items) |*u| u.patch.free(self.allocator);
                 batch.updates.deinit(self.allocator);
                 batch.subscribers.deinit(self.allocator);
             }
 
             try batch.updates.appendSlice(self.allocator, ns_updates);
-            // Clear originals' patches — ownership transferred to batch
-            for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
             if (self.shared_subscribers.get(namespace_id)) |subs| {
                 try batch.subscribers.appendSlice(self.allocator, subs);
             }
-
             try shared_batches.append(self.allocator, batch);
+            // Transfer ownership: batch now owns the patches.
+            for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
         }
+
+        success = true;
     }
 
     pub fn evictExpiredGracePeriods(self: *PresenceManager) void {

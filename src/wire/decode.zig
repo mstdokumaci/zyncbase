@@ -390,8 +390,10 @@ pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator)
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         if (std.mem.eql(u8, key, Key.path)) {
+            if (path) |p| p.free(allocator);
             path = try readSubtree(bytes, &pos, allocator);
         } else if (std.mem.eql(u8, key, Key.value)) {
+            if (value) |v| v.free(allocator);
             value = try readSubtree(bytes, &pos, allocator);
         } else if (std.mem.eql(u8, key, Key.confirm)) {
             confirm = try readStr(bytes, &pos);
@@ -431,6 +433,7 @@ pub fn extractStoreBatchPayloads(
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         if (std.mem.eql(u8, key, Key.ops)) {
+            if (ops) |o| o.free(allocator);
             ops = try readSubtree(bytes, &pos, allocator);
         } else if (std.mem.eql(u8, key, Key.confirm)) {
             confirm = try readStr(bytes, &pos);
@@ -512,6 +515,7 @@ pub fn extractPresenceSetFast(bytes: []const u8, allocator: std.mem.Allocator) !
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         if (std.mem.eql(u8, key, Key.data)) {
+            if (data) |d| d.free(allocator);
             data = try readSubtree(bytes, &pos, allocator);
         } else {
             try skipValue(bytes, &pos);
@@ -561,6 +565,7 @@ pub fn extractPresenceSetSharedFast(bytes: []const u8, allocator: std.mem.Alloca
     for (0..map_len) |_| {
         const key = try readStr(bytes, &pos);
         if (std.mem.eql(u8, key, Key.data)) {
+            if (data) |d| d.free(allocator);
             data = try readSubtree(bytes, &pos, allocator);
         } else {
             try skipValue(bytes, &pos);
