@@ -139,6 +139,25 @@ pub const PresenceManager = struct {
         const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
         const is_new_user = !user_result.found_existing;
 
+        // Function-level rollback for late failures (after the if-block's scoped errdefers exit).
+        // Block-scoped errdefers inside `if (is_new_user)` handle early failures within that block.
+        var user_cleanup = false;
+        errdefer if (user_cleanup) {
+            user_result.value_ptr.deinit(self.allocator);
+            _ = ns_result.value_ptr.fetchRemove(user_id);
+            if (ns_created and ns_result.value_ptr.count() == 0) {
+                ns_result.value_ptr.deinit(self.allocator);
+                _ = self.user_state.remove(namespace_id);
+            }
+            if (self.user_joined_at.getPtr(namespace_id)) |joined_map| {
+                _ = joined_map.fetchRemove(user_id);
+                if (joined_map.count() == 0) {
+                    joined_map.deinit(self.allocator);
+                    _ = self.user_joined_at.remove(namespace_id);
+                }
+            }
+        };
+
         if (is_new_user) {
             // getOrPut inserted user_id with undefined value — register cleanup
             // before any try that might fail.
@@ -169,27 +188,12 @@ pub const PresenceManager = struct {
                 }
             }
             try joined_ns_result.value_ptr.put(self.allocator, user_id, std.time.milliTimestamp());
+
+            user_cleanup = true;
         }
 
-        // Merge patch into record — catch handles cleanup for new users
-        user_result.value_ptr.mergeFromPayload(self.allocator, self.user_fields, patch) catch |err| {
-            if (is_new_user) {
-                user_result.value_ptr.deinit(self.allocator);
-                _ = ns_result.value_ptr.fetchRemove(user_id);
-                if (ns_result.value_ptr.count() == 0) {
-                    ns_result.value_ptr.deinit(self.allocator);
-                    if (ns_created) _ = self.user_state.remove(namespace_id);
-                }
-                if (self.user_joined_at.getPtr(namespace_id)) |joined_map| {
-                    _ = joined_map.fetchRemove(user_id);
-                    if (joined_map.count() == 0) {
-                        joined_map.deinit(self.allocator);
-                        _ = self.user_joined_at.remove(namespace_id);
-                    }
-                }
-            }
-            return err;
-        };
+        // Merge patch into record
+        try user_result.value_ptr.mergeFromPayload(self.allocator, self.user_fields, patch);
 
         // Cancel grace period if it was set
         _ = self.namespace_empty_at.fetchRemove(namespace_id);
@@ -231,22 +235,24 @@ pub const PresenceManager = struct {
         // Get or create shared record
         const result = try self.shared_state.getOrPut(self.allocator, namespace_id);
         const is_new = !result.found_existing;
+
+        var shared_cleanup = false;
+        errdefer if (shared_cleanup) {
+            result.value_ptr.deinit(self.allocator);
+            _ = self.shared_state.remove(namespace_id);
+        };
+
         if (is_new) {
             result.value_ptr.* = try PresenceRecord.init(self.allocator, self.shared_fields.len);
             errdefer {
                 result.value_ptr.deinit(self.allocator);
                 _ = self.shared_state.remove(namespace_id);
             }
+            shared_cleanup = true;
         }
 
         // Merge patch into record
-        result.value_ptr.mergeFromPayload(self.allocator, self.shared_fields, patch) catch |err| {
-            if (is_new) {
-                result.value_ptr.deinit(self.allocator);
-                _ = self.shared_state.remove(namespace_id);
-            }
-            return err;
-        };
+        try result.value_ptr.mergeFromPayload(self.allocator, self.shared_fields, patch);
 
         // Coalesce pending shared updates for the namespace.
         if (self.findPendingSharedUpdate(namespace_id)) |existing| {
@@ -513,6 +519,19 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
         defer {
+            // Free any patches that were not transferred to batches.
+            // After a successful appendSlice, the originals' patches are
+            // cleared (ownership transferred to the batch): user updates
+            // are set to null (optional), shared updates are set to .nil.
+            // Any remaining non-null/non-nil patches belong to items that
+            // were never processed.
+            for (self.pending_user_updates.items) |*update| {
+                if (update.patch) |p| p.free(self.allocator);
+            }
+            for (self.pending_shared_updates.items) |*update| {
+                // free(.nil) is a no-op; real patches get freed here.
+                update.patch.free(self.allocator);
+            }
             self.pending_user_updates.clearRetainingCapacity();
             self.pending_shared_updates.clearRetainingCapacity();
         }
@@ -553,6 +572,8 @@ pub const PresenceManager = struct {
             }
 
             try batch.updates.appendSlice(allocator, ns_updates);
+            // Null originals' patches — ownership transferred to batch
+            for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
             if (self.user_subscribers.get(namespace_id)) |subs| {
                 try batch.subscribers.appendSlice(allocator, subs);
             }
@@ -581,6 +602,8 @@ pub const PresenceManager = struct {
             }
 
             try batch.updates.appendSlice(allocator, ns_updates);
+            // Clear originals' patches — ownership transferred to batch
+            for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
             if (self.shared_subscribers.get(namespace_id)) |subs| {
                 try batch.subscribers.appendSlice(allocator, subs);
             }

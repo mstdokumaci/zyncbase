@@ -353,7 +353,7 @@ export interface PresenceBroadcast {
 export interface PresenceBroadcastEntry {
 	userId: Uint8Array; // bin16 on wire
 	event: "join" | "update" | "leave";
-	data?: Record<number, unknown>; // Integer-keyed field map; present for join/update
+	data?: Record<string, unknown>; // Decoded string-keyed field map; present for join/update
 	joinedAt?: number; // Unix timestamp ms; present only for join
 }
 
@@ -361,7 +361,7 @@ export interface PresenceBroadcastEntry {
 export interface SharedStateBroadcast {
 	type: "SharedStateBroadcast";
 	subId: number;
-	data: Record<number, unknown> | Record<number, unknown>[]; // Single patch or array of patches
+	data: Record<string, unknown> | Record<string, unknown>[]; // Single decoded patch or array of patches
 }
 
 /** Decoded presence entry exposed to SDK consumers. */
