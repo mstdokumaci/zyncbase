@@ -40,9 +40,10 @@ pub const PresenceManager = struct {
     pub const PendingUserUpdate = struct {
         namespace_id: i64,
         user_id: typed.DocId,
-        patch: ?msgpack.Payload, // null = leave
+        patch: ?msgpack.Payload, // null = leave (or transferred to batch)
         is_new_user: bool, // true = join event, false = update event
         joined_at: i64, // actual join timestamp (0 for non-join)
+        is_leave: bool = false, // true = explicit leave event (not a transferred update)
     };
 
     pub const PendingSharedUpdate = struct {
@@ -316,7 +317,7 @@ pub const PresenceManager = struct {
 
             if (self.findPendingUserUpdateIndex(namespace_id, user_id)) |idx| {
                 var existing = &self.pending_user_updates.items[idx];
-                if (existing.patch == null) {
+                if (existing.patch == null and existing.is_leave) {
                     return;
                 }
                 if (existing.is_new_user) {
@@ -328,6 +329,7 @@ pub const PresenceManager = struct {
                 if (existing.patch) |patch| patch.free(self.allocator);
                 existing.patch = null;
                 existing.is_new_user = false;
+                existing.is_leave = true;
                 return;
             }
 
@@ -338,6 +340,7 @@ pub const PresenceManager = struct {
                 .patch = null, // null signals leave
                 .is_new_user = false,
                 .joined_at = 0,
+                .is_leave = true,
             });
         }
     }
@@ -533,11 +536,12 @@ pub const PresenceManager = struct {
 
         // Discard items left over from a previous partial drain
         // (patches already transferred to a batch that was never delivered).
+        // Preserve legitimate leave events (is_leave=true).
         {
             var write: usize = 0;
             for (self.pending_user_updates.items, 0..) |_, read_idx| {
                 const u = &self.pending_user_updates.items[read_idx];
-                if (u.patch == null) continue;
+                if (u.patch == null and !u.is_leave) continue;
                 if (write != read_idx)
                     self.pending_user_updates.items[write] = self.pending_user_updates.items[read_idx];
                 write += 1;

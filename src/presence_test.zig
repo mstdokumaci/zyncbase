@@ -595,3 +595,178 @@ test "PresenceManager - snapshot includes joined_at" {
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
     try testing.expect(snapshot.users.items[0].joined_at > 0);
 }
+
+test "PresenceManager - leave event after successful flush is preserved" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+
+    // Join user
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
+    });
+    defer patch.free(allocator);
+    try manager.setUser(1, user_id, patch);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(!manager.pending_user_updates.items[0].is_leave);
+
+    // Flush: drain pending batches to simulate a successful flush cycle
+    // After drain, pending_user_updates is cleared.
+    {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            user_batches.deinit(allocator);
+        }
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            shared_batches.deinit(allocator);
+        }
+        try manager.drainPendingBatches(&user_batches, &shared_batches);
+        try testing.expectEqual(@as(usize, 0), manager.pending_user_updates.items.len);
+        try testing.expectEqual(@as(usize, 1), user_batches.items.len);
+        try testing.expectEqual(@as(usize, 1), user_batches.items[0].updates.items.len);
+    }
+
+    // Leave: after flush, removeUser queues a new leave entry in pending_user_updates
+    try manager.removeUser(1, user_id);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_leave);
+    try testing.expect(manager.pending_user_updates.items[0].patch == null);
+
+    // Second flush: leave should survive the cleanup and appear in the batch
+    {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            user_batches.deinit(allocator);
+        }
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            shared_batches.deinit(allocator);
+        }
+        try manager.drainPendingBatches(&user_batches, &shared_batches);
+        try testing.expectEqual(@as(usize, 1), user_batches.items.len);
+        try testing.expectEqual(@as(usize, 1), user_batches.items[0].updates.items.len);
+        try testing.expect(user_batches.items[0].updates.items[0].is_leave);
+        try testing.expect(user_batches.items[0].updates.items[0].patch == null);
+    }
+}
+
+test "PresenceManager - leave event with leftover transferred item is preserved" {
+    const allocator = testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = typed.zeroDocId;
+
+    // Join user
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
+    });
+    defer patch.free(allocator);
+    try manager.setUser(1, user_id, patch);
+
+    // Flush successfully — pending_user_updates is cleared
+    {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            user_batches.deinit(allocator);
+        }
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            shared_batches.deinit(allocator);
+        }
+        try manager.drainPendingBatches(&user_batches, &shared_batches);
+    }
+
+    // User makes an update (patch != null)
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 42.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, patch2);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].patch != null);
+    try testing.expect(!manager.pending_user_updates.items[0].is_leave);
+
+    // Now simulate a failed partial drain:
+    //   Free the patch and null it (as drainPendingBatches does after transferring to a batch),
+    //   but leave the item in the list (as happens when success stays false).
+    if (manager.pending_user_updates.items[0].patch) |p| p.free(allocator);
+    manager.pending_user_updates.items[0].patch = null;
+
+    // User leaves — removeUser should convert the leftover transferred item into a leave
+    // (not early-return because is_leave is false on the transferred item).
+    try manager.removeUser(1, user_id);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_leave);
+
+    // Next flush: the leave should survive the cleanup and appear in the batch
+    {
+        var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+        defer {
+            for (user_batches.items) |*batch| {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            user_batches.deinit(allocator);
+        }
+        var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+        defer {
+            for (shared_batches.items) |*batch| {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
+                batch.updates.deinit(allocator);
+                batch.subscribers.deinit(allocator);
+            }
+            shared_batches.deinit(allocator);
+        }
+        try manager.drainPendingBatches(&user_batches, &shared_batches);
+        try testing.expectEqual(@as(usize, 1), user_batches.items.len);
+        try testing.expectEqual(@as(usize, 1), user_batches.items[0].updates.items.len);
+        try testing.expect(user_batches.items[0].updates.items[0].is_leave);
+    }
+}

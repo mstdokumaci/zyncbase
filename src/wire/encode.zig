@@ -499,8 +499,8 @@ pub fn encodePresenceBroadcast(
     for (updates) |update| {
         // Each user entry: { userId: bin16, event: "join"|"update"|"leave", data: {...}, joinedAt: int }
         // join events have data + joinedAt, update events have data only, leave events have neither
-        const is_leave = update.patch == null;
-        const is_join = update.is_new_user and !is_leave;
+        const is_leave = update.is_leave;
+        const is_join = update.is_new_user and update.patch != null;
         const map_size: usize = if (is_leave) 2 else if (is_join) 4 else 3;
         try msgpack.encodeMapHeader(writer, map_size);
 
