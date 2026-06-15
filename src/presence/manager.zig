@@ -295,12 +295,18 @@ pub const PresenceManager = struct {
                 }
             }
 
-            // If namespace is now empty, deinit the empty map and record grace period
-            if (ns_ptr.count() == 0) {
+            // If namespace is now empty, deinit the empty map
+            const ns_was_emptied = ns_ptr.count() == 0;
+            if (ns_was_emptied) {
                 ns_ptr.deinit(self.allocator);
                 _ = self.user_state.remove(namespace_id);
-                try self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp());
             }
+            // Non-critical: record grace period after critical leave broadcast work.
+            defer if (ns_was_emptied) {
+                self.namespace_empty_at.put(self.allocator, namespace_id, std.time.milliTimestamp()) catch |err| {
+                    std.log.err("Failed to record grace period for namespace {}: {}", .{ namespace_id, err });
+                };
+            };
 
             if (self.findPendingUserUpdateIndex(namespace_id, user_id)) |idx| {
                 var existing = &self.pending_user_updates.items[idx];

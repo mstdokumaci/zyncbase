@@ -377,7 +377,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	private handleDisconnect(): void {
-		this.clearThrottle();
+		this.invalidate();
 	}
 
 	private clearThrottle(): void {

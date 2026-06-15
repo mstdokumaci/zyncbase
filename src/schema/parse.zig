@@ -137,7 +137,7 @@ fn parsePresenceTier(
         if (val != .object) return error.InvalidSchema;
 
         const type_val = val.object.get("type") orelse return error.InvalidSchema;
-        if (type_val != .string) return error.InvalidVersion; // using InvalidVersion as generic validation err
+        if (type_val != .string) return error.InvalidSchema;
 
         if (std.mem.eql(u8, type_val.string, "object")) {
             // Nested object - parse fields (1 level only)

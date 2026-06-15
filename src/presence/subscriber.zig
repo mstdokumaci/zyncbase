@@ -56,7 +56,7 @@ pub const SubscriberTable = struct {
         var i: usize = 0;
         while (i < subs.items.len) {
             if (subs.items[i].conn_id == conn_id) {
-                _ = subs.orderedRemove(i);
+                _ = subs.swapRemove(i);
             } else {
                 i += 1;
             }
