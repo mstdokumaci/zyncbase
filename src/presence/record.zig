@@ -79,7 +79,10 @@ pub const PresenceRecord = struct {
             if (f_idx >= self.values.len) return error.InvalidFieldIndex;
 
             const field = fields[f_idx];
-            const new_value = typed.valueFromPayload(allocator, field.declared_type, null, entry.value_ptr.*) catch return error.SchemaValidationFailed;
+            const new_value = typed.valueFromPayload(allocator, field.declared_type, null, entry.value_ptr.*) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.SchemaValidationFailed,
+            };
             errdefer new_value.deinit(allocator);
 
             try temp_updates.append(allocator, .{ .idx = f_idx, .value = new_value });

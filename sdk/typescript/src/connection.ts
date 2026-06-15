@@ -51,6 +51,8 @@ export class ConnectionManager {
 	private messageHandler: MessageHandler | null = null;
 	private deltaHandler: DeltaHandler | null = null;
 	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
+	private connectedWithUserIdHandler: ((userId: string | null) => void) | null =
+		null;
 
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -66,6 +68,7 @@ export class ConnectionManager {
 	private schemaSyncReject: ((reason?: unknown) => void) | null = null;
 	private schemaSyncPromise: Promise<void> = new Promise(() => {});
 
+	private userId: string | null = null;
 	private _refreshInFlight: Promise<void> | null = null;
 
 	constructor(options: ClientOptions) {
@@ -86,6 +89,14 @@ export class ConnectionManager {
 
 	getPresenceNamespace(): string {
 		return this.presenceNamespace;
+	}
+
+	getUserId(): string | null {
+		return this.userId;
+	}
+
+	onConnectedWithUserId(handler: (userId: string | null) => void): void {
+		this.connectedWithUserIdHandler = handler;
 	}
 
 	async setPresenceNamespace(ns: string): Promise<void> {
@@ -455,8 +466,10 @@ export class ConnectionManager {
 	}
 
 	private handleConnected(msg: ConnectedMessage): void {
+		this.userId = msg.userId;
 		if (msg.storeNamespace) this.storeNamespace = msg.storeNamespace;
 		if (msg.presenceNamespace) this.presenceNamespace = msg.presenceNamespace;
+		this.connectedWithUserIdHandler?.(msg.userId);
 		if (this.options.debug) {
 			console.log(`[SDK] Connected as userId=${msg.userId}`);
 		}

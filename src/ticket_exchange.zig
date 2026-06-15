@@ -175,7 +175,10 @@ pub const TicketExchange = struct {
         }
 
         if (extracted.claims_json) |claims_json| {
-            const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch return error.InvalidTicket;
+            const parsed_claims = std.json.parseFromSlice(std.json.Value, allocator, claims_json, .{}) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidTicket,
+            };
             defer parsed_claims.deinit();
 
             if (parsed_claims.value == .object) {

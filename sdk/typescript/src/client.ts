@@ -47,6 +47,13 @@ export class ZyncBaseClient {
 		this.store = new StoreImpl(this.conn, this.tracker, emitError);
 		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
+
+		// When the server sends a Connected message, forward the userId to PresenceImpl
+		// so that presence.getAll() can filter out the local user by default.
+		this.conn.onConnectedWithUserId((userId) => {
+			this.presenceImpl.setLocalUserId(userId);
+		});
+
 		this.utils = { id: generateUUIDv7 };
 
 		// On reconnect: replay subscriptions
