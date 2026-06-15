@@ -4,6 +4,8 @@ const typed = @import("../typed.zig");
 const schema_mod = @import("../schema.zig");
 const msgpack = @import("../msgpack_utils.zig");
 const PresenceRecord = @import("record.zig").PresenceRecord;
+const Subscriber = @import("subscriber.zig").Subscriber;
+const SubscriberTable = @import("subscriber.zig").SubscriberTable;
 
 /// Owns presence state, pending batches, and subscription tracking.
 /// Thread-safe; does not know about networking.
@@ -32,14 +34,8 @@ pub const PresenceManager = struct {
     pending_user_updates: std.ArrayListUnmanaged(PendingUserUpdate),
     pending_shared_updates: std.ArrayListUnmanaged(PendingSharedUpdate),
 
-    // Subscription tracking: namespace_id → []Subscriber
-    user_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
-    shared_subscribers: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(Subscriber)),
-
-    pub const Subscriber = struct {
-        conn_id: u64,
-        sub_id: u64,
-    };
+    user_subscribers: SubscriberTable,
+    shared_subscribers: SubscriberTable,
 
     pub const PendingUserUpdate = struct {
         namespace_id: i64,
@@ -118,16 +114,7 @@ pub const PresenceManager = struct {
         }
         self.pending_shared_updates.deinit(self.allocator);
 
-        var user_sub_iter = self.user_subscribers.iterator();
-        while (user_sub_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
         self.user_subscribers.deinit(self.allocator);
-
-        var shared_sub_iter = self.shared_subscribers.iterator();
-        while (shared_sub_iter.next()) |entry| {
-            entry.value_ptr.deinit(self.allocator);
-        }
         self.shared_subscribers.deinit(self.allocator);
     }
 
@@ -435,18 +422,7 @@ pub const PresenceManager = struct {
             }
         }
 
-        const sub_result = try self.user_subscribers.getOrPut(self.allocator, namespace_id);
-        const sub_created = !sub_result.found_existing;
-        if (sub_created) {
-            sub_result.value_ptr.* = .{};
-        }
-        errdefer {
-            if (sub_created) {
-                sub_result.value_ptr.deinit(self.allocator);
-                _ = self.user_subscribers.remove(namespace_id);
-            }
-        }
-        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
+        try self.user_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id);
 
         return snapshot;
     }
@@ -469,18 +445,7 @@ pub const PresenceManager = struct {
             null;
         errdefer if (cloned_record) |*r| r.deinit(self.allocator);
 
-        const sub_result = try self.shared_subscribers.getOrPut(self.allocator, namespace_id);
-        const sub_created = !sub_result.found_existing;
-        if (sub_created) {
-            sub_result.value_ptr.* = .{};
-        }
-        errdefer {
-            if (sub_created) {
-                sub_result.value_ptr.deinit(self.allocator);
-                _ = self.shared_subscribers.remove(namespace_id);
-            }
-        }
-        try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
+        try self.shared_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id);
 
         return cloned_record;
     }
@@ -494,20 +459,7 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        if (self.user_subscribers.getPtr(namespace_id)) |subs| {
-            var i: usize = 0;
-            while (i < subs.items.len) {
-                if (subs.items[i].conn_id == conn_id) {
-                    _ = subs.orderedRemove(i);
-                } else {
-                    i += 1;
-                }
-            }
-            if (subs.items.len == 0) {
-                subs.deinit(self.allocator);
-                _ = self.user_subscribers.remove(namespace_id);
-            }
-        }
+        self.user_subscribers.unsubscribe(self.allocator, namespace_id, conn_id);
     }
 
     /// Unsubscribe from shared state updates.
@@ -519,20 +471,7 @@ pub const PresenceManager = struct {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
 
-        if (self.shared_subscribers.getPtr(namespace_id)) |subs| {
-            var i: usize = 0;
-            while (i < subs.items.len) {
-                if (subs.items[i].conn_id == conn_id) {
-                    _ = subs.orderedRemove(i);
-                } else {
-                    i += 1;
-                }
-            }
-            if (subs.items.len == 0) {
-                subs.deinit(self.allocator);
-                _ = self.shared_subscribers.remove(namespace_id);
-            }
-        }
+        self.shared_subscribers.unsubscribe(self.allocator, namespace_id, conn_id);
     }
 
     /// Remove all presence data for a connection (called on disconnect).
@@ -615,7 +554,7 @@ pub const PresenceManager = struct {
 
             try batch.updates.appendSlice(allocator, ns_updates);
             if (self.user_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(allocator, subs.items);
+                try batch.subscribers.appendSlice(allocator, subs);
             }
 
             try user_batches.append(allocator, batch);
@@ -643,7 +582,7 @@ pub const PresenceManager = struct {
 
             try batch.updates.appendSlice(allocator, ns_updates);
             if (self.shared_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(allocator, subs.items);
+                try batch.subscribers.appendSlice(allocator, subs);
             }
 
             try shared_batches.append(allocator, batch);

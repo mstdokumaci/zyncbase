@@ -329,8 +329,8 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
     try testing.expectEqual(user_id, snapshot.users.items[0].user_id);
 
     const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 1), subs.items.len);
-    try testing.expectEqual(@as(u64, 100), subs.items[0].conn_id);
+    try testing.expectEqual(@as(usize, 1), subs.len);
+    try testing.expectEqual(@as(u64, 100), subs[0].conn_id);
 }
 
 test "PresenceManager - onSubscribeShared returns current state" {
@@ -358,7 +358,7 @@ test "PresenceManager - onSubscribeShared returns current state" {
     }
 
     const subs = manager.shared_subscribers.get(1) orelse return error.TestExpectedValue;
-    try testing.expectEqual(@as(usize, 1), subs.items.len);
+    try testing.expectEqual(@as(usize, 1), subs.len);
 }
 
 test "PresenceManager - onSubscribeShared returns null when no state" {
@@ -392,15 +392,15 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
 
     {
         const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
-        try testing.expectEqual(@as(usize, 2), subs.items.len);
+        try testing.expectEqual(@as(usize, 2), subs.len);
     }
 
     manager.onUnsubscribeUser(1, 100);
 
     {
         const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
-        try testing.expectEqual(@as(usize, 1), subs.items.len);
-        try testing.expectEqual(@as(u64, 200), subs.items[0].conn_id);
+        try testing.expectEqual(@as(usize, 1), subs.len);
+        try testing.expectEqual(@as(u64, 200), subs[0].conn_id);
     }
 }
 
