@@ -39,27 +39,27 @@ pub const PresenceDispatcher = struct {
         defer {
             for (user_batches.items) |*batch| {
                 for (batch.updates.items) |*update| {
-                    if (update.patch) |patch| patch.free(self.allocator);
+                    if (update.patch) |patch| patch.free(self.presence_manager.allocator);
                 }
-                batch.updates.deinit(self.allocator);
-                batch.subscribers.deinit(self.allocator);
+                batch.updates.deinit(self.presence_manager.allocator);
+                batch.subscribers.deinit(self.presence_manager.allocator);
             }
-            user_batches.deinit(self.allocator);
+            user_batches.deinit(self.presence_manager.allocator);
         }
 
         var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
         defer {
             for (shared_batches.items) |*batch| {
                 for (batch.updates.items) |*update| {
-                    update.patch.free(self.allocator);
+                    update.patch.free(self.presence_manager.allocator);
                 }
-                batch.updates.deinit(self.allocator);
-                batch.subscribers.deinit(self.allocator);
+                batch.updates.deinit(self.presence_manager.allocator);
+                batch.subscribers.deinit(self.presence_manager.allocator);
             }
-            shared_batches.deinit(self.allocator);
+            shared_batches.deinit(self.presence_manager.allocator);
         }
 
-        self.presence_manager.drainPendingBatches(self.allocator, &user_batches, &shared_batches) catch |err| {
+        self.presence_manager.drainPendingBatches(&user_batches, &shared_batches) catch |err| {
             std.log.err("PresenceDispatcher drain failed: {}", .{err});
             return;
         };

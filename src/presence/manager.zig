@@ -528,7 +528,6 @@ pub const PresenceManager = struct {
     /// Caller owns the returned batches and must deinit them.
     pub fn drainPendingBatches(
         self: *PresenceManager,
-        allocator: Allocator,
         user_batches: *std.ArrayListUnmanaged(UserUpdateBatch),
         shared_batches: *std.ArrayListUnmanaged(SharedUpdateBatch),
     ) !void {
@@ -582,19 +581,19 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
-                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
-                batch.updates.deinit(allocator);
-                batch.subscribers.deinit(allocator);
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(self.allocator);
+                batch.updates.deinit(self.allocator);
+                batch.subscribers.deinit(self.allocator);
             }
 
-            try batch.updates.appendSlice(allocator, ns_updates);
+            try batch.updates.appendSlice(self.allocator, ns_updates);
             // Null originals' patches — ownership transferred to batch
             for (self.pending_user_updates.items[range_start..i]) |*update| update.patch = null;
             if (self.user_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(allocator, subs);
+                try batch.subscribers.appendSlice(self.allocator, subs);
             }
 
-            try user_batches.append(allocator, batch);
+            try user_batches.append(self.allocator, batch);
         }
 
         i = 0;
@@ -612,19 +611,19 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
-                for (batch.updates.items) |*u| u.patch.free(allocator);
-                batch.updates.deinit(allocator);
-                batch.subscribers.deinit(allocator);
+                for (batch.updates.items) |*u| u.patch.free(self.allocator);
+                batch.updates.deinit(self.allocator);
+                batch.subscribers.deinit(self.allocator);
             }
 
-            try batch.updates.appendSlice(allocator, ns_updates);
+            try batch.updates.appendSlice(self.allocator, ns_updates);
             // Clear originals' patches — ownership transferred to batch
             for (self.pending_shared_updates.items[range_start..i]) |*update| update.patch = .nil;
             if (self.shared_subscribers.get(namespace_id)) |subs| {
-                try batch.subscribers.appendSlice(allocator, subs);
+                try batch.subscribers.appendSlice(self.allocator, subs);
             }
 
-            try shared_batches.append(allocator, batch);
+            try shared_batches.append(self.allocator, batch);
         }
     }
 
