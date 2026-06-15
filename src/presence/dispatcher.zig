@@ -29,11 +29,11 @@ pub const PresenceDispatcher = struct {
     }
 
     pub fn poll(self: *PresenceDispatcher, cm: *ConnectionManager) void {
-        self.presence_manager.evictExpiredGracePeriods();
-
         const now = std.time.milliTimestamp();
         if (now - self.last_flush_ms < self.flush_interval_ms) return;
         self.last_flush_ms = now;
+
+        self.presence_manager.evictExpiredGracePeriods();
 
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {

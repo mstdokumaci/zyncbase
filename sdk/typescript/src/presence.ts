@@ -27,6 +27,8 @@ export class PresenceImpl implements Presence {
 	private sharedSubId: number | null = null;
 	private userSubPromise: Promise<void> | null = null;
 	private sharedSubPromise: Promise<void> | null = null;
+	private userSubGen = 0;
+	private sharedSubGen = 0;
 	private userCallbacks = new Set<(users: PresenceEntry[]) => void>();
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
@@ -79,26 +81,14 @@ export class PresenceImpl implements Presence {
 		if (this.userSubId !== null) {
 			callback(this.getAll());
 		} else if (!this.userSubPromise) {
+			const gen = this.userSubGen;
 			this.userSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribe" })
 				.then((ok) => {
-					this.userSubPromise = null;
-					if (this.userCallbacks.size === 0) {
-						if (ok.subId !== undefined) {
-							this.conn
-								.dispatch({
-									type: "PresenceUnsubscribe",
-									subId: ok.subId,
-								})
-								.catch(() => {});
-						}
-						return;
-					}
-					this.userSubId = ok.subId ?? null;
-					this.populateUserCacheFromSnapshot(ok);
-					this.fireUserCallbacks();
+					this.handleUserSubscribeResponse(gen, ok);
 				})
 				.catch(() => {
+					if (gen !== this.userSubGen) return;
 					this.userSubPromise = null;
 				});
 		}
@@ -124,6 +114,25 @@ export class PresenceImpl implements Presence {
 		};
 	}
 
+	private handleUserSubscribeResponse(gen: number, ok: OkResponse): void {
+		if (gen !== this.userSubGen) return;
+		this.userSubPromise = null;
+		if (this.userCallbacks.size === 0) {
+			if (ok.subId !== undefined) {
+				this.conn
+					.dispatch({
+						type: "PresenceUnsubscribe",
+						subId: ok.subId,
+					})
+					.catch(() => {});
+			}
+			return;
+		}
+		this.userSubId = ok.subId ?? null;
+		this.populateUserCacheFromSnapshot(ok);
+		this.fireUserCallbacks();
+	}
+
 	subscribeShared(
 		callback: (shared: Record<string, unknown> | null) => void,
 	): () => void {
@@ -132,13 +141,16 @@ export class PresenceImpl implements Presence {
 		if (this.sharedSubId !== null) {
 			callback(this.sharedCache);
 		} else if (!this.sharedSubPromise) {
+			const gen = this.sharedSubGen;
 			this.sharedSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribeShared" })
 				.then((ok) => {
+					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
 					this.handleSharedSubscribeResponse(ok);
 				})
 				.catch(() => {
+					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
 				});
 		}
@@ -206,6 +218,8 @@ export class PresenceImpl implements Presence {
 	}
 
 	invalidate(): void {
+		this.userSubGen++;
+		this.sharedSubGen++;
 		this.userCache.clear();
 		this.sharedCache = null;
 		this.userSubId = null;
@@ -218,24 +232,29 @@ export class PresenceImpl implements Presence {
 	replaySubscriptions(): void {
 		if (this.userCallbacks.size > 0 && !this.userSubPromise) {
 			this.userSubId = null;
+			const gen = this.userSubGen;
 			this.userSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribe" })
 				.then((ok) => {
+					if (gen !== this.userSubGen) return;
 					this.userSubPromise = null;
 					this.userSubId = ok.subId ?? null;
 					this.populateUserCacheFromSnapshot(ok);
 					this.fireUserCallbacks();
 				})
 				.catch(() => {
+					if (gen !== this.userSubGen) return;
 					this.userSubPromise = null;
 				});
 		}
 
 		if (this.sharedCallbacks.size > 0 && !this.sharedSubPromise) {
 			this.sharedSubId = null;
+			const gen = this.sharedSubGen;
 			this.sharedSubPromise = this.conn
 				.dispatch({ type: "PresenceSubscribeShared" })
 				.then((ok) => {
+					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
 					this.sharedSubId = ok.subId ?? null;
 					if (ok.shared != null) {
@@ -246,6 +265,7 @@ export class PresenceImpl implements Presence {
 					this.fireSharedCallbacks();
 				})
 				.catch(() => {
+					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
 				});
 		}

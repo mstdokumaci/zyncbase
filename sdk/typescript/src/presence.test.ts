@@ -465,6 +465,82 @@ describe("PresenceImpl", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(callbackFired).toBe(true);
 	});
+
+	test("stale subscribe promise does not overwrite cache after invalidate()", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		let resolveStale: (value: OkResponse) => void = () => {};
+		const stalePromise = new Promise<OkResponse>((resolve) => {
+			resolveStale = resolve;
+		});
+
+		let isFirstSubscribe = true;
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				if (isFirstSubscribe) {
+					isFirstSubscribe = false;
+					return stalePromise;
+				}
+				// Second subscribe = new namespace data
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 200,
+					users: [
+						{
+							userId: new Uint8Array(16).fill(2),
+							data: conn.schema.decodePresenceUserValue({
+								2: "new_status",
+							}),
+							joinedAt: 5678,
+						},
+					],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribe(() => {});
+		expect(presence.getAll().length).toBe(0);
+
+		// Simulate namespace switch: invalidate then re-subscribe
+		presence.invalidate();
+		presence.replaySubscriptions();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// Cache has new data
+		expect(presence.getAll().length).toBe(1);
+
+		// Now resolve the stale promise from the old subscription
+		resolveStale({
+			type: "ok",
+			id: 0,
+			subId: 100,
+			users: [
+				{
+					userId: new Uint8Array(16).fill(1),
+					data: conn.schema.decodePresenceUserValue({
+						2: "stale_status",
+					}),
+					joinedAt: 1234,
+				},
+			],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// Cache should NOT have stale data — still has the new namespace data
+		expect(presence.getAll().length).toBe(1);
+		const newUserId = conn.schema.decodePresenceUserId(
+			new Uint8Array(16).fill(2),
+		);
+		expect(presence.get(newUserId)).toBeDefined();
+		const staleUserId = conn.schema.decodePresenceUserId(
+			new Uint8Array(16).fill(1),
+		);
+		expect(presence.get(staleUserId)).toBeUndefined();
+	});
 });
 
 describe("SchemaDictionary presence encode/decode", () => {

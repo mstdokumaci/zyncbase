@@ -704,7 +704,7 @@ pub const MessageHandler = struct {
         var shared = try self.presence_manager.onSubscribeShared(session.namespace_id, conn.id, sub_id);
         defer if (shared) |*s| s.deinit(self.presence_manager.allocator);
 
-        return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |s| &s else null);
+        return try wire.encodePresenceSharedSnapshot(arena_allocator, msg_id, sub_id, if (shared) |*s| s else null);
     }
 
     fn handlePresenceUnsubscribeShared(
