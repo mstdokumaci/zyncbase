@@ -328,6 +328,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	private populateUserCacheFromSnapshot(ok: OkResponse): void {
+		this.userCache.clear();
 		if (!Array.isArray(ok.users)) return;
 
 		for (const user of ok.users) {

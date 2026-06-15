@@ -376,6 +376,7 @@ pub const PresenceManager = struct {
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
             const new_value = try entry.value_ptr.*.deepClone(self.allocator);
+            errdefer new_value.free(self.allocator);
 
             if (target.map.getPtr(key)) |existing_value| {
                 existing_value.*.free(self.allocator);

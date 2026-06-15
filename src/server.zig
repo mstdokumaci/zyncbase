@@ -416,8 +416,6 @@ pub const ZyncBaseServer = struct {
         // Start checkpoint manager background thread
         try self.checkpoint_manager.startBackgroundLoop();
 
-        try self.presence_dispatcher.start(&self.connection_manager);
-
         // Setup signal handlers for graceful shutdown (signal-safe)
         try self.setupSignalHandlers();
 

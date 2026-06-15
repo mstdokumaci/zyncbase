@@ -5,16 +5,13 @@ const PresenceManager = @import("manager.zig").PresenceManager;
 const wire = @import("../wire.zig");
 
 /// Drains pending batches from PresenceManager, encodes, and sends via ConnectionManager.
-/// Owns the background flush thread; polled from the event loop for low-latency delivery.
+/// Polled from the event loop; batches every 50ms via timestamp check.
 pub const PresenceDispatcher = struct {
     allocator: Allocator,
     presence_manager: *PresenceManager,
-    thread_connection_manager: ?*ConnectionManager,
 
-    background_thread: ?std.Thread,
-    shutdown_requested: std.atomic.Value(bool),
-    shutdown_mutex: std.Thread.Mutex,
-    shutdown_cond: std.Thread.Condition,
+    last_flush_ms: i64,
+    flush_interval_ms: i64,
 
     pub fn init(
         self: *PresenceDispatcher,
@@ -23,33 +20,20 @@ pub const PresenceDispatcher = struct {
     ) void {
         self.allocator = allocator;
         self.presence_manager = presence_manager;
-        self.thread_connection_manager = null;
-        self.background_thread = null;
-        self.shutdown_requested = std.atomic.Value(bool).init(false);
-        self.shutdown_mutex = .{};
-        self.shutdown_cond = .{};
+        self.last_flush_ms = 0;
+        self.flush_interval_ms = 50;
     }
 
     pub fn deinit(self: *PresenceDispatcher) void {
-        if (self.background_thread) |thread| {
-            self.shutdown_requested.store(true, .release);
-            self.shutdown_mutex.lock();
-            self.shutdown_cond.signal();
-            self.shutdown_mutex.unlock();
-            thread.join();
-            self.background_thread = null;
-        }
-    }
-
-    pub fn start(self: *PresenceDispatcher, cm: *ConnectionManager) !void {
-        self.thread_connection_manager = cm;
-        self.shutdown_requested.store(false, .release);
-        const thread = try std.Thread.spawn(.{}, flushLoop, .{self});
-        self.background_thread = thread;
+        _ = self;
     }
 
     pub fn poll(self: *PresenceDispatcher, cm: *ConnectionManager) void {
         self.presence_manager.evictExpiredGracePeriods();
+
+        const now = std.time.milliTimestamp();
+        if (now - self.last_flush_ms < self.flush_interval_ms) return;
+        self.last_flush_ms = now;
 
         var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
         defer {
@@ -104,25 +88,6 @@ pub const PresenceDispatcher = struct {
                 cm.sendToConnection(subscriber.conn_id, msg);
                 self.allocator.free(msg);
             }
-        }
-    }
-
-    fn flushLoop(self: *PresenceDispatcher) void {
-        const cm = self.thread_connection_manager orelse unreachable;
-
-        self.shutdown_mutex.lock();
-        defer self.shutdown_mutex.unlock();
-
-        while (!self.shutdown_requested.load(.acquire)) {
-            self.shutdown_cond.timedWait(&self.shutdown_mutex, 50 * std.time.ns_per_ms) catch |err| {
-                if (err != error.Timeout) {
-                    std.log.err("PresenceDispatcher flush loop error: {}", .{err});
-                }
-            };
-            if (self.shutdown_requested.load(.acquire)) break;
-            self.shutdown_mutex.unlock();
-            self.poll(cm);
-            self.shutdown_mutex.lock();
         }
     }
 };
