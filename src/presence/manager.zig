@@ -171,8 +171,15 @@ pub const PresenceManager = struct {
 
             // Record join timestamp
             const joined_ns_result = try self.user_joined_at.getOrPut(self.allocator, namespace_id);
-            if (!joined_ns_result.found_existing) {
+            const joined_ns_created = !joined_ns_result.found_existing;
+            if (joined_ns_created) {
                 joined_ns_result.value_ptr.* = .{};
+            }
+            errdefer {
+                if (joined_ns_created) {
+                    joined_ns_result.value_ptr.deinit(self.allocator);
+                    _ = self.user_joined_at.remove(namespace_id);
+                }
             }
             try joined_ns_result.value_ptr.put(self.allocator, user_id, std.time.milliTimestamp());
         }
@@ -429,8 +436,15 @@ pub const PresenceManager = struct {
         }
 
         const sub_result = try self.user_subscribers.getOrPut(self.allocator, namespace_id);
-        if (!sub_result.found_existing) {
+        const sub_created = !sub_result.found_existing;
+        if (sub_created) {
             sub_result.value_ptr.* = .{};
+        }
+        errdefer {
+            if (sub_created) {
+                sub_result.value_ptr.deinit(self.allocator);
+                _ = self.user_subscribers.remove(namespace_id);
+            }
         }
         try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
@@ -456,8 +470,15 @@ pub const PresenceManager = struct {
         errdefer if (cloned_record) |*r| r.deinit(self.allocator);
 
         const sub_result = try self.shared_subscribers.getOrPut(self.allocator, namespace_id);
-        if (!sub_result.found_existing) {
+        const sub_created = !sub_result.found_existing;
+        if (sub_created) {
             sub_result.value_ptr.* = .{};
+        }
+        errdefer {
+            if (sub_created) {
+                sub_result.value_ptr.deinit(self.allocator);
+                _ = self.shared_subscribers.remove(namespace_id);
+            }
         }
         try sub_result.value_ptr.append(self.allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
 
@@ -482,6 +503,10 @@ pub const PresenceManager = struct {
                     i += 1;
                 }
             }
+            if (subs.items.len == 0) {
+                subs.deinit(self.allocator);
+                _ = self.user_subscribers.remove(namespace_id);
+            }
         }
     }
 
@@ -502,6 +527,10 @@ pub const PresenceManager = struct {
                 } else {
                     i += 1;
                 }
+            }
+            if (subs.items.len == 0) {
+                subs.deinit(self.allocator);
+                _ = self.shared_subscribers.remove(namespace_id);
             }
         }
     }
@@ -544,6 +573,10 @@ pub const PresenceManager = struct {
     ) !void {
         self.data_mutex.lock();
         defer self.data_mutex.unlock();
+        defer {
+            self.pending_user_updates.clearRetainingCapacity();
+            self.pending_shared_updates.clearRetainingCapacity();
+        }
 
         // Sort by namespace_id to ensure contiguous grouping
         const SortHelpers = struct {
@@ -575,6 +608,7 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
+                for (batch.updates.items) |*u| if (u.patch) |p| p.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -586,8 +620,6 @@ pub const PresenceManager = struct {
 
             try user_batches.append(allocator, batch);
         }
-
-        self.pending_user_updates.clearRetainingCapacity();
 
         i = 0;
         while (i < self.pending_shared_updates.items.len) {
@@ -604,6 +636,7 @@ pub const PresenceManager = struct {
                 .subscribers = std.ArrayListUnmanaged(Subscriber).empty,
             };
             errdefer {
+                for (batch.updates.items) |*u| u.patch.free(allocator);
                 batch.updates.deinit(allocator);
                 batch.subscribers.deinit(allocator);
             }
@@ -615,8 +648,6 @@ pub const PresenceManager = struct {
 
             try shared_batches.append(allocator, batch);
         }
-
-        self.pending_shared_updates.clearRetainingCapacity();
     }
 
     pub fn evictExpiredGracePeriods(self: *PresenceManager) void {
