@@ -148,7 +148,21 @@ export class ConnectionManager {
 						this.emit("connected");
 						resolve();
 					})
-					.catch(reject);
+					.catch((err) => {
+						if (this.ws) {
+							const ws = this.ws;
+							this.ws = null;
+							ws.onclose = null;
+							ws.onerror = null;
+							ws.onmessage = null;
+							ws.close();
+						}
+						this.pending.rejectAll(err);
+						this.rejectSchemaSync(err);
+						this.setStatus("disconnected", { error: err });
+						this.emit("error", err);
+						reject(err);
+					});
 			};
 
 			ws.onerror = () => this.handleSocketError(reject);

@@ -45,7 +45,7 @@ export class ZyncBaseClient {
 		};
 
 		this.store = new StoreImpl(this.conn, this.tracker, emitError);
-		this.presenceImpl = new PresenceImpl(this.conn);
+		this.presenceImpl = new PresenceImpl(this.conn, emitError);
 		this.presence = this.presenceImpl;
 		this.utils = { id: generateUUIDv7 };
 

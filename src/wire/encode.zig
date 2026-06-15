@@ -523,7 +523,7 @@ pub fn encodePresenceBroadcast(
 
             if (is_join) {
                 try writer.writeAll(Keys.joined_at);
-                try msgpack.encode(msgpack.Payload{ .int = std.time.milliTimestamp() }, writer);
+                try msgpack.encode(msgpack.Payload{ .int = update.joined_at }, writer);
             }
         }
     }

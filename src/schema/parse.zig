@@ -133,6 +133,7 @@ fn parsePresenceTier(
     var it = tier_val.object.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
+        if (!isValidFieldIdentifier(key)) return error.InvalidFieldName;
         const val = entry.value_ptr.*;
         if (val != .object) return error.InvalidSchema;
 
@@ -169,7 +170,6 @@ fn parsePresenceTier(
             }
         } else {
             // Direct field definition
-            if (!isValidFieldIdentifier(key)) return error.InvalidFieldName;
 
             const f_name = try allocator.dupe(u8, key);
             errdefer allocator.free(f_name);

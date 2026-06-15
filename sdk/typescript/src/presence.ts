@@ -1,3 +1,4 @@
+import { ErrorCodes, ZyncBaseError } from "./errors.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
 import type {
 	LifecycleEvent,
@@ -38,9 +39,14 @@ export class PresenceImpl implements Presence {
 	private pendingSetData: Record<string, unknown> | null = null;
 	private throttleTimer: ReturnType<typeof setTimeout> | null = null;
 	private conn: PresenceConnection;
+	private readonly emitError: (err: ZyncBaseError) => void;
 
-	constructor(conn: PresenceConnection) {
+	constructor(
+		conn: PresenceConnection,
+		emitError: (err: ZyncBaseError) => void = () => {},
+	) {
 		this.conn = conn;
+		this.emitError = emitError;
 		this.conn.onPresenceBroadcast((msg) => this.handleBroadcast(msg));
 		this.conn.on("disconnected", () => this.handleDisconnect());
 	}
@@ -72,7 +78,9 @@ export class PresenceImpl implements Presence {
 	}
 
 	setShared(data: Record<string, unknown>): void {
-		this.conn.dispatch({ type: "PresenceSetShared", data }).catch(() => {});
+		this.conn.dispatch({ type: "PresenceSetShared", data }).catch((err) => {
+			this.emitError(this.normalizeError(err, "Presence setShared failed"));
+		});
 	}
 
 	subscribe(callback: (users: PresenceEntry[]) => void): () => void {
@@ -87,9 +95,10 @@ export class PresenceImpl implements Presence {
 				.then((ok) => {
 					this.handleUserSubscribeResponse(gen, ok);
 				})
-				.catch(() => {
+				.catch((err) => {
 					if (gen !== this.userSubGen) return;
 					this.userSubPromise = null;
+					this.emitError(this.normalizeError(err, "Presence subscribe failed"));
 				});
 		}
 
@@ -149,9 +158,12 @@ export class PresenceImpl implements Presence {
 					this.sharedSubPromise = null;
 					this.handleSharedSubscribeResponse(ok);
 				})
-				.catch(() => {
+				.catch((err) => {
 					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
+					this.emitError(
+						this.normalizeError(err, "Presence subscribeShared failed"),
+					);
 				});
 		}
 
@@ -214,7 +226,9 @@ export class PresenceImpl implements Presence {
 	}
 
 	remove(): void {
-		this.conn.dispatch({ type: "PresenceRemove" }).catch(() => {});
+		this.conn.dispatch({ type: "PresenceRemove" }).catch((err) => {
+			this.emitError(this.normalizeError(err, "Presence remove failed"));
+		});
 	}
 
 	invalidate(): void {
@@ -242,9 +256,12 @@ export class PresenceImpl implements Presence {
 					this.populateUserCacheFromSnapshot(ok);
 					this.fireUserCallbacks();
 				})
-				.catch(() => {
+				.catch((err) => {
 					if (gen !== this.userSubGen) return;
 					this.userSubPromise = null;
+					this.emitError(
+						this.normalizeError(err, "Presence replay subscribe failed"),
+					);
 				});
 		}
 
@@ -264,15 +281,20 @@ export class PresenceImpl implements Presence {
 					}
 					this.fireSharedCallbacks();
 				})
-				.catch(() => {
+				.catch((err) => {
 					if (gen !== this.sharedSubGen) return;
 					this.sharedSubPromise = null;
+					this.emitError(
+						this.normalizeError(err, "Presence replay subscribeShared failed"),
+					);
 				});
 		}
 	}
 
 	private sendSet(data: Record<string, unknown>): void {
-		this.conn.dispatch({ type: "PresenceSet", data }).catch(() => {});
+		this.conn.dispatch({ type: "PresenceSet", data }).catch((err) => {
+			this.emitError(this.normalizeError(err, "Presence set failed"));
+		});
 	}
 
 	private handleBroadcast(msg: PresenceBroadcast | SharedStateBroadcast): void {
@@ -378,6 +400,18 @@ export class PresenceImpl implements Presence {
 
 	private handleDisconnect(): void {
 		this.invalidate();
+	}
+
+	private normalizeError(err: unknown, fallbackMessage: string): ZyncBaseError {
+		if (err instanceof ZyncBaseError) return err;
+		return new ZyncBaseError(
+			err instanceof Error ? err.message : fallbackMessage,
+			{
+				code: ErrorCodes.INTERNAL_ERROR,
+				category: "server",
+				retryable: true,
+			},
+		);
 	}
 
 	private clearThrottle(): void {

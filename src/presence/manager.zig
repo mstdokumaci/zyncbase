@@ -42,6 +42,7 @@ pub const PresenceManager = struct {
         user_id: typed.DocId,
         patch: ?msgpack.Payload, // null = leave
         is_new_user: bool, // true = join event, false = update event
+        joined_at: i64, // actual join timestamp (0 for non-join)
     };
 
     pub const PendingSharedUpdate = struct {
@@ -158,6 +159,8 @@ pub const PresenceManager = struct {
             }
         };
 
+        const now = std.time.milliTimestamp();
+
         if (is_new_user) {
             // getOrPut inserted user_id with undefined value — register cleanup
             // before any try that might fail.
@@ -187,7 +190,7 @@ pub const PresenceManager = struct {
                     _ = self.user_joined_at.remove(namespace_id);
                 }
             }
-            try joined_ns_result.value_ptr.put(self.allocator, user_id, std.time.milliTimestamp());
+            try joined_ns_result.value_ptr.put(self.allocator, user_id, now);
 
             user_cleanup = true;
         }
@@ -207,7 +210,12 @@ pub const PresenceManager = struct {
                 const cloned_patch = try patch.deepClone(self.allocator);
                 existing.patch = cloned_patch;
             }
-            if (!existing.is_new_user) existing.is_new_user = is_new_user;
+            if (!existing.is_new_user) {
+                existing.is_new_user = is_new_user;
+                if (is_new_user) {
+                    existing.joined_at = now;
+                }
+            }
             return;
         }
 
@@ -219,6 +227,7 @@ pub const PresenceManager = struct {
             .user_id = user_id,
             .patch = cloned_patch,
             .is_new_user = is_new_user,
+            .joined_at = if (is_new_user) now else 0,
         });
     }
 
@@ -331,6 +340,7 @@ pub const PresenceManager = struct {
                 .user_id = user_id,
                 .patch = null, // null signals leave
                 .is_new_user = false,
+                .joined_at = 0,
             });
         }
     }
